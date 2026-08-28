@@ -8,14 +8,27 @@ extracted. A sender in the allowlist whose adapter found nothing is listed as a
 pending adapter, never silently dropped, because "we shipped and the section is
 empty" is the failure this rule exists to catch.
 
-**The five share one extractor on purpose.** Three of them (The Rundown, The
-Neuron, Milk Road) are built on beehiiv and emit the same block structure, and
-the remaining two differ from it in small, nameable ways (TLDR bolds a headline
-link and follows it with a paragraph and a "(4 minute read)" suffix; Ben's
-Bites writes a list of links with short trailing blurbs). Writing five separate
-parsers would imply five kinds of knowledge we do not have. What we have is one
-extractor with per-sender tuning, plus a `senders` allowlist, and each adapter
-says which it is.
+**The five share one extractor on purpose.** All five write a headline followed
+by the newsletter's own sentence or two about it, so there is one extractor with
+per-sender tuning rather than five parsers implying five kinds of knowledge we
+do not have. The tuning knobs are named and each is there because real mail
+required it:
+
+  * TLDR bolds a headline link and suffixes it "(4 minute read)".
+  * The Rundown and The Neuron are beehiiv and bold their headline links too,
+    but their hrefs are encrypted, so the DESTINATION comes from the plain-text
+    half of the same message (`plain_text_destinations`).
+  * Milk Road is beehiiv as well and writes `<h1>` headlines with no link on
+    them at all, so a heading opens a story there and the story ships linkless
+    (`headings_start_stories`).
+  * Ben's Bites writes a list of plain links with short trailing blurbs.
+
+**Everything here was measured against real mail on 2026-08-28**, four issues
+per sender, and the fixtures are those messages with the identifiers scrubbed
+out. The previous version of this file was tuned against hand-written
+reconstructions, and the first live run showed what that is worth: 15 real TLDR
+messages produced 0 stories, and the three beehiiv senders dropped 100% of
+their links.
 
 **HTML is data, never instructions.** These messages come from outside. They
 are parsed with `html.parser`, reduced to anchors and text, and nothing inside
@@ -28,10 +41,11 @@ entry point and it sanitizes every link before a story leaves this module.
 reach a page, a log, or the state file.
 
 Boilerplate (unsubscribe, view in browser, sponsor, referral, social icons) is
-dropped with simple heuristics: a word list, an anchor-text length floor, and a
-requirement that a headline link be emphasized where the sender emphasizes its
-headlines. These are heuristics against a synthetic fixture, so the measured
-hit rate is a per-run OUTPUT, not a promise made here.
+dropped with simple heuristics: a word list, an anchor-text length floor, a
+leading-imperative check for calls to action, and a requirement that a headline
+link be emphasized where the sender emphasizes its headlines. These are
+heuristics against four issues per sender from one week, so the measured hit
+rate stays a per-run OUTPUT, not a promise made here. Senders redesign.
 """
 
 from __future__ import annotations
@@ -82,12 +96,59 @@ BOILERPLATE = (
     "follow us",
     "add us to your address book",
     "was this email forwarded",
+    "disclaimer",
 )
 
-# Tags whose content is not readable text.
-_SKIP_TAGS = frozenset({"script", "style", "head", "title", "meta", "link"})
+# A headline is a statement; these are invitations. Real mail from the three
+# beehiiv senders ends every issue with a run of them ("Join The Rundown Tech",
+# "Check out ours here", "Lock in $250/year - yours for life"), and they were
+# the ONLY things Milk Road's adapter extracted, so its whole section would have
+# been advertising. Matched as a PREFIX, not a substring, because a real
+# headline can contain any of these words in the middle of a sentence.
+CTA_PREFIXES = (
+    "join the",
+    "join our",
+    "join us",
+    "check out",
+    "lock in",
+    "grab your",
+    "claim your",
+    "get your",
+)
+
+# Tags whose CONTENT is not readable text. Every one of these is a container
+# with a closing tag, and that is load-bearing: `handle_starttag` opens a skip
+# scope that only `handle_endtag` can close. A VOID element here would open a
+# scope that never closes and silently swallow the whole rest of the document.
+#
+# That is not hypothetical. `meta` and `link` used to be in this set, and real
+# TLDR mail writes `<meta ...>` unslashed (six times, in the head). Six skip
+# scopes opened, none ever closed, and `read_blocks` returned an empty list for
+# a 60KB newsletter: 15 real messages in, 0 stories out. The three beehiiv
+# senders happened to write `<meta ... />`, which `html.parser` routes to
+# `handle_startendtag` instead, so they parsed fine and the bug looked
+# sender-specific rather than structural. Void tags are now simply ignored:
+# they have no content to skip.
+_SKIP_TAGS = frozenset({"script", "style", "head", "title"})
+# Elements with no closing tag. Listed so a future edit to `_SKIP_TAGS` cannot
+# reintroduce the never-closing-scope bug, and asserted in the tests.
+_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+    "meta", "param", "source", "track", "wbr",
+})
 # Tags that mean "this anchor is a headline" for senders that emphasize theirs.
 _EMPHASIS_TAGS = frozenset({"h1", "h2", "h3", "h4", "strong", "b"})
+
+# An address written in the newsletter's PROSE, which the sanitizer never sees.
+# `sanitize` guards URLs and only URLs, so a title or blurb was an unguarded
+# channel straight to a public page. The first live run proved it is not
+# hypothetical: TLDR's referral line ("send us a resume at <address>") reached
+# the artifact verbatim. That particular address is TLDR's own public jobs
+# inbox, so nothing was lost this time, but "You are subscribed as <address>" is
+# the same sentence shape and it is the reader's identity. Prose is redacted
+# rather than trusted, for the same reason the query-string gate is an allowlist.
+_ADDRESS_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+ADDRESS_PLACEHOLDER = "[address removed]"
 
 _READ_TIME = re.compile(r"\s*\(\s*\d+\s*minute\s+read\s*\)\s*$", re.I)
 _TRAILING_TAG = re.compile(r"\s*\(\s*(sponsor|sponsored|ad)\s*\)\s*$", re.I)
@@ -241,6 +302,24 @@ class _Link:
     emphasized: bool
 
 
+@dataclass
+class _Heading:
+    """A heading that contains no link of its own.
+
+    Milk Road needs this and nothing else does. Its stories are `<h1>` headings
+    followed by prose, with no anchor anywhere near them: real mail was checked
+    and the ONLY long anchors in a Milk Road issue are the sponsor button, "Read
+    full disclaimer" and "Sponsor Milk Road". An anchor-driven extractor reads
+    that issue as three advertisements and no news.
+
+    A heading that wraps an anchor is NOT one of these. The anchor is emitted as
+    a `_Link` as usual and the heading closes with an empty buffer, so the four
+    senders that link their headlines are untouched.
+    """
+
+    text: str
+
+
 class _BlockReader(HTMLParser):
     """Reduce a newsletter to an ordered stream of links and text runs.
 
@@ -251,18 +330,18 @@ class _BlockReader(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.blocks: list[_Link | str] = []
+        self.blocks: list[_Link | _Heading | str] = []
         self._skip_depth = 0
         self._emphasis_depth = 0
         self._anchor: _Link | None = None
         self._buffer: list[str] = []
 
     # -- helpers
-    def _flush_text(self) -> None:
+    def _flush_text(self, *, as_heading: bool = False) -> None:
         text = " ".join(self._buffer).strip()
         self._buffer = []
         if text:
-            self.blocks.append(text)
+            self.blocks.append(_Heading(text=text) if as_heading else text)
 
     def handle_starttag(self, tag, attrs):
         if tag in _SKIP_TAGS:
@@ -306,7 +385,9 @@ class _BlockReader(HTMLParser):
             self._buffer = []
             self._anchor = None
             self.blocks.append(anchor)
-        elif tag in ("p", "div", "tr", "li", "h1", "h2", "h3", "h4", "table"):
+        elif tag in ("h1", "h2", "h3", "h4"):
+            self._flush_text(as_heading=True)
+        elif tag in ("p", "div", "tr", "li", "table"):
             self._flush_text()
 
     def handle_data(self, data):
@@ -324,7 +405,7 @@ class _BlockReader(HTMLParser):
         self._flush_text()
 
 
-def read_blocks(html: str) -> list[_Link | str]:
+def read_blocks(html: str) -> list[_Link | _Heading | str]:
     reader = _BlockReader()
     try:
         reader.feed(html or "")
@@ -345,11 +426,40 @@ def is_boilerplate(text: str) -> bool:
     return any(word in folded for word in BOILERPLATE)
 
 
+def is_promo_headline(title: str, *, shouting_is_promo: bool = True) -> bool:
+    """A call to action or an advertising banner wearing a headline's clothes.
+
+    Two shapes, both taken from real mail rather than imagined. A leading
+    imperative ("Join The Rundown Tech") is an invitation, not news, and every
+    issue of all three beehiiv senders ends with a run of them.
+
+    The second shape is shouting, and it is why the caller gets a switch. An
+    emphasized ANCHOR in block capitals is a sponsor's button: "FREE SEMINAR ON
+    BLOCKCHAIN & PRIVATE MARKETS" is an ad, and it was one of only three things
+    Milk Road's adapter could find. A HEADING in block capitals is a different
+    thing entirely, because Milk Road writes its own headlines that way. So the
+    rule is applied where it discriminates and switched off where it would
+    delete the sender's actual news.
+    """
+    folded = (title or "").casefold().lstrip(" >»-–—")
+    if any(folded.startswith(prefix) for prefix in CTA_PREFIXES):
+        return True
+    if not shouting_is_promo:
+        return False
+    letters = [c for c in (title or "") if c.isalpha()]
+    return len(letters) >= 3 and not any(c.islower() for c in letters)
+
+
+def redact_addresses(text: str) -> str:
+    """Take every email address out of prose bound for a public page."""
+    return _ADDRESS_IN_TEXT.sub(ADDRESS_PLACEHOLDER, text or "")
+
+
 def _clean_headline(raw: str) -> str:
     title = clean_title(raw)
     title = _READ_TIME.sub("", title)
     title = _TRAILING_TAG.sub("", title)
-    return title.strip(" –—-:·|").strip()
+    return redact_addresses(title.strip(" –—-:·|").strip())
 
 
 def extract_stories(
@@ -358,44 +468,79 @@ def extract_stories(
     require_emphasis: bool = True,
     min_title: int = MIN_TITLE_CHARS,
     max_title: int = MAX_TITLE_CHARS,
+    headings_start_stories: bool = False,
 ) -> list[Story]:
     """Anchor + following text, filtered down to things that look like stories.
 
-    One shape fits all five senders because all five write the same shape: a
-    link that is the headline, followed by the newsletter's own sentence or two
-    about it. The tuning knobs are which of them bold their headlines and how
-    short a headline is allowed to be.
+    One shape fits four of the five senders because four of them write the same
+    shape: a link that is the headline, followed by the newsletter's own
+    sentence or two about it. The tuning knobs are which of them bold their
+    headlines and how short a headline is allowed to be.
+
+    `headings_start_stories` is the fifth. Milk Road writes `<h1>` headlines
+    with no link on them at all, so for that sender a heading opens a story the
+    same way an anchor does, and the story ships with no URL. That is a normal
+    outcome here: `sanitize` refuses far more links than it keeps, and the
+    renderer already handles a story with nothing to link to. It is OFF by
+    default because the other four use headings as section labels ("Big Tech &
+    Startups"), and turning it on for them would publish the table of contents.
     """
     blocks = read_blocks(html)
     stories: list[Story] = []
     seen_hrefs: set[str] = set()
     current: Story | None = None
+    from_heading = False
     blurb_parts: list[str] = []
     blurb_closed = False
 
     def close_current() -> None:
-        nonlocal current, blurb_parts, blurb_closed
+        nonlocal current, from_heading, blurb_parts, blurb_closed
         if current is not None:
             blurb = " ".join(part for part in blurb_parts if part).strip()
             # Leading punctuation is the separator the sender used between the
             # headline link and its sentence ("Title - the blurb"), not content.
             blurb = clean_title(blurb).lstrip(" -–—:·|").strip()
-            current.blurb = blurb[:MAX_BLURB_CHARS].strip()
-            stories.append(current)
+            current.blurb = redact_addresses(blurb)[:MAX_BLURB_CHARS].strip()
+            # A heading with no prose under it and no link on it ("RATE TODAY'S
+            # EDITION") is a section label, and it is indistinguishable from a
+            # story until the block after it turns out to be another heading.
+            # An anchor story is kept either way: it still carries a URL.
+            if not (from_heading and not current.blurb):
+                stories.append(current)
         current = None
+        from_heading = False
         blurb_parts = []
         blurb_closed = False
 
     for block in blocks:
-        if isinstance(block, str):
-            if current is None or blurb_closed or is_boilerplate(block):
+        if isinstance(block, _Heading) and headings_start_stories:
+            title = _clean_headline(block.text)
+            if (
+                min_title <= len(title) <= max_title
+                and not is_boilerplate(block.text)
+                # Milk Road's headlines are in block capitals, so shouting is
+                # this sender's voice and cannot be the tell for an ad here.
+                and not is_promo_headline(title, shouting_is_promo=False)
+            ):
+                close_current()
+                current = Story(title=title, url_raw="")
+                from_heading = True
+                continue
+            # A heading that does not qualify is a section label; it ends the
+            # blurb of whatever story it follows rather than joining it.
+            blurb_closed = current is not None
+            continue
+
+        if isinstance(block, (str, _Heading)):
+            text = block if isinstance(block, str) else block.text
+            if current is None or blurb_closed or is_boilerplate(text):
                 continue
             # A SHORT text run after the blurb has started is the next section
             # heading ("Research & Engineering"), not more of this blurb.
-            if blurb_parts and len(block) < SECTION_HEADING_CHARS:
+            if blurb_parts and len(text) < SECTION_HEADING_CHARS:
                 blurb_closed = True
                 continue
-            blurb_parts.append(block)
+            blurb_parts.append(text)
             continue
 
         title = _clean_headline(block.text)
@@ -404,6 +549,7 @@ def extract_stories(
             and not _BARE_URL.match(title)
             and min_title <= len(title) <= max_title
             and not is_boilerplate(block.text)
+            and not is_promo_headline(title)
             and (block.emphasized or not require_emphasis)
         )
         if not qualifies:
@@ -418,8 +564,93 @@ def extract_stories(
             continue
         seen_hrefs.add(block.href)
         current = Story(title=title, url_raw=block.href)
+        from_heading = False
 
     close_current()
+    return stories
+
+
+# --------------------------------------------------------------------------
+# the other copy of the same message
+# --------------------------------------------------------------------------
+
+# `[label](https://destination)` in the text/plain alternative. The label is
+# bounded so a stray `[` in prose cannot make the match run to the end of a
+# 17KB body.
+_MD_LINK = re.compile(r"\[(?P<label>[^\]\[\n]{1,300}?)\]\(\s*(?P<url>https?://[^)\s]+)\s*\)")
+_MD_MARKS = re.compile(r"[*_`~]+")
+# Two labels only count as the same story when the match key is long enough to
+# be a headline rather than "read more".
+MIN_MATCH_KEY = 20
+
+
+def _match_key(text: str) -> str:
+    """Fold a headline down to what survives HTML-vs-markdown rendering."""
+    return re.sub(r"[^a-z0-9]+", " ", _MD_MARKS.sub("", text or "").lower()).strip()
+
+
+def plain_text_destinations(msg: Message) -> dict[str, str]:
+    """`headline -> destination`, read from the message's OWN plain-text part.
+
+    Why this exists: beehiiv's HTML hrefs are `link.mail.beehiiv.com/ss/c/u001.<blob>/...`
+    and the blob is encrypted, not encoded. Real mail was measured: the blob is
+    240 to 411 characters of base64url, and decoding it yields ~40% printable
+    bytes with no URL anywhere inside. There is nothing in that href to recover,
+    which is why the first live run dropped 100% of these links.
+
+    The destination is nonetheless already in the message, in the OTHER half of
+    the same `multipart/alternative`: beehiiv renders the plain-text copy as
+    markdown, and its `[label](url)` links carry the real publisher URL rather
+    than the tracked one. Reading it is offline decoding of mail we already
+    have. No request is made, so the tracker still learns nothing, which is the
+    whole point of the static-only rule in `sanitize`.
+
+    A label that appears twice with DIFFERENT destinations is dropped rather
+    than guessed at: pointing a headline at the wrong article is a worse
+    failure than shipping it linkless.
+    """
+    table: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for match in _MD_LINK.finditer(text_body(msg)):
+        key = _match_key(match.group("label"))
+        if not key:
+            continue
+        url = match.group("url")
+        if key in table and table[key] != url:
+            ambiguous.add(key)
+        table.setdefault(key, url)
+    for key in ambiguous:
+        table.pop(key, None)
+    return table
+
+
+def recover_destinations(msg: Message, stories: list[Story]) -> list[Story]:
+    """Swap in a plain-text destination for any link the sanitizer cannot use.
+
+    Conservative on purpose, in two ways. It only fires when the HTML href is
+    unrecoverable, so a sender that already ships a usable link keeps it. And
+    the swapped-in URL still goes through `sanitize()` afterwards like every
+    other link, so this widens what can be RECOVERED without widening what is
+    allowed to be PUBLISHED.
+    """
+    table = plain_text_destinations(msg)
+    if not table:
+        return stories
+    for story in stories:
+        if sanitize(story.url_raw):
+            continue
+        key = _match_key(story.title)
+        found = table.get(key)
+        if found is None and len(key) >= MIN_MATCH_KEY:
+            # The HTML headline and the markdown label are the same sentence
+            # cut at different lengths ("...(4 minute read)", a trailing emoji),
+            # so a containment match on a key this long is the same story.
+            for label, url in table.items():
+                if len(label) >= MIN_MATCH_KEY and (label.startswith(key) or key.startswith(label)):
+                    found = url
+                    break
+        if found:
+            story.url_raw = found
     return stories
 
 
@@ -427,9 +658,30 @@ def extract_stories(
 # adapters
 # --------------------------------------------------------------------------
 
+def _milkroad_stories(msg: Message) -> list[Story]:
+    """Milk Road: `<h1>` headlines with no link, followed by prose.
+
+    Same beehiiv chassis as the other two, and a different editorial shape on
+    top of it. Real mail was checked: a Milk Road issue contains no anchor that
+    is a headline, so the shared beehiiv parse returns the sponsor button and
+    the disclaimer link and nothing else. These stories ship without URLs
+    because Milk Road writes its own copy and does not link out per story.
+    """
+    stories = extract_stories(
+        html_body(msg), require_emphasis=True, min_title=15, headings_start_stories=True,
+    )
+    return recover_destinations(msg, stories)
+
+
 def _beehiiv_stories(msg: Message) -> list[Story]:
-    """Shared by the three beehiiv-built senders: headlines are emphasized."""
-    return extract_stories(html_body(msg), require_emphasis=True, min_title=15)
+    """Shared by the two beehiiv senders that link their headlines.
+
+    The links come from the plain-text half of the message, because the HTML
+    half does not contain them in any recoverable form. See
+    `plain_text_destinations`.
+    """
+    stories = extract_stories(html_body(msg), require_emphasis=True, min_title=15)
+    return recover_destinations(msg, stories)
 
 
 def _tldr_stories(msg: Message) -> list[Story]:
@@ -508,14 +760,19 @@ class Adapter:
         return ParseResult(stories=kept, report=report)
 
 
-# Which of these are LIVE, as of the mailbox survey on 2026-08-28: tldr,
-# theneuron and milkroad had mail in the surveyed week and send from
-# `tldrnewsletter.com`, `newsletter.theneurondaily.com` and `mail.milkroad.com`
-# respectively, which is why subdomain suffix matching is load-bearing rather
-# than defensive. therundown and bensbites stay in the allowlist as adapters
-# but had NO mail in that week, so their extraction is tested only against the
-# synthetic fixtures: their real-world format is grade C until a real message
-# from each has been through this parser.
+# Which of these are LIVE, re-measured against the mailbox on 2026-08-28 with
+# four real issues per sender. FOUR are live, not three: `therundown` was
+# previously recorded as having no mail, and it does, from `daily.therundown.ai`
+# rather than the `mail.therundown.ai` that had been guessed at. The four live
+# sending hosts are `tldrnewsletter.com`, `daily.therundown.ai`,
+# `newsletter.theneurondaily.com` and `mail.milkroad.com`: three of the four are
+# subdomains, which is why suffix matching at a dot boundary is load-bearing
+# rather than defensive.
+#
+# `bensbites` is the one adapter with no real message behind it. Its fixture is
+# still a hand-written reconstruction and its format stays grade C until a real
+# issue has been through this parser, which is exactly the grade TLDR carried
+# while it was silently returning nothing.
 ADAPTERS: tuple[Adapter, ...] = (
     Adapter(
         id="tldr",
@@ -526,7 +783,10 @@ ADAPTERS: tuple[Adapter, ...] = (
     Adapter(
         id="therundown",
         name="The Rundown AI",
-        senders=("rundown.ai", "mail.therundown.ai", "therundown.ai"),
+        # `daily.therundown.ai` is the live sending host, confirmed 2026-08-28.
+        # The bare domain already covers it via suffix matching; it is named
+        # here so the Gmail `from:` query says the host that actually sends.
+        senders=("rundown.ai", "daily.therundown.ai", "mail.therundown.ai", "therundown.ai"),
         parse=_beehiiv_stories,
     ),
     Adapter(
@@ -549,7 +809,7 @@ ADAPTERS: tuple[Adapter, ...] = (
         id="milkroad",
         name="Milk Road",
         senders=("milkroad.com", "mail.milkroad.com"),  # live sender: the subdomain
-        parse=_beehiiv_stories,
+        parse=_milkroad_stories,
     ),
 )
 

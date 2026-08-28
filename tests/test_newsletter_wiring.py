@@ -310,6 +310,39 @@ class TestClusterLinksAreSanitizedAtTheOutputBoundary:
         assert "Elsewhere" in html
 
 
+class TestLaneCapIsFairAcrossSenders:
+    def records(self, big: int, small: int) -> list[dict]:
+        rows = [{"source_id": "newsletter:big", "published_at": NOW - timedelta(minutes=n)}
+                for n in range(big)]
+        rows += [{"source_id": "newsletter:small", "published_at": NOW - timedelta(hours=1, minutes=n)}
+                 for n in range(small)]
+        return rows
+
+    def test_round_robin_before_the_cap(self):
+        """One prolific sender must not own the tab: live week one had TLDR
+        taking 43 of 50 slots and The Rundown publishing zero."""
+        from curator.newsletter.lane import fair_cap
+
+        taken = fair_cap(self.records(big=8, small=3), cap=6)
+        assert len(taken) == 6
+        small = sum(1 for r in taken if r["source_id"] == "newsletter:small")
+        assert small == 3  # the small sender keeps every story it had
+
+    def test_under_cap_everything_ships_newest_first(self):
+        from curator.newsletter.lane import fair_cap
+
+        taken = fair_cap(self.records(big=2, small=2), cap=50)
+        assert len(taken) == 4
+        assert [r["published_at"] for r in taken] == sorted(
+            (r["published_at"] for r in taken), reverse=True
+        )
+
+    def test_cap_zero_ships_nothing(self):
+        from curator.newsletter.lane import fair_cap
+
+        assert fair_cap(self.records(big=3, small=1), cap=0) == []
+
+
 class TestSerializeRoundTrip:
     def test_lane_result_survives_the_artifact_boundary(self, tmp_path):
         record = {

@@ -233,6 +233,29 @@ def to_items(records: list[dict]) -> list:
 # fetch
 # --------------------------------------------------------------------------
 
+def fair_cap(records: list[dict], cap: int) -> list[dict]:
+    """The lane cap, applied ROUND-ROBIN BY SENDER, newest first within each.
+
+    A plain newest-first cut let one high-volume sender own the whole tab: the
+    first live week had TLDR taking 43 of 50 slots and The Rundown publishing
+    zero. Every allowlisted sender gets a slot per round before any sender
+    gets a second helping; the final list re-sorts newest-first so the page
+    order is unchanged in the common case.
+    """
+    ordered = sorted(records, key=lambda r: r["published_at"], reverse=True)
+    by_sender: dict[str, list[dict]] = {}
+    for record in ordered:
+        by_sender.setdefault(record["source_id"], []).append(record)
+    taken: list[dict] = []
+    queues = list(by_sender.values())
+    while len(taken) < cap and any(queues):
+        for queue in queues:
+            if queue and len(taken) < cap:
+                taken.append(queue.pop(0))
+    taken.sort(key=lambda r: r["published_at"], reverse=True)
+    return taken
+
+
 def _sent_at(msg: Message, fallback: datetime) -> datetime:
     """The Date header in UTC. A missing or unparseable one falls back."""
     raw = msg.get("Date")
@@ -362,8 +385,7 @@ def fetch(
                 )
             )
 
-    records.sort(key=lambda r: r["published_at"], reverse=True)
-    records = records[: max(0, max_items)]
+    records = fair_cap(records, max(0, max_items))
     for record in records:
         status[record["source_id"].split(":", 1)[1]].published += 1
 

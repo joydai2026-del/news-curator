@@ -1,0 +1,285 @@
+SYNTHETIC FIXTURE, derived from real mail. See README.md.
+
+^ ^**[^Read Online^](https://therundownai.example/p/SYNTHETIC-168?_bhlid=SYNTHETIC-169&jwt_token=SYNTHETIC-170)**^ | ^**[^Sign Up^](https://therundown.example/subscribe)**^ | ^**[^Advertise^](https://therundownai2.example/to/kraZ1TSO)**
+
+----------
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-171/uploads/asset/file/SYNTHETIC-172/SYNTHETIC-173?t=1787861489)
+Follow image link: (https://info.example/guide/SYNTHETIC-174/?utm_medium=paid-email&utm_source=therundown&utm_campaign=SYNTHETIC-175)
+Caption: 
+
+
+----------
+
+----------
+**Good morning, AI enthusiasts, and welcome to our 2,879 new readers. **Anthropic’s Model Context Protocol (MCP) started as a connector and eventually became the default way AI agents talk to software. The company’s next act is getting a bit more physical.
+
+The new Model Hardware Standard plugs agents into the microscopes, robot arms, and assembly lines the world already runs, a simple layer that could suddenly make every machine AI-ready.
+
+———————————————————————————
+
+**In today’s AI rundown:**
+
+* Anthropic wires AI agents into real-world machines
+
+* Rowan’s Corner: Whispering to AI agents
+
+* Use these AI skills to make better decisions quickly
+
+* UK trials live-video AI in brain surgery
+
+
+----------
+
+----------
+**LATEST DEVELOPMENTS**
+
+
+----------
+
+----------
+###### ANTHROPIC
+
+#### 🦾 [_Anthropic wires AI agents into real-world machines_](https://anthropic.example/news/SYNTHETIC-176)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-177/uploads/asset/file/SYNTHETIC-178/mhs.png?t=1787862643)
+Caption: Image source: Anthropic
+
+**The Rundown: **Anthropic just [introduced](https://anthropic.example/news/SYNTHETIC-179) the Model Hardware Standard in research preview, which lets AI agents look up, learn, and run factory machines like microscopes, robotic arms, and other lab gear that previously needed custom code — built to spread in an industry-standard way similar to the company’s Model Context Protocol (MCP). 
+
+**The details: **
+
+* Anthropic claims setup times of “hours or minutes” under the new spec, down from the weeks specialists currently spend hand-wiring instruments.
+
+* Machine owners describe their equipment in natural language, with MHS turning it into a reference file agents can read to learn how to operate the device. 
+
+* In one test, Claude taught itself to align a laser by trial and error, then simplified the routine into a script that automated the job in a single pass.
+
+* An open-source release is planned at a later date, with Tecan, QIAGEN, and AWS partnering and both Hugging Face and Raspberry Pi adding it to their device lines.
+
+**Why it matters: **Claude, for machines! Physical AI is the territory many companies are fighting for, and Anthropic just made it that much simpler to plug its frontier models into the microscopes, robot arms, and assembly lines those companies are chasing… In a way that won’t feel much different from connecting agents to software via MCP.
+
+
+----------
+
+----------
+###### TOGETHER WITH LANGCHAIN
+
+#### **🛠️ **[_**Build and scale a winning AI agent strategy**_](https://info.example/guide/SYNTHETIC-180/?utm_medium=paid-email&utm_source=therundown&utm_campaign=SYNTHETIC-181)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-182/uploads/asset/file/SYNTHETIC-183/unnamed__78_.png?t=1787854644)
+Follow image link: (https://info.example/guide/SYNTHETIC-184/?utm_medium=paid-email&utm_source=therundown&utm_campaign=SYNTHETIC-185)
+Caption: 
+
+**The Rundown:** Agents are non-deterministic and dependent on models, prompts, and tools that change without warning. Traditional engineering playbooks no longer translate. LangChain’s new guide breaks down the Agentic Operating Model, aligning people, process, and technology to build, deploy, and scale agents across your organization.
+
+**In the guide, you’ll learn:** 
+
+* Why AI agents don’t break like traditional software
+
+* The engineering stack that covers the entire agent lifecycle
+
+* How to shift from “build and deploy” to “operate and improve”
+
+[Download the guide to learn more](https://info.example/guide/SYNTHETIC-186/?utm_medium=paid-email&utm_source=therundown&utm_campaign=SYNTHETIC-187).
+
+
+----------
+
+----------
+###### ROWAN’S CORNER
+
+#### 🎙️ [_A new AI trend: Whispering to AI agents_](https://therundown.example/)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-188/uploads/asset/file/SYNTHETIC-189/HJXFqioaMAAaT6e.jpeg?t=1787847480)
+Caption: Image source: _AT-tmiyatake1 on X_
+
+**Rowan:** Back in October of last year, I visited several startup offices in San Francisco and noticed the early innings of a trend — developers were using tools like Wispr Flow to multitask across workflows and control AI agents more efficiently, entirely by voice.
+
+Fast forward to today, and that trend has only accelerated.
+
+SF tech trends are fascinating because there’s something new every week, but most never escape the early-adopter bubble. Every so often, though, one breaks out and becomes huge for everyone.
+
+Now that Apple is shipping an AI dictation keyboard in iOS 27 (alongside a fully rebuilt Siri AI), I’m fully convinced: whispering to AI is breaking out of the bubble.
+
+I don’t take personal recommendations lightly, but this one's worth hopping on if you haven’t already.
+
+Here’s why:
+
+1. Speed and context. You speak at ~150 words per minute and type at _maybe_ 60. But the underrated part is that spoken prompts are naturally 2–3x longer, so you include the context you’d skip when typing.
+
+2. It turns you into a director of agents. A common workflow is to have several tabs of agents open at once, focus on ONE window, whisper a 60-second brief, release, let the agent work, review, and move to the next.
+
+3. The AI dictation apps are so good that you can _literally_ whisper to them, and it catches nearly everything. That’s the only way this works in an office of 50 people.
+
+If you’ve been following our Workflow Hub, you know one of my [favorite workflows](https://app.example/community/posts/SYNTHETIC-190) is whispering ideas into Wispr Flow on walks and between meetings, then using a scheduled Claude task to organize everything into my Notion overnight.
+
+Getting started is simple: either wait for the iOS drop, or skip the wait and map a Wispr-style app to your iPhone’s Action Button today. And if you want to go full Silicon Valley? Grab a $20 desk mic and direct your agents all day.
+
+
+----------
+
+----------
+###### AI TRAINING
+
+#### 💡 [_**Use these AI skills to make better decisions quickly**_](https://app.example/guides/SYNTHETIC-191)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-192/uploads/asset/file/SYNTHETIC-193/435-nl-thumb.png?t=1787868765)
+Follow image link: (https://app.example/guides/SYNTHETIC-194?utm_source=SYNTHETIC-195&utm_medium=newsletter&utm_campaign=rundown-0828&_bhlid=SYNTHETIC-196)
+Caption: 
+
+**The Rundown:** In this guide, you will learn how to give your AI skills that make every decision easier. You’ll use an /unstuck tool, a /decide tool, and more to turn problems into solutions.
+
+**Step-by-step:**
+
+1. Open Claude Code in Terminal and install [makerskills](https://github.example/coreyhaines31/makerskills) with /plugin marketplace add coreyhaines31/makerskills, followed by /plugin install makerskillsAT-makerskills.
+
+2. Use the repository’s routing table to match the problem to a skill: /unstuck when you keep circling the same wall or /decide when you need to choose between real options.
+
+3. Describe the situation and answer the follow-up questions. When social-fetch could not pull our X post and suggested a paid scraping API, /unstuck challenged the assumption that the video needed that demo.
+
+4. Try the framework on another job. /decide compared two hypothetical client projects, tested how reversible the choice was, recommended one, and set a date to revisit the decision.
+
+**Pro tip:** Run the skill inside a project or session that already has context on your work. You will get more specific questions and recommendations.
+
+
+----------
+
+----------
+###### PRESENTED BY GARTNER
+
+#### 🤖** **_[**Webinar: More agents, more problems?**](https://gartner.example/en/webinar/914828/SYNTHETIC-197?utm_source=TheRundownAI&utm_medium=display&utm_campaign=SYNTHETIC-198&utm_term=hubpage)_
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-199/uploads/asset/file/SYNTHETIC-200/unnamed__79_.png?t=1787859446)
+Follow image link: (https://gartner.example/en/webinar/914828/SYNTHETIC-201?utm_source=TheRundownAI&utm_medium=display&utm_campaign=SYNTHETIC-202&utm_term=hubpage)
+Caption: 
+
+**The Rundown:** Enterprises are quickly deploying and scaling AI agents, but at what cost? The latest Gartner webinar unpacks how leaders avoid the orchestration overlap and governance gaps that often undercut their efforts.
+
+**In this webinar, you’ll learn how to:**
+
+* Cut through AI orchestration complexity
+
+* Close critical governance gaps
+
+* Build a trusted agentic AI framework
+
+[Register today](https://gartner.example/en/webinar/914828/SYNTHETIC-203?utm_source=TheRundownAI&utm_medium=display&utm_campaign=SYNTHETIC-204&utm_term=hubpage)**.**
+
+
+----------
+
+
+
+----------
+###### AI & MEDICAL TECH
+
+#### 🧠 [_UK trials live-video AI in brain surgery_](https://uclh.example/news/SYNTHETIC-205)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-206/uploads/asset/file/SYNTHETIC-207/braintumor.png?t=1787857256)
+Caption: Image source: UCLH / BBC
+
+**The Rundown: **UK surgeons just [announced](https://uclh.example/news/SYNTHETIC-208) the first brain surgery ever performed with a live AI assistant, with a University College of London system watching in real-time through a surgical camera and flagging hidden arteries and optic nerves to avoid during the removal of a tumor. 
+
+**The details: **
+
+* Patient Rhys Hibbert had no symptoms until a seizure in late 2024 revealed an 11mm pituitary growth that slowly narrowed his field of vision.
+
+* Surgeons reached the tumor through Hibbert’s nose, while AI watched the camera feed on its own monitor and marked the safest spots to cut and areas to avoid.
+
+* The AI trained on hundreds of labeled videos of past removals, with surgeon Hani Marcus saying it saw “more operations than most surgeons see or do in a lifetime.”
+
+* The patient’s vision was restored within days following the successful removal, with the team now moving toward larger trials of the AI system. 
+
+**Why it matters: **Robots may eventually be capable of the precise movements needed for most surgeries, but for now this is a powerful example of the near-term advances AI can bring to the operating table: an expert second set of eyes to monitor and flag while the human surgeon remains completely in control. 
+
+
+----------
+
+----------
+**QUICK HITS**
+
+
+----------
+
+----------
+###### COMMUNITY AI WORKFLOW OF THE DAY
+
+▸ **Karen built a family heirloom catalog with Gemini and a whiteboard**
+
+==Today’s workflow comes from reader ==[Karen D.](https://linkedin.example/in/karendevriescoaching):
+
+“My mother recently moved into a retirement suite, which meant downsizing her possessions. We ended up with dozens of physical items she no longer had space for, and we wanted her children and grandchildren to have an opportunity to sign up for the family items they loved before anything was donated. I needed a way to catalog everything quickly, share the info remotely, and verify that we weren't accidentally giving away items of significant value.
+
+I tested a physical-to-digital workflow using Gemini. Instead of putting the items in a pile or typing out endless lists, I drew a numbered grid on a large whiteboard, placed one item in each square, and took a few photos. Gemini identified the objects by grid position, categorized them, estimated their market values, and built a ready-to-use spreadsheet with a signup column.
+
+The physical staging took about 30 to 45 minutes, and the entire digital workload took under 10 minutes. The process turned an overwhelming chore into something manageable.”
+
+_See Karen’s full workflow _[_here_](https://app.example/community/posts/SYNTHETIC-209)_. How do you use AI? _[_Tell us_](https://app.example/community?submit=open)_ for a chance to be featured._
+
+
+----------
+
+----------
+### 🛠️ _**[Trending AI Tools](https://rundown.example/tools)**_
+
+* 🔀 _[Switch](https://flintai.example/products/switch?utm_source=TheRundownAI&utm_medium=Newsletter&utm_campaign=NewTools082826)_ - Bring any AI agent into Slack, Teams, Discord, and more. Open source. No migration. No platform lock-in.* 
+
+* 📄 [Cohere Parse 5](https://therundown.example/tools/cohere-parse-5) - SOTA model for converting docs into machine-readable data
+
+* ⚡️ [Gemini Omni 1.1 Flash](https://therundown.example/tools/SYNTHETIC-210) - Google’s upgraded video model
+
+* 🎥 [H3 Max](https://therundown.example/tools/h3-max) - fal's MiniMax H3 remixed video model tuned for speed and quality
+
+_*Sponsored Listing_
+
+
+----------
+
+----------
+### 📰 _[Everything else in AI today](https://rundown.example/)_
+
+**OpenAI** [published](https://openai.example/SYNTHETIC-211/) an open letter signed by 116 companies (including Anthropic) warning that AI-enabled cyberattacks will become “far more widespread and sophisticated” in the coming months, calling for a coordinated cyber defense push.
+
+**Nvidia **is reportedly [acquiring](https://theinformation.example/articles/SYNTHETIC-212) open model hub Hugging Face for $12.9B, with open-source interest continuing to surge on Chinese model gains.
+
+**Google **[released](https://blog.example/innovation-and-ai/technology/developers-tools/SYNTHETIC-213/) Gemini Omni 1.1 Flash, an upgraded video model that adds 40-sec scene extensions and 4K upscaling, moving to the top spot on Arena’s text-to-image leaderboard.
+
+**Thinking Machines co-founder Barret Zoph **is [rejoining](https://x.example/barret_zoph/status/2092790775524516206?s=20) Google as a research VP to work on reinforcement learning for Gemini, coming after a brief second stint at OpenAI.
+
+**Salesforce **[partnered](https://salesforce.example/claudeforce/) with Anthropic to introduce Claudeforce, which puts a 37-skill sales plugin into Claude, while also making Claude the default model in Slack.
+
+
+----------
+
+----------
+### **🎓 **_**[Highlights: News, Guides & Events](https://app.example/)**_
+
+* Read our last AI newsletter: [The Ox Alpha mystery ends with Z.ai](https://therundown.example/articles/SYNTHETIC-214)
+
+* Read our last Tech newsletter: [Apple’s Mac Mini makes an AI comeback](https://tech.example/p/SYNTHETIC-215)
+
+* Read our last Robotics newsletter: [Cyborg roaches become tiny paramedics](https://robotnews.example/p/SYNTHETIC-216)
+
+* Today’s AI tool guide: **[Use these AI skills to make better decisions quickly](https://app.example/guides/SYNTHETIC-217)**
+
+* RSVP to next workshop on Sept. 2: [Build an AI operating system for your 1:1s](https://app.example/live/SYNTHETIC-218)
+
+
+----------
+
+----------
+See you soon,
+
+_Rowan, Zach, Shubham, Jennifer, and Nate — the humans behind The Rundown_
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-219/uploads/asset/file/SYNTHETIC-220/team.png?t=1785702878)
+Caption: 
+
+
+----------
+
+
+———
+
+You are reading a plain text version of this post. For the best experience, copy and paste this link in your browser to view the post online:
+https://therundownai.example/p/SYNTHETIC-221
