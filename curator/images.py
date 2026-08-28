@@ -477,13 +477,30 @@ def enrich(
     """
     cfg = config or {}
     stats = {"total": 0, "from_feed": 0, "from_cache": 0, "fetched": 0,
-             "no_image": 0, "errors": 0, "capped": 0, "budget_hit": 0}
+             "no_image": 0, "errors": 0, "capped": 0, "budget_hit": 0,
+             "newsletter_skipped": 0}
 
     # De-duplicate by canonical URL: the same story shown in two categories is
     # two Item objects and exactly one article to ask about.
     pending: dict[str, list[Item]] = {}
     for item in items:
         stats["total"] += 1
+        # Newsletter items never reach the network and never reach the cache.
+        #
+        # Their URLs routinely carry a subscriber identifier: a tracking
+        # redirect, a hosted-view token, a per-recipient hash. Fetching one
+        # tells the sender which subscriber's mail was processed and when.
+        # Writing one into `image_cache.json` would publish it, permanently, in
+        # a public repository. The pipeline is also expected to skip these, and
+        # that is exactly why the check is repeated here: the pipeline decides
+        # what to enrich, this function decides what it is willing to request,
+        # and a privacy rule that exists in only one of those is one refactor
+        # away from being gone. The `continue` is before `cache.touch` on
+        # purpose, so nothing about a newsletter item is even written back as a
+        # timestamp.
+        if item.is_newsletter:
+            stats["newsletter_skipped"] += 1
+            continue
         key = item.canonical_url
         if not key:
             continue

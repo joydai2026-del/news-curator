@@ -1,0 +1,207 @@
+SYNTHETIC FIXTURE, derived from real mail. See README.md.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-93/uploads/asset/file/SYNTHETIC-94/Optionality_c_b.png?t=1787938011)
+Follow image link: (https://out.example/SYNTHETIC-95)
+Caption: 
+
+GM. This is Milk Road, the daily newsletter that's the well-timed assist right before your portfolio scores.
+
+​Here’s what we’ve got for you today:
+
+* ✍️ AI agents are transacting onchain (again).
+
+* 🎙️ The Milk Road Show: [Wall Street Is Moving Onchain Faster Than Most Investors Realize](https://linktr.example/themilkroadshow).
+
+* 🍪 Saylor: "STRC is digital credit." Bitcoin is digital capital.
+
+Optionality is a free trading community with 14 active traders, real-time trade alerts and end of day recaps. [Join the Optionality community for free.](https://out.example/SYNTHETIC-96)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-97/uploads/asset/file/SYNTHETIC-98/SYNTHETIC-99?t=1787940188)
+Follow image link: (https://out.example/SYNTHETIC-100?utm_source=milk-road&utm_medium=referral&utm_campaign=ipo-pricetracker)
+Caption: Prices as of 2:00 p.m. ET. Powered by CoinGecko.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-101/uploads/asset/file/SYNTHETIC-102/divider.png?t=1787154583)
+Caption: 
+
+# **AI AGENTS ARE PAYING EACH OTHER ONCHAIN AGAIN **🤖
+
+Back in March, pretty much everyone agreed that AI agents paying each other onchain was a dead idea.
+
+And the numbers backed them up.
+
+Weekly machine-to-machine payments running on x402 (Coinbase's payments standard) had fallen more than 95% off their November high, down to under 1M a week.
+
+Even Coinbase's own product team admitted in March that the demand just wasn't there.
+
+And if you don’t know what x402 is - lemme help you out real quick.
+
+There's an error code baked into the internet called 402, "Payment Required," and it's sat unused since the 90s. Coinbase wired it up to stablecoins so software can charge other software per request.
+
+Your agent asks a server for some data, the server says "that'll be half a cent," the agent pays in USDC, and the data comes back. No account, no subscription, and no humans needed.
+
+**But that November peak was a bit of a lie.**
+
+Token Terminal counted 20.1M of those payments in the week of November 17, 2025, and 18.7M of them ran on Base.
+
+Chainalysis traced that surge largely to PING, a token you minted by paying $1 of USDC.
+
+I.e. people were paying to farm a coin, so the traffic was speculation, not legit agent-to-agent micropayments.
+
+So when it collapsed, the obituaries kinda wrote themselves.
+
+But while everyone was busy writing them, Amazon was building agent payments into Bedrock AgentCore (its main AI product for business customers), with Coinbase and Stripe supplying the wallets.
+
+That went into preview on May 7, then live for every AWS customer on August 18.
+
+Last week, x402 saw 8.7M payments, up from 4.1M the week before.
+
+(Doubling, week over week.)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-103/uploads/asset/file/SYNTHETIC-104/image.png?t=1787921462)
+Caption: Source: Token Terminal
+
+Which would be a decent story on its own, but the interesting part is where all those payments went…
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-105/uploads/asset/file/SYNTHETIC-106/Optionality_c_d.png?t=1787938026)
+Follow image link: (https://out.example/SYNTHETIC-107)
+Caption: 
+
+----------
+# [FREE TRADING COMMUNITY WITH 14,000+ MEMBERS](https://out.example/SYNTHETIC-108)
+
+Optionality is a free trading community built around one thing: **real traders.**
+
+Here's what's inside:
+
+* **14 active traders** _(7 day traders, 5 swing traders, 2 futures traders)_
+
+* Real time trade alerts
+
+* End of day recaps
+
+* Free chat channels
+
+* **$1 trial for 7 days** to test the full PRO experience before committing
+
+14,000+ traders are already on the server and it **costs absolutely nothing** to join this free community.
+
+[Join the Optionality community for free.](https://out.example/SYNTHETIC-109)
+
+
+----------View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-110/uploads/asset/file/SYNTHETIC-111/divider.png?t=1787154584)
+Caption: 
+
+# **AI AGENTS ARE PAYING EACH OTHER AGAIN (P2) **🤖
+
+If this were November all over again, the traffic would have gone straight back to the one chain that was paying for it all.
+
+Instead it spread across four:
+
+* Base: down to 48% of the weekly count (from 93%).
+
+* Solana: up from 6% to 38%.
+
+* Everyone else: the remaining 14%.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-112/uploads/asset/file/SYNTHETIC-113/image.png?t=1787921471)
+Caption: Source: Token Terminal
+
+Because Amazon wasn't the only one turning this on.
+
+Ramp switched x402 on for its 70,000+ business customers on August 20, and Google Cloud now lets agents pay per request for Gemini, BigQuery and Vertex AI over Solana.
+
+**Vincent saw this one coming.**
+
+He bought SOL for the PRO portfolio on March 31, at the exact bottom of the panic, writing: "Solana is a bet on agent payments. If AI agents start paying for APIs, compute, data, and each other, the winner is likely a chain built for small, fast, cheap, real-time transactions."
+
+His entry was $82.56. SOL's at ~$105 at the time of this writing.
+
+The volumes here aren't as wild as they were when there was a token to farm, and they're not meant to be.
+
+Agents pay per request instead of per purchase, so every payment is priced like an API call, which keeps things at pennies while software buys from software.
+
+8.7M payments a week tells us that the plumbing is being used (though nobody's getting rich off the payments themselves yet).
+
+**Which brings us to who's actually getting paid here.**
+
+The standard charges nothing on each sale, by design.
+
+The money lands with whoever runs the wallet and earns interest on the dollars parked inside it.
+
+Which, in this case, is Coinbase. It wrote the standard, runs one of the two wallets Amazon shipped, and takes a slice of the interest Circle earns on USDC reserves.
+
+Last quarter that business brought in $292M, with a record $20B of USDC sitting inside Coinbase products (over 30% of every USDC in existence).
+
+When it comes to agent-to-agent payments onchain, we’ve barely begun to see the start of this adoption story.
+
+And Coinbase is set up to be one of the largest benefactors.
+
+----------
+Kyle called Coinbase below $60. It's ~$188 today, and still one of his largest holdings.
+
+Don't miss his next big call, [try Milk Road PRO](https://milkroad.example/pro/) for $1. 
+
+
+----------View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-114/uploads/asset/file/SYNTHETIC-115/divider.png?t=1787154584)
+Caption: 
+
+# **BITE-SIZED COOKIES FOR THE ROAD **🍪
+
+[Got Bitcoin but need cash?](https://out.example/Ledn0828Cookie) Ledn lets you borrow against your BTC without selling it.*
+
+[Tom Lee:](https://x.example/milkroaddaily/status/2093062407815917988?s=20) Crypto winter may already be ending, and Wall Street could be caught underexposed.
+
+[Saylor:](https://x.example/milkroaddaily/status/2093050706098008522?s=20) "STRC is digital credit." Bitcoin is digital capital. Stablecoins are digital currency... the missing piece is stable, yield bearing, Bitcoin-backed digital money.
+
+[Denelle Dixon:](https://x.example/milkroaddaily/status/2092672761525313597?s=20) The CLARITY Act isn't going to open the floodgates, because they're already open.
+
+*this is sponsored content.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-116/uploads/asset/file/SYNTHETIC-117/Optionality_c_d.png?t=1787938026)
+Follow image link: (https://out.example/SYNTHETIC-118)
+Caption: 
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-119/uploads/asset/file/SYNTHETIC-120/image.png?t=1787938043)
+Follow image link: (https://out.example/SYNTHETIC-121)
+Caption: 
+
+[Join the Optionality community for free.](https://out.example/SYNTHETIC-122)
+
+----------
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-123/uploads/asset/file/SYNTHETIC-124/divider.png?t=1787154584)
+Caption: 
+
+
+
+# **RATE TODAY’S EDITION**
+
+
+----------View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-125/uploads/asset/file/SYNTHETIC-126/divider.png?t=1787154584)
+Caption: 
+
+# **MILKY MEMES **🤣
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-127/uploads/asset/file/SYNTHETIC-128/image.png?t=1787921228)
+Caption: Source: AT-boldleonidas
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-129/uploads/asset/file/SYNTHETIC-130/image.png?t=1787921250)
+Caption: Source: AT-ToolySOL
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-131/uploads/asset/file/SYNTHETIC-132/divider.png?t=1787154584)
+Caption: 
+
+# **ROADIE REVIEW OF THE DAY **🥛
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-133/uploads/asset/file/SYNTHETIC-134/image.png?t=1787583440)
+Caption: 
+
+# **VITALIK PIC OF THE DAY**
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-135/uploads/asset/file/SYNTHETIC-136/image.png?t=1787587195)
+Caption: 
+
+
+———
+
+You are reading a plain text version of this post. For the best experience, copy and paste this link in your browser to view the post online:
+https://mrcrypto.example/p/SYNTHETIC-137

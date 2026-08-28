@@ -1,0 +1,212 @@
+SYNTHETIC FIXTURE, derived from real mail. See README.md.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-150/uploads/asset/file/SYNTHETIC-151/SYNTHETIC-152?t=1787726256)
+Caption: 
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-153/uploads/asset/file/SYNTHETIC-154/SYNTHETIC-155?t=1774287533)
+Follow image link: (https://techrepublic.example/hubs/SYNTHETIC-156/)
+Caption: 
+
+Welcome, humans.
+
+OpenAI released benchmarks Tuesday for its first custom AI chip, and gave it a fittingly bold name: [Jalapeño](https://axios.example/2026/08/25/SYNTHETIC-157). The chip beat NVIDIA and other rivals at running (not training) AI models like DeepSeek R1 (a popular rival AI model), all while using less energy.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-158/uploads/asset/file/SYNTHETIC-159/image.png?t=1787725710)
+Follow image link: (https://openai.example/index/SYNTHETIC-160/)
+Caption: OpenAI's own benchmarks for Jalapeño, and the pepper name is earning its keep: up to 4.1x faster than the current best chip at spitting out tokens (the words/units an AI model generates per response) for models like DeepSeek R1 and Kimi K2.5.
+
+It's part of a bigger shift. Every major AI lab, including Google, Amazon, Microsoft, and now Anthropic, is racing to build its own chips instead of depending entirely on NVIDIA. OpenAI plans a small batch of Jalapeño-powered systems this year, with more next year, plus two newer chip generations already in the works.
+
+Only catch: Jalapeño can't train new models from scratch, so OpenAI still needs NVIDIA's chips for that part. _Even the spiciest pepper still needs someone else's kitchen._
+
+**Here’s what happened in AI today:**
+
+* 😸 Anthropic will tell IPO investors it sees $30 trillion in potential revenue
+
+* 📰 Perplexity and NVIDIA launched a local AI agent with zero token costs
+
+* 📰 Apple's new Mac mini runs AI models up to 4x faster
+
+* 📰 OpenAI's data center chief just became the fourth exec to exit
+
+* 📰 Google added AI agents built specifically for law firms and lawyers
+
+…and a **whole lot more that you can read about here(hyperlink bold text w/ link)**.
+
+Advertise in The Neuron here! (https://info.example/SYNTHETIC-161?utm_source=SYNTHETIC-162&utm_medium=referral&utm_campaign=SYNTHETIC-163)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-164/uploads/asset/file/SYNTHETIC-165/image.png?t=1777310197)
+Caption: 
+
+# 😺 Anthropic Thinks Its Market Is Worth $30 Trillion (Yes, With A "T")
+
+Anthropic is gearing up for its IPO (when a company first sells stock to the public). And it's about to tell investors something wild. Its total addressable market, or TAM (the entire revenue opportunity if it captured every single customer), tops [$30 trillion](https://pymnts.example/news/SYNTHETIC-166/2026/SYNTHETIC-167/), according to the Wall Street Journal. That would make Anthropic's market bigger than SpaceX's, which held the previous record.
+
+Here's the deal: Anthropic currently makes about $47 billion a year. To capture even a sliver of a $30 trillion opportunity, it would need to grow more than 600 times its current size.
+
+**Here's what happened:**
+
+* Anthropic is preparing IPO paperwork pegging its total addressable market above $30 trillion, beating SpaceX's own $28.5 trillion claim from its May filing.
+
+* The number comes from estimating the value of all work AI models could theoretically do, not just chatbot subscriptions.
+
+* Anthropic's actual 2028 revenue projection is a smaller, but still massive, $190 to $200 billion, per earlier Reuters reporting.
+
+* The company more than doubled its revenue to $11.6 billion last quarter alone, up from a $47 billion annual run rate.
+
+**Why this matters:** TAM slides are usually more sales pitch than science. They exist to justify sky-high valuations and heavy spending on data centers and chips before a company proves it can capture that market. For Anthropic, whose planned IPO could value it around $2 trillion, a bigger TAM makes for an easier investor pitch. But it's also a signal for the rest of us: AI labs increasingly believe there's no corner of the economy AI won't eventually touch, from your job to your industry's entire software budget. If Anthropic's math is even directionally right, "will AI change my job" stops being a hypothetical and starts becoming a certainty.
+
+**Our take:** _Even the 1,500 biggest public companies in America only made $2.4 trillion combined last year, according to FactSet data. So Anthropic's TAM claim assumes AI eventually eats a market bigger than corporate America itself. That's either visionary or a masterclass in IPO storytelling, and probably both. Worth watching whether Wall Street actually buys the pitch once the roadshow (the investor pitch tour before a stock sale) starts, or whether $30 trillion becomes this cycle's most-quoted eye-roll._
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-168/uploads/asset/file/SYNTHETIC-169/image.png?t=1774505086)
+Caption: 
+
+**FROM OUR PARTNERS**
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-170/uploads/asset/file/SYNTHETIC-171/SYNTHETIC-172?t=1780900793)
+Follow image link: (https://techrepublic.example/hubs/SYNTHETIC-173/)
+Caption: 
+
+Plenty of companies can launch an AI pilot. Far fewer know how to make it stick. Explore this resource hub, sponsored by [Dell AI Factory with NVIDIA,](https://techrepublic.example/hubs/SYNTHETIC-174/) for strategies, decisions, and real-world lessons on turning AI into something scalable, useful, and worth the investment.
+
+[Learn More](https://techrepublic.example/hubs/SYNTHETIC-175/)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-176/uploads/asset/file/SYNTHETIC-177/image.png?t=1774646505)
+Caption: 
+
+# 🎓 AI Skill of the Day: Make Gemini Show Its Work in Sheets
+
+Don’t ask Gemini to “analyze this spreadsheet” and blindly take the answer. [Google Sheets](https://support.example/docs/answer/14356410?hl=en) gives you enough controls to make the analysis reviewable: scope Gemini to selected data, inspect **Analysis steps**, preview charts, and review an action before applying spreadsheet changes.
+
+1. Highlight the exact table or range you want analyzed.
+
+2. Ask for the finding plus the rows or cells that support it, then inspect Analysis steps.
+
+3. Preview any chart or action card before inserting or applying it.
+
+**Copy this:**
+
+```
+Analyze only the selected range. For every finding, name the rows or cells that support it. Show your analysis steps before recommending any change. Do not apply edits until I approve them.
+```
+**Have a specific skill you want to learn?** [Request it here.](https://docs.example/forms/d/e/SYNTHETIC-178/viewform)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-179/uploads/asset/file/SYNTHETIC-180/image.png?t=1777315698)
+Caption: 
+
+**FROM OUR PARTNERS**
+
+### The CX Architects: Designing the Future of Customer Experience
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-181/uploads/asset/file/SYNTHETIC-182/SYNTHETIC-183?t=1787236336)
+Follow image link: (https://fin.example/on-demand/SYNTHETIC-184?utm_source=beehiiv&utm_medium=syndication&utm_campaign=ai-fintech&utm_term=YJ4ZPRQDHV&utm_content=secondary&_bhiiv=SYNTHETIC-185&bhcl_id=SYNTHETIC-186)
+Caption: 
+
+Running a CX team used to mean following playbooks. AI changed that overnight. [Hear three leaders](https://fin.example/on-demand/SYNTHETIC-187?utm_source=beehiiv&utm_medium=syndication&utm_campaign=ai-fintech&utm_term=YJ4ZPRQDHV&utm_content=secondary&_bhiiv=SYNTHETIC-188&bhcl_id=SYNTHETIC-189) who shaped what came next, Kayla Arp, Chris Rule, and Amy Harvey, on what changed, the challenges they faced, and where CX is headed. Watch on-demand now.
+
+[Watch now](https://fin.example/on-demand/SYNTHETIC-190?utm_source=beehiiv&utm_medium=syndication&utm_campaign=ai-fintech&utm_term=YJ4ZPRQDHV&utm_content=secondary&_bhiiv=SYNTHETIC-191&bhcl_id=SYNTHETIC-192)
+
+
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-193/uploads/asset/file/SYNTHETIC-194/image.png?t=1772983496)
+Caption: 
+
+# 📰 Around the Horn
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-195/uploads/asset/file/SYNTHETIC-196/image.png?t=1787725505)
+Follow image link: (https://x.example/ChatGPT/status/2092366554965107164)
+Caption: ChatGPT just quietly became the assistant you've been begging your landlord/insurance company/the DMV to hire on your behalf. It can log into your accounts without ever seeing your password, then go handle the errands you've been avoiding for three weeks. The scary part isn't that it can do your chores. It's that it'll probably have better follow-through than you.
+
+The scary part isn't that it can do your chores. It's that it'll probably have better follow-through than you.
+
+1. [Perplexity](https://venturebeat.example/infrastructure/SYNTHETIC-197) and NVIDIA launched Portable Computer, a fully local AI agent (software that completes tasks, not just chats) with zero token costs (the usual per-use AI fees).
+
+2. [Apple](https://apple.example/newsroom/2026/08/SYNTHETIC-198/) unveiled a new Mac mini with the M6 chip, delivering up to 4x faster on-device AI performance.
+
+3. [OpenAI's data center chief](https://investing.example/news/stock-market-news/SYNTHETIC-199) exited, the fourth senior executive to leave ahead of its planned 2027 IPO.
+
+4. [Google](https://brecorder.example/news/40436482/SYNTHETIC-200) launched Gemini Enterprise for Legal, giving law firms like Weil Gotshal AI agents for contract review and research.
+
+5. [Claude's memory](https://claude.example/blog/SYNTHETIC-201) now works the same across chat and Claude Cowork (Anthropic's tool for handing off multi-step work tasks), carrying your context everywhere you work with Claude.
+
+6. [A flaw in NVIDIA's tool](https://darkreading.example/cyber-risk/SYNTHETIC-202) for deploying AI agents let attackers hijack them with a single malicious webpage visit.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-203/uploads/asset/file/SYNTHETIC-204/image.png?t=1777315670)
+Caption: 
+
+# 🍪 Treats to Try
+
+_*Asterisk = from our partners (only the first one!). __[Advertise to 700K+ readers here](https://info.example/SYNTHETIC-205)__!_
+
+1. *[ElevenLabs ](https://technologyadvice.example/r/SYNTHETIC-206)turns text into lifelike speech for voiceovers, apps, and agents; free plan, then $6/mo.
+
+2. [BrowserOS neo](https://browseros.example/neo) gives you a free browser just for your AI agents (Claude Code, Cowork, Codex, Cursor), signed into your real logins so they can actually click through the web instead of just talking about it —free to try.
+
+3. [Coldtea](https://coldtea.example/) runs AI agents that test every pull request (a proposed code change) on a real device, watch your app in production, and file the bugs they catch before your users ever see them —free to try.
+
+4. [MulmoTerminal](https://github.example/receptron/mulmoterminal) puts a whole team of coding agents like Claude Code and Codex into one browser grid, so you can watch, run, and steer all of them at once instead of babysitting a single terminal —free to try.
+
+5. [Soloop](https://soloop.example/) hands you an AI founding team (a CEO, CTO, CMO, and analyst) that plans, builds, and markets your product, so you can run a company solo (no pricing details).
+
+6. [Nitro](https://nitrotranslate.example/SYNTHETIC-207) puts professional human translation behind a single API call your AI agent can trigger on its own, no account or API key needed, across 80+ languages (pay per request, no fixed monthly price).
+
+7. [Telerik's AI Engineering tools](https://telerik.example/ai-engineering) trace every AI agent's decision, cache repeated calls so you're not billed twice for the same response, and catch cost spikes before they blow your budget (no pricing details).
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-208/uploads/asset/file/SYNTHETIC-209/image.png?t=1777315698)
+Caption: 
+
+# 📖 Midweek Wisdom
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-210/uploads/asset/file/SYNTHETIC-211/image.png?t=1787725288)
+Caption: AI adoption jumped from 21% to 89% of companies since 2017. Almost half are now scaling it, not just piloting.
+
+* **[The State of AI in 2026: On the Road to ROI](https://mckinsey.example/capabilities/quantumblack/our-insights/the-state-of-ai)** (McKinsey) — 80% of workers say AI made them more productive, but company-wide profit impact is stuck at 37%, unchanged from last year.
+
+* **[90 Percent of Execs Say AI Didn't Help Productivity, So Layoffs Will Continue](https://futurism.example/SYNTHETIC-212/SYNTHETIC-213)** (Victor Tangermann, Futurism) — over 90% of execs say AI hasn't moved the needle on jobs or output, yet layoffs blamed on AI keep coming.
+
+* **[With Limited AI Policies, Teachers Take Different Approaches in the Classroom](https://wral.example/news/education/SYNTHETIC-214/)** (Emily Walkenhorst & Destinee Patterson, WRAL) — with school AI policies still vague, one NC teacher banned laptops entirely and says student work actually improved.
+
+* **[AI Detectors Like Pangram Are Everywhere but Aren't Always Accurate](https://washingtonpost.example/technology/interactive/2026/08/25/SYNTHETIC-215/)** (Washington Post) — a top AI detector flagged part of the Pope's own encyclical on AI as AI-written, proof these tools still misfire.
+
+* **[The Dawn of Neuro-Accounting](https://ucf.example/news/SYNTHETIC-216/)** (Robert Stephens, UCF Today) — a UCF professor is pioneering "neuro-accounting," using AI and neuroscience together to study how people make better financial judgment calls under stress.
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-217/uploads/asset/file/SYNTHETIC-218/image.png?t=1777315698)
+Caption: 
+
+# New from The Neuron: AI Explained
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-219/uploads/asset/file/SYNTHETIC-220/SYNTHETIC-221?t=1786149887)
+Caption: 
+
+New episodes air **every week** on Wednesdays: [Spotify](https://open.example/show/SYNTHETIC-222) | [Apple Podcasts](https://podcasts.example/us/podcast/SYNTHETIC-223/id1742267001) | [YouTube](https://youtube.example/SYNTHETIC-224)
+
+**P.S:** We’re trying to hit** 50K subscribers** **on YouTube** this year. [Click here to help!](https://youtube.example/SYNTHETIC-225?sub_confirmation=1)
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-226/uploads/asset/file/SYNTHETIC-227/image.png?t=1774646505)
+Caption: 
+
+# A Cat’s Commentary
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-228/uploads/asset/file/SYNTHETIC-229/SYNTHETIC-230?t=1786762132)
+Caption: 
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-231/uploads/asset/file/SYNTHETIC-232/image.png?t=1777315630)
+Caption: 
+
+View image: (https://media.beehiiv.com/cdn-cgi/image/SYNTHETIC-233/uploads/asset/file/SYNTHETIC-234/image.png?t=1764643057)
+Caption: 
+
+That’s all for now. If you want to get featured above, fill out the poll below and tell us how we did today! 
+
+
+
+
+**Btw: ** We just launched a robotics newsletter! [Sign up for it here](https://roboticsinsider.example/).
+
+**P.S:** Love the newsletter, but only want to get it once per week? Don’t unsubscribe—[update your preferences here](https://theneurondaily.example/subscribe/SYNTHETIC-235/preferences).
+
+
+———
+
+You are reading a plain text version of this post. For the best experience, copy and paste this link in your browser to view the post online:
+https://theneurondaily.example/p/SYNTHETIC-236

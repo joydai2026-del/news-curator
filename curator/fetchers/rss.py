@@ -27,6 +27,14 @@ Four details that came out of review and measurement:
     to get a preview image from publishers who refuse a direct article fetch.
     Measured across the shipped feed list, this covers roughly half of them
     before a single extra request is made.
+  * **Many feeds already carry the blurb too.** The entry's own `summary` (or
+    `description`) is the publisher's sentence about their own story, and it
+    goes through exactly the same cleaning path as the title: tags out of the
+    RAW text first, then entities unescaped once. Doing it the other way round
+    deletes real content, which is the bug `clean_title` exists to prevent, so
+    the summary reuses that function rather than reimplementing it slightly
+    differently. It is stored truncated and displayed clamped, and it is never
+    written or rewritten by us.
 
 Feeds are fetched in parallel because the list is long enough that doing them
 one at a time made the run slower than the news. Concurrency is bounded and
@@ -58,6 +66,11 @@ MAX_FEED_BYTES = 8 * 1024 * 1024
 FEED_TRANSFER_TIMEOUT_FACTOR = 4
 
 _IMAGE_ENCLOSURE_TYPE = "image/"
+
+# How much of a publisher's summary we keep. The card clamps to two lines, so
+# this is about not shipping a whole article body into a static page that some
+# feeds put in `description`. It is a storage cap, not an editorial one.
+MAX_DESCRIPTION_CHARS = 600
 
 
 class FeedTruncated(Exception):
@@ -117,6 +130,36 @@ def entry_image(entry) -> str:
         if cleaned:
             return cleaned
     return ""
+
+
+def entry_summary(entry, *, limit: int = MAX_DESCRIPTION_CHARS) -> str:
+    """The publisher's own blurb for this entry, cleaned, or "".
+
+    `summary` is preferred over `description` because feedparser maps the two
+    onto the same field for RSS but keeps them distinct for Atom, where
+    `summary` is the human sentence and `content` is the article. We want the
+    sentence.
+
+    Cleaning is `clean_title` verbatim, and that is deliberate rather than lazy:
+    it is the one function in this codebase that strips markup from the RAW text
+    before unescaping entities, which is the order that does not eat `2 &lt; 3`.
+    A second, subtly different cleaner for summaries would be a second place for
+    that bug to come back.
+
+    Truncation cuts at a word boundary and marks the cut with an ellipsis, so a
+    clamped card never implies the publisher wrote a sentence that stops mid
+    word. Nothing else is added, removed or rephrased: an empty summary stays
+    empty and the card renders without one.
+    """
+    raw = entry.get("summary") or entry.get("description") or ""
+    text = clean_title(raw)
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rstrip()
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space].rstrip()
+    return cut.rstrip(".,;:!?-–—") + "…"
 
 
 def _fetch_one(source: RssSource, cfg: Config, malformed: set[str], lock: threading.Lock) -> list[Item]:
@@ -191,6 +234,7 @@ def _fetch_one(source: RssSource, cfg: Config, malformed: set[str], lock: thread
                 is_aggregator=source.is_aggregator,
                 time_is_estimated=estimated,
                 image_url=entry_image(entry),
+                description=entry_summary(entry),
                 native_categories={source.category} if source.category else set(),
             )
         )

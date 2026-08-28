@@ -111,6 +111,9 @@ class Config:
     hackernews: dict[str, Any]
     reddit: dict[str, Any]
     images: dict[str, Any] = field(default_factory=dict)
+    # The `newsletter:` block from sources.yaml, passed to the lane as a plain
+    # mapping. The lane owns its own defaults; config only validates types.
+    newsletter: dict[str, Any] = field(default_factory=dict)
 
     @property
     def topics(self) -> list[Category]:
@@ -240,6 +243,17 @@ def _parse_categories(raw: dict, path: Path) -> list[Category]:
         if not cid:
             raise ConfigError(f"{path.name}: category '{name}' produces an empty id; give it an explicit 'id'.")
 
+        # `newsletters` belongs to the pipeline's pseudo-category (the tab the
+        # newsletter lane renders into). A user category reusing the id or the
+        # name would silently share its bucket: items would be duplicated, one
+        # tab would swallow the other, and the lane's cap would replace the
+        # category's. Reviewed and rejected loudly instead.
+        if cid == "newsletters" or name.casefold() == "newsletters":
+            raise ConfigError(
+                f"{path.name}: category '{name}' uses the reserved name/id 'newsletters', "
+                "which belongs to the newsletter lane's own tab. Pick another name or id."
+            )
+
         keywords = _str_list(entry.get("keywords"), f"category '{name}' keywords", path)
         sources_raw = entry.get("sources")
         if sources_raw is not None and not isinstance(sources_raw, list):
@@ -311,7 +325,7 @@ def load_sources(path: Path) -> dict[str, Any]:
         raise ConfigError(f"{path.name}: 'rss' must be a list.")
     rss = [parse_rss_entry(entry, i, "rss", path) for i, entry in enumerate(entries)]
 
-    for key in ("settings", "ranking", "dedup", "hackernews", "reddit", "images"):
+    for key in ("settings", "ranking", "dedup", "hackernews", "reddit", "images", "newsletter"):
         if raw.get(key) is not None and not isinstance(raw[key], dict):
             raise ConfigError(f"{path.name}: '{key}' must be a mapping.")
 
@@ -328,6 +342,8 @@ def load_sources(path: Path) -> dict[str, Any]:
         ("reddit", ("weight", "request_delay_seconds")),
         ("images", ("max_bytes", "timeout", "max_fetches_per_run", "budget_seconds",
                     "workers", "retain_days", "retry_error_after_hours")),
+        ("newsletter", ("max_items", "max_age_hours", "max_messages", "overlap_hours",
+                        "request_timeout", "id_budget")),
     ):
         block = raw.get(section) or {}
         for key in keys:
@@ -338,10 +354,14 @@ def load_sources(path: Path) -> dict[str, Any]:
     if threshold is not None and not 0 < float(threshold) <= 1:
         raise ConfigError(f"{path.name}: 'dedup.title_similarity_threshold' must be between 0 and 1.")
 
-    for section in ("hackernews", "reddit", "images"):
+    for section in ("hackernews", "reddit", "images", "newsletter"):
         enabled = (raw.get(section) or {}).get("enabled")
         if enabled is not None and not isinstance(enabled, bool):
             raise ConfigError(f"{path.name}: '{section}.enabled' must be true or false.")
+
+    adapters = (raw.get("newsletter") or {}).get("adapters")
+    if adapters is not None and not isinstance(adapters, list):
+        raise ConfigError(f"{path.name}: 'newsletter.adapters' must be a list.")
 
     subs = (raw.get("reddit") or {}).get("subreddits")
     if subs is not None and not isinstance(subs, list):
@@ -363,6 +383,7 @@ def load_config(root: Path) -> Config:
         hackernews=src.get("hackernews") or {},
         reddit=src.get("reddit") or {},
         images=src.get("images") or {},
+        newsletter=src.get("newsletter") or {},
     )
 
     # Feed ids must be unique across BOTH files. A duplicate id is not cosmetic:

@@ -13,13 +13,14 @@ one.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .config import Config, ConfigError, load_config
+from .config import Category, Config, ConfigError, load_config
 from .dedup import dedupe
 from .filter import assign_categories
 from .images import ImageCache, enrich
@@ -30,6 +31,13 @@ from .render import render_site
 log = logging.getLogger("curator")
 
 IMAGE_CACHE_FILE = "image_cache.json"
+
+# The newsletter lane's pseudo-category. Constructed here, never in
+# topics.yaml: config validation rightly rejects a category with no keywords
+# and no feeds, but this one matches by the `newsletters` native tag that the
+# lane stamps on its items, so it can never be empty while the lane is lit.
+NEWSLETTER_CATEGORY_ID = "newsletters"
+NEWSLETTER_CATEGORY_NAME = "Newsletters"
 
 
 def collect(cfg: Config, *, offline: bool = False) -> list[TierResult]:
@@ -54,8 +62,106 @@ def collect(cfg: Config, *, offline: bool = False) -> list[TierResult]:
     return results
 
 
-def build(cfg: Config, results: list[TierResult], now: datetime) -> dict[str, list[Item]]:
+def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
+    """The fetch job's artifact, as items + a health line + advance() metadata.
+
+    The artifact was produced by `python -m curator.newsletter` in a separate,
+    secrets-scoped job (see that module's docstring for why). Everything in it
+    is already sanitized; this function's job is reconstruction, not trust:
+    every URL still passes through the same output-boundary validation as any
+    other item once it reaches the renderer.
+
+    Newsletter items are built `is_aggregator=True` on purpose: TLDR and
+    friends write their OWN headline for someone else's article, which is
+    exactly the case that flag documents. When the publisher's feed carried
+    the same link, the publisher's title wins the merge and the newsletter
+    copy rides along as provenance, not as the display row.
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    items: list[Item] = []
+    for record in raw.get("items", []):
+        try:
+            published = datetime.fromisoformat(record["published_at"])
+        except (KeyError, ValueError):
+            continue
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        items.append(
+            Item(
+                title=str(record.get("title") or ""),
+                url=str(record.get("url") or ""),
+                canonical_url=str(record.get("canonical_url") or ""),
+                source_id=str(record.get("source_id") or "newsletter"),
+                source_name=str(record.get("source_name") or "Newsletter"),
+                platform=str(record.get("platform") or "newsletter"),
+                published_at=published,
+                description=str(record.get("description") or ""),
+                is_newsletter=True,
+                is_aggregator=True,
+                newsletter_sender=str(record.get("newsletter_sender") or ""),
+                image_url="",  # PRIVACY RULE: never an image, whatever the artifact says
+                native_categories={NEWSLETTER_CATEGORY_ID},
+            )
+        )
+
+    dark = bool(raw.get("dark", True))
+    ok = bool(raw.get("ok", False)) and not dark
+    status = raw.get("status") or {}
+    # Per-sender hit rates always go to the LOG (and live in the artifact);
+    # the page's health note carries only PROBLEMS, because `TierResult`
+    # renders any note as "degraded" and a clean run reporting "tldr 3/3"
+    # must not read as one. An allowlisted sender whose adapter extracted
+    # nothing IS a problem, and gets its hit rate as context.
+    for adapter_id, s in sorted(status.items()):
+        if s.get("seen"):
+            log.info("newsletter adapter %-12s %d/%d stories, %d links dropped",
+                     adapter_id, s.get("extracted", 0), s.get("seen", 0),
+                     s.get("dropped_links", 0))
+    bits = []
+    pending = sorted(a for a, s in status.items() if s.get("state") == "pending")
+    if pending:
+        bits.append(f"pending adapters: {', '.join(pending)}")
+    if raw.get("unmatched_messages"):
+        bits.append(f"{raw['unmatched_messages']} messages from senders without an adapter")
+    # The fetch job's "what this run did NOT see" counters. A short batch and
+    # an authentication rejection are exactly the states that must not hide
+    # behind a healthy item count.
+    if raw.get("truncated"):
+        # Bodies are read oldest-first and the watermark stops at the newest
+        # processed message, so the remainder is a backlog that drains, never
+        # a tail that is skipped. The wording says what happens.
+        bits.append("short batch; backlog remains, read next run")
+    if raw.get("unreadable_messages"):
+        bits.append(f"{raw['unreadable_messages']} messages unreadable")
+    rejected = int(raw.get("unauthenticated_messages") or 0) + int(raw.get("unauthenticated_missing") or 0)
+    if rejected:
+        bits.append(f"{rejected} messages failed sender authentication")
+    note = str(raw.get("note") or "") if dark else "; ".join(bits)
+    tier = TierResult(tier="newsletters", items=items, ok=ok, note=note)
+
+    meta = {
+        "dark": dark,
+        "ok": bool(raw.get("ok", False)),
+        "watermark": raw.get("watermark"),
+        "hashes": list(raw.get("hashes") or []),
+    }
+    return items, tier, meta
+
+
+def build(
+    cfg: Config,
+    results: list[TierResult],
+    now: datetime,
+    *,
+    newsletter_on: bool = False,
+) -> dict[str, list[Item]]:
     raw: list[Item] = [i for r in results for i in r.items]
+
+    categories = list(cfg.categories)
+    if newsletter_on:
+        # The tab is present whenever the lane is lit, even on a quiet window.
+        # A dark lane adds no tab at all, which is the "no empty tab" rule.
+        categories.append(Category(name=NEWSLETTER_CATEGORY_NAME, id=NEWSLETTER_CATEGORY_ID))
 
     cutoff = now - timedelta(hours=cfg.max_age_hours)
     fresh = [i for i in raw if i.published_at >= cutoff]
@@ -70,11 +176,14 @@ def build(cfg: Config, results: list[TierResult], now: datetime) -> dict[str, li
     )
     log.info("deduped to %d unique items", len(deduped))
 
-    buckets = assign_categories(deduped, cfg.categories)
+    buckets = assign_categories(deduped, categories)
+    newsletter_cap = int(cfg.newsletter.get("max_items", 50) or 50)
     ranked: dict[str, list[Item]] = {}
-    for category in cfg.categories:
+    for category in categories:
         items = rank_items(buckets[category.name], category, now, cfg.ranking)
-        ranked[category.name] = items[: cfg.max_items_per_topic]
+        # The lane has its own cap and no effect on category caps.
+        cap = newsletter_cap if category.id == NEWSLETTER_CATEGORY_ID else cfg.max_items_per_topic
+        ranked[category.name] = items[:cap]
         native = sum(1 for i in ranked[category.name] if category.id in i.native_categories)
         log.info(
             "category %-22s %3d items (%d from its own feeds)",
@@ -108,6 +217,13 @@ def main(argv: list[str] | None = None) -> int:
         help=f"preview-image cache file (default: <root>/{IMAGE_CACHE_FILE})",
     )
     parser.add_argument(
+        "--newsletter-artifact",
+        type=Path,
+        default=None,
+        help="JSON artifact written by `python -m curator.newsletter` in the "
+        "secrets-scoped fetch job; absent means the lane is dark this run",
+    )
+    parser.add_argument(
         "--allow-empty",
         action="store_true",
         help="write the page even if no story matched (used by the render smoke test)",
@@ -128,7 +244,23 @@ def main(argv: list[str] | None = None) -> int:
 
     now = datetime.now(timezone.utc)
     results = collect(cfg, offline=args.offline)
-    ranked = build(cfg, results, now)
+
+    # The newsletter lane arrives pre-fetched as an artifact from its own
+    # secrets-scoped job. A missing or unreadable artifact is a dark lane and
+    # a note in the log, never a failed build of the six healthy tabs.
+    newsletter_meta: dict = {"dark": True, "ok": False}
+    if args.newsletter_artifact and args.newsletter_artifact.is_file():
+        try:
+            nl_items, nl_tier, newsletter_meta = load_newsletter_artifact(args.newsletter_artifact)
+        except (ValueError, OSError):
+            log.warning("newsletter artifact unreadable; lane dark this run")
+        else:
+            results.append(nl_tier)
+            log.info("newsletter lane: %d items (%s)", len(nl_items), nl_tier.note or "ok")
+    elif args.newsletter_artifact:
+        log.warning("newsletter artifact %s missing; lane dark this run", args.newsletter_artifact)
+
+    ranked = build(cfg, results, now, newsletter_on=not newsletter_meta.get("dark", True))
     visible = sum(len(v) for v in ranked.values())
 
     # The guard is on VISIBLE rows, and it runs after filtering, because that is
@@ -148,8 +280,11 @@ def main(argv: list[str] | None = None) -> int:
     # rows, not the number of headlines collected.
     cache_path = args.image_cache or (args.root / IMAGE_CACHE_FILE)
     cache = ImageCache.load(cache_path)
+    # Newsletter items are excluded here AND refused inside enrich(): the
+    # privacy rule (no article fetch, no cache entry for newsletter-derived
+    # URLs) should survive either guard being refactored away.
     stats = enrich(
-        [i for rows in ranked.values() for i in rows],
+        [i for rows in ranked.values() for i in rows if not i.is_newsletter],
         cache,
         now,
         user_agent=cfg.user_agent,
@@ -192,6 +327,28 @@ def main(argv: list[str] | None = None) -> int:
         cname_source=args.root / "CNAME",
     )
     log.info("wrote %s (%d rows across %d topics)", path, visible, len(ranked))
+
+    # The cursor moves ONLY here, after the page is on disk and the publish
+    # guard passed. A run that fetched mail and then died re-reads that mail
+    # next hour (the overlap window and the salted hashes make that harmless);
+    # a run that published moves the watermark so mail is never re-shown.
+    if newsletter_meta.get("ok") and not newsletter_meta.get("dark") and newsletter_meta.get("watermark"):
+        from .newsletter import state as newsletter_state
+
+        try:
+            watermark = datetime.fromisoformat(str(newsletter_meta["watermark"]))
+            state_path = args.root / newsletter_state.STATE_FILENAME
+            st = newsletter_state.load(state_path, now=now)
+            newsletter_state.advance(
+                state_path, st,
+                watermark=watermark,
+                new_hashes=list(newsletter_meta.get("hashes") or []),
+            )
+            log.info("newsletter cursor advanced to %s", watermark.isoformat())
+        except (ValueError, OSError) as exc:
+            # A cursor that failed to advance means one hour of re-read mail,
+            # not lost mail. Say so and finish the run as a success.
+            log.warning("newsletter cursor not advanced (%s)", type(exc).__name__)
     return 0
 
 

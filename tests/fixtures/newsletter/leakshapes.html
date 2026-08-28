@@ -1,0 +1,105 @@
+<!-- SYNTHETIC FIXTURE. Nothing here is a real newsletter, a real address, or a
+     real identifier. This file exists to carry the FIVE link shapes that
+     review round 1 proved reached the public page (finding M2), plus two
+     shapes that must survive, so the end-to-end privacy test is provably not
+     vacuous: it can only pass by removing something.
+
+     Shapes carried, in the order they appear:
+       1. a TLDR-style wrapper whose destination carries the reader address
+       2. the reader address sitting in a bare path segment
+       3. ?subid=JJ7742          (too short for the old token-shape blocklist)
+       4. ?token=aBcDeFgHiJkLmNoP (16 chars, mixed case, no digit: also missed)
+       5. ?ref=jj7742
+       6. ?id=<32 lowercase letters>  (review round 2, R2-3: the content
+          allowlist used to keep `id` and no token-shape test can see this
+          value, because it has no digits, no separators and no mixed case)
+       7. an opaque tracker-host link that must resolve to nothing
+       8. a clean publisher link that must survive untouched
+     The layout is TLDR-shaped (bold headline link, blurb, minute-read suffix)
+     so the tldr adapter parses it. -->
+<html>
+  <body>
+    <h1>SYNTHETIC FIXTURE: leak shapes</h1>
+
+    <h2>Big Tech &amp; Startups</h2>
+
+    <p>
+      <strong><a href="https://tracking.tldrnewsletter.com/CL0/https:%3A%2F%2Fexample.com%2Fbig-ai-story%3Femail%3Dfixture-reader%2540example.invalid/1/010001SUBleak7f3a9c2b4d6e8f0a/abc">A very large model lands in the clinic</a></strong>
+      (3 minute read)
+    </p>
+    <p>
+      The wrapper unwraps cleanly and the destination it hands back carries the
+      reader address in its query string, which is the leak that reached a live
+      page in review round one.
+    </p>
+
+    <p>
+      <strong><a href="https://example.com/a/fixture-reader@example.invalid/article">Siting rules move to the states</a></strong>
+      (4 minute read)
+    </p>
+    <p>
+      No query string at all here. The address is a path segment, which the old
+      shape detector could not see because it excluded the at sign.
+    </p>
+
+    <h2>Science &amp; Futuristic Technology</h2>
+
+    <p>
+      <strong><a href="https://example.com/inference-chip-story?subid=JJ7742">Inference chips get cheaper again</a></strong>
+      (2 minute read)
+    </p>
+    <p>
+      Six characters, so the old length floor never looked at it.
+    </p>
+
+    <p>
+      <strong><a href="https://example.com/agent-liability?token=aBcDeFgHiJkLmNoP">Agent liability guidance arrives</a></strong>
+      (5 minute read)
+    </p>
+    <p>
+      Sixteen characters, mixed case, no digit, which is precisely the gap in
+      the old mixed-case test.
+    </p>
+
+    <p>
+      <strong><a href="https://example.com/settlement-windows?ref=jj7742">Settlement windows keep shrinking</a></strong>
+      (3 minute read)
+    </p>
+    <p>
+      A referral handle, lower case and short.
+    </p>
+
+    <p>
+      <strong><a href="https://example.com/opaque-id-story?id=fsvmkqjprtcnxldghzwyabueokinqmcv">Model cards arrive in the clinic</a></strong>
+      (4 minute read)
+    </p>
+    <p>
+      Thirty-two lowercase letters with no digits and no separators, sitting in
+      the one parameter name a subscriber id is most likely to use.
+    </p>
+
+    <h2>Miscellaneous</h2>
+
+    <p>
+      <strong><a href="https://link.mail.beehiiv.com/ss/c/SUBleak93d17ea4b8f2605c1d9e7a3/aGVhZGVy/01">An opaque tracker with nothing inside it</a></strong>
+      (1 minute read)
+    </p>
+    <p>
+      Nothing is recoverable from this one, so the story must render with no
+      link at all rather than with a partial tracker URL.
+    </p>
+
+    <p>
+      <strong><a href="https://publisher.example/quantum-chip-story">Apple ships a quantum chip</a></strong>
+      (6 minute read)
+    </p>
+    <p>
+      A clean publisher link, carried so the test can tell "the sanitizer works"
+      from "the renderer dropped everything".
+    </p>
+
+    <p>
+      <a href="https://link.mail.beehiiv.com/unsub/SUBleak7f3a9c2b4d6e8f0a?email=fixture-reader%40example.invalid">Unsubscribe</a>
+    </p>
+  </body>
+</html>

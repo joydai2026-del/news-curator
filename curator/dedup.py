@@ -32,6 +32,12 @@ from difflib import SequenceMatcher
 from .models import Item
 from .normalize import fold_text
 
+# How many alternate addresses one story may carry. This is display data on an
+# unfolded card, and six named outlets is already more than anyone reads. It is
+# also the bound that stops a pathological run (one wire story syndicated forty
+# times) from putting forty links behind one headline.
+MAX_CLUSTER_LINKS = 6
+
 _PUNCT = re.compile(r"[^\w\s]")
 _WS = re.compile(r"\s+")
 _NUM = re.compile(r"\d+")
@@ -85,6 +91,54 @@ def same_story(a: Item, b: Item, threshold: float) -> bool:
     return title_similarity(a.title, b.title) >= threshold
 
 
+def _collect_cluster(keep: Item, drop: Item) -> None:
+    """Remember the OTHER address this story also lived at.
+
+    An entry is added for `drop` itself only when its canonical URL differs from
+    the survivor's, and the condition is the whole meaning of the field. Pass 1
+    merges rows that share a canonical URL, so there is no other address to
+    record there: what happened is that a second SOURCE carried the same link,
+    and the page already reports that, precisely and numerically, as the "N
+    sources" badge. Duplicating it here as an "also covered by" pointing back at
+    the same link would say the same thing twice and less accurately.
+
+    Pass 2 is where this earns its place. A fuzzy merge collapses two genuinely
+    different URLs, and without this the losing outlet vanished silently. Now
+    the unfolded card names it and links it, which also makes the fuzzy pass
+    auditable by eye for the first time: a wrong merge is now visible on the
+    page rather than invisible in a log line.
+
+    Entries a dropped row had already collected ride along either way, so a
+    chain of merges does not lose the outlets it gathered on the way.
+
+    NEWSLETTER URLS NEVER ENTER A CLUSTER. Review round 1 proved this was the
+    one channel a newsletter-derived link could ride onto a card with
+    `is_newsletter=False`, where every newsletter guard (the image skip, the
+    `data-newsletter` marker, the workflow check) is blind to it. The reader
+    loses nothing: the newsletter's coverage of the story is a paraphrase of
+    the same article, and the publisher link the survivor already carries is
+    the better address. The privacy rule wins over completeness.
+    """
+    if len(keep.cluster) >= MAX_CLUSTER_LINKS:
+        return
+
+    incoming: list[dict] = []
+    if drop.canonical_url != keep.canonical_url and drop.url and not drop.is_newsletter:
+        incoming.append({"source_name": drop.source_name, "url": drop.url})
+    incoming.extend(entry for entry in drop.cluster if isinstance(entry, dict))
+
+    seen = {keep.url, keep.canonical_url}
+    seen.update(str(entry.get("url") or "") for entry in keep.cluster)
+    for entry in incoming:
+        url = str(entry.get("url") or "")
+        if not url or url in seen:
+            continue
+        keep.cluster.append({"source_name": str(entry.get("source_name") or ""), "url": url})
+        seen.add(url)
+        if len(keep.cluster) >= MAX_CLUSTER_LINKS:
+            return
+
+
 def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     """Fold `drop` into `keep`.
 
@@ -97,9 +151,21 @@ def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     An image is inherited either way. It is a picture, not a claim about the
     story, and taking the surviving row's own image first keeps the publisher's
     artwork with the publisher's headline.
+
+    A DESCRIPTION is deliberately NOT inherited, and the asymmetry with the
+    image is the point. A picture is a picture; a blurb is prose one outlet
+    wrote about their own piece, and showing The Register's sentence under Ars
+    Technica's headline is exactly the misattribution the aggregator-preference
+    rule above exists to prevent. The survivor shows its own summary or none.
+    In practice this costs nothing: publishers outrank aggregators in
+    `_preference`, so the row that survives is usually the one that came with a
+    summary in the first place.
     """
     if count_echo:
         keep.echo_platforms |= drop.echo_platforms
+    # Both passes. What the merged-away row leaves behind is its ADDRESS, which
+    # is a fact either way, unlike the badge, which is a claim.
+    _collect_cluster(keep, drop)
     # Category membership is unioned on BOTH passes, unlike the echo badge, and
     # the asymmetry is deliberate.
     #

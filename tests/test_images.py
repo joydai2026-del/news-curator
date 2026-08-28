@@ -265,6 +265,52 @@ class TestEnrich:
         assert enrich([], ImageCache(None), NOW, user_agent="t")["total"] == 0
 
 
+class TestNewsletterItemsAreNeverLookedUp:
+    """A newsletter URL can carry a subscriber identifier. Two consequences.
+
+    Requesting one tells the sender which subscriber's mail was processed and
+    when. Writing one into `image_cache.json` publishes it, permanently, in a
+    public repository. The pipeline is also expected to skip these, and that is
+    exactly why the guard is repeated here: a privacy rule that lives in only
+    one layer is one refactor away from being gone.
+    """
+
+    def test_a_newsletter_item_is_never_fetched(self):
+        item = make_item("A newsletter story", "https://sender.example/r/abc123")
+        item.is_newsletter = True
+        stats = enrich([item], ImageCache(None), NOW, user_agent="t")
+        assert stats["newsletter_skipped"] == 1
+        assert stats["fetched"] == 0 and stats["from_cache"] == 0
+        assert item.image_url == ""
+
+    def test_a_newsletter_item_never_reaches_the_cache_at_all(self):
+        cache = ImageCache(None)
+        item = make_item("A newsletter story", "https://sender.example/r/abc123")
+        item.is_newsletter = True
+        enrich([item], cache, NOW, user_agent="t")
+        assert cache.entries == {}
+
+    def test_a_cached_image_is_not_even_applied_to_a_newsletter_item(self):
+        # Not merely "we do not ask again": we do not attach one either. The
+        # card renders its typographic panel, which is the design.
+        cache = ImageCache(None)
+        item = make_item("A newsletter story", "https://sender.example/r/abc123")
+        item.is_newsletter = True
+        cache.put(item.canonical_url, "https://cdn.example/c.jpg", "ok", NOW)
+        enrich([item], cache, NOW, user_agent="t")
+        assert item.image_url == ""
+
+    def test_ordinary_items_alongside_one_are_unaffected(self):
+        cache = ImageCache(None)
+        ordinary = make_item("A story", "https://e.example/a")
+        cache.put(ordinary.canonical_url, "https://cdn.example/c.jpg", "ok", NOW)
+        letter = make_item("A newsletter story", "https://sender.example/r/abc123")
+        letter.is_newsletter = True
+        stats = enrich([letter, ordinary], cache, NOW, user_agent="t")
+        assert stats["total"] == 2 and stats["newsletter_skipped"] == 1
+        assert ordinary.image_url == "https://cdn.example/c.jpg"
+
+
 class TestPublicHostGuard:
     """v1 never fetched a destination page, so this is new attack surface.
 
