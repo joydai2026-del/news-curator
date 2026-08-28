@@ -40,10 +40,12 @@ You do not need a developer, a checkout, or an account system.
 1. Click **"Add a topic or keyword"** in the page footer. It opens
    [`topics.yaml`](topics.yaml) in GitHub's own editor.
 2. Find your section, add a line under `keywords`, commit.
-3. The page rebuilds on that commit.
+3. If you can commit to the repository, the page rebuilds on that commit. If you
+   cannot, GitHub turns your edit into a pull request instead, and it goes live
+   once the owner merges it.
 
-GitHub decides who is allowed to save it: whoever can push to the repo edits it
-directly, and whoever cannot gets GitHub's fork-and-pull-request flow. There is
+GitHub decides who is allowed to save it, which is the point: whoever can push
+edits directly, and whoever cannot gets the fork-and-pull-request flow. There is
 no form to secure and no new place for a secret to leak, which is why this is
 one link rather than a service.
 
@@ -197,17 +199,17 @@ shows one extra row, a wrong merge silently deletes a story.
 ## What this promises, and what it does not
 
 **It promises:** every headline is the text its source handed us at build time,
-linked to the address that source gave. Where a story has a picture, it is the
-preview image the publisher declared for it, hotlinked from them rather than
-copied. Nothing is written, rewritten or summarized by a machine. There is no LLM
+linked to the address that source gave. Each row also carries the address of the
+preview image its publisher declared, which the page does not yet display.
+Nothing is written, rewritten or summarized by a machine. There is no LLM
 anywhere in this pipeline.
 
 **It does not promise:**
 
-- That a link is still live or still carries that title. The only thing read from
-  a linked page is its `<head>`, to find the image tag the publisher put there
-  for exactly this purpose. No article text is fetched, stored or summarized, so
-  a link may have moved, changed or died since the build.
+- That a link is still live or still carries that title. Building the page reads
+  a linked page only as far as the end of its head, to find the image tag the
+  publisher put there for exactly this purpose. No article text is stored or
+  summarized, so a link may have moved, changed or died since the build.
 - That anything in a linked article is true. No claim is checked.
 - That a keyword match means the story is genuinely *about* your topic. Matching
   proves a phrase appears in a headline. That is a weaker claim, it is checkable
@@ -265,7 +267,7 @@ whichever of two places is cheaper:
 Answers are cached in `image_cache.json`, committed to the repo and keyed by
 canonical URL. A found image and a definitive "this page declares none" are
 both kept, so an hourly job does not ask the same question again: a live run
-resolved 158 of 180 rows, and the next run fetched nothing. A refusal or a
+resolved 157 of 180 rows, and the next run fetched nothing. A refusal or a
 timeout is not definitive, so it is retried after 24 hours, and a link that
 stops appearing is pruned after 45 days and would be looked up again if it came
 back.
@@ -300,7 +302,7 @@ curator/
   fetchers/          hn.py, rss.py, reddit.py
 scripts/probe_sources.py   verify every source yourself
 docs/plans/                the v1 spec, its adversarial review, and the v1.1 notes
-tests/                     258 tests, no network
+tests/                     262 tests, network blocked in conftest
 ```
 
 Three dependencies, all pinned: `requests`, `feedparser`, `PyYAML`. A tool that

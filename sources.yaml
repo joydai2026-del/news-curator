@@ -207,6 +207,8 @@ rss:
   - {id: ieee-comp,    name: IEEE Spectrum Computing, url: "https://spectrum.ieee.org/feeds/topic/computing.rss", weight: 1.05}
   - {id: quanta,       name: Quanta Magazine,  url: "https://api.quantamagazine.org/feed/",        weight: 1.05}
   - {id: techxplore,   name: Tech Xplore,      url: "https://techxplore.com/rss-feed/",            weight: 0.85}
+  # Quantum PHYSICS, not quantum computing. Shared, so keywords decide.
+  - {id: physorg-q,    name: Phys.org Quantum, url: "https://phys.org/rss-feed/physics-news/quantum-physics/", weight: 0.95}
   - {id: googleai,     name: Google Blog,      url: "https://blog.google/technology/ai/rss/",      weight: 0.9}
 
   # Community aggregators: submitter-written titles, so flagged and down-weighted.

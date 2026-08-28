@@ -760,12 +760,12 @@ Live end-to-end run on 2026-08-28, cold cache:
 | Space technology | 30 | 25 |
 | Biotechnology | 30 | 27 |
 
-2,880 items collected across 58 feeds (18 shared, 40 curated) plus Hacker News,
-770 inside the 48-hour window, 718 unique after dedup, 180 rendered. Every
+2,875 items collected across 58 feeds (19 shared, 39 curated) plus Hacker News,
+766 inside the 48-hour window, 715 unique after dedup, 180 rendered. Every
 category hit the `max_items_per_topic` cap of 30, so none of the six is thin.
 
-Preview images: **158 of 180 rows (88%)**, of which 86 came free from feeds and
-72 from an `og:image` lookup; 3 pages declare no image and 18 refused the fetch.
+Preview images: **157 of 180 rows (87%)**, of which 86 came free from feeds and
+71 from an `og:image` lookup; 3 pages declare no image and 19 refused the fetch.
 The refusals are concentrated in publishers that serve a feed happily and return
 403 to a direct article fetch, which is exactly why the feed is read first. A
 second run resolved everything from cache and fetched nothing, which is the
@@ -778,7 +778,7 @@ The low AI native count (5 of 30) is expected rather than a defect: AI is the on
 category the shared pool already covers heavily, so general-technology
 publications win most of those slots on recency and keyword strength.
 
-Tests: **258, no network.** The new ones cover category parsing, the two ways to
+Tests: **262, and the suite now ENFORCES "no network"** with an autouse socket blocker rather than asserting it in a README line. The new ones cover category parsing, the two ways to
 belong to a category, native ranking, the `og:image` parser against offline
 markup fixtures, feed-declared image extraction, cache hit/miss/retry/prune
 behaviour, and the rendered image and add-topic output.
@@ -871,3 +871,77 @@ and fail loudly if it is reached. Test count went 231 -> 258, with new coverage
 for redirect SSRF, DNS-based private-host bypass, byte-cap enforcement,
 definitive-versus-truncated outcomes, fuzzy-merge category loss, and a feed that
 returns 200 and yields nothing usable.
+
+### Second review round (fresh-context Claude adversary)
+
+A second reviewer, with no context from the build, went further than the first
+and caught four things the Codex round missed, two of which were live bugs in
+already-pushed code.
+
+1. **The fuzzy-dedup fix from round one was incomplete, and the reviewer proved
+   it with a repro.** Round one refused to merge two rows whose curated
+   categories DISAGREED. That misses the common case: a curated energy row and
+   a higher-weight GENERAL row (no categories at all) still merged, the general
+   copy won on weight, and the story matched no keyword, so it vanished from the
+   page entirely. The headline it vanished was the flagship example this whole
+   design is justified by, "Vogtle 4 enters commercial operation".
+
+   The fix is the opposite of round one's: `native_categories` is now unioned on
+   BOTH dedup passes. The reviewer's argument is decisive, and it is that the
+   code was already inconsistent: a fuzzy merge already inherits the image, the
+   score and the publish time from the losing row, so it already trusts the
+   same-story assertion. Withholding only the category did not mean "we declined
+   to guess", it meant the row silently disappeared. The echo badge stays gated
+   on certainty, because it makes a public numeric claim; a section assignment
+   does not.
+
+2. **The SSRF fix from round one had a hole, also with a live repro.**
+   Resolving the hostname closed `evil.example -> 169.254.169.254`, but every
+   non-dotted-quad way of writing an address (`2130706433`, `127.1`, `0x7f.1`)
+   fails `ipaddress.ip_address` and was treated as a name. Worse,
+   `0177.0.0.1` resolves via `getaddrinfo` to `177.0.0.1`, which IS global and
+   so PASSED, while a client applying octal rules connects to `127.0.0.1`. Two
+   parsers disagreeing is a bypass, not a residual. A hostname whose last label
+   is all-digits or `0x`-prefixed is now refused outright, since no real domain
+   ends that way.
+
+3. **`budget_seconds` bounded nothing, measured at 20x over.** `as_completed`
+   had no timeout, so if every request stalled the loop never reached the
+   budget check; and exiting the `with ThreadPoolExecutor` block called
+   `shutdown(wait=True)`, which joined every stalled worker anyway. The budget
+   is now armed on the wait itself and the pool is shut down with `wait=False,
+   cancel_futures=True`. Measured before and after on eight stalling hosts with
+   `budget_seconds=1`: **20.0s -> 1.0s**. `sources.yaml` claimed this bound was
+   real; now it is.
+
+4. **A shipped config bug.** `Phys.org Quantum` was listed as a curated feed
+   under "Quantum computing". Listing a feed there asserts it is single-subject
+   for that section, and a quantum-PHYSICS feed publishes entanglement and
+   optics work with no computing angle, which bypassed keyword matching
+   entirely. It moved to the shared pool where the quantum keywords decide.
+   `topics.yaml` warns against bare "quantum" as a keyword for this exact
+   reason; the same care had to apply to feeds.
+
+Also fixed: a prune fallback that made any row with an unparseable `seen_at`
+immortal (`cutoff < cutoff` is False), so the file could grow without bound
+after one hand edit; `safe_url` validated a control-stripped string and returned
+the raw one, which only stayed safe by two parsers coincidentally agreeing;
+`retain_days: 0` silently becoming 45; `hackernews.budget_seconds` missing from
+the load-time validation list; and cap/budget exhaustion being invisible, which
+the Hacker News tier already surfaces and this one did not.
+
+Two more false claims went with them. The footer described a "hotlinked" picture
+on a page that displays none and makes no third-party request, and promised that
+saving `topics.yaml` "rebuilds this page" to an audience whose edits become a
+pull request on their own fork and rebuild nothing. Both now say what happens.
+
+**The reviewer's sharpest structural point** was that `tests/test_images.py`
+opened by claiming "every fixture below is markup or a fake transport" when the
+file contained no transport at all, so four defences documented as "learned by
+measurement, encoded below" had no regression test. Those exist now, and the
+suite no longer takes "no network" on trust: an autouse fixture in
+`conftest.py` blocks `connect`, `create_connection` and `getaddrinfo`, and tests
+that genuinely resolve a host opt in with `@pytest.mark.allow_socket`. It caught
+a test doing real DNS on its first run.
+
+Round one: 231 -> 258 tests. Round two: 258 -> 262, plus the blocker.

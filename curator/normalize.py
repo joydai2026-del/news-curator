@@ -30,6 +30,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Tab, LF and CR are stripped from URLs by every browser, so a URL containing
+# them is not the URL that gets requested. `safe_url` must therefore validate
+# and RETURN the same string, or it is vouching for one thing and handing back
+# another and only coincidence keeps the two agreeing.
+_URL_STRIP = re.compile(r"[\t\n\r]")
 
 ALLOWED_SCHEMES = ("http", "https")
 
@@ -85,7 +90,7 @@ def safe_url(raw: str) -> str | None:
     """
     if not raw:
         return None
-    candidate = _CTRL.sub("", str(raw)).strip()
+    candidate = _URL_STRIP.sub("", _CTRL.sub("", str(raw))).strip()
     if not candidate:
         return None
     try:

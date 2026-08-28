@@ -1,6 +1,6 @@
 """Scoring one item, for one topic, at one moment.
 
-Four terms, all weights in config. The function is pure and takes an explicit
+Five terms, all weights in config. The function is pure and takes an explicit
 `now`, so it can be tested without mocking the clock.
 
 Native popularity (Hacker News points) deliberately does NOT appear as a fifth

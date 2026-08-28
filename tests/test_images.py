@@ -8,6 +8,8 @@ morning.
 from __future__ import annotations
 
 import json
+
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from curator.fetchers.rss import entry_image
@@ -271,8 +273,13 @@ class TestPublicHostGuard:
     meta tag can never be parsed onto a public page.
     """
 
+    @pytest.mark.allow_socket
     def test_ordinary_public_hosts_pass(self):
+        # The one place a real lookup is the point. Everything else in the suite
+        # is blocked from the network by the autouse fixture in conftest.
         assert is_public_host("https://techcrunch.com/a")
+
+    def test_a_public_ip_literal_passes_without_resolving(self):
         assert is_public_host("https://1.1.1.1/a")
 
     def test_loopback_is_refused(self):
@@ -605,3 +612,27 @@ class TestFetchImageMetaTransport:
             max_bytes=65536, session=NeverSession(),
         )
         assert image is None and outcome == "error"
+
+
+class TestNonCanonicalIpFormsAreRefused:
+    """Every one of these is 127.0.0.1 or the metadata endpoint to a C resolver.
+
+    None of them parses as an IP with `ipaddress`, so a literal-only check waves
+    them through. `0177.0.0.1` is the sharp case: getaddrinfo answers
+    177.0.0.1 (global, so it would PASS) while a client applying octal rules
+    connects to 127.0.0.1. Two parsers disagreeing is a bypass, not a residual.
+    """
+
+    def test_decimal_and_octal_and_hex_forms_are_refused(self):
+        for host in ("2130706433", "2852039166", "127.1", "0177.0.0.1", "0x7f.1", "127.0.0.001", "0"):
+            assert not is_public_host(f"http://{host}/a"), host
+
+    def test_a_real_domain_is_still_allowed(self, monkeypatch):
+        import socket as s
+        from curator import images
+
+        monkeypatch.setattr(
+            images.socket, "getaddrinfo",
+            lambda *a, **k: [(s.AF_INET, s.SOCK_STREAM, 6, "", ("93.184.216.34", 0))],
+        )
+        assert is_public_host("https://techcrunch.com/2026/08/28/a-story")

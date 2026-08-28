@@ -23,7 +23,10 @@ Three corrections from review are load-bearing here:
 
 v1.1 adds a preview image per row, carried as a `data-image` attribute rather
 than an `<img>`. The layout is a separate decision and is deliberately untouched
-here, so this ships the DATA a future layout needs without pre-empting it. The
+here, so this ships the DATA a future layout needs without pre-empting it. That
+also means the page still makes NO third-party requests: the address is present,
+nothing loads it, and the footer says so rather than describing a hotlinking
+policy for a picture nobody can see yet. The
 attribute holds the publisher's own image address, hotlinked, and is absent when
 the publisher declared none, which is why the renderer never invents a
 placeholder: an empty attribute would look like an answer.
@@ -307,8 +310,9 @@ def render_html(
         # link, pointed straight at the file rather than at the repo.
         add_line = (
             f'<p><a class="add-topic" href="{_e(edit_url)}">Add a topic or keyword</a> '
-            "&mdash; edit <code>topics.yaml</code> on GitHub. Signing in decides who may save it, "
-            "and saving it rebuilds this page.</p>"
+            "&mdash; edit <code>topics.yaml</code> on GitHub. If you can commit to this "
+            "repository, saving rebuilds the page. Otherwise GitHub opens a pull request "
+            "for the owner to merge, and it appears after they do.</p>"
         )
     else:
         add_line = (
@@ -350,11 +354,13 @@ def render_html(
      aggregator, where the headline is written by whoever submitted the link rather than
      by the publisher. Nothing on this page is written, rewritten or summarized by a
      machine.</p>
-  <p>Where a story carries a picture, it is the preview image the publisher declared for
-     it, taken from their feed or from the <code>og:image</code> tag on their page, and
-     hotlinked from them rather than copied. No article text is fetched, stored or
-     summarized, no claim in any linked article has been checked, and a link may have
-     moved, changed or died since the build.</p>
+  <p>Each story also carries the address of the preview image its publisher declared for
+     it, taken from their feed or from the <code>og:image</code> tag on their page. This
+     page does not display it and your browser never requests it, so there are still no
+     third-party requests of any kind here. Building the page reads the head of an
+     article to find that tag; no article text is stored or summarized, no claim in any
+     linked article has been checked, and a link may have moved, changed or died since
+     the build.</p>
   <p class="health">Sources this run &mdash; {_health_line(results)}</p>
   {add_line}
   {repo_line}

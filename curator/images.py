@@ -108,9 +108,9 @@ def is_public_host(url: str) -> bool:
     does that.
 
     The residual is a DNS rebind between this check and the connect, which
-    needs pinning the resolved address into the socket to close. That is
-    recorded rather than half-solved: nothing is returned to the page, and the
-    request happens in an ephemeral container on a public repository.
+    needs pinning the resolved address into the socket to close. That one is
+    recorded rather than half-solved: it is a race an attacker must win against
+    a request made from an ephemeral container on a public repository.
     """
     host = (urlsplit(url).hostname or "").strip("[]")
     if not host:
@@ -124,6 +124,20 @@ def is_public_host(url: str) -> bool:
         pass
     else:
         return address.is_global
+
+    # Not a canonical address, so it is either a real name or an address written
+    # in a form designed to slip past a check like this one. `2130706433`,
+    # `127.1`, `0x7f.1` and `0177.0.0.1` are all 127.0.0.1 to a C resolver and
+    # none of them parses as an IP above.
+    #
+    # `0177.0.0.1` is the one that proves the point: `getaddrinfo` returns
+    # 177.0.0.1 (global, so it would PASS) while a client applying octal rules
+    # connects to 127.0.0.1. Two parsers disagreeing is not a residual to
+    # document, it is a bypass. A real domain never ends in an all-numeric
+    # label, so requiring that is both cheap and complete.
+    last = host.rsplit(".", 1)[-1]
+    if not last or last.isdigit() or last.lower().startswith("0x"):
+        return False
 
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
@@ -390,10 +404,19 @@ class ImageCache:
     def prune(self, now: datetime, *, retain_days: float) -> int:
         """Drop links we have not seen in a while, so the file cannot grow forever."""
         cutoff = now - timedelta(days=retain_days)
-        stale = [
-            k for k, v in self.entries.items()
-            if not isinstance(v, dict) or (_parse_time(v.get("seen_at")) or cutoff) < cutoff
-        ]
+        # A row whose `seen_at` will not parse is pruned, not kept. The earlier
+        # `or cutoff` fallback made it `cutoff < cutoff`, i.e. False, so any
+        # malformed row became immortal and the file could grow without bound
+        # after a single hand edit or merge-conflict resolution. Failing toward
+        # dropping a cache entry is free; failing toward keeping it is not.
+        stale = []
+        for key, row in self.entries.items():
+            if not isinstance(row, dict):
+                stale.append(key)
+                continue
+            seen = _parse_time(row.get("seen_at"))
+            if seen is None or seen < cutoff:
+                stale.append(key)
         for key in stale:
             del self.entries[key]
         if stale:
@@ -453,7 +476,8 @@ def enrich(
     is a smaller problem than a build that did not happen.
     """
     cfg = config or {}
-    stats = {"total": 0, "from_feed": 0, "from_cache": 0, "fetched": 0, "no_image": 0, "errors": 0}
+    stats = {"total": 0, "from_feed": 0, "from_cache": 0, "fetched": 0,
+             "no_image": 0, "errors": 0, "capped": 0, "budget_hit": 0}
 
     # De-duplicate by canonical URL: the same story shown in two categories is
     # two Item objects and exactly one article to ask about.
@@ -497,10 +521,11 @@ def enrich(
     max_bytes = int(_setting(cfg, "max_bytes"))
     workers = max(1, min(16, int(_setting(cfg, "workers"))))
 
-    capped = len(todo) > max_fetches
+    if len(todo) > max_fetches:
+        stats["capped"] = len(todo) - max_fetches
+        log.info("image lookups capped at %d this run; %d resolve next run",
+                 max_fetches, stats["capped"])
     todo = todo[:max_fetches]
-    if capped:
-        log.info("image lookups capped at %d this run; the rest resolve next run", max_fetches)
 
     started = time.monotonic()
 
@@ -528,13 +553,20 @@ def enrich(
         )
         return key, image, outcome
 
+    pool = futures.ThreadPoolExecutor(max_workers=workers)
     try:
-        with futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            jobs = {pool.submit(work, key): key for key in todo}
-            for future in futures.as_completed(jobs):
+        jobs = {pool.submit(work, key): key for key in todo}
+        # `as_completed` WITHOUT a timeout was the hole in this budget: if
+        # every in-flight request stalled, the loop blocked forever and the
+        # check at the bottom was never reached. The budget has to be armed
+        # here, on the wait itself, or it only fires when work is already
+        # finishing, which is when it is not needed.
+        try:
+            completed = futures.as_completed(jobs, timeout=budget)
+            for future in completed:
                 try:
                     key, image, outcome = future.result()
-                except Exception as exc:  # a bug in the worker must not lose the build
+                except Exception as exc:  # a worker bug must not lose the build
                     log.warning("image lookup raised: %s", exc)
                     stats["errors"] += 1
                     continue
@@ -550,13 +582,26 @@ def enrich(
                     stats["errors"] += 1
 
                 if time.monotonic() - started > budget:
-                    # Stop starting new work. Whatever is in flight finishes,
-                    # and the rest is picked up next run from the cache miss.
                     log.info("image time budget of %.0fs reached", budget)
-                    for pending_future in jobs:
-                        pending_future.cancel()
-                    break
+                    raise futures.TimeoutError
+        except futures.TimeoutError:
+            # Whatever has not finished is simply a cache miss next run.
+            # Cancel what has not started; a request already in flight is
+            # bounded by its own transfer deadline, not by this.
+            unfinished = [f for f in jobs if not f.done()]
+            stats["budget_hit"] = len(unfinished)
+            for future in unfinished:
+                future.cancel()
+            log.info("image budget left %d lookups for the next run", len(unfinished))
     finally:
+        # `wait=False` is the other half of the budget. Exiting a `with` block
+        # calls shutdown(wait=True), which JOINS every still-running request, so
+        # a stalled publisher would hold the build open long past the deadline
+        # no matter what the loop above decided. Queued work is cancelled; work
+        # already in flight is bounded by its own per-request transfer deadline,
+        # which is what makes the total worst case "budget plus one request"
+        # rather than "budget plus however long the slowest server feels like".
+        pool.shutdown(wait=False, cancel_futures=True)
         for session in sessions:
             session.close()
 

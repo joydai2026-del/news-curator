@@ -39,3 +39,25 @@ def make_item(
 @pytest.fixture
 def now() -> datetime:
     return NOW
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch, request):
+    """Enforce "no network" rather than asserting it in a README line.
+
+    Several tests claim a code path makes no request. Without this they would
+    still pass while quietly doing a DNS lookup, which is how "231 tests, no
+    network" becomes false without anyone noticing. Tests that deliberately
+    exercise host resolution opt out with @pytest.mark.allow_socket.
+    """
+    if request.node.get_closest_marker("allow_socket"):
+        return
+
+    import socket
+
+    def blocked(*args, **kwargs):
+        raise AssertionError("this test touched the network; the suite must stay offline")
+
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)

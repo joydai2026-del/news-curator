@@ -295,35 +295,49 @@ class TestDegradedFeedReporting:
 
 
 class TestFuzzyDedupCannotEmptyACategory:
-    """Category membership does not survive a fuzzy merge, so the merge is refused."""
+    """A fuzzy merge must never delete a story out of a section."""
 
-    def _pair(self):
+    def test_a_higher_weight_general_copy_does_not_delete_the_native_one(self):
+        # The regression that matters, and the exact headline the whole design
+        # is justified by. A wire story is carried by the curated energy feed
+        # and by a higher-weight general feed at a different URL. The general
+        # copy wins the merge, and before the fix the energy tag went with the
+        # loser, so the story vanished from Energy entirely.
+        from curator.config import Category
+        from curator.dedup import dedupe
+        from curator.filter import assign_categories
+
+        native = make_item("Vogtle 4 enters commercial operation", "https://wnn.example/1", weight=1.0)
+        native.native_categories = {"energy"}
+        general = make_item("Vogtle 4 enters commercial operation", "https://reuters.example/2", weight=1.5)
+
+        (survivor,) = dedupe([native, general], threshold=0.9)
+        assert survivor.native_categories == {"energy"}
+
+        energy = Category(name="Energy", id="energy", keywords=["nuclear power"])
+        assert len(assign_categories([survivor], [energy])["Energy"]) == 1
+
+    def test_a_fuzzy_merge_unions_categories_from_both_rows(self):
         from curator.dedup import dedupe
 
-        energy = make_item("Reactor project clears final hurdle", "https://a.example/1")
-        energy.native_categories = {"energy"}
-        space = make_item("Reactor project clears final hurdles", "https://b.example/2")
-        space.native_categories = {"space"}
-        return dedupe, energy, space
+        a = make_item("Reactor project clears final hurdle", "https://a.example/1")
+        a.native_categories = {"energy"}
+        b = make_item("Reactor project clears final hurdles", "https://b.example/2")
+        b.native_categories = {"space"}
+        (survivor,) = dedupe([a, b], threshold=0.85)
+        assert survivor.native_categories == {"energy", "space"}
 
-    def test_two_different_categories_are_not_fuzzy_merged(self):
-        # Merging them would delete the loser's section membership and the story
-        # would silently vanish from that section.
-        dedupe, energy, space = self._pair()
-        assert len(dedupe([energy, space], threshold=0.85)) == 2
+    def test_a_fuzzy_merge_still_does_not_inflate_the_echo_badge(self):
+        # The badge makes a public numeric claim, so it stays gated on certainty
+        # even though category membership no longer is.
+        from curator.dedup import dedupe
 
-    def test_two_items_in_the_same_category_still_merge(self):
-        dedupe, energy, other = self._pair()
-        other.native_categories = {"energy"}
-        assert len(dedupe([energy, other], threshold=0.85)) == 1
-
-    def test_a_non_native_item_still_merges_normally(self):
-        dedupe, energy, plain = self._pair()
-        plain.native_categories = set()
-        assert len(dedupe([energy, plain], threshold=0.85)) == 1
+        a = make_item("Reactor project clears final hurdle", "https://a.example/1", platform="p1")
+        b = make_item("Reactor project clears final hurdles", "https://b.example/2", platform="p2")
+        (survivor,) = dedupe([a, b], threshold=0.85)
+        assert survivor.echo_platforms == {"p1"}
 
     def test_exact_url_merge_still_unions_categories(self):
-        # The certain path is unchanged: same link means same article.
         from curator.dedup import dedupe
 
         a = make_item("A story", "https://same.example/x")

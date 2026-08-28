@@ -164,7 +164,20 @@ def main(argv: list[str] | None = None) -> int:
         with_image, stats["total"], stats["from_feed"], stats["from_cache"],
         stats["fetched"], stats["no_image"], stats["errors"],
     )
-    cache.prune(now, retain_days=float(cfg.images.get("retain_days", 45) or 45))
+    # Hitting the cap or the budget is a degraded run, not a quiet one, and it
+    # has to be visible the way the Hacker News tier already makes its own cap
+    # visible. Otherwise a run that silently abandoned 40 lookups reads exactly
+    # like a run that had nothing to do.
+    if stats["capped"] or stats["budget_hit"]:
+        log.warning(
+            "images: %d lookups deferred by the per-run cap, %d by the time budget; "
+            "they resolve on a later run",
+            stats["capped"], stats["budget_hit"],
+        )
+    # `or 45` would have turned an explicit `retain_days: 0` into 45, silently
+    # ignoring the one value a person would set to mean "keep nothing".
+    retain = cfg.images.get("retain_days")
+    cache.prune(now, retain_days=float(45 if retain is None else retain))
     if cache.save():
         log.info("image cache written to %s (%d entries)", cache_path, len(cache.entries))
 

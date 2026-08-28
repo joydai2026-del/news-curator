@@ -77,20 +77,10 @@ def same_story(a: Item, b: Item, threshold: float) -> bool:
     similarity simply cannot tell "releases" from "delays", so the threshold has
     to sit above where a single verb swap lands.
 
-    **Category guard.** Two items from DIFFERENT categories' curated feeds are
-    never fuzzy-merged. Category membership deliberately does not survive a
-    fuzzy merge (filing a story under a section on a guess is worse than not
-    filing it), which means merging them would DELETE the loser's section
-    membership and the story would silently vanish from that section. Refusing
-    the merge keeps both rows, each in its own section.
-
-    That is the same asymmetry the threshold is tuned for, applied one level up:
-    a missed merge shows one extra row, a wrong merge silently deletes a story,
-    misattributes the survivor, or empties a section nobody was watching.
+    The cost of being wrong is asymmetric: a missed merge shows one extra row,
+    a wrong merge silently deletes a story and misattributes the survivor.
     """
     if numbers_in(a.title) != numbers_in(b.title):
-        return False
-    if a.native_categories and b.native_categories and not (a.native_categories & b.native_categories):
         return False
     return title_similarity(a.title, b.title) >= threshold
 
@@ -110,7 +100,23 @@ def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     """
     if count_echo:
         keep.echo_platforms |= drop.echo_platforms
-        keep.native_categories |= drop.native_categories
+    # Category membership is unioned on BOTH passes, unlike the echo badge, and
+    # the asymmetry is deliberate.
+    #
+    # The badge makes a public numeric claim ("3 sources"), so it may only ever
+    # rest on certainty. Category membership decides which SECTION a story
+    # appears in, and the failure modes are not symmetric: withholding it on a
+    # fuzzy merge does not mean "we declined to guess", it means the surviving
+    # row loses the losing row's sections and the story SILENTLY VANISHES from
+    # them. That is exactly what happened to "Vogtle 4 enters commercial
+    # operation" when a higher-weight general copy beat the curated energy one.
+    #
+    # A fuzzy merge has already asserted these are the same article (0.90
+    # similarity plus identical numbers), and this same function already trusts
+    # that assertion enough to inherit the image, the score and the publish
+    # time. Trusting it for the section too is consistent; deleting the row was
+    # not.
+    keep.native_categories |= drop.native_categories
     if not keep.image_url and drop.image_url:
         keep.image_url = drop.image_url
     if drop.score is not None:

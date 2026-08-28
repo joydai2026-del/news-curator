@@ -9,6 +9,18 @@ from curator.render import human_age, render_html, render_site
 from tests.conftest import make_item
 
 
+def flat(html: str) -> str:
+    """Collapse whitespace before matching prose.
+
+    The footer is wrapped for readability in the source, so a phrase can span a
+    line break and a literal substring check on the raw output fails for a
+    reason that has nothing to do with what the page says.
+    """
+    import re
+
+    return re.sub(r"\s+", " ", html)
+
+
 def render(ranked, results=None, now=None, **kw):
     from tests.conftest import NOW
 
@@ -243,10 +255,21 @@ class TestPreviewImageData:
         # v1 promised destination pages are never fetched. v1.1 reads the head
         # of an article for its og:image, so that sentence had to go with the
         # feature rather than quietly outlive it.
-        html = render({"T": [make_item("a")]}, now=now)
+        html = flat(render({"T": [make_item("a")]}, now=now))
         assert "never fetched" not in html
-        assert "No article text is fetched" in html
-        assert "hotlinked" in html
+        assert "reads the head of an article" in html
+        assert "no article text is stored or summarized" in html
+
+    def test_the_footer_does_not_describe_a_picture_the_page_never_shows(self, now):
+        # The page emits data-image and no <img>, so nothing is hotlinked and no
+        # third-party request happens. Describing a hotlinking policy here would
+        # be explaining a behaviour the reader cannot observe.
+        item = make_item("A story")
+        item.image_url = "https://cdn.example/a.jpg"
+        html = flat(render({"T": [item]}, now=now))
+        assert "hotlinked" not in html
+        assert "does not display it and your browser never requests it" in html
+        assert "no third-party requests of any kind" in html
 
 
 class TestAddTopicLink:

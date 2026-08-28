@@ -274,7 +274,13 @@ categories:
     sources:
       - {id: qinsider,     name: The Quantum Insider,       url: "https://thequantuminsider.com/feed/",     weight: 1.1}
       - {id: qcreport,     name: Quantum Computing Report,  url: "https://quantumcomputingreport.com/feed/", weight: 1.05}
-      - {id: physorg-q,    name: Phys.org Quantum,          url: "https://phys.org/rss-feed/physics-news/quantum-physics/", weight: 0.95}
+      # Phys.org's quantum-physics feed is deliberately NOT here. Listing a
+      # feed under a category claims it is single-subject FOR THAT SECTION, and
+      # that feed publishes entanglement, optics and foundations work with no
+      # computing angle, which would bypass keyword matching entirely. It sits
+      # in the shared pool in sources.yaml instead, where the quantum keywords
+      # decide. This file warns against "quantum" as a bare keyword for exactly
+      # this reason; the same care has to apply to feeds.
       - {id: qzeitgeist,   name: Quantum Zeitgeist,         url: "https://quantumzeitgeist.com/feed/",      weight: 0.85}
 
   # ==========================================================================
