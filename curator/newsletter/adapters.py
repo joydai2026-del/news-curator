@@ -147,7 +147,27 @@ _EMPHASIS_TAGS = frozenset({"h1", "h2", "h3", "h4", "strong", "b"})
 # inbox, so nothing was lost this time, but "You are subscribed as <address>" is
 # the same sentence shape and it is the reader's identity. Prose is redacted
 # rather than trusted, for the same reason the query-string gate is an allowlist.
-_ADDRESS_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+#
+# The separator is an alternation rather than a bare `@` because two encodings
+# of the same character reach prose intact. `＠` (U+FF20, fullwidth) survives a
+# CJK-aware mailer and any copy-paste out of one, and `%40` / `%2540` survive a
+# newsletter that pastes a URL-encoded address into its own body text (the
+# double-encoded form is the same shape `sanitize.looks_like_address` already
+# has to defeat inside URLs).
+#
+# DELIBERATELY OUT OF SCOPE, and named so nobody reads the gap as an oversight:
+#   * IDN / non-ASCII local parts and domains (`用户@例子.公司`, `joyd@例子.公司`).
+#     Allowing non-ASCII on both sides of the separator turns this regex into a
+#     matcher for ordinary CJK prose containing an at-sign, and none of the five
+#     allowlisted senders is a CJK newsletter. It stays ASCII on both halves.
+#   * The spelled-out separators `(at)` / `[at]` / ` at `. The realistic carrier
+#     of a subscriber address is a mailer's own "you are subscribed as X"
+#     footer, which is machine-written and always uses a literal at-sign. A
+#     human writing `(at)` is obfuscating on purpose and is not the threat.
+_ADDRESS_SEPARATOR = r"(?:@|＠|%2540|%40)"
+_ADDRESS_IN_TEXT = re.compile(
+    r"[A-Za-z0-9._%+-]+" + _ADDRESS_SEPARATOR + r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+)
 ADDRESS_PLACEHOLDER = "[address removed]"
 
 _READ_TIME = re.compile(r"\s*\(\s*\d+\s*minute\s+read\s*\)\s*$", re.I)
@@ -233,39 +253,108 @@ def sender_address(msg: Message) -> str:
 # The two halves are matched separately because a real header interleaves
 # several methods (spf, dkim, dmarc) with their own parameters, in any order.
 _AUTH_DKIM = re.compile(r"\bdkim\s*=\s*(?P<verdict>[a-z]+)", re.I)
-_AUTH_DOMAIN = re.compile(r"\bheader\.(?:d|i)\s*=\s*@?(?P<domain>[A-Za-z0-9.\-]+)", re.I)
+# `header.d` is the signing domain directly. `header.i` is the AUID, which is
+# written either as `@example.com` or as `user@example.com`; the optional
+# local-part group is what stops the second form capturing `user` as a domain.
+# (Round 2, R2-S4: the old combined `header.(d|i)` regex did exactly that. It
+# failed closed, so nothing was exploitable, but half of it did not work.)
+_AUTH_HEADER_D = re.compile(r"\bheader\.d\s*=\s*@?(?P<domain>[A-Za-z0-9.\-]+)", re.I)
+_AUTH_HEADER_I = re.compile(
+    r"\bheader\.i\s*=\s*(?:[^@\s;]*@)?@?(?P<domain>[A-Za-z0-9.\-]+)", re.I
+)
+# Comments in a header are RFC 5322 `(...)` runs. Gmail writes one right after
+# the authserv-id on some verdicts, so the id has to be read past them.
+_AUTH_COMMENT = re.compile(r"\([^()]*\)")
+
+# WHOSE verdict counts. RFC 8601 §2.2: the first token of an
+# Authentication-Results header is the authserv-id, the identity of the ADMD
+# that performed the check and wrote the header. A receiving server strips only
+# the headers bearing its OWN id (§5) and passes foreign ones through, because
+# relayed mail legitimately carries them. So "is there a dkim=pass anywhere in
+# the header set" is not a check at all: the sender writes their own header,
+# Gmail forwards it, and the forgery reads as a pass.
+#
+# This is the default, not the rule. The rule is `authserv_id`, which flows in
+# from the lane's config (`newsletter.authserv_id` in sources.yaml), because a
+# mailbox that is not Gmail has a different receiving server and changing that
+# must not mean editing this file.
+DEFAULT_AUTHSERV_ID = "mx.google.com"
 
 AUTH_PASS = "pass"  # DKIM passed and signed a domain the adapter allows
-AUTH_FAIL = "fail"  # a header is present and it does not authorise this sender
-AUTH_MISSING = "missing"  # no Authentication-Results header at all
+AUTH_FAIL = "fail"  # the trusted server's header does not authorise this sender
+AUTH_MISSING = "missing"  # no Authentication-Results header from the trusted id
 
 
-def dkim_results(msg: Message) -> list[tuple[str, str]]:
-    """Every `(verdict, signing domain)` pair in the Authentication-Results set.
+def authserv_id(header: str) -> str:
+    """The authserv-id of one Authentication-Results header, lowercased.
 
-    A message can carry several of these headers; the mail server writes them
-    on delivery and a sender cannot forge the one the RECEIVING server wrote,
-    which is the whole reason this is worth reading. Malformed values become
-    empty strings rather than exceptions: this is untrusted input.
+    Everything before the first `;`, with comments and any trailing version
+    number removed and surrounding quotes stripped. Untrusted input: a header
+    that is empty, malformed, or has no id at all yields the empty string,
+    which matches no configured id and therefore counts for nothing.
     """
-    out: list[tuple[str, str]] = []
+    head = _AUTH_COMMENT.sub(" ", str(header or "").split(";", 1)[0])
+    tokens = head.strip().split()
+    if not tokens:
+        return ""
+    return tokens[0].strip('"').strip().lower()
+
+
+def trusted_auth_header(msg: Message, *, trusted_id: str = DEFAULT_AUTHSERV_ID) -> str | None:
+    """The TOPMOST Authentication-Results header written by the trusted server.
+
+    Topmost, not "any matching one", and that is the half of the fix that
+    defeats the self-supplied header claiming to be `mx.google.com`: the
+    receiving server prepends its own header, so its verdict is always above
+    anything that arrived with the message. `get_all` preserves header order,
+    so the first match here is the topmost one in the message.
+
+    None means the trusted server wrote nothing, which is AUTH_MISSING and is
+    a refusal, not an absence of evidence to be shrugged at.
+    """
+    want = (trusted_id or "").strip().strip('"').lower()
+    if not want:
+        return None
     for raw in msg.get_all("Authentication-Results") or []:
-        text = str(raw or "")
-        # One header can carry several methods. Split on `;` so a `dkim=pass`
-        # in one clause is not paired with a `header.d` from another.
-        for clause in text.split(";"):
-            verdict = _AUTH_DKIM.search(clause)
-            if not verdict:
-                continue
-            domain = _AUTH_DOMAIN.search(clause)
-            out.append((
-                verdict.group("verdict").lower(),
-                (domain.group("domain").lower().strip(".") if domain else ""),
-            ))
+        if authserv_id(raw) == want:
+            return str(raw)
+    return None
+
+
+def dkim_results(
+    msg: Message, *, trusted_id: str = DEFAULT_AUTHSERV_ID
+) -> list[tuple[str, str]]:
+    """Every `(verdict, signing domain)` pair the TRUSTED server wrote.
+
+    Scoped to one header on purpose. Reading every Authentication-Results
+    header in the message is what made this control forgeable in round 2: an
+    attacker sends their own `Authentication-Results: mx.evil.example;
+    dkim=pass header.d=tldrnewsletter.com`, Gmail passes the foreign header
+    through untouched, and a scan of the whole set finds the attacker's pass.
+    Malformed values become empty strings rather than exceptions: this is
+    untrusted input.
+    """
+    header = trusted_auth_header(msg, trusted_id=trusted_id)
+    if header is None:
+        return []
+    out: list[tuple[str, str]] = []
+    # One header can carry several methods. Split on `;` so a `dkim=pass`
+    # in one clause is not paired with a `header.d` from another.
+    for clause in header.split(";"):
+        verdict = _AUTH_DKIM.search(clause)
+        if not verdict:
+            continue
+        domain = _AUTH_HEADER_D.search(clause) or _AUTH_HEADER_I.search(clause)
+        out.append((
+            verdict.group("verdict").lower(),
+            (domain.group("domain").lower().strip(".") if domain else ""),
+        ))
     return out
 
 
-def authentication(msg: Message, adapter: "Adapter") -> str:
+def authentication(
+    msg: Message, adapter: "Adapter", *, trusted_id: str = DEFAULT_AUTHSERV_ID
+) -> str:
     """AUTH_PASS, AUTH_FAIL or AUTH_MISSING for this message and adapter.
 
     The gap this closes: Gmail's `from:` search operator matches the From
@@ -274,20 +363,26 @@ def authentication(msg: Message, adapter: "Adapter") -> str:
     public page under a trusted newsletter's name. No XSS needed; the content
     itself is the payload.
 
-    **Fail-closed, including on a missing header, and graded C until a live
-    run says otherwise.** Gmail stamps Authentication-Results on delivery, so
-    every real message should carry one, and the fixtures assert the shape.
-    But no message from the real mailbox has been through this code yet. The
-    missing case therefore gets its OWN counter rather than being folded into
-    the failures: if real mail turns up without the header, the lane's status
-    line says so on the first run instead of silently reading as empty.
+    Two conditions, both required, and the first one is the one round 2 was
+    missing: the verdict must come from the TOPMOST header the trusted
+    receiving server wrote (`trusted_id`), and within that header a `dkim=pass`
+    must sign a domain the adapter allows. A header from any other authserv-id
+    is ignored entirely, however convincing its contents.
+
+    **Fail-closed, including on a missing header.** Gmail stamps
+    Authentication-Results on delivery, so every real message should carry one,
+    and the first live run confirmed it on 23 real messages. The missing case
+    keeps its OWN counter rather than being folded into the failures: if mail
+    turns up with no header from the trusted server, the lane's status line
+    says so instead of the run silently reading as clean.
     """
-    results = dkim_results(msg)
-    if not results:
+    if trusted_auth_header(msg, trusted_id=trusted_id) is None:
         return AUTH_MISSING
-    for verdict, domain in results:
+    for verdict, domain in dkim_results(msg, trusted_id=trusted_id):
         if verdict == "pass" and domain and adapter.allows_domain(domain):
             return AUTH_PASS
+    # The trusted server spoke and did not authorise this sender. A header that
+    # carries no DKIM clause at all lands here too: present, and not a pass.
     return AUTH_FAIL
 
 

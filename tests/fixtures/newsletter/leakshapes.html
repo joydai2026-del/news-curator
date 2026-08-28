@@ -10,8 +10,11 @@
        3. ?subid=JJ7742          (too short for the old token-shape blocklist)
        4. ?token=aBcDeFgHiJkLmNoP (16 chars, mixed case, no digit: also missed)
        5. ?ref=jj7742
-       6. an opaque tracker-host link that must resolve to nothing
-       7. a clean publisher link that must survive untouched
+       6. ?id=<32 lowercase letters>  (review round 2, R2-3: the content
+          allowlist used to keep `id` and no token-shape test can see this
+          value, because it has no digits, no separators and no mixed case)
+       7. an opaque tracker-host link that must resolve to nothing
+       8. a clean publisher link that must survive untouched
      The layout is TLDR-shaped (bold headline link, blurb, minute-read suffix)
      so the tldr adapter parses it. -->
 <html>
@@ -64,6 +67,15 @@
     </p>
     <p>
       A referral handle, lower case and short.
+    </p>
+
+    <p>
+      <strong><a href="https://example.com/opaque-id-story?id=fsvmkqjprtcnxldghzwyabueokinqmcv">Model cards arrive in the clinic</a></strong>
+      (4 minute read)
+    </p>
+    <p>
+      Thirty-two lowercase letters with no digits and no separators, sitting in
+      the one parameter name a subscriber id is most likely to use.
     </p>
 
     <h2>Miscellaneous</h2>

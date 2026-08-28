@@ -127,7 +127,10 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
     # an authentication rejection are exactly the states that must not hide
     # behind a healthy item count.
     if raw.get("truncated"):
-        bits.append("short batch, cursor held back")
+        # Bodies are read oldest-first and the watermark stops at the newest
+        # processed message, so the remainder is a backlog that drains, never
+        # a tail that is skipped. The wording says what happens.
+        bits.append("short batch; backlog remains, read next run")
     if raw.get("unreadable_messages"):
         bits.append(f"{raw['unreadable_messages']} messages unreadable")
     rejected = int(raw.get("unauthenticated_messages") or 0) + int(raw.get("unauthenticated_missing") or 0)

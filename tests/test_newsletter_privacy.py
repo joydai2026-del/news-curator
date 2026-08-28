@@ -246,9 +246,17 @@ E2E_LEAKS = (
     "aBcDeFgHiJkLmNoP",
     "ref=jj7742",
     "jj7742",
+    # Round 2, R2-3: the `id` content parameter. Both halves are asserted
+    # because the parameter NAME reaching the page would be a leak on its own.
+    "id=fsvmkqjprtcnxldghzwyabueokinqmcv",
+    "fsvmkqjprtcnxldghzwyabueokinqmcv",
     "tracking.tldrnewsletter.com",
     "link.mail.beehiiv.com",
 )
+
+# The R2-3 story with its identifier removed. Like `E2E_STRIPPED` below, it
+# proves the parameter was STRIPPED rather than the whole link thrown away.
+E2E_STRIPPED_ID = "https://example.com/opaque-id-story"
 
 # Links that SHOULD survive. Without these, a renderer that dropped every card
 # would pass every leak assertion above.
@@ -291,9 +299,11 @@ def e2e_render():
         def has_credentials(self, env):
             return True
 
-        def fetch(self, senders, after, *, env=None, limit=30, timeout=20.0):
+        def fetch(self, senders, after, *, env=None, limit=30, timeout=20.0,
+                  id_budget=gmail_module.DEFAULT_ID_BUDGET):
             return gmail_module.fetch(
-                senders, after, env=ENV, session=session, limit=limit, timeout=timeout
+                senders, after, env=ENV, session=session, limit=limit, timeout=timeout,
+                id_budget=id_budget,
             )
 
     st = state_module.NewsletterState(watermark=NOW - timedelta(hours=6), salt="fixture-salt")
@@ -341,6 +351,7 @@ def test_the_end_to_end_chain_actually_produced_a_page():
     assert items, "the lane produced no items, so the leak assertions prove nothing"
     assert survivors and "<article" in html
     assert E2E_STRIPPED in html, "a stripped link must still reach the page as a link"
+    assert E2E_STRIPPED_ID in html, "the R2-3 shape must be stripped, not dropped"
     assert E2E_CLEAN in {i.url for i in items}, "a clean link must pass through untouched"
 
 

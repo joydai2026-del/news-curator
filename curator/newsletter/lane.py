@@ -23,11 +23,17 @@ Three properties the rest of the codebase depends on:
     not be fetched, the watermark stops at the newest message actually
     processed and the shortfall is named in the status line. Advancing to `now`
     after a short batch is how mail gets silently skipped, which is exactly
-    what the design doc forbids.
+    what the design doc forbids. The other half of that contract lives in
+    `gmail.fetch`, which reads message bodies OLDEST FIRST: that is what makes
+    "the newest message processed" a safe place to park the cursor, because
+    everything left unread is newer than it and therefore still inside the
+    next window.
   * **Who sent it is checked, not assumed.** Gmail's `from:` operator matches
     the From header, which anyone can write. Every message must carry a
-    DKIM `pass` for a domain the adapter allows, or it is counted and dropped
-    before it is parsed. See `adapters.authentication`.
+    DKIM `pass`, from the RECEIVING server's own Authentication-Results header
+    and for a domain the adapter allows, or it is counted and dropped before it
+    is parsed. Which server counts is `authserv_id` in this lane's config. See
+    `adapters.authentication`.
 
 Privacy, restated because this is where items are born: `image_url` is always
 empty (no og:image fetch, no image-cache entry, ever), `url` is either a
@@ -108,7 +114,12 @@ class LaneResult:
         base = gmail_module.REASON_TEXT.get(self.reason, self.reason)
         extra = []
         if self.truncated:
-            extra.append("more mail matched than this run read; cursor held back")
+            # Says what happens, not what would be reassuring. The run read the
+            # OLDEST messages in the window, so the remainder is newer than the
+            # committed watermark and is still in the next window: a backlog
+            # that drains, not a tail that is skipped.
+            extra.append("more mail matched than this run read; backlog remains; "
+                         "it is read next run")
         if self.unreadable_messages:
             extra.append(f"{self.unreadable_messages} messages could not be read")
         rejected = self.unauthenticated_messages + self.unauthenticated_missing
@@ -309,14 +320,26 @@ def fetch(
     max_items = int(cfg.get("max_items", DEFAULT_MAX_ITEMS))
     max_age_hours = float(cfg.get("max_age_hours", DEFAULT_MAX_AGE_HOURS))
     max_messages = int(cfg.get("max_messages", DEFAULT_MAX_MESSAGES))
+    # How many ids one run will list before it stops turning pages. Bounds the
+    # cost of a resume after a long outage (GitHub disables a scheduled
+    # workflow after 60 days of repo inactivity, which is exactly that case).
+    id_budget = int(cfg.get("id_budget", gmail_module.DEFAULT_ID_BUDGET))
     overlap_hours = float(cfg.get("overlap_hours", DEFAULT_OVERLAP_HOURS))
     timeout = float(cfg.get("request_timeout", gmail_module.DEFAULT_TIMEOUT))
+    # WHICH mail server's verdict counts as authentication. Config, not a
+    # constant: the mailbox is Gmail today, and a mailbox that is not Gmail has
+    # a different authserv-id, which must be a settings change and not a source
+    # edit. An empty or missing value falls back to the Gmail default rather
+    # than trusting everything, because "" matches no header and every message
+    # would read as AUTH_MISSING.
+    authserv_id = str(cfg.get("authserv_id") or adapters_module.DEFAULT_AUTHSERV_ID).strip()
 
     start, _end = state_module.plan_window(state, now, overlap_hours=overlap_hours)
     senders = adapters_module.sender_queries([a.id for a in active])
 
     result = client.fetch(
-        senders, start, env=source_env, limit=max_messages, timeout=timeout
+        senders, start, env=source_env, limit=max_messages, timeout=timeout,
+        id_budget=id_budget,
     )
     status = {a.id: AdapterStatus(adapter_id=a.id, name=a.name) for a in active}
     if not result.ok:
@@ -347,7 +370,7 @@ def fetch(
             unmatched += 1
             continue
 
-        verdict = adapters_module.authentication(msg, adapter)
+        verdict = adapters_module.authentication(msg, adapter, trusted_id=authserv_id)
         if verdict != adapters_module.AUTH_PASS:
             # The From header said this was TLDR; the receiving server's own
             # DKIM stamp did not agree. Counted by adapter slug, never by
@@ -397,20 +420,34 @@ def fetch(
     # losing a MESSAGE, which is what the watermark below is about.
     published_hashes = [state.story_hash(r["title"], r["url"]) for r in records]
 
-    # The cursor. `now` is only correct when this run consumed the whole
-    # window: round 1 proved that advancing to `now` after a truncated batch
-    # puts the unread tail permanently outside the next window. When anything
-    # was missed, the cursor stops at the newest message actually processed,
-    # so the wall-clock gap between that message and now is re-read next hour
-    # instead of being skipped. It never moves backwards, because re-reading a
-    # window the state already covers buys nothing the hash list does not.
+    # The cursor. Two cases, and the difference between them is the whole
+    # no-skip contract:
     #
-    # Honest limit, and it is the reason `truncated` is also on the status
-    # line: Gmail lists newest first, so a truncated batch loses the OLDEST
-    # tail, which holding the cursor here does not by itself recover. Draining
-    # that tail needs pagination, which this lane deliberately does not do.
-    # What this change buys is that the loss is REPORTED and that mail
-    # arriving mid-run is not burned. Pagination is the follow-up.
+    #   clean run  (every id in the window was listed, fetched and judged)
+    #       -> watermark = now. There is nothing left behind to come back for.
+    #   lossy run  (a backlog remained, or a message could not be read)
+    #       -> watermark = the newest message this run actually processed.
+    #
+    # The second case is only safe because `gmail.fetch` reads bodies OLDEST
+    # FIRST. Every message the run did not read is therefore NEWER than
+    # `newest_processed`, so parking the cursor there leaves the whole
+    # remainder inside the next window, and the backlog drains a runful per
+    # run. Round 2 measured the version of this that did not paginate: Gmail
+    # lists newest first, so `newest_processed` WAS the newest message in the
+    # mailbox, the watermark landed on `now` in all but name, and the older
+    # tail fell outside the next window exactly as before.
+    #
+    # It never moves backwards. Re-reading a window the state already covers
+    # buys nothing the hash list does not, and a cursor that can retreat can
+    # creep backwards over successive lossy runs. The cost of that choice,
+    # stated so a later round does not have to rediscover it: if MORE than
+    # `max_messages` messages sit inside the overlap window, every run consumes
+    # its cap on mail older than the cursor, the watermark cannot advance, and
+    # the lane STALLS rather than progressing. It still does not skip (the
+    # backlog stays in the window and `truncated` stays on the status line),
+    # but nothing new is read. The fix for a stall is config, not code: raise
+    # `max_messages` or lower `overlap_hours`. With five newsletters and a
+    # six-hour overlap it takes 30+ messages in six hours to reach.
     lossy = result.truncated or result.fetch_failures > 0
     watermark = now
     if lossy:

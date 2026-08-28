@@ -343,7 +343,7 @@ def load_sources(path: Path) -> dict[str, Any]:
         ("images", ("max_bytes", "timeout", "max_fetches_per_run", "budget_seconds",
                     "workers", "retain_days", "retry_error_after_hours")),
         ("newsletter", ("max_items", "max_age_hours", "max_messages", "overlap_hours",
-                        "request_timeout")),
+                        "request_timeout", "id_budget")),
     ):
         block = raw.get(section) or {}
         for key in keys:

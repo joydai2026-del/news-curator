@@ -34,15 +34,19 @@ Four rules, applied in this order:
      percent-decoding, so `%2540` cannot hide), the answer is None. The
      subscriber's own address is the highest-value identifier in the system and
      it gets its own rule rather than a heuristic.
-  3. **Drop the whole query string except a tiny publisher-content allowlist.**
-     `p`, `id`, `story`, `v` are the parameters a publisher genuinely uses to
-     name an article. Everything else goes, whether or not this module has ever
-     heard of it, and the fragment goes with it. That is the bounded gate: a
-     leak now requires an attacker to hide an identifier inside one of four
-     named parameters, instead of merely inventing a parameter name.
+  3. **Drop the whole query string. All of it.** No parameter name is
+     allowlisted, and the fragment goes too. Round 2 killed the four-name
+     allowlist (`p`, `id`, `story`, `v`) that used to sit here, because it was
+     the last remaining leak channel and the measurement said closing it was
+     free: across all four real-mail captures, 27 URLs survive the sanitizer
+     and ZERO of them keep a content parameter. `id` in particular is the most
+     likely name for a subscriber identifier, which makes it the worst possible
+     member of a privacy allowlist. The cost is a link to a query-addressed
+     article (`?p=12345` on an old WordPress install) pointing at the site root
+     instead; the benefit is that there is no longer any parameter name an
+     identifier can hide behind.
   4. **When in doubt, drop the link.** Still on a known tracker host, or an
-     opaque token-shaped path segment, or a token-shaped value inside one of
-     the four allowlisted parameters: None. A story with no link is a small
+     opaque token-shaped path segment: None. A story with no link is a small
      loss. A leaked subscriber id is permanent.
 
 `is_suspect()` is the output-boundary twin of all four rules and is deliberately
@@ -70,7 +74,7 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 from ..normalize import safe_url
 
@@ -107,12 +111,17 @@ _TRACKER_HOST_PATTERNS = (
 _OPAQUE_CHARS = re.compile(r"^[A-Za-z0-9_\-=~%+.]+$")
 _LOWER_SLUG = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 
-# The whole allowlist. A publisher article URL essentially never needs a query
-# parameter to say WHICH article; these four are the exceptions that show up on
-# real CMSes (`?p=` on WordPress, `?id=`/`?story=` on wire services, `?v=` on
-# YouTube). Adding a fifth is a decision, not a bug fix: every name added here
-# is a name an identifier could hide behind.
-CONTENT_PARAMS = frozenset({"p", "id", "story", "v"})
+# There is no query-parameter allowlist any more, deliberately, and this
+# comment is here so a later edit has to argue with it rather than rediscover
+# it. `CONTENT_PARAMS = {"p", "id", "story", "v"}` used to live here and was
+# removed in review round 2. The case for it was that a publisher sometimes
+# names an article in the query; the case against it was measured on real mail
+# and won 27-0. Re-adding ANY name re-opens the channel, because the value side
+# cannot be judged: `?id=JJ7742` is six characters and `?id=<32 lowercase
+# letters>` has no digits or separators, so neither trips a token-shape test,
+# and both are perfectly good subscriber identifiers. If a future sender really
+# does need a parameter, scope it to a specific HOST rather than allowing a
+# name everywhere.
 
 MAX_UNWRAP_DEPTH = 4
 # How many times to percent-decode before deciding a component holds no `@`.
@@ -254,20 +263,10 @@ def _publisher_url(url: str) -> str | None:
     if any(is_token_like(seg) for seg in (parts.path or "").split("/") if seg):
         return None
 
-    keep: list[tuple[str, str]] = []
-    for name, value in parse_qsl(parts.query, keep_blank_values=True):
-        if name.lower() not in CONTENT_PARAMS:
-            continue  # rule 3: unrecognised means gone, not kept
-        if is_token_like(value):
-            # An allowlisted NAME carrying a token-shaped VALUE is the one way
-            # left to smuggle an id. Dropping the parameter would silently
-            # point the link at the wrong article, so the link goes instead.
-            return None
-        keep.append((name, value))
-
-    # Fragment dropped: it never identifies a different article, and trackers
-    # do sometimes hide the recipient there.
-    return safe_url(urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(keep), "")))
+    # Rule 3: the whole query goes, and the fragment with it. Neither is needed
+    # to name an article on any of the five shipped senders' destinations, and
+    # both are places a recipient id hides.
+    return safe_url(urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")))
 
 
 def sanitize(raw: str, *, max_depth: int = MAX_UNWRAP_DEPTH) -> str | None:

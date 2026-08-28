@@ -192,7 +192,14 @@ def test_a_next_page_token_is_truncation_even_when_the_page_fits():
 # the happy path
 # --------------------------------------------------------------------------
 
-def test_messages_come_back_parsed():
+def test_messages_come_back_parsed_oldest_first():
+    """Gmail lists newest first; this client reads the OTHER end of the list.
+
+    The order is not cosmetic. It is the mechanism behind the no-skip contract:
+    the messages this run did not read are the NEWEST ones, so the lane's
+    watermark (the newest message it processed) leaves them inside the next
+    window instead of behind it.
+    """
     session = FakeSession(
         listing=FakeResponse(200, {"messages": [{"id": "m1"}, {"id": "m2"}]}),
         messages={"m1": raw_response("tldr"), "m2": raw_response("milkroad")},
@@ -200,7 +207,8 @@ def test_messages_come_back_parsed():
     result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
     assert result.ok and result.reason == gmail.OK
     senders = [m.get("From") for m in result.messages]
-    assert SENDERS["tldr"] in senders[0]
+    assert SENDERS["milkroad"] in senders[0], "the OLDEST listed id is read first"
+    assert SENDERS["tldr"] in senders[1]
 
 
 def test_the_per_run_message_cap_is_honoured_and_says_it_capped():
@@ -209,6 +217,80 @@ def test_the_per_run_message_cap_is_honoured_and_says_it_capped():
     result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session, limit=3)
     assert len(result.messages) == 3
     assert result.truncated
+
+
+def test_the_cap_takes_the_oldest_ids_not_the_newest():
+    """The reviewer's 40-against-30 repro, at the id level.
+
+    Gmail returns m0 (newest) .. m39 (oldest). A run capped at 30 must fetch
+    m39..m10, leaving the ten NEWEST unread. The old code fetched m0..m29 and
+    left the ten oldest unread, which the watermark then moved past.
+    """
+    ids = [f"m{i}" for i in range(40)]
+    session = FakeSession(
+        listing=FakeResponse(200, {"messages": [{"id": i} for i in ids]}),
+        messages={i: raw_response("tldr") for i in ids},
+    )
+    gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session, limit=30)
+    fetched = [url.rsplit("/", 1)[-1] for _method, url in session.calls if "/messages/" in url]
+    assert fetched == list(reversed(ids))[:30]
+    assert set(fetched) == {f"m{i}" for i in range(10, 40)}
+    assert not ({"m0", "m9"} & set(fetched)), "the newest ten are the ones deferred"
+
+
+# --------------------------------------------------------------------------
+# pagination (round 2, R2-2)
+# --------------------------------------------------------------------------
+
+class PagingSession(FakeSession):
+    """A listing endpoint that answers in pages, like the real one."""
+
+    def __init__(self, pages, **kwargs):
+        super().__init__(**kwargs)
+        self.pages = pages
+        self.page_tokens: list[str | None] = []
+
+    def request(self, method, url, timeout=None, **kwargs):
+        if url.endswith("/messages"):
+            self.calls.append((method, url))
+            token = (kwargs.get("params") or {}).get("pageToken")
+            self.page_tokens.append(token)
+            index = 0 if token is None else int(token)
+            rows, nxt = self.pages[index]
+            payload = {"messages": [{"id": i} for i in rows]}
+            if nxt is not None:
+                payload["nextPageToken"] = str(nxt)
+            return FakeResponse(200, payload)
+        return super().request(method, url, timeout=timeout, **kwargs)
+
+
+def test_the_listing_follows_next_page_tokens_until_the_window_is_drained():
+    ids_a = [f"a{i}" for i in range(5)]
+    ids_b = [f"b{i}" for i in range(4)]
+    session = PagingSession(
+        pages=[(ids_a, 1), (ids_b, None)],
+        messages={i: raw_response("tldr") for i in ids_a + ids_b},
+    )
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session, limit=30)
+    assert session.page_tokens == [None, "1"], "the second page must be requested"
+    assert result.listed == 9
+    assert len(result.messages) == 9
+    assert not result.truncated, "a fully drained window is not truncated"
+
+
+def test_the_id_budget_bounds_the_listing_and_reports_the_shortfall():
+    pages = [([f"p{p}i{i}" for i in range(5)], p + 1) for p in range(10)]
+    pages[-1] = (pages[-1][0], None)
+    every_id = [i for rows, _ in pages for i in rows]
+    session = PagingSession(
+        pages=pages, messages={i: raw_response("tldr") for i in every_id}
+    )
+    result = gmail.fetch(
+        ["tldrnewsletter.com"], WINDOW, env=ENV, session=session, limit=30, id_budget=12,
+    )
+    assert result.listed == 12, "the budget cuts the listing, it does not silently drain it"
+    assert result.truncated, "a budget-bounded listing must report that it was short"
+    assert len(session.page_tokens) == 3, "one page past the budget, then stop"
 
 
 def test_decode_raw_rejects_junk():

@@ -116,18 +116,38 @@ def test_tracking_parameters_are_stripped():
     assert sanitize(url) == CLEAN
 
 
-def test_only_the_four_publisher_content_parameters_survive():
-    """The allowlist, stated as behaviour: named stays, unnamed goes."""
-    assert sanitize("https://lab.example/?p=12345") == "https://lab.example/?p=12345"
+def test_no_query_parameter_survives_at_all():
+    """Round 2 (R2-3): there is no content allowlist left. The query goes."""
+    assert sanitize("https://lab.example/?p=12345") == "https://lab.example/"
     assert sanitize("https://lab.example/story?id=8812&ref=jj7742") == (
-        "https://lab.example/story?id=8812"
+        "https://lab.example/story"
     )
     assert sanitize("https://lab.example/search?q=agents&page=2") == "https://lab.example/search"
+    assert sanitize("https://lab.example/watch?v=dQw4w9WgXcQ") == "https://lab.example/watch"
 
 
-def test_an_allowlisted_name_carrying_a_token_value_drops_the_whole_link():
-    """Dropping just the parameter would point the link at the wrong article."""
-    assert sanitize(f"https://lab.example/story?id={TOKEN}") is None
+@pytest.mark.parametrize(
+    "poison",
+    [
+        # The five shapes review round 2 proved survived the four-name
+        # allowlist. Every one is a plausible subscriber identifier and every
+        # one is invisible to a token-shape test: too short, or all lowercase
+        # with no digits and no separators.
+        "https://publisher.example/article?id=fsvmkqjprtcnxldghzwyabueokinqmcv",
+        "https://publisher.example/article?id=JJ7742",
+        "https://publisher.example/article?p=sub7742",
+        "https://publisher.example/article?story=0123456789abcdef0123",
+        "https://publisher.example/article?v=abcdefghijklmnopqrst",
+    ],
+)
+def test_the_round_two_content_parameter_poisons_are_stripped_and_flagged(poison):
+    assert sanitize(poison) == "https://publisher.example/article"
+    assert is_suspect(poison), "the workflow page-wide gate shares this predicate"
+
+
+def test_an_opaque_token_in_a_query_no_longer_needs_a_value_check():
+    """Once the whole query goes, the value side stops being a judgement call."""
+    assert sanitize(f"https://lab.example/story?id={TOKEN}") == "https://lab.example/story"
 
 
 def test_fragment_is_dropped():

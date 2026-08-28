@@ -57,6 +57,13 @@ REQUIRED_ENV = (ENV_CLIENT_ID, ENV_CLIENT_SECRET, ENV_REFRESH_TOKEN)
 
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_MAX_MESSAGES = 30
+# How many message IDS one run will list before it stops asking for pages.
+# Listing is cheap (ids only, 100 per page); fetching BODIES is what costs, and
+# that is capped separately by `limit`. The two are different numbers because
+# they answer different questions: the budget bounds "how much of the window do
+# we know about", the limit bounds "how much of it do we read this run".
+DEFAULT_ID_BUDGET = 500
+_PAGE_SIZE = 100
 
 # Machine-readable statuses. The pipeline turns these into page/workflow text;
 # they are never assembled from an exception string.
@@ -88,6 +95,18 @@ class GmailResult:
     advanced to now, ten messages permanently outside the next window. So the
     two ways a batch can be short of the mailbox are now named fields, and
     `complete` is the single question the lane asks before advancing a cursor.
+
+    What each field means after round 2's pagination change:
+      `listed`     ids the whole window held, up to the id budget.
+      `truncated`  the run read fewer BODIES than there were ids (a backlog
+                   remains, and it is the NEWEST part of the window because
+                   bodies are read oldest-first), or the id budget itself ran
+                   out before the listing was drained.
+      `fetch_failures`  ids that were listed and then could not be read.
+    `truncated` is now normal-and-recoverable rather than lossy: the unread
+    remainder is newer than everything processed, so the caller's watermark
+    leaves it inside the next window. It is still reported, because a backlog
+    that never shrinks is a thing JJ should be able to see.
     """
 
     ok: bool
@@ -189,39 +208,62 @@ def _access_token(session: requests.Session, env, timeout: float) -> str:
 
 
 def _list_message_ids(
-    session, token: str, query: str, limit: int, timeout: float
+    session, token: str, query: str, timeout: float, *, id_budget: int = DEFAULT_ID_BUDGET
 ) -> tuple[list[str], bool]:
-    """The ids for this window, plus "and there are more where those came from".
+    """Every id in this window, newest first, plus "the budget cut it short".
 
     Gmail answers a page at a time and hands back a `nextPageToken` when the
-    query matched more than the page. This function does not paginate (an
-    hourly job with a per-run cap should not try to drain an unbounded
-    backlog), so that token is the honest signal that this run saw a PREFIX of
-    the window, and it is returned rather than dropped.
+    query matched more than the page. This function FOLLOWS that token until
+    the window is drained or `id_budget` ids have been collected, and that is
+    what makes the no-skip contract real: the caller cannot decide which mail
+    to read next when it only knows about the newest page of it.
+
+    The earlier version deliberately did not paginate and returned the token as
+    an honest "this run saw a prefix" signal. Round 2 measured what the honesty
+    was worth: the prefix was the NEWEST 30, the watermark moved past it, and
+    the older tail fell permanently outside the next window. Listing is the
+    cheap half of the API (ids only), so the bound moved from one page to a
+    budget, and the second return value now means "even the budget did not
+    drain the window", which is a genuinely rare state rather than the norm.
     """
-    response = _request(
-        session,
-        "GET",
-        f"{API_ROOT}/messages",
-        timeout=timeout,
-        headers={"Authorization": f"Bearer {token}"},
-        params={"q": query, "maxResults": max(1, min(int(limit), 100))},
-    )
-    if response.status_code in (401, 403):
-        raise _Unavailable(AUTH_REVOKED)
-    if response.status_code != 200:
-        log.warning("gmail list returned %d", response.status_code)
-        raise _Unavailable(API_ERROR)
-    try:
-        payload = response.json() or {}
-    except ValueError:
-        raise _Unavailable(API_ERROR) from None
-    more = bool(payload.get("nextPageToken"))
-    rows = payload.get("messages")
-    if not isinstance(rows, list):
-        return [], more
-    ids = [str(row.get("id")) for row in rows if isinstance(row, dict) and row.get("id")]
-    return ids, more
+    ids: list[str] = []
+    page_token: str | None = None
+    budget = max(1, int(id_budget))
+    while True:
+        params = {"q": query, "maxResults": _PAGE_SIZE}
+        if page_token:
+            params["pageToken"] = page_token
+        response = _request(
+            session,
+            "GET",
+            f"{API_ROOT}/messages",
+            timeout=timeout,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+        )
+        if response.status_code in (401, 403):
+            raise _Unavailable(AUTH_REVOKED)
+        if response.status_code != 200:
+            log.warning("gmail list returned %d", response.status_code)
+            raise _Unavailable(API_ERROR)
+        try:
+            payload = response.json() or {}
+        except ValueError:
+            raise _Unavailable(API_ERROR) from None
+        rows = payload.get("messages")
+        if isinstance(rows, list):
+            ids += [
+                str(row.get("id")) for row in rows
+                if isinstance(row, dict) and row.get("id")
+            ]
+        page_token = str(payload.get("nextPageToken") or "") or None
+        if page_token is None:
+            return ids[:budget], len(ids) > budget
+        if len(ids) >= budget:
+            # The budget ran out with pages still to go. This is the only
+            # remaining shape of "the window was not drained", and it is
+            # reported rather than hidden.
+            return ids[:budget], True
 
 
 def _get_message(session, token: str, message_id: str, timeout: float) -> Message | None:
@@ -269,8 +311,18 @@ def fetch(
     session: requests.Session | None = None,
     limit: int = DEFAULT_MAX_MESSAGES,
     timeout: float = DEFAULT_TIMEOUT,
+    id_budget: int = DEFAULT_ID_BUDGET,
 ) -> GmailResult:
-    """Read up to `limit` messages from allowlisted senders since `after`.
+    """Read the OLDEST `limit` messages from allowlisted senders since `after`.
+
+    Oldest, not newest, and that word is the whole no-skip mechanism. Gmail
+    lists newest first; reading the newest `limit` and then moving the cursor
+    to `now` is precisely how the older tail got skipped in round 1 and round
+    2. Reading the OLDEST `limit` instead means every message this run did not
+    read is NEWER than every message it did, so the caller can park its
+    watermark on the newest message it processed and know the remainder is
+    still inside the next window. The backlog drains a runful per run instead
+    of being lost.
 
     Never raises. Every failure comes back as `ok=False` plus a status slug the
     pipeline can render as a visible warning.
@@ -285,14 +337,22 @@ def fetch(
     client = session or requests.Session()
     try:
         token = _access_token(client, source, timeout)
-        ids, more = _list_message_ids(client, token, build_query(senders, after), limit, timeout)
-        taken = ids[: max(0, int(limit))]
+        ids, budget_hit = _list_message_ids(
+            client, token, build_query(senders, after), timeout, id_budget=id_budget
+        )
+        # Gmail lists newest first. Reverse it, then take from the front: the
+        # oldest `limit` ids, which is the backlog-draining order. The messages
+        # come back in the same oldest-first order, which the lane does not
+        # depend on (it reads the Date header) but which makes a log or a
+        # debugger read the way the run actually happened.
+        oldest_first = list(reversed(ids))
+        taken = oldest_first[: max(0, int(limit))]
         messages: list[Message] = []
         for message_id in taken:
             parsed = _get_message(client, token, message_id, timeout)
             if parsed is not None:
                 messages.append(parsed)
-        truncated = more or len(taken) < len(ids)
+        truncated = budget_hit or len(taken) < len(ids)
         failures = len(taken) - len(messages)
         log.info(
             "gmail: listed %d messages, parsed %d, truncated=%s, unreadable=%d",

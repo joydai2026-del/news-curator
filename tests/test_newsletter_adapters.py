@@ -130,6 +130,155 @@ def test_a_lookalike_signing_domain_does_not_authenticate():
     assert adapters.authentication(msg, adapters.by_id("milkroad")) == adapters.AUTH_FAIL
 
 
+# --------------------------------------------------------------------------
+# whose verdict counts: the authserv-id (round 2, R2-1)
+# --------------------------------------------------------------------------
+"""Why this block exists.
+
+The six tests above all wrote ONE Authentication-Results header and treated it
+as Gmail's. Round 2 pointed out that this is the wrong shape of test for this
+class of control: the primary attack is a header the ATTACKER wrote. RFC 8601
+§5 says a receiving ADMD strips only headers carrying its own authserv-id and
+passes foreign ones through, because relayed mail legitimately carries them. So
+a message can arrive with the attacker's `Authentication-Results: mx.evil.
+example; dkim=pass header.d=tldrnewsletter.com` intact, sitting under Gmail's
+own `dkim=fail`. Scanning the whole header set finds the attacker's pass.
+
+The probes below are review round 2's own six rows, plus the two cases that
+pin the mechanism: a foreign id on its own, and the configurability.
+"""
+
+GOOGLE = "mx.google.com"
+
+
+def spoofable(*headers: str, sender: str = "tldr"):
+    """A message carrying the given Authentication-Results headers, in order.
+
+    First argument is the TOPMOST header, which is where the receiving server
+    writes its own: Gmail prepends on delivery, so anything the attacker sent
+    ends up below it.
+    """
+    msg = build_message(sender, authenticated=False)
+    for header in headers:
+        msg["Authentication-Results"] = header
+    return msg
+
+
+def test_authserv_id_reads_the_token_before_the_first_semicolon():
+    assert adapters.authserv_id("mx.google.com; dkim=pass header.d=x.example") == GOOGLE
+    assert adapters.authserv_id('"mx.google.com"; dkim=pass') == GOOGLE
+    assert adapters.authserv_id("mx.google.com 1; dkim=pass") == GOOGLE
+    assert adapters.authserv_id("MX.Google.Com; dkim=pass") == GOOGLE
+    assert adapters.authserv_id("(a comment) mx.google.com; dkim=pass") == GOOGLE
+    assert adapters.authserv_id("") == ""
+    assert adapters.authserv_id(";;;") == ""
+
+
+def test_a_genuine_google_pass_still_passes():
+    """Probe row 1. The control must not have been fixed by breaking it."""
+    msg = spoofable(f"{GOOGLE}; dkim=pass header.d=tldrnewsletter.com")
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_PASS
+
+
+def test_a_google_fail_on_its_own_is_a_fail():
+    """Probe row 2."""
+    msg = spoofable(f"{GOOGLE}; dkim=fail header.d=tldrnewsletter.com")
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_FAIL
+
+
+def test_a_self_supplied_header_from_a_foreign_authserv_id_does_not_authenticate():
+    """Probe row 3: THE BYPASS. Graded `pass` before this fix.
+
+    Gmail delivers the attacker's own header untouched and stamps its own
+    `dkim=fail` above it. Reading every header found the attacker's pass.
+    """
+    msg = spoofable(
+        f"{GOOGLE}; dkim=fail header.d=tldrnewsletter.com",
+        "mx.evil-attacker.example; dkim=pass header.d=tldrnewsletter.com",
+    )
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_FAIL
+    assert adapters.dkim_results(msg) == [("fail", "tldrnewsletter.com")], (
+        "only the trusted server's clauses may be read at all"
+    )
+
+
+def test_a_self_supplied_header_claiming_the_trusted_id_loses_to_the_topmost():
+    """Probe row 4: topmost-wins. The attacker copies the id and still fails."""
+    msg = spoofable(
+        f"{GOOGLE}; dkim=none header.d=tldrnewsletter.com",
+        f"{GOOGLE}; dkim=pass header.d=tldrnewsletter.com",
+    )
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_FAIL
+
+
+def test_no_header_at_all_is_missing():
+    """Probe row 5."""
+    msg = spoofable()
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_MISSING
+
+
+def test_a_lookalike_signing_domain_under_the_trusted_id_is_a_fail():
+    """Probe row 6."""
+    msg = spoofable(f"{GOOGLE}; dkim=pass header.d=evil-tldrnewsletter.com")
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_FAIL
+
+
+def test_a_foreign_authserv_id_alone_reads_as_missing_not_as_evidence():
+    """The whole message's only header is the attacker's. Fail closed."""
+    msg = spoofable("mx.evil-attacker.example; dkim=pass header.d=tldrnewsletter.com")
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_MISSING
+    assert adapters.dkim_results(msg) == []
+
+
+def test_the_trusted_authserv_id_is_configurable_not_a_constant():
+    """A non-Gmail mailbox is a settings change, never a source edit."""
+    msg = spoofable("mx.fastmail.example; dkim=pass header.d=tldrnewsletter.com")
+    tldr = adapters.by_id("tldr")
+    assert adapters.authentication(msg, tldr) == adapters.AUTH_MISSING, (
+        "under the Gmail default this header is a stranger's and counts for nothing"
+    )
+    assert adapters.authentication(
+        msg, tldr, trusted_id="mx.fastmail.example"
+    ) == adapters.AUTH_PASS
+
+
+def test_a_trusted_header_with_no_dkim_clause_is_a_fail_not_a_pass():
+    msg = spoofable(f"{GOOGLE}; spf=pass smtp.mailfrom=bounce@tldrnewsletter.com")
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_FAIL
+
+
+def test_header_i_yields_the_domain_not_the_local_part():
+    """R2-S4: the AUID form. `header.i=user@example.com` is example.com."""
+    msg = spoofable(f"{GOOGLE}; dkim=pass header.i=dan@tldrnewsletter.com")
+    assert adapters.dkim_results(msg) == [("pass", "tldrnewsletter.com")]
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_PASS
+    at_form = spoofable(f"{GOOGLE}; dkim=pass header.i=@tldrnewsletter.com")
+    assert adapters.dkim_results(at_form) == [("pass", "tldrnewsletter.com")]
+
+
+def test_the_forged_message_publishes_nothing():
+    """The finding stated as its consequence: no attacker card, ever.
+
+    `extract` is the parser and does not itself authenticate; the lane refuses
+    the message before calling it. This asserts both halves so a future
+    refactor that moves the check cannot quietly drop it.
+    """
+    payload = (
+        "<html><body><h2><a href='https://evil.example/payload-story-here'>"
+        "Attacker controlled headline goes here</a></h2>"
+        "<p>Attacker controlled blurb prose that is long enough to survive.</p>"
+        "</body></html>"
+    )
+    msg = build_message("tldr", html=payload, authenticated=False)
+    msg["Authentication-Results"] = f"{GOOGLE}; dkim=fail header.d=tldrnewsletter.com"
+    msg["Authentication-Results"] = (
+        "mx.evil-attacker.example; dkim=pass header.d=tldrnewsletter.com"
+    )
+    tldr = adapters.by_id("tldr")
+    assert adapters.authentication(msg, tldr) != adapters.AUTH_PASS
+    assert tldr.extract(msg).stories, "the fixture must be parseable, or this proves nothing"
+
+
 def test_sender_queries_cover_only_the_enabled_adapters():
     terms = adapters.sender_queries(["tldr"])
     assert "tldrnewsletter.com" in terms
@@ -420,6 +569,48 @@ def test_an_address_in_a_headline_is_redacted_too():
             "<p>Some blurb.</p></body></html>")
     stories = adapters.extract_stories(html)
     assert stories and "@" not in stories[0].title
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "joyd.example@mail.invalid",                # the plain form, already covered
+        "joyd.example&#64;mail.invalid",            # entity, decoded before this runs
+        "joyd.example＠mail.invalid",           # U+FF20 fullwidth at-sign
+        "joyd.example%40mail.invalid",              # percent-encoded, pasted into prose
+        "joyd.example%2540mail.invalid",            # doubly encoded
+    ],
+)
+def test_every_encoded_at_sign_in_prose_is_redacted(written):
+    """R2-S1, the ASCII half. Four encodings of one character, one rule."""
+    import html as html_mod
+
+    blurb = html_mod.unescape(f"You are subscribed as {written}, thanks for reading.")
+    out = adapters.redact_addresses(blurb)
+    assert adapters.ADDRESS_PLACEHOLDER in out
+    assert "mail.invalid" not in out, "the domain half must go with the local half"
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "用户@例子.公司",   # CJK local part AND domain
+        "joyd@例子.公司",           # ASCII local part, IDN domain
+        "joyd.example (at) mail.invalid",           # spelled-out separator
+        "joyd.example [at] mail.invalid",
+    ],
+)
+def test_the_deliberately_unhandled_prose_shapes_stay_unhandled(written):
+    """Not a wish list: a pin, so a later edit sees the decision.
+
+    IDN would turn this regex into a matcher for ordinary CJK prose containing
+    an at-sign, and no allowlisted sender is a CJK newsletter. `(at)` is a
+    human obfuscating on purpose, and the realistic carrier of a subscriber
+    address is a machine-written "you are subscribed as X" footer that always
+    uses a literal at-sign. Both are out of scope by decision. If a CJK sender
+    is ever added to the allowlist, this test is the thing that must change.
+    """
+    assert adapters.redact_addresses(written) == written
 
 
 def test_beehiiv_opaque_links_drop_while_direct_links_survive():

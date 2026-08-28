@@ -274,6 +274,11 @@ newsletter:
   adapters: [tldr, therundown, bensbites, theneuron, milkroad]
   max_items: 50        # the lane's own cap; category caps are untouched
   max_age_hours: 48    # same retention window as everything else
-  max_messages: 30     # messages fetched per hourly run
+  max_messages: 30     # message BODIES read per hourly run, oldest first
   overlap_hours: 6     # poll window overlaps the committed watermark
   request_timeout: 20
+  id_budget: 500       # message ids listed per run (pagination ceiling)
+  # Which server's Authentication-Results header is trusted for the DKIM
+  # check. Relayed mail legitimately carries other servers' headers, and an
+  # attacker can write one, so only the receiving server's own verdict counts.
+  authserv_id: mx.google.com

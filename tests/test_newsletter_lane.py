@@ -43,12 +43,15 @@ class FakeGmail:
         )
         self.credentials = credentials
         self.calls: list[tuple[list[str], datetime, int]] = []
+        self.budgets: list[int] = []
 
     def has_credentials(self, env):
         return self.credentials
 
-    def fetch(self, senders, after, *, env=None, limit=30, timeout=20.0):
+    def fetch(self, senders, after, *, env=None, limit=30, timeout=20.0,
+              id_budget=gmail.DEFAULT_ID_BUDGET):
         self.calls.append((list(senders), after, limit))
+        self.budgets.append(id_budget)
         return self.result
 
 
@@ -266,6 +269,157 @@ class TestTheCursorOnAShortBatch:
         result = lane.fetch(CFG, st, NOW, env=ENV, client=FakeGmail([], truncated=True))
         assert result.watermark == st.watermark
 
+    def test_the_short_batch_note_says_the_backlog_is_read_next_run(self):
+        """R2-2: the note used to claim "cursor held back" while it moved to now.
+
+        The claim is now the behaviour: the cursor stops at the newest message
+        read, the unread remainder is newer than that, and the words say so.
+        """
+        client = FakeGmail(self.sent_two_hours_ago(), truncated=True)
+        result = lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
+        assert "backlog remains; it is read next run" in result.note
+        assert "held back" not in result.note
+
+
+# --------------------------------------------------------------------------
+# the no-skip contract, end to end (round 2, R2-2)
+# --------------------------------------------------------------------------
+"""Design doc line 50: "mail is never silently skipped".
+
+Round 2's repro, restated as a test. Forty messages match the window, the cap
+is thirty, and the question is what happens to the other ten. Before the fix:
+Gmail listed newest first, the run read the newest thirty, the watermark moved
+to the newest message (which is `now` in all but name), and the OLDEST ten fell
+permanently outside the next window.
+
+The fix is in two halves and both are asserted here. `gmail.fetch` reads bodies
+OLDEST first, so the ten left over are the NEWEST ten. `lane.fetch` parks the
+watermark on the newest message it processed, so those ten are all newer than
+the cursor and re-enter the next window. Nothing is skipped; the backlog drains
+a runful per run.
+"""
+
+
+class TestNothingIsSkippedAcrossRuns:
+    """The scenario is a resume after an outage, which is the live case.
+
+    No `newsletter_state.json` is committed to the repo, and GitHub disables a
+    scheduled workflow after 60 days of repo inactivity, so the first run on
+    `main` starts from the full lookback window with a backlog waiting.
+    """
+
+    CAP = 30
+    BACKLOG_CFG = {
+        **CFG, "max_messages": CAP, "max_age_hours": 72,
+        "overlap_hours": lane.DEFAULT_OVERLAP_HOURS,
+    }
+
+    def mailbox(self, count=40):
+        """`count` messages, one per hour going back, NEWEST FIRST (Gmail order)."""
+        return [parsed("tldr", sent=NOW - timedelta(hours=1 + i)) for i in range(count)]
+
+    def read_this_run(self, mailbox, cap):
+        """What `gmail.fetch`'s oldest-first order hands the lane."""
+        return list(reversed(mailbox))[:cap]
+
+    def stale_state(self, hours=41):
+        return state_module.NewsletterState(
+            watermark=NOW - timedelta(hours=hours), salt="fixture-salt"
+        )
+
+    def next_window_start(self, watermark):
+        start, _end = state_module.plan_window(
+            state_module.NewsletterState(watermark=watermark, salt="s"),
+            NOW,
+            overlap_hours=self.BACKLOG_CFG["overlap_hours"],
+        )
+        return start
+
+    def test_the_forty_against_thirty_repro_leaves_no_message_outside_the_next_window(self):
+        mailbox = self.mailbox(40)
+        taken = self.read_this_run(mailbox, self.CAP)
+        result = lane.fetch(
+            self.BACKLOG_CFG, self.stale_state(), NOW, env=ENV,
+            client=FakeGmail(taken, truncated=True),
+        )
+        assert result.truncated and result.lossy
+
+        # The oldest ten, which the old code lost, were READ this run.
+        read_now = {lane._sent_at(m, NOW) for m in taken}
+        oldest_ten = {lane._sent_at(m, NOW) for m in list(reversed(mailbox))[:10]}
+        assert oldest_ten <= read_now, "the oldest tail is what this run drains first"
+
+        # The ten it did not read are the NEWEST ten, every one of them is
+        # newer than the committed cursor, and the next window still covers them.
+        deferred = [m for m in mailbox if m not in taken]
+        assert len(deferred) == 10
+        start = self.next_window_start(result.watermark)
+        for message in deferred:
+            sent = lane._sent_at(message, NOW)
+            assert sent > result.watermark, "a deferred message must be newer than the cursor"
+            assert sent >= start, "and must therefore fall inside the next window"
+
+    def test_a_second_run_drains_the_remainder_and_then_advances_to_now(self):
+        """Convergence, not just non-loss. The backlog is finite and shrinks."""
+        mailbox = self.mailbox(40)
+        first = lane.fetch(
+            self.BACKLOG_CFG, self.stale_state(), NOW, env=ENV,
+            client=FakeGmail(self.read_this_run(mailbox, self.CAP), truncated=True),
+        )
+        remainder = [m for m in mailbox if lane._sent_at(m, NOW) > first.watermark]
+        assert len(remainder) == 10, "one runful drained, the rest still waiting"
+
+        st = state_module.NewsletterState(watermark=first.watermark, salt="fixture-salt")
+        second = lane.fetch(
+            self.BACKLOG_CFG, st, NOW, env=ENV,
+            client=FakeGmail(list(reversed(remainder)), truncated=False),
+        )
+        assert not second.lossy
+        assert second.watermark == NOW, "a drained window advances the cursor to now"
+
+    def test_the_next_window_never_starts_later_than_this_one_did(self):
+        """The general form of the invariant the two tests above instantiate.
+
+        Whichever branch the watermark takes (`newest_processed`, or the old
+        cursor when that would be a step backwards), the next window's start is
+        never later than this window's start plus what was actually consumed.
+        So a message that was in this window and went unread is in the next one.
+        """
+        st = self.stale_state()
+        this_start = self.next_window_start(st.watermark)
+        mailbox = self.mailbox(40)
+        result = lane.fetch(
+            self.BACKLOG_CFG, st, NOW, env=ENV,
+            client=FakeGmail(self.read_this_run(mailbox, self.CAP), truncated=True),
+        )
+        unread = [m for m in mailbox if lane._sent_at(m, NOW) > result.watermark]
+        assert unread
+        start = self.next_window_start(result.watermark)
+        for message in unread:
+            sent = lane._sent_at(message, NOW)
+            assert sent >= this_start, "the fixture must really be inside this window"
+            assert sent >= start, "and it stays inside the next one"
+
+    def test_the_id_budget_reaches_the_gmail_client_from_config(self):
+        client = FakeGmail(self.mailbox(2))
+        lane.fetch({**CFG, "id_budget": 77}, fresh_state(), NOW, env=ENV, client=client)
+        assert client.budgets == [77]
+
+    def test_the_id_budget_defaults_without_config(self):
+        client = FakeGmail(self.mailbox(2))
+        lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
+        assert client.budgets == [gmail.DEFAULT_ID_BUDGET]
+
+    def test_the_id_budget_reaches_the_gmail_client_from_config(self):
+        client = FakeGmail(self.mailbox(2))
+        lane.fetch({**CFG, "id_budget": 77}, fresh_state(), NOW, env=ENV, client=client)
+        assert client.budgets == [77]
+
+    def test_the_id_budget_defaults_without_config(self):
+        client = FakeGmail(self.mailbox(2))
+        lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
+        assert client.budgets == [gmail.DEFAULT_ID_BUDGET]
+
 
 # --------------------------------------------------------------------------
 # sender authentication (round 1, S2)
@@ -294,6 +448,42 @@ class TestSenderAuthentication:
         failed = parsed("tldr", sent=NOW - timedelta(hours=1), dkim_verdict="fail")
         result = run([failed])
         assert result.items == [] and result.unauthenticated_messages == 1
+
+    def test_a_forged_foreign_authserv_id_header_publishes_nothing(self):
+        """R2-1, at the lane boundary: the bypass that put attacker copy live.
+
+        Gmail's own verdict is `fail`; underneath it sits the header the
+        attacker wrote for themselves. Reading the whole header set found their
+        `pass` and published their headline under TLDR's name.
+        """
+        msg = parsed("tldr", sent=NOW - timedelta(hours=1), dkim_verdict="fail")
+        msg["Authentication-Results"] = (
+            "mx.evil-attacker.example; dkim=pass header.d=tldrnewsletter.com"
+        )
+        result = run([msg])
+        assert result.items == []
+        assert result.unauthenticated_messages == 1
+        assert result.status["tldr"].seen == 0, "dropped before it is parsed"
+
+    def test_the_trusted_authserv_id_comes_from_config(self):
+        """A non-Gmail mailbox is a config change, not a source edit."""
+        msg = parsed("tldr", sent=NOW - timedelta(hours=1), authenticated=False)
+        msg["Authentication-Results"] = (
+            "mx.fastmail.example; dkim=pass header.d=tldrnewsletter.com"
+        )
+        default = run([msg])
+        assert default.items == [] and default.unauthenticated_missing == 1
+
+        configured = run([msg], cfg={**CFG, "authserv_id": "mx.fastmail.example"})
+        assert configured.items, "the configured server's verdict must be honoured"
+        assert configured.unauthenticated_missing == 0
+
+    def test_an_empty_configured_authserv_id_falls_back_rather_than_trusting_all(self):
+        result = run(
+            [parsed("tldr", sent=NOW - timedelta(hours=1))],
+            cfg={**CFG, "authserv_id": ""},
+        )
+        assert result.items, "an empty value means the Gmail default, not 'no server'"
 
     def test_a_missing_header_fails_closed_with_its_own_counter(self):
         """Gmail writes this header on delivery, so a message without one is a
