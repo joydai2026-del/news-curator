@@ -1,0 +1,71 @@
+# ============================================================================
+# topics.yaml — THIS IS THE FILE YOU EDIT.
+#
+# Everything below is an EXAMPLE. Delete it and write your own topics.
+# Nothing in the code knows or cares what these topics are.
+#
+# Each topic needs a `name` and a list of `keywords`.
+# Optional per topic:
+#   aliases  - extra phrases that also count as a match
+#   exclude  - if one of these appears in a headline, drop the item from this
+#              topic even if a keyword matched. Your escape hatch for an
+#              ambiguous keyword.
+#
+# Matching is whole-word and case-insensitive, against the headline only.
+# "AI" will not match "malaria" or "said". Multi-word keywords match as a
+# phrase.
+#
+# ---------------------------------------------------------------------------
+# ONE THING WORTH KNOWING BEFORE YOU WRITE KEYWORDS
+#
+# A keyword match proves a phrase APPEARS in a headline. It does not prove the
+# story is ABOUT your topic. Those are different claims, and the gap between
+# them is where a curated page gets embarrassing.
+#
+# So prefer specific phrases over generic ones. An early draft of this file
+# listed "tool use" as an alias for AI agents, which quietly files carpentry
+# and gardening stories under AI. Two rules that avoid most of it:
+#
+#   1. If a phrase is common outside your topic, do not use it alone.
+#   2. If a keyword is also a person's name, a company name, or an everyday
+#      word, expect to add a few `exclude` lines. That is normal, not a defect.
+# ============================================================================
+
+topics:
+  # ---- EXAMPLE TOPIC 1 (replace me) ----
+  - name: AI agents
+    keywords:
+      - AI agent
+      - AI agents
+      - agentic
+      - autonomous agent
+      - coding agent
+      - multi-agent
+    aliases:
+      - agent framework
+      - agent harness
+    exclude:
+      - real estate agent
+      - travel agent
+      - insurance agent
+      - free agent
+      - federal agent
+      - sports agent
+
+  # ---- EXAMPLE TOPIC 2 (replace me) ----
+  - name: Claude
+    keywords:
+      - Claude
+      - Anthropic
+    aliases:
+      - Claude Code
+      - Model Context Protocol
+    exclude:
+      # "Claude" is also a common given name. These keep the topic on-target,
+      # and you will probably need to add more the first week you run this.
+      - Claude Monet
+      - Claude Debussy
+      - Claude Shannon
+      - Claude Levi-Strauss
+      - Jean-Claude
+      - Claude Rains

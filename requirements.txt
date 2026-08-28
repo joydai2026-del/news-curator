@@ -1,0 +1,5 @@
+# Deliberately three dependencies. A tool that rebuilds itself hourly and
+# unattended should have a dependency surface small enough to audit.
+requests==2.32.5
+feedparser==6.0.11
+PyYAML==6.0.3

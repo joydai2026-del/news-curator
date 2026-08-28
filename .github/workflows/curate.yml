@@ -1,0 +1,93 @@
+name: Curate
+
+# Rebuilds the page and publishes it to GitHub Pages.
+#
+# Two honest notes about the schedule:
+#   * GitHub runs cron on a best-effort basis and delays or drops runs under
+#     load. The page therefore says "scheduled hourly" and shows the real build
+#     time rather than claiming a guarantee.
+#   * GitHub DISABLES scheduled workflows in a public repo after 60 days with no
+#     repository activity, and emails the owner. If the page goes stale, check
+#     the Actions tab first: the job was probably switched off, not broken.
+on:
+  schedule:
+    # Off the hour on purpose. Minute 0 is the busiest slot on the shared cron
+    # pool and the most likely to be delayed.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "topics.yaml"
+      - "sources.yaml"
+      - "curator/**"
+      - ".github/workflows/curate.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let a manual run and a scheduled run publish over each other.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build the page
+        run: python -m curator.pipeline --root . --out ./site --verbose
+
+      - name: Verify the rendered page has real content
+        # A green exit code and an existing file do not prove a page is any
+        # good: a blank render passes both. Assert on the output itself.
+        run: |
+          python - <<'PY'
+          import re, sys
+          from pathlib import Path
+
+          page = Path("site/index.html")
+          if not page.exists():
+              sys.exit("FAIL: site/index.html was not written")
+
+          html = page.read_text(encoding="utf-8")
+          links = re.findall(r'<a class="head" href="(https?://[^"]+)"', html)
+          print(f"rendered {len(links)} story links, {len(html)} bytes")
+
+          if len(html) < 2000:
+              sys.exit(f"FAIL: page is suspiciously small ({len(html)} bytes)")
+          if not links:
+              sys.exit("FAIL: page rendered zero story links")
+          if "javascript:" in html.lower():
+              sys.exit("FAIL: unsafe scheme present in rendered output")
+          print("OK: page contains real, linked stories")
+          PY
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

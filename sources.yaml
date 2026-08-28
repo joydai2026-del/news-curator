@@ -1,0 +1,146 @@
+# ============================================================================
+# sources.yaml — where headlines come from, and how much you trust each one.
+#
+# `weight` is the "premium" dial. 1.0 is neutral. Raise it for outlets you
+# trust, lower it for ones you merely tolerate. Defaults here are deliberately
+# near-uniform: your taste is not our business.
+#
+# ---------------------------------------------------------------------------
+# ABOUT THIS FEED LIST, READ BEFORE ADDING TO IT
+#
+# Every feed below returned HTTP 200 with parseable XML when probed on
+# 2026-08-25 from a residential connection. Reproduce it yourself any time:
+#
+#     python3 scripts/probe_sources.py
+#
+# "It returned 200" means the feed is REACHABLE. It does not mean you have
+# permission to republish it. Those are different questions and only the first
+# one is testable by a script.
+#
+# This list therefore sticks to feeds that publishers promote for reading and
+# syndication, and deliberately leaves out outlets whose published terms govern
+# RSS reuse specifically (the BBC requires unmodified presentation with a
+# prominent credited link; the FT licenses RSS per client; several majors have
+# their own republishing terms). Those feeds are reachable and are still not in
+# the defaults.
+#
+# If you add a feed, you own that decision. This tool shows a headline, an
+# attribution and a link out, and never reproduces article text, which is the
+# ordinary reader-facing use of a feed. That is a reasonable position, not
+# legal advice.
+# ============================================================================
+
+settings:
+  # Shown in the browser tab and as the page heading.
+  site_name: "News Curator"
+  # Optional. Linked in the footer. Falls back to the GitHub Actions repo, so a
+  # fork advertises ITSELF rather than whoever it was forked from.
+  # repo_url: "https://github.com/your-name/news-curator"
+
+  # How far back an item can be published and still be considered.
+  max_age_hours: 48
+  # Per-request network timeout, seconds.
+  request_timeout: 15
+  # Max items shown per topic on the rendered page.
+  max_items_per_topic: 30
+  user_agent: "news-curator/0.1 (+https://github.com/topics/news-curator)"
+
+ranking:
+  # Recency is the dominant term: the product promise is "up to date".
+  recency_half_life_hours: 12.0
+  weight_recency: 1.0
+  weight_keyword: 0.6
+  weight_source: 0.4
+  # Bonus when 2+ DISTINCT platforms carried the same LINK. Fuzzy title matches
+  # never feed this, so the "N sources" badge means what it says.
+  weight_echo: 0.5
+  echo_max_sources: 3
+  # A keyword hit in the first N characters suggests the article is ABOUT the
+  # topic rather than merely mentioning it.
+  title_lead_chars: 40
+  title_lead_bonus: 0.25
+
+dedup:
+  # Titles more similar than this (0-1) collapse into one row. Differing
+  # numbers veto a merge, so "iOS 18.6.1" and "iOS 18.6.2" stay separate.
+  title_similarity_threshold: 0.85
+  # Only compare titles published within this many hours of each other.
+  time_bucket_hours: 36
+
+# ---------------------------------------------------------------------------
+# Tier A — Hacker News via the Algolia API. No auth, no key, no quota observed
+# across 10 rapid sequential calls (~0.3 s each) from a residential IP.
+#
+# HN is an AGGREGATOR: the headline is written by whoever submitted the link,
+# not by the publisher. Rows sourced only from HN are labeled "via Hacker News",
+# and when a publisher's own feed carried the same link, the publisher's
+# headline wins. Its weight is below 1.0 for that reason.
+# ---------------------------------------------------------------------------
+hackernews:
+  enabled: true
+  weight: 0.95
+  # The ranked endpoint gives quality; this floor keeps out 1-point noise.
+  min_points_ranked: 20
+  # The by-date endpoint gives freshness and runs with no floor.
+  include_by_date: true
+  hits_per_page: 40
+
+# ---------------------------------------------------------------------------
+# Tier B — RSS. The backbone, precisely because it is boring and stable.
+# Mark a source `aggregator: true` if its titles are submitter-written.
+# ---------------------------------------------------------------------------
+rss:
+  - {id: techcrunch,   name: TechCrunch,       url: "https://techcrunch.com/feed/",                weight: 1.0}
+  - {id: verge,        name: The Verge,        url: "https://www.theverge.com/rss/index.xml",      weight: 1.0}
+  - {id: arstechnica,  name: Ars Technica,     url: "https://arstechnica.com/feed/",               weight: 1.1}
+  - {id: wired,        name: Wired,            url: "https://www.wired.com/feed/rss",              weight: 1.0}
+  - {id: mittr,        name: MIT Tech Review,  url: "https://www.technologyreview.com/feed/",      weight: 1.1}
+  - {id: ieee,         name: IEEE Spectrum,    url: "https://spectrum.ieee.org/feeds/feed.rss",    weight: 1.1}
+  - {id: simonw,       name: Simon Willison,   url: "https://simonwillison.net/atom/everything/",  weight: 1.1}
+  - {id: openai,       name: OpenAI,           url: "https://openai.com/news/rss.xml",             weight: 1.0}
+  - {id: deepmind,     name: Google DeepMind,  url: "https://deepmind.google/blog/rss.xml",        weight: 1.0}
+  - {id: googleai,     name: Google AI Blog,   url: "https://blog.google/technology/ai/rss/",      weight: 1.0}
+  - {id: theregister,  name: The Register,     url: "https://www.theregister.com/headlines.atom",  weight: 0.9}
+  - {id: venturebeat,  name: VentureBeat,      url: "https://venturebeat.com/feed/",               weight: 0.9}
+  - {id: restofworld,  name: Rest of World,    url: "https://restofworld.org/feed/latest/",        weight: 1.0}
+  - {id: fourohfour,   name: 404 Media,        url: "https://www.404media.co/rss/",                weight: 1.0}
+  - {id: stratechery,  name: Stratechery,      url: "https://stratechery.com/feed/",               weight: 1.0}
+  - {id: arxivai,      name: arXiv cs.AI,      url: "https://export.arxiv.org/rss/cs.AI",          weight: 0.8}
+  # Community aggregators: submitter-written titles, so flagged and down-weighted.
+  - {id: lobsters,     name: Lobsters,         url: "https://lobste.rs/rss",                       weight: 0.9, aggregator: true}
+  - {id: hnfront,      name: Hacker News,      url: "https://news.ycombinator.com/rss",            weight: 0.9, aggregator: true, platform: hackernews}
+
+# ---------------------------------------------------------------------------
+# Tier C — Reddit. OFF BY DEFAULT, and that is not an oversight.
+#
+# Measured 2026-08-25 from a residential IP:
+#   /r/<sub>/hot.json      -> HTTP 403 with every User-Agent tried. Closed.
+#   /r/<sub>/.rss, bursty  -> HTTP 200 once, then HTTP 429 for everything after
+#   /r/<sub>/.rss, spaced  -> HTTP 200 every time, 10 entries each
+#
+# That last line matters: the 429 is a short-window BURST limit, not a ban.
+# Four requests spaced 60-300 s apart all succeeded once the throttle cooled
+# off. Reddit over RSS works if you go slow, and only if you go slow.
+#
+# Still off by default, for two honest reasons:
+#   1. GitHub Actions runners use shared datacenter IPs, the traffic class
+#      Reddit blocks hardest, and that cannot be tested from a laptop.
+#   2. Reddit points programmatic users at registered OAuth apps. Unauthenticated
+#      RSS polling is tolerated rather than sanctioned.
+#
+# Turning it on is harmless either way: a blocked tier is skipped with a note on
+# the page, never a failed run. See README, "Reddit is hard".
+# ---------------------------------------------------------------------------
+reddit:
+  enabled: false
+  weight: 0.85
+  # Seconds between subreddit requests. 6 s earned a 429; 60 s did not.
+  # 30 s is the compromise, and the tier stops on the first 429 rather than
+  # hammering. Do not lower this.
+  request_delay_seconds: 30
+  subreddits:
+    - technology
+    - programming
+    - MachineLearning
+    - artificial
+    - LocalLLaMA

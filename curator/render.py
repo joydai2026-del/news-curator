@@ -1,0 +1,286 @@
+"""One static page. No framework, no build step, no runtime requests.
+
+Design intent: premium, clean, minimal list. One column, generous whitespace, a
+strong type hierarchy, almost no ornament. The reference is a well-set reading
+page, not a dashboard.
+
+Everything is inlined. No images, no web fonts, no analytics, no third-party
+requests of any kind, so the page renders before a spinner would have appeared.
+
+Three corrections from review are load-bearing here:
+
+  * **Health is count AND state, separately.** A tier that returned ten items
+    and then got rate-limited used to render as a reassuring "reddit: 10". It
+    now renders as "Reddit: 10 items, degraded (rate-limited after 2/5)".
+  * **"Scheduled hourly", not "refreshes hourly".** GitHub delays and drops
+    scheduled runs under load, and disables them entirely after 60 days of
+    repository inactivity. The page states the schedule and shows how old the
+    build actually is, and says so out loud when that is more than three hours.
+  * **The accuracy note is narrowed to what the code can actually prove.** We
+    never fetch the destination, so we cannot promise a link is live or still
+    carries that title. We can promise the source handed us this pair at build
+    time, and that aggregator headlines are labeled as such.
+"""
+
+from __future__ import annotations
+
+import html
+from datetime import datetime
+from pathlib import Path
+
+from .models import Item, TierResult
+from .normalize import safe_url
+
+CSS = """
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#fbfbfa; --fg:#16161a; --muted:#6b6b76; --faint:#9a9aa4;
+  --line:#e7e7e4; --accent:#16161a; --chip:#f0f0ed; --chip-on:#16161a;
+  --chip-on-fg:#fbfbfa; --echo:#6d5c2f; --echo-bg:#f6efdb; --warn:#8a4b2a;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0e0e10; --fg:#ececef; --muted:#9c9ca6; --faint:#6c6c76;
+    --line:#26262b; --accent:#ececef; --chip:#1d1d22; --chip-on:#ececef;
+    --chip-on-fg:#0e0e10; --echo:#d8c38a; --echo-bg:#2a2418; --warn:#e0a184;
+  }
+}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif;
+  font-size:17px; line-height:1.5;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+.wrap{max-width:44rem; margin:0 auto; padding:4.5rem 1.5rem 6rem}
+header{margin-bottom:3.5rem}
+h1{margin:0 0 .6rem; font-size:1.5rem; font-weight:620; letter-spacing:-.021em; line-height:1.2}
+.sub{margin:0; color:var(--muted); font-size:.875rem}
+.dot{color:var(--faint); margin:0 .45em}
+.stale{color:var(--warn); font-weight:500}
+
+nav{display:flex; flex-wrap:wrap; gap:.5rem; margin:2rem 0 0}
+.chip{
+  font:inherit; font-size:.8125rem; font-weight:500; padding:.4rem .8rem;
+  border-radius:100px; border:1px solid transparent; background:var(--chip);
+  color:var(--muted); cursor:pointer; transition:background .12s ease,color .12s ease;
+}
+.chip:hover{color:var(--fg)}
+.chip[aria-pressed="true"]{background:var(--chip-on); color:var(--chip-on-fg)}
+.chip:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+section{margin-top:3.5rem}
+section[hidden]{display:none}
+h2{margin:0 0 1.25rem; font-size:.75rem; font-weight:600; text-transform:uppercase;
+   letter-spacing:.09em; color:var(--faint)}
+ol{list-style:none; margin:0; padding:0}
+li{padding:1.1rem 0; border-top:1px solid var(--line)}
+li:first-child{border-top:none; padding-top:0}
+a.head{
+  color:var(--fg); text-decoration:none; font-size:1.0625rem; font-weight:500;
+  letter-spacing:-.011em; line-height:1.4; display:inline-block;
+}
+a.head:hover{text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:1px}
+a.head:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:2px}
+.meta{margin-top:.4rem; font-size:.8125rem; color:var(--muted);
+      display:flex; flex-wrap:wrap; align-items:center; gap:.45rem}
+.meta .sep{color:var(--faint)}
+.echo{color:var(--echo); background:var(--echo-bg); padding:.08rem .42rem;
+      border-radius:100px; font-size:.75rem; font-weight:500}
+.via{color:var(--faint)}
+.empty{color:var(--muted); font-size:.9375rem; padding:.5rem 0 0; margin:0}
+
+footer{margin-top:5rem; padding-top:1.75rem; border-top:1px solid var(--line);
+       color:var(--muted); font-size:.8125rem; line-height:1.65}
+footer p{margin:0 0 .7rem}
+footer a{color:var(--muted); text-decoration:underline; text-underline-offset:2px}
+footer a:hover{color:var(--fg)}
+.health{color:var(--faint); font-size:.78125rem}
+.health .bad{color:var(--warn)}
+@media (max-width:34rem){.wrap{padding:3rem 1.15rem 4rem} body{font-size:16px}}
+"""
+
+JS = """
+(function(){
+  var chips=[].slice.call(document.querySelectorAll('.chip'));
+  var secs=[].slice.call(document.querySelectorAll('section[data-topic]'));
+  function show(key){
+    chips.forEach(function(c){c.setAttribute('aria-pressed', String(c.dataset.filter===key));});
+    secs.forEach(function(s){s.hidden = !(key==='__all__' || s.dataset.topic===key);});
+    try{localStorage.setItem('nc-filter',key);}catch(e){}
+  }
+  chips.forEach(function(c){c.addEventListener('click',function(){show(c.dataset.filter);});});
+  var saved='__all__';
+  try{saved=localStorage.getItem('nc-filter')||'__all__';}catch(e){}
+  var known=chips.some(function(c){return c.dataset.filter===saved;});
+  show(known?saved:'__all__');
+})();
+"""
+
+STALE_AFTER_HOURS = 3
+
+
+def _e(text: object) -> str:
+    return html.escape(str(text), quote=True)
+
+
+def human_age(item: Item, now: datetime) -> str:
+    minutes = int(item.age_hours(now) * 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return "1 day ago" if days == 1 else f"{days} days ago"
+
+
+def _slug(name: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in name.casefold()).strip("-") or "topic"
+
+
+def _render_item(item: Item, now: datetime) -> str:
+    bits = []
+    n = len(item.echo_platforms)
+    if n > 1:
+        bits.append(f'<span class="echo">{n} sources</span>')
+    # Aggregator headlines are submitter-written. Say so rather than letting the
+    # reader assume the publisher wrote it.
+    label = f"via {item.source_name}" if item.is_aggregator else item.source_name
+    cls = ' class="via"' if item.is_aggregator else ""
+    bits.append(f"<span{cls}>{_e(label)}</span>")
+    age = human_age(item, now)
+    bits.append(f"<span>{_e(age)}</span>")
+
+    meta = '<span class="sep">&middot;</span>'.join(bits)
+    return (
+        "<li>"
+        f'<a class="head" href="{_e(item.url)}" rel="noopener noreferrer nofollow">{_e(item.title)}</a>'
+        f'<div class="meta">{meta}</div></li>'
+    )
+
+
+def _health_line(results: list[TierResult]) -> str:
+    """Count AND state, independently.
+
+    Hiding a partial failure behind a healthy-looking item count is exactly the
+    silent degradation this line exists to prevent.
+    """
+    parts = []
+    for r in results:
+        count = len(r.items)
+        if count and r.degraded:
+            text = f"{r.tier}: {count} items, degraded ({r.note})"
+            parts.append(f'<span class="bad">{_e(text)}</span>')
+        elif count:
+            parts.append(_e(f"{r.tier}: {count} items"))
+        else:
+            text = f"{r.tier}: {r.note or 'nothing returned'}"
+            span = "bad" if not r.ok else "ok"
+            parts.append(f'<span class="{span}">{_e(text)}</span>' if span == "bad" else _e(text))
+    return " &middot; ".join(parts)
+
+
+def render_html(
+    ranked: dict[str, list[Item]],
+    results: list[TierResult],
+    now: datetime,
+    *,
+    site_name: str = "News Curator",
+    repo_url: str | None = None,
+    built_at: datetime | None = None,
+) -> str:
+    built = built_at or now
+    stamp = built.strftime("%b %d, %Y at %H:%M UTC").replace(" 0", " ")
+    age_h = max(0.0, (now - built).total_seconds() / 3600.0)
+    stale = (
+        f'<span class="dot">&middot;</span><span class="stale">last build {int(age_h)}h ago</span>'
+        if age_h >= STALE_AFTER_HOURS
+        else ""
+    )
+
+    chips = ['<button class="chip" data-filter="__all__" aria-pressed="true">All</button>']
+    for name in ranked:
+        chips.append(f'<button class="chip" data-filter="{_e(name)}">{_e(name)}</button>')
+
+    sections = []
+    for name, items in ranked.items():
+        body = (
+            f"<ol>{''.join(_render_item(i, now) for i in items)}</ol>"
+            if items
+            else '<p class="empty">Nothing matched in this window.</p>'
+        )
+        sections.append(
+            f'<section data-topic="{_e(name)}" id="{_slug(name)}"><h2>{_e(name)}</h2>{body}</section>'
+        )
+
+    total = sum(len(v) for v in ranked.values())
+    safe_repo = safe_url(repo_url) if repo_url else None
+    repo_line = (
+        f'<p><a href="{_e(safe_repo)}">Open source on GitHub</a>. Fork it, edit '
+        f"<code>topics.yaml</code>, and it becomes yours.</p>"
+        if safe_repo
+        else "<p>Open source. Fork it, edit <code>topics.yaml</code>, and it becomes yours.</p>"
+    )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_e(site_name)}</title>
+<meta name="description" content="A self-updating list of the latest headlines matching a set of keywords.">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<style>{CSS}</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>{_e(site_name)}</h1>
+  <p class="sub">Built {_e(stamp)}<span class="dot">&middot;</span>scheduled hourly<span class="dot">&middot;</span>{total} stories{stale}</p>
+  <nav>{''.join(chips)}</nav>
+</header>
+<main>{''.join(sections)}</main>
+<footer>
+  <p>Headlines matching a keyword list, pulled from Hacker News and a set of RSS feeds,
+     ranked by how recent and how well-matched they are. Rebuilt on a schedule.</p>
+  <p>Every headline here is the text its source handed us at build time, linked to the
+     address that source gave. Rows marked <span class="via">via</span> come from an
+     aggregator, where the headline is written by whoever submitted the link rather than
+     by the publisher. Nothing on this page is written, rewritten or summarized by a
+     machine. Destination pages are never fetched, so a link may have since moved,
+     changed or died, and no claim in any linked article has been checked.</p>
+  <p class="health">Sources this run &mdash; {_health_line(results)}</p>
+  {repo_line}
+</footer>
+</div>
+<script>{JS}</script>
+</body>
+</html>
+"""
+
+
+def render_site(
+    ranked: dict[str, list[Item]],
+    results: list[TierResult],
+    now: datetime,
+    out_dir: Path,
+    *,
+    site_name: str = "News Curator",
+    repo_url: str | None = None,
+) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "index.html"
+    payload = render_html(ranked, results, now, site_name=site_name, repo_url=repo_url)
+
+    # Write via a temp file in the same directory, then replace, so an
+    # interrupted run can never leave a half-written page published.
+    tmp = path.with_suffix(".html.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(path)
+
+    (out_dir / ".nojekyll").write_text("", encoding="utf-8")
+    return path

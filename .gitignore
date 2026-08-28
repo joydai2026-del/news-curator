@@ -1,0 +1,17 @@
+# Build output. The published page is produced by CI, not committed to main.
+site/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local probe receipts
+receipt.json
+
+# OS
+.DS_Store
