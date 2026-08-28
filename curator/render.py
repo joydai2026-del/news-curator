@@ -17,9 +17,22 @@ Three corrections from review are load-bearing here:
     repository inactivity. The page states the schedule and shows how old the
     build actually is, and says so out loud when that is more than three hours.
   * **The accuracy note is narrowed to what the code can actually prove.** We
-    never fetch the destination, so we cannot promise a link is live or still
-    carries that title. We can promise the source handed us this pair at build
-    time, and that aggregator headlines are labeled as such.
+    can promise the source handed us this headline and this address at build
+    time, and that aggregator headlines are labeled as such. We cannot promise
+    the link is still live or still carries that title.
+
+v1.1 adds a preview image per row, carried as a `data-image` attribute rather
+than an `<img>`. The layout is a separate decision and is deliberately untouched
+here, so this ships the DATA a future layout needs without pre-empting it. The
+attribute holds the publisher's own image address, hotlinked, and is absent when
+the publisher declared none, which is why the renderer never invents a
+placeholder: an empty attribute would look like an answer.
+
+That addition changes one factual claim in the footer and the copy had to move
+with it. v1 said destination pages are never fetched. v1.1 reads the head of an
+article to find the image the publisher declared there, so the footer now says
+that, and says what is still true: no article text is fetched, stored or
+summarized.
 """
 
 from __future__ import annotations
@@ -27,6 +40,7 @@ from __future__ import annotations
 import html
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .models import Item, TierResult
 from .normalize import safe_url
@@ -187,8 +201,16 @@ def _render_item(item: Item, now: datetime) -> str | None:
     bits.append(f"<span>{_e(age)}</span>")
 
     meta = '<span class="sep">&middot;</span>'.join(bits)
+
+    # The publisher's own preview image, revalidated at the output boundary like
+    # every other URL. Carried as data, not as an <img>: the layout is a
+    # separate decision, and a row whose publisher declared no image carries no
+    # attribute at all, so a future layout can tell "none" from "empty".
+    image = safe_url(item.image_url) if item.image_url else None
+    image_attr = f' data-image="{_e(image)}"' if image else ""
+
     return (
-        "<li>"
+        f"<li{image_attr}>"
         f'<a class="head" href="{_e(href)}" rel="noopener noreferrer nofollow">{_e(item.title)}</a>'
         f'<div class="meta">{meta}</div></li>'
     )
@@ -213,6 +235,28 @@ def _health_line(results: list[TierResult]) -> str:
             span = "bad" if not r.ok else "ok"
             parts.append(f'<span class="{span}">{_e(text)}</span>' if span == "bad" else _e(text))
     return " &middot; ".join(parts)
+
+
+def edit_topics_url(repo_url: str | None, *, branch: str = "main", file: str = "topics.yaml") -> str | None:
+    """GitHub's web editor for the keyword file, or None if we cannot be sure.
+
+    This is the whole of the "add a topic" feature, and its smallness is the
+    point. There is no backend to write, no form to secure and no account system
+    to run: GitHub already owns the identity, the permission check, the edit
+    box, the diff and the audit trail. Whoever can push to the repo can add a
+    keyword; whoever cannot, gets GitHub's own fork-and-pull-request flow.
+
+    Returned only for github.com URLs, because `/edit/<branch>/<file>` is
+    GitHub's route and would be a broken link anywhere else. A fork on another
+    host gets no link rather than a wrong one.
+    """
+    safe = safe_url(repo_url) if repo_url else None
+    if not safe:
+        return None
+    host = urlsplit(safe).hostname or ""
+    if host.lower() not in ("github.com", "www.github.com"):
+        return None
+    return f"{safe.rstrip('/')}/edit/{branch}/{file}"
 
 
 def render_html(
@@ -255,6 +299,23 @@ def render_html(
 
     total = sum(len(v) for v in ranked.values())
     safe_repo = safe_url(repo_url) if repo_url else None
+    edit_url = edit_topics_url(safe_repo)
+
+    if edit_url:
+        # The manager's path in one line. Editing the keyword file is the only
+        # thing anyone needs to change what this page collects, so that is the
+        # link, pointed straight at the file rather than at the repo.
+        add_line = (
+            f'<p><a class="add-topic" href="{_e(edit_url)}">Add a topic or keyword</a> '
+            "&mdash; edit <code>topics.yaml</code> on GitHub. Signing in decides who may save it, "
+            "and saving it rebuilds this page.</p>"
+        )
+    else:
+        add_line = (
+            "<p>Add a topic or keyword by editing <code>topics.yaml</code>. "
+            "The change appears here on the next build.</p>"
+        )
+
     repo_line = (
         f'<p><a href="{_e(safe_repo)}">Open source on GitHub</a>. Fork it, edit '
         f"<code>topics.yaml</code>, and it becomes yours.</p>"
@@ -288,9 +349,14 @@ def render_html(
      address that source gave. Rows marked <span class="via">via</span> come from an
      aggregator, where the headline is written by whoever submitted the link rather than
      by the publisher. Nothing on this page is written, rewritten or summarized by a
-     machine. Destination pages are never fetched, so a link may have since moved,
-     changed or died, and no claim in any linked article has been checked.</p>
+     machine.</p>
+  <p>Where a story carries a picture, it is the preview image the publisher declared for
+     it, taken from their feed or from the <code>og:image</code> tag on their page, and
+     hotlinked from them rather than copied. No article text is fetched, stored or
+     summarized, no claim in any linked article has been checked, and a link may have
+     moved, changed or died since the build.</p>
   <p class="health">Sources this run &mdash; {_health_line(results)}</p>
+  {add_line}
   {repo_line}
 </footer>
 </div>

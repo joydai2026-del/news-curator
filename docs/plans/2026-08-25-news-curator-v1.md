@@ -610,3 +610,264 @@ one.
 - The rendered page was opened and inspected in light and dark mode. Filter
   chips work, publisher and aggregator attribution render distinctly, six rows
   carried a multi-source badge, and no unsafe scheme appears in the output.
+
+---
+
+# v1.1 — The content layer (2026-08-28)
+
+v1 shipped a working machine with example content in it. `topics.yaml` said
+"EXAMPLE TOPIC 1 (replace me)" and the feed list was eighteen general technology
+publications. v1.1 replaces the content and adds the two things a real reader
+needs from it. The pipeline design from v1 is unchanged.
+
+## The ruling this implements
+
+Six sections, each with a strong keyword set **and** a curated list of premium
+sources: AI (TechCrunch is a required source), Crypto, Quantum computing, Energy
+including small modular reactors, Space technology, Biotechnology. Plus a
+picture per story, and a way for a manager to add a keyword without a developer.
+
+## What changed, and the one design decision worth arguing about
+
+### Categories became first-class, and own their feeds
+
+A category is now `keywords` + `sources` in one place, because those answer the
+same question: what belongs in this section.
+
+The decision worth writing down is that **a feed listed under a category joins
+that category without needing a keyword hit.** Keyword-only matching has a
+failure that no keyword list can fix: "Vogtle 4 enters commercial operation" is
+unmistakably an energy story and contains not one energy keyword. Publications
+like World Nuclear News exist to supply exactly those stories, and gating them
+behind a string match throws away the reason to curate a source at all.
+
+So listing a feed under a category is an editorial claim that the publication is
+SINGLE-SUBJECT. That is why multi-subject publications stay in the shared pool in
+`sources.yaml` and are matched by keyword: TechCrunch's AI section feed is native
+to AI, while its front page is shared, so a TechCrunch crypto story still lands
+in Crypto rather than dragging the front page into AI wholesale.
+
+Three guards keep the claim honest:
+
+- `exclude` still vetoes a native item. A strong claim, not an unconditional one.
+- A native item with no keyword hit scores `native_source_score` (0.5) rather
+  than a full keyword match, so a headline that says what it is about still wins.
+- Category membership only survives a URL-IDENTICAL dedup merge, never a fuzzy
+  title merge, on the same reasoning that already governs the "N sources" badge:
+  filing a story under a section on the strength of a guess is exactly the kind
+  of confident wrongness this codebase is built to avoid.
+
+`topics:` from v1 still loads, so a fork does not break. It produces categories
+with no native feeds, which is what v1 meant.
+
+### Preview images, from the publisher, hotlinked
+
+Two sources, cheapest first:
+
+1. **The feed.** `media:content`, `media:thumbnail`, image enclosures. Zero extra
+   requests, and it covers roughly half the shipped feeds. It is also the ONLY
+   way to get an image from CoinDesk, The Block and the Industry Dive properties,
+   which serve their feed happily and return 403 to a direct article fetch.
+2. **`og:image` on the article.** Only for what the feed left bare, and only for
+   rows that survived ranking and truncation. The response is read as far as the
+   end of the head and then dropped; the body is never parsed.
+
+The ceiling is therefore the number of VISIBLE rows, not the number of headlines
+collected, which is what keeps an hourly job bounded. Answers are cached in
+`image_cache.json`, committed to the repo and keyed by canonical URL: the answer
+for a given article does not change, and a committed file is durable and
+auditable in a way a CI cache is not.
+
+Nothing is downloaded, resized or re-hosted. The publisher keeps their CDN and
+the ability to change or withdraw the image.
+
+**This changed a promise, and the promise had to change with it.** v1's footer
+said destination pages are never fetched. That is no longer true, so the footer
+now says what is: the head of an article is read for the image tag the publisher
+put there, no article text is fetched, stored or summarized, and no claim in any
+linked article has been checked.
+
+Two failure modes were found by measurement rather than reasoning, and both are
+now encoded:
+
+- **A 403 or 429 page can carry its own `og:image`.** Several publishers return
+  a styled block page with a social preview. Parsing it would attach the
+  publisher's "you are blocked" artwork to a real story, so a non-200 response is
+  never parsed. A 64 KB probe that ignored status codes looked like it worked.
+- **Some heads are bigger than they look.** Springer article pages reach
+  `</head>` at about 100 KB, so a 64 KB cap silently missed every one. The cap is
+  256 KB and is a config dial.
+
+Errors and clean misses are cached differently, because they are different facts:
+"this page declares no image" is permanent, while "we were refused at 14:00" is
+about one moment and is retried after 24 hours.
+
+### Adding a topic without a developer (v1, zero backend)
+
+The page footer links to GitHub's web editor for `topics.yaml`. That is the whole
+feature, and its smallness is the point: GitHub already owns the identity, the
+permission check, the edit box, the diff and the audit trail. Whoever can push to
+the repo edits a keyword in the browser and saves; whoever cannot gets GitHub's
+own fork-and-pull-request flow. There is no form to secure, no account system to
+run, and no new place for a secret to leak.
+
+Saving `topics.yaml` is a push to a path the Curate workflow already watches, so
+the page rebuilds immediately rather than waiting for the hour.
+
+The link is built from the repo URL and only rendered for `github.com` hosts,
+because `/edit/<branch>/<file>` is GitHub's route and would be a broken link
+anywhere else. A fork on another host gets instructions instead of a wrong link.
+
+**A v2 exists and was deliberately not built.** An issue template ("Add a
+keyword") plus an Action that parses the issue body, edits the YAML, opens a PR
+and closes the issue would let someone with no write access propose a keyword,
+and would give every change a conversation thread. It is worth building when
+there is a second person asking for keywords. Today there is one manager who has
+push access, and for her the editor link is strictly fewer steps.
+
+## Sources: what shipped, and what did not
+
+Every feed was probed live on 2026-08-28. Reachability is not permission to
+republish, and only the first is testable by a script, so exclusions are recorded
+with their actual reason rather than a blanket policy sentence:
+
+| Excluded | Reason |
+|---|---|
+| BBC, FT, NYT | Published terms govern RSS reuse specifically. Carried over from v1. |
+| Endpoints News | Feed returns HTTP 403 to an ordinary client. The terms question never arose. |
+| STAT News | Reachable, but its terms of service could not be retrieved to check, and most feed items are STAT+, so a link lands the reader on a paywall. |
+| Nature, Science | Terms pages sit behind an authentication redirect. Both are general-science rather than biotech, so the fit was weak anyway. |
+| arXiv cs.AI / cs.LG | Reachable and parsing (312 entries on probe day). Excluded on EDITORIAL grounds: a preprint firehose is not news, and several hundred same-day papers would crowd out a recency-ranked AI section. Left commented in `sources.yaml`. |
+| Fierce Biotech, Fierce Pharma | The interesting one. Both return 200, parse cleanly, and carry 25 entries. Every entry is then dropped, because `<pubDate>` is `Aug 28, 2026 10:30am` rather than RFC 822, with no timezone. We drop undated items rather than stamping them "now", and guessing a timezone would silently misorder a recency-ranked section by hours. |
+| IEEE Spectrum quantum tag | Does not exist. IEEE publishes topic feeds for `computing` and `energy` but no quantum one, so the computing feed went to the shared pool where keywords decide, and the energy feed is native to Energy. |
+| Quanta Magazine | Not excluded, but NOT native to Quantum despite the name. It is a general science and mathematics publication, so it sits in the shared pool. |
+
+The Fierce case produced a code change worth keeping: a feed that answers 200,
+parses, and yields nothing usable is now reported as degraded. It previously
+looked identical to a slow news day, which is the quietest way for a source to
+die.
+
+## Verification
+
+Live end-to-end run on 2026-08-28, cold cache:
+
+| Category | Rows | From its own curated feeds |
+|---|---|---|
+| AI | 30 | 5 |
+| Crypto | 30 | 28 |
+| Quantum computing | 30 | 30 |
+| Energy and nuclear | 30 | 26 |
+| Space technology | 30 | 25 |
+| Biotechnology | 30 | 27 |
+
+2,880 items collected across 58 feeds (18 shared, 40 curated) plus Hacker News,
+770 inside the 48-hour window, 718 unique after dedup, 180 rendered. Every
+category hit the `max_items_per_topic` cap of 30, so none of the six is thin.
+
+Preview images: **158 of 180 rows (88%)**, of which 86 came free from feeds and
+72 from an `og:image` lookup; 3 pages declare no image and 18 refused the fetch.
+The refusals are concentrated in publishers that serve a feed happily and return
+403 to a direct article fetch, which is exactly why the feed is read first. A
+second run resolved everything from cache and fetched nothing, which is the
+steady state the cache exists to produce. Cold run 40 s, warm run 25 s.
+
+Source probe: **58/58 reachable**, via `python3 scripts/probe_sources.py`, which
+now covers both files rather than only the shared pool.
+
+The low AI native count (5 of 30) is expected rather than a defect: AI is the one
+category the shared pool already covers heavily, so general-technology
+publications win most of those slots on recency and keyword strength.
+
+Tests: **258, no network.** The new ones cover category parsing, the two ways to
+belong to a category, native ranking, the `og:image` parser against offline
+markup fixtures, feed-declared image extraction, cache hit/miss/retry/prune
+behaviour, and the rendered image and add-topic output.
+
+Two defects were found by the new tests before shipping, both now regressions:
+
+1. The head parser set a "stop at body" flag and never checked it, so an
+   `og:image` in the article body would have been read as if the publisher had
+   declared it in the head.
+2. `--offline` did not disable image fetching, so the offline render smoke test
+   would have gone to the network.
+
+### Security note: new attack surface, and what is and is not defended
+
+v1 never fetched a destination page, so the `og:image` lookup is genuinely new
+attack surface and is worth stating plainly rather than leaving implied. A feed
+we do not control now supplies addresses that a CI runner will request.
+
+Defended:
+
+- **Scheme.** Every image URL goes through the same `safe_url` allow-list as
+  every other link, at parse time and again at the render boundary. A
+  `javascript:` or `data:` value in an `og:image` tag is dropped twice.
+- **Non-public destinations.** `images.is_public_host` refuses loopback, private
+  ranges, link-local and the cloud metadata endpoint at `169.254.169.254`,
+  checked on the initial URL and AGAIN on the post-redirect URL. The second
+  check is the load-bearing one: blocking the request matters less than making
+  sure an internal page's meta tag can never be parsed onto a public page.
+- **Non-200 responses are never parsed.** Measured, not assumed: several
+  publishers return a styled block page carrying its own `og:image`, so a
+  parser that ignored status codes would have attached "you are blocked"
+  artwork to real stories.
+- **Resource use.** 256 KB per page, a 10 s timeout, 8 workers, 120 fetches and
+  60 seconds per run, all config dials.
+
+Not defended, deliberately: a hostname that RESOLVES to a private address still
+passes, because catching it needs DNS resolution per redirect hop. The residual
+is blind (nothing is returned to the page), inside an ephemeral container, on a
+public repository with no secrets beyond the job's own token. It is recorded
+here as a decision rather than left as an oversight.
+
+### Adversarial review round (Codex, cross-model)
+
+A cross-model adversarial pass returned FIX-FIRST with nine findings. All were
+applied. The four that changed real behaviour:
+
+1. **CRITICAL, an unreviewed path to `main`.** `workflow_dispatch` lets a human
+   pick any branch, and the cache step's `git push origin HEAD:main` would have
+   promoted that whole branch to `main` as an unreviewed merge. The step is now
+   gated on `github.ref == 'refs/heads/main'`. Found only because the reviewer
+   read the trigger list and the push together; each looks fine alone.
+2. **HIGH, the SSRF gate was decorative.** The original check compared the
+   hostname against private IP LITERALS, which `evil.example` pointing at
+   `169.254.169.254` walks straight past, and `requests` chased redirects before
+   any re-check could run. Now the name is RESOLVED and every returned address
+   must be global, redirects are followed manually one hop at a time with a
+   re-check before each request, and a name that will not resolve is refused.
+   The difference is refusing to REQUEST an internal address rather than merely
+   refusing to parse what it sent back.
+3. **HIGH, fuzzy dedup could empty a section.** Two similar headlines from two
+   DIFFERENT categories' curated feeds would merge, and since category
+   membership deliberately does not survive a fuzzy merge, the loser's story
+   silently vanished from its section. Such a merge is now refused outright.
+   This is the existing asymmetry applied one level up: a missed merge shows one
+   extra row, a wrong merge deletes a story.
+4. **MEDIUM, the ranking claim was off by a tie.** `native_source_score` was
+   0.5, and a single keyword hit with no lead bonus scores exactly 0.5, so the
+   documented "a native item ranks below a real keyword hit" was a tie broken by
+   source weight. The default is now 0.4. The original test missed it by only
+   testing a leading keyword.
+
+Also applied: a total-transfer deadline per feed (the `requests` timeout is per
+READ, so a server dripping bytes could hold a worker indefinitely); a byte cap
+that no longer overshoots by one chunk; non-definitive misses (truncated reads,
+refused redirects) cached with the SHORT retry TTL instead of being recorded as
+"this page declares no image"; and cache values revalidated on READ, since the
+file is committed and therefore hand-editable.
+
+Four claims were corrected rather than defended: the README said "four signals"
+and listed five; "49 feeds" when there are 58; "only once ever per link" when
+errors retry after 24 hours and pruning can cause a refetch; and "only the head
+is read" when the final chunk can overlap the start of the body. The last one is
+the kind of promise that quietly becomes false, so it now says "as far as the
+end of the head" and explains why.
+
+The reviewer also noted that several tests asserted counters rather than
+behaviour: `enrich` tests claiming "never fetched" would have passed against an
+implementation that fetched and discarded. Those now monkeypatch the transport
+and fail loudly if it is reached. Test count went 231 -> 258, with new coverage
+for redirect SSRF, DNS-based private-host bypass, byte-cap enforcement,
+definitive-versus-truncated outcomes, fuzzy-merge category loss, and a feed that
+returns 200 and yields nothing usable.

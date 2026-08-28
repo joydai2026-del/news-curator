@@ -21,12 +21,15 @@ from pathlib import Path
 
 from .config import Config, ConfigError, load_config
 from .dedup import dedupe
-from .filter import assign_topics
+from .filter import assign_categories
+from .images import ImageCache, enrich
 from .models import Item, TierResult
 from .rank import rank_items
 from .render import render_site
 
 log = logging.getLogger("curator")
+
+IMAGE_CACHE_FILE = "image_cache.json"
 
 
 def collect(cfg: Config, *, offline: bool = False) -> list[TierResult]:
@@ -67,12 +70,16 @@ def build(cfg: Config, results: list[TierResult], now: datetime) -> dict[str, li
     )
     log.info("deduped to %d unique items", len(deduped))
 
-    buckets = assign_topics(deduped, cfg.topics)
+    buckets = assign_categories(deduped, cfg.categories)
     ranked: dict[str, list[Item]] = {}
-    for topic in cfg.topics:
-        items = rank_items(buckets[topic.name], topic, now, cfg.ranking)
-        ranked[topic.name] = items[: cfg.max_items_per_topic]
-        log.info("topic %-22s %3d items", topic.name, len(ranked[topic.name]))
+    for category in cfg.categories:
+        items = rank_items(buckets[category.name], category, now, cfg.ranking)
+        ranked[category.name] = items[: cfg.max_items_per_topic]
+        native = sum(1 for i in ranked[category.name] if category.id in i.native_categories)
+        log.info(
+            "category %-22s %3d items (%d from its own feeds)",
+            category.name, len(ranked[category.name]), native,
+        )
     return ranked
 
 
@@ -94,6 +101,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=None, help="output dir (default: <root>/site)")
     parser.add_argument("--offline", action="store_true", help="skip all network calls")
     parser.add_argument("--site-name", default=None)
+    parser.add_argument(
+        "--image-cache",
+        type=Path,
+        default=None,
+        help=f"preview-image cache file (default: <root>/{IMAGE_CACHE_FILE})",
+    )
     parser.add_argument(
         "--allow-empty",
         action="store_true",
@@ -128,6 +141,32 @@ def main(argv: list[str] | None = None) -> int:
             "with an empty one. Re-run with --allow-empty to override."
         )
         return 1
+
+    # Preview images are resolved AFTER ranking and truncation, so the only
+    # article heads fetched are the ones a reader will actually see. That is
+    # what keeps an hourly job bounded: the ceiling is the number of visible
+    # rows, not the number of headlines collected.
+    cache_path = args.image_cache or (args.root / IMAGE_CACHE_FILE)
+    cache = ImageCache.load(cache_path)
+    stats = enrich(
+        [i for rows in ranked.values() for i in rows],
+        cache,
+        now,
+        user_agent=cfg.user_agent,
+        # `--offline` means no network, and that has to include this. Feed-borne
+        # images and cache hits still apply, because neither touches the wire.
+        config={**cfg.images, "enabled": False} if args.offline else cfg.images,
+    )
+    with_image = sum(1 for rows in ranked.values() for i in rows if i.image_url)
+    log.info(
+        "images: %d/%d rows have one (%d from feeds, %d cached, %d fetched, "
+        "%d declare none, %d unavailable)",
+        with_image, stats["total"], stats["from_feed"], stats["from_cache"],
+        stats["fetched"], stats["no_image"], stats["errors"],
+    )
+    cache.prune(now, retain_days=float(cfg.images.get("retain_days", 45) or 45))
+    if cache.save():
+        log.info("image cache written to %s (%d entries)", cache_path, len(cache.entries))
 
     out_dir = args.out or (args.root / "site")
     path = render_site(

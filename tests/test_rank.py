@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from curator.config import Topic
+from curator.config import Category
 from curator.rank import echo_score, keyword_score, rank_items, recency_score, score_item
 from tests.conftest import make_item
 
@@ -16,7 +16,7 @@ CFG = {
     "title_lead_chars": 40,
     "title_lead_bonus": 0.25,
 }
-TOPIC = Topic(name="AI", keywords=["AI", "machine learning"])
+TOPIC = Category(name="AI", keywords=["AI", "machine learning"])
 
 
 class TestRecency:

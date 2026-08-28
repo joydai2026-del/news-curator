@@ -77,10 +77,20 @@ def same_story(a: Item, b: Item, threshold: float) -> bool:
     similarity simply cannot tell "releases" from "delays", so the threshold has
     to sit above where a single verb swap lands.
 
-    The cost of being wrong is asymmetric: a missed merge shows one extra row,
-    a wrong merge silently deletes a story and misattributes the survivor.
+    **Category guard.** Two items from DIFFERENT categories' curated feeds are
+    never fuzzy-merged. Category membership deliberately does not survive a
+    fuzzy merge (filing a story under a section on a guess is worse than not
+    filing it), which means merging them would DELETE the loser's section
+    membership and the story would silently vanish from that section. Refusing
+    the merge keeps both rows, each in its own section.
+
+    That is the same asymmetry the threshold is tuned for, applied one level up:
+    a missed merge shows one extra row, a wrong merge silently deletes a story,
+    misattributes the survivor, or empties a section nobody was watching.
     """
     if numbers_in(a.title) != numbers_in(b.title):
+        return False
+    if a.native_categories and b.native_categories and not (a.native_categories & b.native_categories):
         return False
     return title_similarity(a.title, b.title) >= threshold
 
@@ -89,10 +99,20 @@ def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     """Fold `drop` into `keep`.
 
     `count_echo` is False for fuzzy merges, so a guess can never inflate the
-    corroboration badge.
+    corroboration badge. Category membership rides the same rule and for the
+    same reason: filing a story under a section because two headlines LOOKED
+    alike would put it there on a guess. Same link is certain; same-ish title is
+    not.
+
+    An image is inherited either way. It is a picture, not a claim about the
+    story, and taking the surviving row's own image first keeps the publisher's
+    artwork with the publisher's headline.
     """
     if count_echo:
         keep.echo_platforms |= drop.echo_platforms
+        keep.native_categories |= drop.native_categories
+    if not keep.image_url and drop.image_url:
+        keep.image_url = drop.image_url
     if drop.score is not None:
         keep.score = drop.score if keep.score is None else max(keep.score, drop.score)
     # Earliest known publish time is the truest one: a syndicated copy is later

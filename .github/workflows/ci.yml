@@ -39,9 +39,13 @@ jobs:
           from curator.config import load_config
 
           cfg = load_config(Path("."))
-          print(f"{len(cfg.topics)} topics, {len(cfg.rss)} feeds, max age {cfg.max_age_hours}h")
-          assert cfg.topics, "topics.yaml parsed to nothing"
-          assert cfg.rss, "sources.yaml parsed to no feeds"
+          print(f"{len(cfg.categories)} categories, {len(cfg.all_feeds)} feeds "
+                f"({len(cfg.rss)} shared), max age {cfg.max_age_hours}h")
+          assert cfg.categories, "topics.yaml parsed to nothing"
+          assert cfg.rss, "sources.yaml parsed to no shared feeds"
+          for c in cfg.categories:
+              print(f"  {c.id:<10} {len(c.keywords):>3} keywords, {len(c.sources):>2} curated feeds")
+              assert c.keywords or c.sources, f"category {c.id} can never match anything"
           PY
 
       - name: Render smoke test (offline, no network)

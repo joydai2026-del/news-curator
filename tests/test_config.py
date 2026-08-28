@@ -41,7 +41,7 @@ class TestTopics:
             "topics.yaml",
             "topics:\n  - name: X\n    keywords: [AI]\n  - name: x\n    keywords: [ML]\n",
         )
-        with pytest.raises(ConfigError, match="duplicate topic"):
+        with pytest.raises(ConfigError, match="duplicate category names"):
             load_topics(path)
 
     def test_invalid_yaml(self, tmp_path):
@@ -74,7 +74,7 @@ class TestSources:
             "sources.yaml",
             "rss:\n  - {id: a, url: 'https://a.com/f'}\n  - {id: a, url: 'https://b.com/f'}\n",
         )
-        with pytest.raises(ConfigError, match="duplicate rss id"):
+        with pytest.raises(ConfigError, match="duplicate feed id"):
             load_config(tmp_path)
 
     def test_negative_max_age_rejected(self, tmp_path):

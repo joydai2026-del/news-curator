@@ -1,0 +1,334 @@
+"""Categories: keywords AND curated feeds, and the two ways to belong to one.
+
+The claim under test is narrow and load-bearing: a feed listed under a category
+is an editorial judgement that the publication is single-subject, so its items
+join that section WITHOUT a keyword hit, which is the only way a headline like
+"Vogtle 4 enters commercial operation" ever reaches the energy section.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from curator.config import Category, ConfigError, load_config, load_topics, slugify
+from curator.filter import assign_categories, is_native, topic_match
+from curator.rank import keyword_score
+from tests.conftest import make_item
+
+
+def write(tmp_path, name, text):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+SOURCES = "settings:\n  max_age_hours: 24\nrss: []\n"
+
+
+class TestCategoryParsing:
+    def test_categories_carry_keywords_and_sources(self, tmp_path):
+        write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n"
+            "  - id: energy\n"
+            "    name: Energy\n"
+            "    keywords:\n      - nuclear power\n"
+            "    sources:\n"
+            "      - {id: wnn, name: World Nuclear News, url: 'https://w.example/rss', weight: 1.2}\n",
+        )
+        write(tmp_path, "sources.yaml", SOURCES)
+        cfg = load_config(tmp_path)
+
+        (category,) = cfg.categories
+        assert category.id == "energy"
+        assert category.keywords == ["nuclear power"]
+        assert len(category.sources) == 1
+        assert category.sources[0].weight == 1.2
+        # The feed is tagged with its category, which is what the fetcher uses
+        # to mark the items it produces.
+        assert category.sources[0].category == "energy"
+
+    def test_category_feeds_join_the_fetch_list(self, tmp_path):
+        write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n  - name: Space\n    keywords: [rocket]\n"
+            "    sources:\n      - {id: sn, url: 'https://s.example/rss'}\n",
+        )
+        write(tmp_path, "sources.yaml", "rss:\n  - {id: shared, url: 'https://g.example/rss'}\n")
+        cfg = load_config(tmp_path)
+
+        assert [s.id for s in cfg.rss] == ["shared"]  # the shared pool stays shared
+        assert sorted(s.id for s in cfg.all_feeds) == ["shared", "sn"]
+
+    def test_id_is_derived_from_the_name_when_omitted(self, tmp_path):
+        write(tmp_path, "topics.yaml", "categories:\n  - name: Quantum computing\n    keywords: [qubit]\n")
+        write(tmp_path, "sources.yaml", SOURCES)
+        assert load_config(tmp_path).categories[0].id == "quantum-computing"
+
+    def test_v1_topics_key_still_loads(self, tmp_path):
+        # A fork written against v1 must keep working. It simply gets categories
+        # with no native feeds.
+        path = write(tmp_path, "topics.yaml", "topics:\n  - name: AI\n    keywords:\n      - AI\n")
+        (category,) = load_topics(path)
+        assert category.name == "AI" and category.sources == []
+
+    def test_a_category_with_only_sources_is_allowed(self, tmp_path):
+        # Legitimate: a section defined purely by which publications feed it.
+        path = write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n  - name: Space\n"
+            "    sources:\n      - {id: sn, url: 'https://s.example/rss'}\n",
+        )
+        assert load_topics(path)[0].keywords == []
+
+    def test_a_category_with_neither_is_rejected(self, tmp_path):
+        path = write(tmp_path, "topics.yaml", "categories:\n  - name: Empty\n")
+        with pytest.raises(ConfigError, match="no keywords and no sources"):
+            load_topics(path)
+
+    def test_scalar_keywords_is_still_a_loud_error(self, tmp_path):
+        path = write(tmp_path, "topics.yaml", "categories:\n  - name: X\n    keywords: AI\n")
+        with pytest.raises(ConfigError, match="must be a LIST"):
+            load_topics(path)
+
+    def test_bad_category_feed_url_is_rejected(self, tmp_path):
+        write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n  - name: X\n    keywords: [a]\n"
+            "    sources:\n      - {id: bad, url: 'javascript:alert(1)'}\n",
+        )
+        write(tmp_path, "sources.yaml", SOURCES)
+        with pytest.raises(ConfigError, match="absolute http"):
+            load_config(tmp_path)
+
+    def test_duplicate_category_ids_are_rejected(self, tmp_path):
+        path = write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n  - {name: A B, keywords: [x]}\n  - {name: 'A  B', keywords: [y]}\n",
+        )
+        with pytest.raises(ConfigError, match="duplicate category ids"):
+            load_topics(path)
+
+    def test_a_feed_id_cannot_be_reused_across_files(self, tmp_path):
+        # Not cosmetic: `platform` defaults to the id and drives the "N sources"
+        # echo badge, so two feeds sharing an id would claim to corroborate
+        # each other.
+        write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n  - name: X\n    keywords: [a]\n"
+            "    sources:\n      - {id: dup, url: 'https://a.example/rss'}\n",
+        )
+        write(tmp_path, "sources.yaml", "rss:\n  - {id: dup, url: 'https://b.example/rss'}\n")
+        with pytest.raises(ConfigError, match="duplicate feed id 'dup'"):
+            load_config(tmp_path)
+
+    def test_hn_queries_fall_back_to_keywords(self, tmp_path):
+        path = write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n"
+            "  - name: A\n    keywords: [alpha, beta]\n"
+            "  - name: B\n    keywords: [gamma]\n    hn_queries: [g]\n",
+        )
+        a, b = load_topics(path)
+        assert a.search_terms == ["alpha", "beta"]
+        assert b.search_terms == ["g"]
+
+    def test_slugify_is_stable(self):
+        assert slugify("Energy and nuclear") == "energy-and-nuclear"
+        assert slugify("AI / ML!!") == "ai-ml"
+
+
+class TestNativeMembership:
+    def _energy(self):
+        return Category(
+            name="Energy",
+            id="energy",
+            keywords=["nuclear power"],
+            exclude=["fossil"],
+        )
+
+    def test_a_native_feed_belongs_without_a_keyword(self):
+        item = make_item("Vogtle 4 enters commercial operation")
+        item.native_categories = {"energy"}
+        # An empty LIST means "belongs, on the strength of its source".
+        assert topic_match(item, self._energy()) == []
+
+    def test_a_non_native_item_without_a_keyword_does_not_belong(self):
+        item = make_item("Vogtle 4 enters commercial operation")
+        assert topic_match(item, self._energy()) is None
+
+    def test_exclude_still_vetoes_a_native_item(self):
+        # A native feed is a strong claim, not an unconditional one.
+        item = make_item("A fossil plant closes")
+        item.native_categories = {"energy"}
+        assert topic_match(item, self._energy()) is None
+
+    def test_a_native_item_that_also_matches_reports_its_keywords(self):
+        item = make_item("Nuclear power gets a boost")
+        item.native_categories = {"energy"}
+        assert topic_match(item, self._energy()) == ["nuclear power"]
+
+    def test_native_membership_does_not_leak_between_categories(self):
+        space = Category(name="Space", id="space", keywords=["rocket"])
+        item = make_item("Vogtle 4 enters commercial operation")
+        item.native_categories = {"energy"}
+        assert topic_match(item, space) is None
+
+    def test_assign_carries_native_tags_onto_each_copy(self):
+        energy = self._energy()
+        item = make_item("Vogtle 4 enters commercial operation")
+        item.native_categories = {"energy"}
+        (row,) = assign_categories([item], [energy])["Energy"]
+        assert is_native(row, energy)
+        assert row.matched_keywords == []
+
+
+class TestNativeRanking:
+    def test_a_native_item_with_no_keyword_scores_above_zero(self):
+        # Zero would rank a curated nuclear story below a passing mention of
+        # "power grid" in a story about something else.
+        energy = Category(name="Energy", id="energy", keywords=["nuclear power"])
+        item = make_item("Vogtle 4 enters commercial operation")
+        item.native_categories = {"energy"}
+        score = keyword_score(item, energy, lead_chars=40, lead_bonus=0.25, native_score=0.4)
+        assert score == 0.4
+
+    def test_a_real_keyword_hit_still_outranks_a_bare_native_item(self):
+        energy = Category(name="Energy", id="energy", keywords=["nuclear power"])
+        native = make_item("Vogtle 4 enters commercial operation")
+        native.native_categories = {"energy"}
+        matched = make_item("Nuclear power output climbs")
+        matched.matched_keywords = ["nuclear power"]
+        args = dict(lead_chars=40, lead_bonus=0.25, native_score=0.4)
+        assert keyword_score(matched, energy, **args) > keyword_score(native, energy, **args)
+
+    def test_the_default_beats_even_a_keyword_hit_with_no_lead_bonus(self):
+        # The case the first version of this test missed. A single keyword hit
+        # LATE in a headline scores exactly 0.5 with no lead bonus, so a native
+        # score of 0.5 would tie and let source weight decide the order.
+        energy = Category(name="Energy", id="energy", keywords=["nuclear power"])
+        native = make_item("Vogtle 4 enters commercial operation")
+        native.native_categories = {"energy"}
+        late = make_item("A very long headline about something before nuclear power")
+        late.matched_keywords = ["nuclear power"]
+        args = dict(lead_chars=10, lead_bonus=0.25)  # no lead bonus for either
+        assert keyword_score(late, energy, **args) == 0.5
+        assert keyword_score(native, energy, **args) == 0.4
+        assert keyword_score(late, energy, **args) > keyword_score(native, energy, **args)
+
+    def test_a_non_native_item_with_no_keyword_scores_zero(self):
+        energy = Category(name="Energy", id="energy", keywords=["nuclear power"])
+        assert keyword_score(make_item("Unrelated"), energy, lead_chars=40, lead_bonus=0.25) == 0.0
+
+
+class TestTheShippedConfig:
+    """The six categories JJ asked for, loaded from the real files."""
+
+    def _cfg(self):
+        return load_config(Path(__file__).resolve().parent.parent)
+
+    def test_six_categories_each_with_keywords_and_feeds(self):
+        cfg = self._cfg()
+        assert len(cfg.categories) == 6
+        for category in cfg.categories:
+            assert category.keywords, f"{category.name} has no keywords"
+            assert category.sources, f"{category.name} has no curated feeds"
+
+    def test_techcrunch_is_present_for_ai(self):
+        # An explicit product requirement, so it gets an explicit test rather
+        # than being left to whoever edits the YAML next.
+        cfg = self._cfg()
+        (ai,) = [c for c in cfg.categories if c.id == "ai"]
+        assert any("techcrunch.com" in s.url for s in ai.sources)
+
+    def test_every_feed_id_is_unique_and_every_url_is_https(self):
+        for source in self._cfg().all_feeds:
+            assert source.url.startswith("https://"), source.url
+
+    def test_every_category_declares_hn_queries(self):
+        # Without them a category falls back to all its keywords, and six
+        # categories of keywords blow the Hacker News request cap.
+        for category in self._cfg().categories:
+            assert category.hn_queries, f"{category.name} has no hn_queries"
+
+
+class TestDegradedFeedReporting:
+    """A source that dies quietly is the failure this reporting exists to catch."""
+
+    def test_a_feed_yielding_nothing_usable_is_reported_as_degraded(self, monkeypatch):
+        # The real case: Fierce Biotech returns 200, parses, carries 25 entries,
+        # and every one is dropped for an unparseable <pubDate>. Without this the
+        # tier reports "ok" and it looks identical to a slow news day.
+        from curator import config as cfg_mod
+        from curator.fetchers import rss
+
+        cfg = cfg_mod.Config(
+            categories=[], rss=[cfg_mod.RssSource(id="dead", name="Dead", url="https://d.example/rss")],
+            settings={}, ranking={}, dedup={}, hackernews={}, reddit={},
+        )
+        monkeypatch.setattr(rss, "_fetch_one", lambda *a, **k: [])
+        result = rss.fetch(cfg)
+        assert result.ok is False
+        assert "nothing usable" in result.note
+
+    def test_a_healthy_feed_is_not_reported_as_degraded(self, monkeypatch):
+        from curator import config as cfg_mod
+        from curator.fetchers import rss
+        from tests.conftest import make_item
+
+        cfg = cfg_mod.Config(
+            categories=[], rss=[cfg_mod.RssSource(id="live", name="Live", url="https://l.example/rss")],
+            settings={}, ranking={}, dedup={}, hackernews={}, reddit={},
+        )
+        monkeypatch.setattr(rss, "_fetch_one", lambda *a, **k: [make_item("A story")])
+        result = rss.fetch(cfg)
+        assert result.ok is True and result.note == ""
+
+
+class TestFuzzyDedupCannotEmptyACategory:
+    """Category membership does not survive a fuzzy merge, so the merge is refused."""
+
+    def _pair(self):
+        from curator.dedup import dedupe
+
+        energy = make_item("Reactor project clears final hurdle", "https://a.example/1")
+        energy.native_categories = {"energy"}
+        space = make_item("Reactor project clears final hurdles", "https://b.example/2")
+        space.native_categories = {"space"}
+        return dedupe, energy, space
+
+    def test_two_different_categories_are_not_fuzzy_merged(self):
+        # Merging them would delete the loser's section membership and the story
+        # would silently vanish from that section.
+        dedupe, energy, space = self._pair()
+        assert len(dedupe([energy, space], threshold=0.85)) == 2
+
+    def test_two_items_in_the_same_category_still_merge(self):
+        dedupe, energy, other = self._pair()
+        other.native_categories = {"energy"}
+        assert len(dedupe([energy, other], threshold=0.85)) == 1
+
+    def test_a_non_native_item_still_merges_normally(self):
+        dedupe, energy, plain = self._pair()
+        plain.native_categories = set()
+        assert len(dedupe([energy, plain], threshold=0.85)) == 1
+
+    def test_exact_url_merge_still_unions_categories(self):
+        # The certain path is unchanged: same link means same article.
+        from curator.dedup import dedupe
+
+        a = make_item("A story", "https://same.example/x")
+        a.native_categories = {"energy"}
+        b = make_item("A story", "https://same.example/x")
+        b.native_categories = {"space"}
+        (survivor,) = dedupe([a, b], threshold=0.9)
+        assert survivor.native_categories == {"energy", "space"}

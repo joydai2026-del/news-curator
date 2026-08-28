@@ -198,3 +198,107 @@ class TestCname:
         out = tmp_path / "site"
         render_site({"T": [make_item("a")]}, [], now, out, cname_source=tmp_path / "CNAME")
         assert not (out / "CNAME").exists()
+
+
+class TestPreviewImageData:
+    """v1.1 ships the image DATA. The layout that uses it is a later decision.
+
+    Carrying it as `data-image` rather than an `<img>` is what lets the content
+    layer land without pre-empting a design that has not been made yet.
+    """
+
+    def test_an_image_is_carried_as_a_data_attribute(self, now):
+        item = make_item("A story", "https://example.com/a")
+        item.image_url = "https://cdn.example/a.jpg"
+        html = render({"T": [item]}, now=now)
+        assert 'data-image="https://cdn.example/a.jpg"' in html
+
+    def test_a_row_without_an_image_carries_no_attribute(self, now):
+        # An empty attribute would look like an answer. Absent means absent, so
+        # a future layout can tell "none declared" from "declared as nothing".
+        html = render({"T": [make_item("A story")]}, now=now)
+        assert "data-image" not in html
+
+    def test_the_image_is_not_rendered_as_an_img_tag_yet(self, now):
+        item = make_item("A story")
+        item.image_url = "https://cdn.example/a.jpg"
+        assert "<img" not in render({"T": [item]}, now=now)
+
+    def test_an_unsafe_image_url_never_reaches_the_page(self, now):
+        # Last gate before a publisher-supplied string becomes an attribute on
+        # a public page. A defence that only exists upstream is one refactor
+        # away from being gone.
+        item = make_item("A story")
+        item.image_url = "javascript:alert(1)"
+        html = render({"T": [item]}, now=now)
+        assert "javascript:" not in html and "data-image" not in html
+
+    def test_quotes_in_an_image_url_are_escaped(self, now):
+        item = make_item("A story")
+        item.image_url = 'https://cdn.example/a.jpg?x="onload="alert(1)'
+        html = render({"T": [item]}, now=now)
+        assert 'onload="alert' not in html
+
+    def test_the_footer_no_longer_claims_pages_are_never_fetched(self, now):
+        # v1 promised destination pages are never fetched. v1.1 reads the head
+        # of an article for its og:image, so that sentence had to go with the
+        # feature rather than quietly outlive it.
+        html = render({"T": [make_item("a")]}, now=now)
+        assert "never fetched" not in html
+        assert "No article text is fetched" in html
+        assert "hotlinked" in html
+
+
+class TestAddTopicLink:
+    """The manager's path: edit the keyword file, on GitHub, with no backend."""
+
+    def test_a_github_repo_gets_an_editor_link(self, now):
+        html = render(
+            {"T": [make_item("a")]},
+            now=now,
+            repo_url="https://github.com/joydai2026-del/news-curator",
+        )
+        assert "https://github.com/joydai2026-del/news-curator/edit/main/topics.yaml" in html
+        assert "Add a topic or keyword" in html
+
+    def test_a_trailing_slash_does_not_double_up(self, now):
+        html = render({"T": [make_item("a")]}, now=now, repo_url="https://github.com/a/b/")
+        assert "https://github.com/a/b/edit/main/topics.yaml" in html
+
+    def test_a_non_github_host_gets_instructions_instead_of_a_broken_link(self, now):
+        # /edit/<branch>/<file> is GitHub's route. A self-hosted fork gets no
+        # link rather than a wrong one.
+        html = render({"T": [make_item("a")]}, now=now, repo_url="https://git.example/a/b")
+        assert "/edit/main/topics.yaml" not in html
+        assert "topics.yaml" in html
+
+    def test_no_repo_url_still_explains_the_path(self, now):
+        html = render({"T": [make_item("a")]}, now=now)
+        assert "/edit/main/" not in html
+        assert "topics.yaml" in html
+
+    def test_an_unsafe_repo_url_produces_no_link(self, now):
+        html = render({"T": [make_item("a")]}, now=now, repo_url="javascript:alert(1)")
+        assert "javascript:" not in html
+
+
+class TestEditTopicsUrl:
+    def test_builds_the_github_editor_path(self):
+        from curator.render import edit_topics_url
+
+        assert edit_topics_url("https://github.com/a/b") == "https://github.com/a/b/edit/main/topics.yaml"
+
+    def test_rejects_other_hosts(self):
+        from curator.render import edit_topics_url
+
+        assert edit_topics_url("https://gitlab.com/a/b") is None
+
+    def test_rejects_a_lookalike_host(self):
+        from curator.render import edit_topics_url
+
+        assert edit_topics_url("https://github.com.evil.example/a/b") is None
+
+    def test_rejects_none(self):
+        from curator.render import edit_topics_url
+
+        assert edit_topics_url(None) is None

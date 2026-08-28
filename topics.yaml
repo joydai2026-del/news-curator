@@ -1,19 +1,36 @@
 # ============================================================================
 # topics.yaml — THIS IS THE FILE YOU EDIT.
 #
-# Everything below is an EXAMPLE. Delete it and write your own topics.
-# Nothing in the code knows or cares what these topics are.
+# Six categories. Each one owns two things:
 #
-# Each topic needs a `name` and a list of `keywords`.
-# Optional per topic:
-#   aliases  - extra phrases that also count as a match
-#   exclude  - if one of these appears in a headline, drop the item from this
-#              topic even if a keyword matched. Your escape hatch for an
-#              ambiguous keyword.
+#   keywords  — phrases that pull a matching headline in from ANY feed, so a
+#               big story in a general publication reaches the right section.
+#   sources   — feeds that are native to this category. A feed listed here is a
+#               claim that the publication is SINGLE-SUBJECT: everything it
+#               publishes belongs in this section, so its items appear without
+#               needing a keyword. That is how "Vogtle 4 enters commercial
+#               operation" reaches the energy section, a story that is
+#               unmistakably energy news and contains not one energy keyword.
+#
+# Optional per category:
+#   aliases     - extra phrases that also count as a keyword match
+#   exclude     - if one of these appears in a headline, drop the item from this
+#                 category even if a keyword matched, and even if the feed is
+#                 native. Your escape hatch for an ambiguous keyword.
+#   id          - a stable short name. Derived from `name` when omitted.
+#   hn_queries  - what to ask Hacker News for. See the note at the bottom.
 #
 # Matching is whole-word and case-insensitive, against the headline only.
 # "AI" will not match "malaria" or "said". Multi-word keywords match as a
 # phrase.
+#
+# ---------------------------------------------------------------------------
+# ADDING A KEYWORD (the whole procedure)
+#
+# Find your category below, add a line under `keywords`, save. On GitHub you can
+# do this in the browser: the "Add a topic or keyword" link in the page footer
+# opens this file in GitHub's editor. Signing in decides who is allowed to save
+# it, and the change appears on the site at the next scheduled run.
 #
 # ---------------------------------------------------------------------------
 # ONE THING WORTH KNOWING BEFORE YOU WRITE KEYWORDS
@@ -24,48 +41,479 @@
 #
 # So prefer specific phrases over generic ones. An early draft of this file
 # listed "tool use" as an alias for AI agents, which quietly files carpentry
-# and gardening stories under AI. Two rules that avoid most of it:
+# and gardening stories under AI. Three rules that avoid most of it:
 #
-#   1. If a phrase is common outside your topic, do not use it alone.
+#   1. If a phrase is common outside your topic, do not use it alone. That is
+#      why the list below says "quantum computing" and not "quantum", "power
+#      grid" and not "grid", "antibody-drug conjugate" and not "ADC" (which is
+#      also an analog-to-digital converter).
 #   2. If a keyword is also a person's name, a company name, or an everyday
 #      word, expect to add a few `exclude` lines. That is normal, not a defect.
+#   3. Reach for a native `sources` entry instead when a whole publication is
+#      about your topic. It is more accurate than any keyword list, because it
+#      is an editorial judgement rather than a string match.
+#
+# ---------------------------------------------------------------------------
+# ABOUT THE FEEDS LISTED HERE
+#
+# Every feed below returned HTTP 200 with parseable XML when probed on
+# 2026-08-28. Reproduce it any time:
+#
+#     python3 scripts/probe_sources.py
+#
+# "It returned 200" means the feed is REACHABLE. It does not mean you have
+# permission to republish it. Those are different questions and only the first
+# is testable by a script. See the note at the top of sources.yaml for which
+# outlets are deliberately absent and why.
 # ============================================================================
 
-topics:
-  # ---- EXAMPLE TOPIC 1 (replace me) ----
-  - name: AI agents
+categories:
+  # ==========================================================================
+  - id: ai
+    name: AI
     keywords:
+      - artificial intelligence
+      - AI
+      - AI model
       - AI agent
       - AI agents
       - agentic
-      - autonomous agent
+      - AI chip
+      - AI safety
+      - AGI
+      - LLM
+      - LLMs
+      - large language model
+      - foundation model
+      - machine learning
+      - deep learning
+      - neural network
+      - generative AI
+      - diffusion model
+      - transformer model
+      - fine-tuning
+      - chatbot
+      - GPT
+      - ChatGPT
+      - Claude
+      - Gemini
+      - Llama
+      - OpenAI
+      - Anthropic
+      - DeepMind
+      - Hugging Face
+      - computer vision
+      - speech recognition
+      - prompt injection
+    aliases:
+      - Model Context Protocol
       - coding agent
       - multi-agent
-    aliases:
-      - agent framework
-      - agent harness
+      - superintelligence
+      - AI regulation
+      - AI datacenter
+      - AI data center
     exclude:
+      # "agent" senses that are not this one.
       - real estate agent
       - travel agent
       - insurance agent
       - free agent
       - federal agent
       - sports agent
-
-  # ---- EXAMPLE TOPIC 2 (replace me) ----
-  - name: Claude
-    keywords:
-      - Claude
-      - Anthropic
-    aliases:
-      - Claude Code
-      - Model Context Protocol
-    exclude:
-      # "Claude" is also a common given name. These keep the topic on-target,
-      # and you will probably need to add more the first week you run this.
+      # "Claude" is also a common given name, and "Gemini" and "Llama" have
+      # older meanings that a space or a wildlife story will happily supply.
       - Claude Monet
       - Claude Debussy
       - Claude Shannon
-      - Claude Levi-Strauss
       - Jean-Claude
       - Claude Rains
+      - Gemini spacecraft
+      - Project Gemini
+      - Gemini horoscope
+    hn_queries:
+      - artificial intelligence
+      - LLM
+      - AI agents
+    sources:
+      # TechCrunch is the anchor source for this section, so it is here as its
+      # AI section feed (native, no keyword needed) as well as in the shared
+      # pool in sources.yaml as its front page (where keywords decide).
+      - {id: tc-ai,     name: TechCrunch AI,     url: "https://techcrunch.com/category/artificial-intelligence/feed/", weight: 1.15}
+      - {id: ars-ai,    name: Ars Technica AI,   url: "https://arstechnica.com/ai/feed/",                              weight: 1.1}
+      - {id: mittr-ai,  name: MIT Tech Review,   url: "https://www.technologyreview.com/topic/artificial-intelligence/feed/", weight: 1.1}
+      - {id: verge-ai,  name: The Verge AI,      url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",    weight: 1.05}
+      - {id: vb-ai,     name: VentureBeat AI,    url: "https://venturebeat.com/category/ai/feed/",                     weight: 0.95}
+      # Lab announcements. First-party, so useful, and self-interested, so not
+      # weighted above the press that covers them.
+      - {id: openai,    name: OpenAI,            url: "https://openai.com/news/rss.xml",                               weight: 0.95}
+      - {id: deepmind,  name: Google DeepMind,   url: "https://deepmind.google/blog/rss.xml",                          weight: 0.95}
+
+  # ==========================================================================
+  - id: crypto
+    name: Crypto
+    keywords:
+      - cryptocurrency
+      - crypto
+      - bitcoin
+      - BTC
+      - ethereum
+      - ETH
+      - stablecoin
+      - stablecoins
+      - blockchain
+      - DeFi
+      - decentralized finance
+      - NFT
+      - NFTs
+      - web3
+      - altcoin
+      - memecoin
+      - Solana
+      - XRP
+      - Ripple
+      - Dogecoin
+      - Coinbase
+      - Binance
+      - Tether
+      - USDC
+      - crypto exchange
+      - crypto ETF
+      - bitcoin ETF
+      - bitcoin mining
+      - crypto mining
+      - halving
+      - staking
+      - smart contract
+      - on-chain
+      - digital asset
+      - CBDC
+      - central bank digital currency
+      - self-custody
+      - crypto wallet
+      - Layer 2
+      - rollup
+    aliases:
+      - digital assets
+      - crypto regulation
+      - crypto custody
+      - tokenized fund
+      - real-world assets
+    exclude:
+      - data mining
+      - coal mining
+      - gold mining
+      - lithium mining
+      - copper mining
+      - Ripple effect
+    hn_queries:
+      - cryptocurrency
+      - bitcoin
+      - stablecoin
+    sources:
+      - {id: coindesk,      name: CoinDesk,        url: "https://www.coindesk.com/arc/outboundfeeds/rss/", weight: 1.1}
+      - {id: theblock,      name: The Block,       url: "https://www.theblock.co/rss.xml",                 weight: 1.1}
+      - {id: decrypt,       name: Decrypt,         url: "https://decrypt.co/feed",                         weight: 1.0}
+      - {id: blockworks,    name: Blockworks,      url: "https://blockworks.co/feed",                      weight: 1.0}
+      - {id: cointelegraph, name: Cointelegraph,   url: "https://cointelegraph.com/rss",                   weight: 0.95}
+      - {id: dlnews,        name: DL News,         url: "https://www.dlnews.com/arc/outboundfeeds/rss/",   weight: 0.95}
+      - {id: thedefiant,    name: The Defiant,     url: "https://thedefiant.io/api/feed",                  weight: 0.95}
+      - {id: bitcoinmag,    name: Bitcoin Magazine, url: "https://bitcoinmagazine.com/feed",               weight: 0.9}
+
+  # ==========================================================================
+  - id: quantum
+    name: Quantum computing
+    keywords:
+      # Every phrase here is compound on purpose. Bare "quantum" is a physics
+      # word and an advertising word, and it files "quantum leap in sales"
+      # under quantum computing.
+      - quantum computing
+      - quantum computer
+      - quantum computers
+      - qubit
+      - qubits
+      - logical qubit
+      - superconducting qubit
+      - topological qubit
+      - trapped ion
+      - quantum processor
+      - quantum chip
+      - quantum hardware
+      - quantum advantage
+      - quantum supremacy
+      - quantum error correction
+      - quantum algorithm
+      - quantum annealing
+      - quantum simulation
+      - quantum sensing
+      - quantum networking
+      - quantum internet
+      - quantum entanglement
+      - quantum cryptography
+      - post-quantum cryptography
+      - quantum key distribution
+      - quantum machine learning
+      - NISQ
+      - IonQ
+      - Rigetti
+      - D-Wave
+      - PsiQuantum
+      - Quantinuum
+      - Pasqal
+    aliases:
+      - quantum stack
+      - quantum ecosystem
+      - quantum workforce
+      - fault-tolerant quantum
+    exclude:
+      - quantum leap
+      - Quantum of Solace
+    hn_queries:
+      - quantum computing
+      - qubit
+    sources:
+      - {id: qinsider,     name: The Quantum Insider,       url: "https://thequantuminsider.com/feed/",     weight: 1.1}
+      - {id: qcreport,     name: Quantum Computing Report,  url: "https://quantumcomputingreport.com/feed/", weight: 1.05}
+      - {id: physorg-q,    name: Phys.org Quantum,          url: "https://phys.org/rss-feed/physics-news/quantum-physics/", weight: 0.95}
+      - {id: qzeitgeist,   name: Quantum Zeitgeist,         url: "https://quantumzeitgeist.com/feed/",      weight: 0.85}
+
+  # ==========================================================================
+  - id: energy
+    name: Energy and nuclear
+    keywords:
+      # Small modular reactors are the reason this section exists, so the SMR
+      # vocabulary is deliberately dense.
+      - small modular reactor
+      - SMR
+      - SMRs
+      - microreactor
+      - nuclear reactor
+      - nuclear power
+      - nuclear plant
+      - nuclear energy
+      - nuclear fuel
+      - uranium
+      - HALEU
+      - uranium enrichment
+      - spent fuel
+      - NRC
+      - BWRX-300
+      - AP1000
+      - fusion energy
+      - fusion reactor
+      - tokamak
+      - power grid
+      - electricity grid
+      - transmission line
+      - interconnection queue
+      - capacity market
+      - baseload
+      - renewable energy
+      - solar power
+      - offshore wind
+      - wind power
+      - energy storage
+      - battery storage
+      - grid-scale storage
+      - geothermal
+      - green hydrogen
+      - electrolyzer
+      - heat pump
+      - electrification
+      - energy transition
+      - data center power
+      - FERC
+      - utility-scale
+    aliases:
+      - advanced reactor
+      - nuclear restart
+      - power purchase agreement
+      - grid operator
+      - load growth
+    exclude:
+      - grid computing
+      - starting grid
+      - Formula 1 grid
+      - grid layout
+      - off the grid
+    hn_queries:
+      - small modular reactor
+      - nuclear power
+      - power grid
+    sources:
+      - {id: wnn,          name: World Nuclear News,      url: "https://www.world-nuclear-news.org/rss",           weight: 1.15}
+      - {id: utilitydive,  name: Utility Dive,            url: "https://www.utilitydive.com/feeds/news/",          weight: 1.05}
+      - {id: canary,       name: Canary Media,            url: "https://www.canarymedia.com/feed",                 weight: 1.05}
+      - {id: ieee-energy,  name: IEEE Spectrum Energy,    url: "https://spectrum.ieee.org/feeds/topic/energy.rss", weight: 1.1}
+      - {id: neimag,       name: Nuclear Engineering Intl, url: "https://www.neimagazine.com/feed/",               weight: 1.0}
+      - {id: powermag,     name: POWER Magazine,          url: "https://www.powermag.com/feed/",                   weight: 0.95}
+      - {id: pvmag,        name: pv magazine,             url: "https://www.pv-magazine.com/feed/",                weight: 0.9}
+      - {id: neutronbytes, name: Neutron Bytes,           url: "https://neutronbytes.com/feed/",                   weight: 0.85}
+
+  # ==========================================================================
+  - id: space
+    name: Space technology
+    keywords:
+      - spaceflight
+      - spacecraft
+      - space station
+      - space telescope
+      - space debris
+      - Space Force
+      - spaceport
+      - launch vehicle
+      - orbital launch
+      - reusable rocket
+      - rocket launch
+      - satellite
+      - satellites
+      - Starlink
+      - SpaceX
+      - Starship
+      - Falcon 9
+      - Falcon Heavy
+      - Blue Origin
+      - New Glenn
+      - Rocket Lab
+      - Vulcan Centaur
+      - Ariane 6
+      - NASA
+      - ESA
+      - ISS
+      - International Space Station
+      - Artemis
+      - lunar lander
+      - Moon mission
+      - Mars mission
+      - Mars rover
+      - James Webb
+      - Hubble
+      - low Earth orbit
+      - geostationary
+      - cislunar
+      - astronaut
+      - cosmonaut
+      - deorbit
+      - propulsion
+    aliases:
+      - launch provider
+      - constellation operator
+      - space economy
+      - in-space manufacturing
+    exclude:
+      - Land Rover
+      - Range Rover
+      - satellite office
+      - satellite campus
+      - satellite event
+      - malware payload
+      - space heater
+    hn_queries:
+      - spacecraft
+      - rocket launch
+      - satellite
+    sources:
+      - {id: spacenews,      name: SpaceNews,             url: "https://spacenews.com/feed/",                    weight: 1.15}
+      - {id: ars-space,      name: Ars Technica Space,    url: "https://arstechnica.com/science/space/feed/",    weight: 1.1}
+      - {id: nsf,            name: NASASpaceflight,       url: "https://www.nasaspaceflight.com/feed/",          weight: 1.1}
+      - {id: payloadspace,   name: Payload,               url: "https://payloadspace.com/feed/",                 weight: 1.05}
+      - {id: spaceflightnow, name: Spaceflight Now,       url: "https://spaceflightnow.com/feed/",               weight: 1.05}
+      - {id: spacepolicy,    name: SpacePolicyOnline,     url: "https://spacepolicyonline.com/feed/",            weight: 1.0}
+      - {id: eurospace,      name: European Spaceflight,  url: "https://europeanspaceflight.com/feed/",          weight: 0.95}
+      - {id: spacecom,       name: Space.com,             url: "https://www.space.com/feeds/all",                weight: 0.9}
+
+  # ==========================================================================
+  - id: biotech
+    name: Biotechnology
+    keywords:
+      - biotech
+      - biotechnology
+      - biopharma
+      - CRISPR
+      - gene therapy
+      - gene editing
+      - base editing
+      - prime editing
+      - mRNA
+      - cell therapy
+      - stem cell
+      - CAR-T
+      - monoclonal antibody
+      - antibody-drug conjugate
+      - immunotherapy
+      - checkpoint inhibitor
+      - oncology
+      - clinical trial
+      - phase 3 trial
+      - phase 2 trial
+      - Phase III
+      - FDA approval
+      - FDA approves
+      - FDA clearance
+      - drug candidate
+      - drug discovery
+      - orphan drug
+      - rare disease
+      - biosimilar
+      - GLP-1
+      - obesity drug
+      - synthetic biology
+      - genomics
+      - proteomics
+      - genome sequencing
+      - gene sequencing
+      - DNA sequencing
+      - precision medicine
+      - vaccine
+      - antiviral
+      - bioreactor
+    aliases:
+      - readout
+      - pivotal trial
+      - IND filing
+      - drug pricing
+      - life sciences
+    exclude:
+      # "ADC" is deliberately absent from the keywords above: it is also an
+      # analog-to-digital converter, which a technology feed supplies weekly.
+      - analog-to-digital
+      - vaccine for computers
+    hn_queries:
+      - biotech
+      - CRISPR
+      - drug approval
+    sources:
+      - {id: biopharmadive,  name: BioPharma Dive,     url: "https://www.biopharmadive.com/feeds/news/",    weight: 1.1}
+      - {id: gen,            name: GEN,                url: "https://www.genengnews.com/feed/",             weight: 1.05}
+      - {id: ddtrends,       name: Drug Discovery & Dev, url: "https://www.drugdiscoverytrends.com/feed/",  weight: 0.95}
+      - {id: medcity,        name: MedCity News,       url: "https://medcitynews.com/feed/",                weight: 0.9}
+      - {id: labiotech,      name: Labiotech,          url: "https://www.labiotech.eu/feed/",               weight: 0.9}
+      # Fierce Biotech and Fierce Pharma are deliberately absent, and the reason
+      # is worth writing down because both feeds LOOK healthy. They return 200,
+      # they parse, they carry 25 entries each. Every one of those entries is
+      # then dropped, because their <pubDate> is "Aug 28, 2026 10:30am" rather
+      # than RFC 822, so no date parser accepts it and no timezone is stated.
+      #
+      # We drop undated items rather than stamping them "now", and the same
+      # reasoning rules out guessing here: recency is the dominant ranking term,
+      # so inventing a timezone would silently misorder the section by hours.
+      # If they ever fix the date format, add them back at weight 1.15.
+      # - {id: fiercebiotech, name: Fierce Biotech, url: "https://www.fiercebiotech.com/rss/xml", weight: 1.15}
+      # - {id: fiercepharma,  name: Fierce Pharma,  url: "https://www.fiercepharma.com/rss/xml",  weight: 1.0}
+
+# ============================================================================
+# A NOTE ON `hn_queries`
+#
+# Keywords are free: they run locally against headlines we already have. Hacker
+# News terms are not. Every term costs two API requests, and the run has a hard
+# request cap so a slow API can never eat the whole build.
+#
+# Six categories times thirty keywords would be 360 requests against a cap of
+# 60, so most keywords would silently never be searched. `hn_queries` is the
+# honest fix: two or three broad terms per category, hand-picked. Hacker News is
+# a candidate generator anyway. Whatever it returns is re-checked against the
+# full keyword list locally before it can reach the page.
+#
+# Omit `hn_queries` and the category falls back to using all its keywords, which
+# is the v1 behaviour and is fine for a config with one or two categories.
+# ============================================================================

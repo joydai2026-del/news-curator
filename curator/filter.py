@@ -11,9 +11,20 @@ Matching runs against the headline only. Feed summaries range from one sentence
 to a full article dump, and matching against those produces weak matches nobody
 can explain by looking at the page.
 
-What this does NOT do, and the page says so: prove the story is genuinely ABOUT
-the topic. It proves the term really appears in the headline. That is a weaker
-claim, it is checkable by eye, and `exclude` exists for when it is not enough.
+**Two ways to belong to a category, and they are different claims.**
+
+  * A KEYWORD hit proves the term really appears in the headline. It does not
+    prove the story is about the topic. That is the weaker claim, it is
+    checkable by eye, and `exclude` exists for when it is not enough.
+  * A NATIVE feed is the editor's claim, made once in config, that a
+    single-subject publication belongs in a section. It is what puts "Vogtle 4
+    enters commercial operation" in the energy section, a story that is
+    unmistakably energy news and contains not one energy keyword. Keyword
+    matching alone systematically loses exactly the stories a curated feed
+    exists to supply.
+
+`exclude` vetoes both. A native feed is a strong claim, not an unconditional
+one, so the escape hatch still works on it.
 """
 
 from __future__ import annotations
@@ -22,7 +33,7 @@ import copy
 import re
 from functools import lru_cache
 
-from .config import Topic
+from .config import Category
 from .models import Item
 from .normalize import fold_text
 
@@ -62,31 +73,46 @@ def match_position(title: str, terms: list[str]) -> int | None:
     return min(positions) if positions else None
 
 
-def topic_match(item: Item, topic: Topic) -> list[str] | None:
-    """Keywords this item matched for this topic, or None if it does not belong.
+def is_native(item: Item, category: Category) -> bool:
+    """Did one of this category's own curated feeds carry this link?"""
+    return category.id in item.native_categories
 
-    An exclude term vetoes the item for this topic even when a keyword hit. That
-    escape hatch is why a keyword system beats an embedding system here: when a
-    bad match shows up, the owner can see why and fix it in one line.
+
+def topic_match(item: Item, category: Category) -> list[str] | None:
+    """Keywords this item matched, or None if it does not belong here at all.
+
+    An empty LIST means "belongs, on the strength of its source, with no keyword
+    hit". `None` means "does not belong". Those are different answers and the
+    caller must not conflate them, which is why this returns a list-or-None
+    rather than a bool.
     """
-    if matched_terms(item.title, topic.exclude):
+    if matched_terms(item.title, category.exclude):
         return None
-    return matched_terms(item.title, topic.all_terms) or None
+    hits = matched_terms(item.title, category.all_terms)
+    if hits:
+        return hits
+    return [] if is_native(item, category) else None
 
 
-def assign_topics(items: list[Item], topics: list[Topic]) -> dict[str, list[Item]]:
-    """Bucket items by topic. An item may legitimately appear under several.
+def assign_categories(items: list[Item], categories: list[Category]) -> dict[str, list[Item]]:
+    """Bucket items by category. An item may legitimately appear under several.
 
-    Each bucket gets its own copy so `matched_keywords` reflects the topic it is
-    displayed under, not whichever topic happened to be checked last.
+    Each bucket gets its own copy so `matched_keywords` reflects the category it
+    is displayed under, not whichever one happened to be checked last.
     """
-    buckets: dict[str, list[Item]] = {t.name: [] for t in topics}
+    buckets: dict[str, list[Item]] = {c.name: [] for c in categories}
     for item in items:
-        for topic in topics:
-            hits = topic_match(item, topic)
-            if hits:
-                clone = copy.copy(item)
-                clone.matched_keywords = hits
-                clone.echo_platforms = set(item.echo_platforms)
-                buckets[topic.name].append(clone)
+        for category in categories:
+            hits = topic_match(item, category)
+            if hits is None:
+                continue
+            clone = copy.copy(item)
+            clone.matched_keywords = hits
+            clone.echo_platforms = set(item.echo_platforms)
+            clone.native_categories = set(item.native_categories)
+            buckets[category.name].append(clone)
     return buckets
+
+
+# v1 name.
+assign_topics = assign_categories

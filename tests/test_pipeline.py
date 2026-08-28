@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from curator.config import Config, Topic
+from curator.config import Category, Config
 from curator.models import TierResult
 from curator.pipeline import build, main
 from tests.conftest import make_item
@@ -10,7 +10,7 @@ from tests.conftest import make_item
 
 def config(**kw) -> Config:
     base = dict(
-        topics=[Topic(name="AI", keywords=["AI"])],
+        categories=[Category(name="AI", keywords=["AI"])],
         rss=[],
         settings={"max_age_hours": 48},
         ranking={},

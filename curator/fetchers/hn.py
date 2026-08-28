@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from ..config import Config, Topic
+from ..config import Category, Config
 from ..models import Item, TierResult
 from ..normalize import canonical_url, clean_title, safe_url
 
@@ -103,7 +103,7 @@ def _query(endpoint: str, params: dict, cfg: Config) -> list[dict]:
     return hits if isinstance(hits, list) else []
 
 
-def fetch(cfg: Config, topics: list[Topic]) -> TierResult:
+def fetch(cfg: Config, topics: list[Category]) -> TierResult:
     hn_cfg = cfg.hackernews or {}
     if not hn_cfg.get("enabled", True):
         return TierResult(tier="hackernews", ok=True, note="disabled in sources.yaml")
@@ -114,14 +114,35 @@ def fetch(cfg: Config, topics: list[Topic]) -> TierResult:
     by_date = bool(hn_cfg.get("include_by_date", True))
     cutoff = int(time.time() - cfg.max_age_hours * 3600)
 
+    # Interleave categories rather than draining one at a time. Six categories
+    # with twenty keywords each produce far more query plans than the per-run
+    # cap allows, and taking them in file order would spend the entire budget on
+    # whichever category happens to be written first, leaving the rest with no
+    # Hacker News coverage at all and no visible sign of it. Round-robin means
+    # the cap degrades every section a little instead of starving five of them.
+    #
+    # `search_terms` is a category's `hn_queries` when it has them, which is the
+    # real fix: a short hand-picked query list per category, because each term
+    # costs two API requests while a local keyword costs nothing.
+    per_category = [list(dict.fromkeys(c.search_terms)) for c in topics]
+    ordered_terms: list[str] = []
+    for i in range(max((len(t) for t in per_category), default=0)):
+        for terms in per_category:
+            if i < len(terms):
+                ordered_terms.append(terms[i])
+
     plans: list[tuple[str, str, str]] = []
-    for topic in topics:
+    seen_terms: set[str] = set()
+    for term in ordered_terms:
         # One query per term: Algolia ORs loose tokens in a way that widens the
-        # net unhelpfully when several keywords are jammed together.
-        for term in topic.all_terms:
-            plans.append((term, "search", f"created_at_i>{cutoff},points>={min_points}"))
-            if by_date:
-                plans.append((term, "search_by_date", f"created_at_i>{cutoff}"))
+        # net unhelpfully when several keywords are jammed together. Two
+        # categories sharing a term is one query, not two.
+        if term.casefold() in seen_terms:
+            continue
+        seen_terms.add(term.casefold())
+        plans.append((term, "search", f"created_at_i>{cutoff},points>={min_points}"))
+        if by_date:
+            plans.append((term, "search_by_date", f"created_at_i>{cutoff}"))
 
     max_requests = int(hn_cfg.get("max_requests", MAX_REQUESTS_PER_RUN))
     budget = float(hn_cfg.get("budget_seconds", DEFAULT_BUDGET_SECONDS))

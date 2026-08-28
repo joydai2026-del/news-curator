@@ -24,7 +24,12 @@ on:
       - ".github/workflows/curate.yml"
 
 permissions:
-  contents: read
+  # `write` only so the build can commit image_cache.json back. That cache is
+  # what stops an hourly job asking every publisher the same question forever:
+  # the preview image for a given article does not change, so it is looked up
+  # once and committed. That commit is the only write this job makes, it happens
+  # only on main (see the `if:` on the step), and it touches only that one file.
+  contents: write
   pages: write
   id-token: write
 
@@ -65,7 +70,11 @@ jobs:
 
           html = page.read_text(encoding="utf-8")
           links = re.findall(r'<a class="head" href="(https?://[^"]+)"', html)
-          print(f"rendered {len(links)} story links, {len(html)} bytes")
+          rows = html.count("<li")
+          images = len(re.findall(r'<li data-image="https?://', html))
+          sections = re.findall(r'<section data-topic="([^"]+)"', html)
+          print(f"rendered {len(links)} story links in {len(sections)} sections, "
+                f"{images}/{rows} rows with a preview image, {len(html)} bytes")
 
           if len(html) < 2000:
               sys.exit(f"FAIL: page is suspiciously small ({len(html)} bytes)")
@@ -73,8 +82,62 @@ jobs:
               sys.exit("FAIL: page rendered zero story links")
           if "javascript:" in html.lower():
               sys.exit("FAIL: unsafe scheme present in rendered output")
-          print("OK: page contains real, linked stories")
+
+          # Per-section counts, so a category that quietly stops producing is
+          # visible in the log instead of being hidden inside a healthy total.
+          #
+          # A WARNING, not a failure, and the distinction is deliberate. An
+          # empty section is a legitimate state that the page already reports
+          # honestly ("Nothing matched in this window"), so failing here would
+          # leave a STALE page published rather than a fresh one with a quiet
+          # section. The publish guard that does fail the build lives in the
+          # pipeline and fires when NOTHING matched anywhere.
+          empty = []
+          for name, body in re.findall(
+              r'<section data-topic="([^"]+)"[^>]*>(.*?)</section>', html, re.S
+          ):
+              count = body.count("<li")
+              print(f"  {name}: {count} stories")
+              if not count:
+                  empty.append(name)
+          if empty:
+              print(f"WARNING: these sections rendered no stories: {', '.join(empty)}")
+          print(f"OK: page contains real, linked stories across {len(sections)} sections")
           PY
+
+      - name: Persist the preview-image cache
+        # ONLY on main. `workflow_dispatch` lets a human pick any branch, and
+        # `git push origin HEAD:main` from a feature branch would promote that
+        # branch's ENTIRE history to main as an unreviewed merge. The cache is
+        # a main-branch artifact, so a run on any other ref simply skips this.
+        if: github.ref == 'refs/heads/main'
+        # Only when it actually changed, so a quiet hour makes no commit at all.
+        # `[skip ci]` keeps the test workflow from re-running on a data-only
+        # commit, the cache is not in this workflow's `paths:` filter, and a
+        # push made with GITHUB_TOKEN does not start another workflow run
+        # anyway, so there is no trigger loop.
+        run: |
+          if [ -z "$(git status --porcelain image_cache.json)" ]; then
+            echo "image cache unchanged, nothing to commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add image_cache.json
+          git commit -m "chore: refresh preview-image cache [skip ci]"
+          # `HEAD:main` rather than a bare `git push`, because actions/checkout
+          # leaves a detached HEAD on scheduled runs and a bare push there fails
+          # with "You are not currently on a branch."
+          #
+          # A scheduled run can also race a real push, so rebase and retry once.
+          # Never fail the build over a cache file: the page is the product, and
+          # a missed cache write just means the next run looks those images up
+          # again.
+          git push origin HEAD:main || {
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
+          } || echo "cache push skipped this run; the next run will retry"
 
       - uses: actions/configure-pages@v5
 

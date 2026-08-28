@@ -76,9 +76,19 @@ def main() -> int:
     cfg = load_config(args.root)
     ua, timeout = cfg.user_agent, cfg.timeout
 
-    rows = [{"id": "hackernews", "name": "Hacker News (Algolia)", **probe_hn(ua, timeout)}]
-    for source in cfg.rss:
-        rows.append({"id": source.id, "name": source.name, **probe_feed(source.url, ua, timeout)})
+    rows = [{"id": "hackernews", "name": "Hacker News (Algolia)", "category": "-", **probe_hn(ua, timeout)}]
+    # Both files: the shared pool in sources.yaml AND every category's curated
+    # feeds in topics.yaml. A probe that only checked one of them would report a
+    # healthy feed list while half of it was broken.
+    for source in cfg.all_feeds:
+        rows.append(
+            {
+                "id": source.id,
+                "name": source.name,
+                "category": source.category or "shared",
+                **probe_feed(source.url, ua, timeout),
+            }
+        )
 
     ok = sum(1 for r in rows if r["ok"])
     receipt = {
@@ -94,15 +104,15 @@ def main() -> int:
         return 0 if ok == len(rows) else 1
 
     print(f"Probed {len(rows)} sources at {receipt['probed_at']}\n")
-    print(f"{'id':<14}{'status':>7}{'entries':>9}{'bytes':>10}  result")
-    print("-" * 62)
+    print(f"{'id':<16}{'category':<14}{'status':>7}{'entries':>9}{'bytes':>10}  result")
+    print("-" * 76)
     for r in rows:
         mark = "ok" if r["ok"] else (r.get("error") or "FAILED")
         print(
-            f"{r['id']:<14}{str(r.get('status') or '-'):>7}{r.get('entries', 0):>9}"
-            f"{r.get('bytes', 0):>10}  {mark}"
+            f"{r['id']:<16}{r.get('category', '-'):<14}{str(r.get('status') or '-'):>7}"
+            f"{r.get('entries', 0):>9}{r.get('bytes', 0):>10}  {mark}"
         )
-    print("-" * 62)
+    print("-" * 76)
     print(f"{ok}/{len(rows)} reachable")
     print("\nReachable is not the same as licensed to republish. See sources.yaml.")
     return 0 if ok == len(rows) else 1

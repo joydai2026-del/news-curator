@@ -14,6 +14,18 @@ would show a stranger's paraphrase and attribute it to the publisher's URL.
 `echo_platforms` — only ever grows from URL-IDENTICAL merges. A fuzzy title
 match is a guess, and a guess must never become the evidence behind a "3
 sources" badge on the page.
+
+`native_categories` — which curated category feeds carried this link. A feed
+listed under a category is a claim that the feed is single-subject, so its items
+join that category without needing a keyword hit. Like `echo_platforms`, this
+only ever grows from URL-identical merges: filing a story under a section on the
+strength of a fuzzy title guess is exactly the kind of confident wrongness this
+codebase avoids.
+
+`image_url` — the preview image the PUBLISHER declared, either in the feed
+itself or as `og:image` on the article. It is hotlinked, never rehosted, and
+never invented: an item with no declared image keeps this empty and the renderer
+decides what to do about that.
 """
 
 from __future__ import annotations
@@ -35,9 +47,11 @@ class Item:
     score: int | None = None  # native popularity, if the source has one
     is_aggregator: bool = False
     time_is_estimated: bool = False  # True when only an "updated" time existed
+    image_url: str = ""  # publisher-declared preview image, hotlinked, may be empty
 
     # Filled in downstream.
     echo_platforms: set[str] = field(default_factory=set)
+    native_categories: set[str] = field(default_factory=set)
     matched_keywords: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:

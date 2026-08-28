@@ -1,15 +1,28 @@
 # ============================================================================
-# sources.yaml — where headlines come from, and how much you trust each one.
+# sources.yaml — the SHARED feed pool, the dials, and the terms notes.
+#
+# Feeds come from two places:
+#
+#   * topics.yaml — feeds NATIVE to one category. A single-subject publication,
+#     whose every story belongs in that section. Those live next to the keywords
+#     they belong with, because they answer the same question.
+#   * this file, under `rss:` — the SHARED pool. Multi-subject publications
+#     whose front page covers all six categories and none of them exclusively.
+#     Keywords decide where each of their stories lands, or whether it lands.
+#
+# The distinction is a claim about the PUBLICATION, not about its quality.
+# TechCrunch appears in both: its AI section feed is native to AI in topics.yaml,
+# and its front page is here, so a TechCrunch crypto or space story still
+# reaches the right section by keyword.
 #
 # `weight` is the "premium" dial. 1.0 is neutral. Raise it for outlets you
-# trust, lower it for ones you merely tolerate. Defaults here are deliberately
-# near-uniform: your taste is not our business.
+# trust, lower it for ones you merely tolerate.
 #
 # ---------------------------------------------------------------------------
 # ABOUT THIS FEED LIST, READ BEFORE ADDING TO IT
 #
-# Every feed below returned HTTP 200 with parseable XML when probed on
-# 2026-08-25 from a residential connection. Reproduce it yourself any time:
+# Every feed in both files returned HTTP 200 with parseable XML when probed on
+# 2026-08-28 from a residential connection. Reproduce it yourself any time:
 #
 #     python3 scripts/probe_sources.py
 #
@@ -24,26 +37,49 @@
 # their own republishing terms). Those feeds are reachable and are still not in
 # the defaults.
 #
+# DELIBERATELY ABSENT, and why (checked 2026-08-28):
+#
+#   BBC, FT, NYT     Published terms govern RSS reuse specifically.
+#   Endpoints News   Feed returns HTTP 403 to an ordinary client. Not reachable,
+#                    so the terms question never arose.
+#   STAT News        Reachable, and its own terms of service could not be
+#                    retrieved to check. Most feed items are also STAT+, so the
+#                    link lands a reader on a paywall. Two reasons to leave out.
+#   Nature, Science  Terms pages sit behind an authentication redirect and could
+#                    not be read. Both are general-science publications rather
+#                    than biotech ones, so the fit was weak anyway.
+#   arXiv            Reachable and parses (312 entries on the day of probing).
+#                    Left out on EDITORIAL grounds, not legal ones: it is a
+#                    preprint firehose, not news, and several hundred same-day
+#                    papers would crowd a recency-ranked AI section out of
+#                    existence. Uncomment below if you want it.
+#
 # If you add a feed, you own that decision. This tool shows a headline, an
-# attribution and a link out, and never reproduces article text, which is the
-# ordinary reader-facing use of a feed. That is a reasonable position, not
-# legal advice.
+# attribution, a link out, and the preview image the publisher declared for that
+# story, hotlinked from them. It never reproduces article text and never
+# re-hosts an image, which is the ordinary reader-facing use of a feed. That is
+# a reasonable position, not legal advice.
 # ============================================================================
 
 settings:
   # Shown in the browser tab and as the page heading.
   site_name: "News Curator"
-  # Optional. Linked in the footer. Falls back to the GitHub Actions repo, so a
-  # fork advertises ITSELF rather than whoever it was forked from.
+  # Optional. Linked in the footer, and the source of the "Add a topic or
+  # keyword" link. Falls back to the GitHub Actions repo, so a fork advertises
+  # ITSELF rather than whoever it was forked from.
   # repo_url: "https://github.com/your-name/news-curator"
 
   # How far back an item can be published and still be considered.
   max_age_hours: 48
   # Per-request network timeout, seconds.
   request_timeout: 15
-  # Max items shown per topic on the rendered page.
+  # Max items shown per category on the rendered page.
   max_items_per_topic: 30
-  user_agent: "news-curator/0.1 (+https://github.com/topics/news-curator)"
+  # Feeds are fetched in parallel. The list is long enough that doing them one
+  # at a time made the build slower than the news. Bounded on purpose: these are
+  # other people's servers, and each feed is still hit exactly once per run.
+  fetch_workers: 8
+  user_agent: "news-curator/0.2 (+https://github.com/topics/news-curator)"
 
 ranking:
   # Recency is the dominant term: the product promise is "up to date".
@@ -59,6 +95,16 @@ ranking:
   # topic rather than merely mentioning it.
   title_lead_chars: 40
   title_lead_bonus: 0.25
+  # What a story from a category's OWN feed scores when no keyword hit. Zero
+  # would be wrong twice over: the feed being single-subject is real evidence,
+  # and a curated nuclear story would otherwise rank below a passing mention of
+  # "power grid" in a story about something else.
+  #
+  # The exact value matters. A single keyword hit with no lead bonus scores
+  # exactly 0.5, so 0.5 here would TIE with it and let source weight break the
+  # tie. 0.4 keeps the order strict: a headline that says what it is about
+  # outranks one that merely arrived on the right feed.
+  native_source_score: 0.4
 
 dedup:
   # Titles more similar than this (0-1) collapse into one row. Differing
@@ -70,6 +116,44 @@ dedup:
   time_bucket_hours: 36
 
 # ---------------------------------------------------------------------------
+# Preview images. The publisher's own picture for their own story, hotlinked.
+#
+# Two sources, cheapest first. Roughly half the feeds above ship the image in
+# the feed itself (media:content, media:thumbnail, an image enclosure), which
+# costs nothing extra and is the only way to get a picture from publishers who
+# refuse a direct article fetch. Only the rows still without one get their
+# article HEAD read for an og:image tag, and only after ranking, so the ceiling
+# is the number of VISIBLE rows rather than everything collected.
+#
+# Answers are cached in image_cache.json, committed to the repo, keyed by
+# canonical URL. The answer for a given article does not change, the job runs
+# every hour, and a committed file is both durable and auditable.
+#
+# Nothing is downloaded, resized or re-hosted. The publisher keeps their CDN,
+# their referrer, and the ability to change or withdraw the image at any time.
+# ---------------------------------------------------------------------------
+images:
+  enabled: true
+  # 256 KB. A 64 KB cap silently missed every Springer article page, whose
+  # </head> sits at about 100 KB.
+  max_bytes: 262144
+  timeout: 10
+  # Two brakes, same reasoning as the Hacker News tier: the request cap bounds
+  # volume, the time budget bounds the RUN, and the second is the one that
+  # actually protects the job when a publisher is slow. Anything not resolved
+  # this run is simply a cache miss next run.
+  max_fetches_per_run: 120
+  budget_seconds: 60
+  workers: 8
+  # Drop cache entries for links we have not seen in this many days, so the
+  # committed file cannot grow without bound.
+  retain_days: 45
+  # "This page declares no image" is a permanent fact and is kept for the full
+  # retention window. A refusal or a timeout is a fact about one moment, so it
+  # is retried after this long rather than becoming permanent.
+  retry_error_after_hours: 24
+
+# ---------------------------------------------------------------------------
 # Tier A — Hacker News via the Algolia API. No auth, no key, no quota observed
 # across 10 rapid sequential calls (~0.3 s each) from a residential IP.
 #
@@ -77,6 +161,10 @@ dedup:
 # not by the publisher. Rows sourced only from HN are labeled "via Hacker News",
 # and when a publisher's own feed carried the same link, the publisher's
 # headline wins. Its weight is below 1.0 for that reason.
+#
+# Which terms get searched comes from each category's `hn_queries` in
+# topics.yaml. See the note at the bottom of that file for why that list is
+# separate from the keyword list.
 # ---------------------------------------------------------------------------
 hackernews:
   enabled: true
@@ -87,34 +175,48 @@ hackernews:
   include_by_date: true
   hits_per_page: 40
   # Two brakes. The request cap bounds volume; the time budget bounds the run,
-  # which is what actually protects the CI job when the API is slow.
+  # which is what actually protects the CI job when the API is slow. Query plans
+  # are interleaved across categories, so hitting the cap thins every section a
+  # little rather than starving whichever ones are written last in the file.
   max_requests: 60
   budget_seconds: 120
 
 # ---------------------------------------------------------------------------
-# Tier B — RSS. The backbone, precisely because it is boring and stable.
+# Tier B — the SHARED RSS pool. Multi-subject publications. Keywords decide
+# where their stories land. Feeds native to ONE category live in topics.yaml.
+#
 # Mark a source `aggregator: true` if its titles are submitter-written.
 # ---------------------------------------------------------------------------
 rss:
+  # General technology and business. Broad enough to feed every category.
   - {id: techcrunch,   name: TechCrunch,       url: "https://techcrunch.com/feed/",                weight: 1.0}
   - {id: verge,        name: The Verge,        url: "https://www.theverge.com/rss/index.xml",      weight: 1.0}
   - {id: arstechnica,  name: Ars Technica,     url: "https://arstechnica.com/feed/",               weight: 1.1}
   - {id: wired,        name: Wired,            url: "https://www.wired.com/feed/rss",              weight: 1.0}
   - {id: mittr,        name: MIT Tech Review,  url: "https://www.technologyreview.com/feed/",      weight: 1.1}
-  - {id: ieee,         name: IEEE Spectrum,    url: "https://spectrum.ieee.org/feeds/feed.rss",    weight: 1.1}
-  - {id: simonw,       name: Simon Willison,   url: "https://simonwillison.net/atom/everything/",  weight: 1.1}
-  - {id: openai,       name: OpenAI,           url: "https://openai.com/news/rss.xml",             weight: 1.0}
-  - {id: deepmind,     name: Google DeepMind,  url: "https://deepmind.google/blog/rss.xml",        weight: 1.0}
-  - {id: googleai,     name: Google AI Blog,   url: "https://blog.google/technology/ai/rss/",      weight: 1.0}
   - {id: theregister,  name: The Register,     url: "https://www.theregister.com/headlines.atom",  weight: 0.9}
   - {id: venturebeat,  name: VentureBeat,      url: "https://venturebeat.com/feed/",               weight: 0.9}
   - {id: restofworld,  name: Rest of World,    url: "https://restofworld.org/feed/latest/",        weight: 1.0}
   - {id: fourohfour,   name: 404 Media,        url: "https://www.404media.co/rss/",                weight: 1.0}
   - {id: stratechery,  name: Stratechery,      url: "https://stratechery.com/feed/",               weight: 1.0}
-  - {id: arxivai,      name: arXiv cs.AI,      url: "https://export.arxiv.org/rss/cs.AI",          weight: 0.8}
+  - {id: simonw,       name: Simon Willison,   url: "https://simonwillison.net/atom/everything/",  weight: 1.05}
+
+  # Engineering and science desks. Each covers several of the six categories,
+  # which is exactly why they are shared rather than native to one.
+  - {id: ieee,         name: IEEE Spectrum,    url: "https://spectrum.ieee.org/feeds/feed.rss",    weight: 1.1}
+  - {id: ieee-comp,    name: IEEE Spectrum Computing, url: "https://spectrum.ieee.org/feeds/topic/computing.rss", weight: 1.05}
+  - {id: quanta,       name: Quanta Magazine,  url: "https://api.quantamagazine.org/feed/",        weight: 1.05}
+  - {id: techxplore,   name: Tech Xplore,      url: "https://techxplore.com/rss-feed/",            weight: 0.85}
+  - {id: googleai,     name: Google Blog,      url: "https://blog.google/technology/ai/rss/",      weight: 0.9}
+
   # Community aggregators: submitter-written titles, so flagged and down-weighted.
   - {id: lobsters,     name: Lobsters,         url: "https://lobste.rs/rss",                       weight: 0.9, aggregator: true}
   - {id: hnfront,      name: Hacker News,      url: "https://news.ycombinator.com/rss",            weight: 0.9, aggregator: true, platform: hackernews}
+
+  # Reachable, parses, and deliberately off. A few hundred same-day preprints
+  # would take most of a recency-ranked AI section. Uncomment if you want them.
+  # - {id: arxivai,    name: arXiv cs.AI,      url: "https://export.arxiv.org/rss/cs.AI",          weight: 0.7}
+  # - {id: arxivlg,    name: arXiv cs.LG,      url: "https://export.arxiv.org/rss/cs.LG",          weight: 0.7}
 
 # ---------------------------------------------------------------------------
 # Tier C — Reddit. OFF BY DEFAULT, and that is not an oversight.

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from curator.config import Topic
-from curator.filter import assign_topics, match_position, matched_terms, topic_match
+from curator.config import Category
+from curator.filter import assign_categories, match_position, matched_terms, topic_match
 from tests.conftest import make_item
 
 
@@ -48,19 +48,19 @@ class TestWordBoundaries:
 
 class TestTopicMatch:
     def test_exclude_vetoes_a_keyword_hit(self):
-        topic = Topic(name="Claude", keywords=["Claude"], exclude=["Claude Monet"])
+        topic = Category(name="Claude", keywords=["Claude"], exclude=["Claude Monet"])
         assert topic_match(make_item("Claude Monet painting sells"), topic) is None
 
     def test_exclude_does_not_veto_unrelated(self):
-        topic = Topic(name="Claude", keywords=["Claude"], exclude=["Claude Monet"])
+        topic = Category(name="Claude", keywords=["Claude"], exclude=["Claude Monet"])
         assert topic_match(make_item("Claude ships a new model"), topic) == ["Claude"]
 
     def test_no_keyword_means_no_topic(self):
-        topic = Topic(name="Rust", keywords=["Rust"])
+        topic = Category(name="Rust", keywords=["Rust"])
         assert topic_match(make_item("Python 4 released"), topic) is None
 
     def test_aliases_count_as_matches(self):
-        topic = Topic(name="Claude", keywords=["Claude"], aliases=["Model Context Protocol"])
+        topic = Category(name="Claude", keywords=["Claude"], aliases=["Model Context Protocol"])
         assert topic_match(make_item("Model Context Protocol explained"), topic) == [
             "Model Context Protocol"
         ]
@@ -81,16 +81,16 @@ class TestMatchPosition:
 
 class TestAssignTopics:
     def test_item_can_appear_under_two_topics(self):
-        topics = [Topic(name="AI", keywords=["AI"]), Topic(name="Chips", keywords=["chips"])]
-        buckets = assign_topics([make_item("AI chips are hot")], topics)
+        topics = [Category(name="AI", keywords=["AI"]), Category(name="Chips", keywords=["chips"])]
+        buckets = assign_categories([make_item("AI chips are hot")], topics)
         assert len(buckets["AI"]) == 1 and len(buckets["Chips"]) == 1
 
     def test_each_copy_carries_its_own_matched_keywords(self):
-        topics = [Topic(name="AI", keywords=["AI"]), Topic(name="Chips", keywords=["chips"])]
-        buckets = assign_topics([make_item("AI chips are hot")], topics)
+        topics = [Category(name="AI", keywords=["AI"]), Category(name="Chips", keywords=["chips"])]
+        buckets = assign_categories([make_item("AI chips are hot")], topics)
         assert buckets["AI"][0].matched_keywords == ["AI"]
         assert buckets["Chips"][0].matched_keywords == ["chips"]
 
     def test_unmatched_item_appears_nowhere(self):
-        buckets = assign_topics([make_item("Gardening tips")], [Topic(name="AI", keywords=["AI"])])
+        buckets = assign_categories([make_item("Gardening tips")], [Category(name="AI", keywords=["AI"])])
         assert buckets["AI"] == []
