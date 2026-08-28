@@ -114,6 +114,24 @@ JS = """
   try{saved=localStorage.getItem('nc-filter')||'__all__';}catch(e){}
   var known=chips.some(function(c){return c.dataset.filter===saved;});
   show(known?saved:'__all__');
+
+  // Staleness is a property of WHEN YOU LOOK, so it is measured here rather
+  // than baked in at build time (where it would always read as zero).
+  var el=document.getElementById('stale');
+  if(el){
+    var built=Date.parse(el.dataset.built);
+    var after=parseFloat(el.dataset.after)||3;
+    if(!isNaN(built)){
+      var hrs=(Date.now()-built)/3600000;
+      if(hrs>=after){
+        var n=Math.floor(hrs), unit='h';
+        if(n>=48){n=Math.floor(hrs/24); unit=' days';}
+        el.textContent='last build '+n+unit+' ago';
+        el.hidden=false;
+        if(el.previousElementSibling){el.previousElementSibling.hidden=false;}
+      }
+    }
+  }
 })();
 """
 
@@ -125,23 +143,37 @@ def _e(text: object) -> str:
 
 
 def human_age(item: Item, now: datetime) -> str:
+    """How old, and honest about which timestamp that is.
+
+    Some feeds (Atom especially) only carry an "updated" time. Showing that as a
+    bare "3h ago" claims a publication time we were never given, so those rows
+    say "updated 3h ago" instead.
+    """
     minutes = int(item.age_hours(now) * 60)
     if minutes < 1:
-        return "just now"
-    if minutes < 60:
-        return f"{minutes}m ago"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h ago"
-    days = hours // 24
-    return "1 day ago" if days == 1 else f"{days} days ago"
+        text = "just now"
+    elif minutes < 60:
+        text = f"{minutes}m ago"
+    elif minutes < 1440:
+        text = f"{minutes // 60}h ago"
+    else:
+        days = minutes // 1440
+        text = "1 day ago" if days == 1 else f"{days} days ago"
+    return f"updated {text}" if item.time_is_estimated else text
 
 
 def _slug(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name.casefold()).strip("-") or "topic"
 
 
-def _render_item(item: Item, now: datetime) -> str:
+def _render_item(item: Item, now: datetime) -> str | None:
+    # Revalidate at the output boundary. The fetchers already check, but this is
+    # the last gate before a URL becomes a clickable href on a public page, and
+    # a defence that only exists upstream is one refactor away from being gone.
+    href = safe_url(item.url)
+    if href is None:
+        return None
+
     bits = []
     n = len(item.echo_platforms)
     if n > 1:
@@ -157,7 +189,7 @@ def _render_item(item: Item, now: datetime) -> str:
     meta = '<span class="sep">&middot;</span>'.join(bits)
     return (
         "<li>"
-        f'<a class="head" href="{_e(item.url)}" rel="noopener noreferrer nofollow">{_e(item.title)}</a>'
+        f'<a class="head" href="{_e(href)}" rel="noopener noreferrer nofollow">{_e(item.title)}</a>'
         f'<div class="meta">{meta}</div></li>'
     )
 
@@ -194,11 +226,15 @@ def render_html(
 ) -> str:
     built = built_at or now
     stamp = built.strftime("%b %d, %Y at %H:%M UTC").replace(" 0", " ")
-    age_h = max(0.0, (now - built).total_seconds() / 3600.0)
+
+    # Staleness is computed in the READER's browser, not here. The build always
+    # renders itself as zero seconds old, so a server-side check could never
+    # fire in production. It has to be evaluated when the page is viewed, which
+    # is the only moment the answer is interesting.
     stale = (
-        f'<span class="dot">&middot;</span><span class="stale">last build {int(age_h)}h ago</span>'
-        if age_h >= STALE_AFTER_HOURS
-        else ""
+        f'<span class="dot" hidden>&middot;</span>'
+        f'<span class="stale" id="stale" data-built="{_e(built.isoformat())}" '
+        f'data-after="{STALE_AFTER_HOURS}" hidden></span>'
     )
 
     chips = ['<button class="chip" data-filter="__all__" aria-pressed="true">All</button>']
@@ -207,9 +243,10 @@ def render_html(
 
     sections = []
     for name, items in ranked.items():
+        rows = [html for i in items if (html := _render_item(i, now)) is not None]
         body = (
-            f"<ol>{''.join(_render_item(i, now) for i in items)}</ol>"
-            if items
+            f"<ol>{''.join(rows)}</ol>"
+            if rows
             else '<p class="empty">Nothing matched in this window.</p>'
         )
         sections.append(
@@ -271,6 +308,7 @@ def render_site(
     *,
     site_name: str = "News Curator",
     repo_url: str | None = None,
+    cname_source: Path | None = None,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
@@ -283,4 +321,13 @@ def render_site(
     tmp.replace(path)
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
+
+    # A CNAME committed at the repo root has to be copied into the published
+    # output or a custom domain silently resets on every deploy. The README
+    # tells people to add one, so the build has to honour it.
+    if cname_source and cname_source.is_file():
+        domain = cname_source.read_text(encoding="utf-8").strip()
+        if domain:
+            (out_dir / "CNAME").write_text(domain + "\n", encoding="utf-8")
+
     return path

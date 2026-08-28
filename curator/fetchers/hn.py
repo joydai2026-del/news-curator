@@ -43,7 +43,11 @@ API = "https://hn.algolia.com/api/v1"
 HN_ITEM = "https://news.ycombinator.com/item?id="
 
 # A fork with fifty keywords should not fire two hundred requests every hour.
+# Two independent brakes, because a request cap alone does not bound TIME: 60
+# requests each hitting a 15-second timeout is 15 minutes, which is the whole
+# CI job budget. The wall-clock budget is the one that actually protects the run.
 MAX_REQUESTS_PER_RUN = 60
+DEFAULT_BUDGET_SECONDS = 120.0
 
 
 def _to_item(hit: dict, weight: float) -> Item | None:
@@ -119,13 +123,21 @@ def fetch(cfg: Config, topics: list[Topic]) -> TierResult:
             if by_date:
                 plans.append((term, "search_by_date", f"created_at_i>{cutoff}"))
 
-    capped = len(plans) > MAX_REQUESTS_PER_RUN
-    plans = plans[:MAX_REQUESTS_PER_RUN]
+    max_requests = int(hn_cfg.get("max_requests", MAX_REQUESTS_PER_RUN))
+    budget = float(hn_cfg.get("budget_seconds", DEFAULT_BUDGET_SECONDS))
+    capped = len(plans) > max_requests
+    plans = plans[:max_requests]
 
     items: list[Item] = []
     failures = 0
+    started = time.monotonic()
+    exhausted = False
 
-    for term, endpoint, numeric in plans:
+    for i, (term, endpoint, numeric) in enumerate(plans):
+        if time.monotonic() - started > budget:
+            exhausted = True
+            log.warning("HN time budget of %.0fs reached after %d/%d queries", budget, i, len(plans))
+            break
         try:
             hits = _query(
                 endpoint,
@@ -148,5 +160,7 @@ def fetch(cfg: Config, topics: list[Topic]) -> TierResult:
     if failures:
         notes.append(f"{failures} of {len(plans)} queries failed")
     if capped:
-        notes.append(f"query cap {MAX_REQUESTS_PER_RUN} reached, some keywords not searched")
-    return TierResult(tier="hackernews", items=items, ok=True, note="; ".join(notes))
+        notes.append(f"query cap {max_requests} reached, some keywords not searched")
+    if exhausted:
+        notes.append("time budget reached, some keywords not searched")
+    return TierResult(tier="hackernews", items=items, ok=not notes, note="; ".join(notes))

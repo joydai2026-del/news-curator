@@ -86,6 +86,17 @@ class Config:
         return str(self.settings.get("site_name") or "News Curator")
 
 
+def _number(value: Any, label: str) -> float:
+    """Any finite number. Zero and negatives are allowed where they make sense."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"'{label}' must be a number, got {value!r}") from None
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ConfigError(f"'{label}' must be a finite number, got {value!r}")
+    return number
+
+
 def _positive(value: Any, label: str) -> float:
     try:
         number = float(value)
@@ -201,6 +212,35 @@ def load_sources(path: Path) -> dict[str, Any]:
     for key in ("settings", "ranking", "dedup", "hackernews", "reddit"):
         if raw.get(key) is not None and not isinstance(raw[key], dict):
             raise ConfigError(f"{path.name}: '{key}' must be a mapping.")
+
+    # Every editable number is checked HERE, at load time. Casting them later at
+    # the point of use turns an ordinary YAML typo into either a crash in the
+    # middle of a scheduled run or, worse, a silent coercion nobody notices.
+    for section, keys in (
+        ("ranking", ("recency_half_life_hours", "weight_recency", "weight_keyword",
+                     "weight_source", "weight_echo", "echo_max_sources",
+                     "title_lead_chars", "title_lead_bonus")),
+        ("dedup", ("title_similarity_threshold", "time_bucket_hours")),
+        ("hackernews", ("weight", "min_points_ranked", "hits_per_page", "max_requests")),
+        ("reddit", ("weight", "request_delay_seconds")),
+    ):
+        block = raw.get(section) or {}
+        for key in keys:
+            if key in block:
+                _number(block[key], f"{section}.{key}")
+
+    threshold = (raw.get("dedup") or {}).get("title_similarity_threshold")
+    if threshold is not None and not 0 < float(threshold) <= 1:
+        raise ConfigError(f"{path.name}: 'dedup.title_similarity_threshold' must be between 0 and 1.")
+
+    for section in ("hackernews", "reddit"):
+        enabled = (raw.get(section) or {}).get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            raise ConfigError(f"{path.name}: '{section}.enabled' must be true or false.")
+
+    subs = (raw.get("reddit") or {}).get("subreddits")
+    if subs is not None and not isinstance(subs, list):
+        raise ConfigError(f"{path.name}: 'reddit.subreddits' must be a list.")
 
     raw["_rss_objects"] = rss
     return raw

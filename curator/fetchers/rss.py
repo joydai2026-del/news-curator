@@ -35,6 +35,10 @@ log = logging.getLogger(__name__)
 
 MAX_FEED_BYTES = 8 * 1024 * 1024
 
+# Feeds that parsed but were malformed on this run. Reported on the page so a
+# degrading source is visible before it fails outright.
+_MALFORMED: set[str] = set()
+
 
 class FeedTruncated(Exception):
     """The feed exceeded the size cap, so what we have is not a whole document."""
@@ -79,8 +83,13 @@ def _fetch_one(source: RssSource, cfg: Config) -> list[Item]:
         resp.close()
 
     parsed = feedparser.parse(b"".join(chunks))
-    if getattr(parsed, "bozo", False) and not parsed.entries:
-        raise ValueError("malformed feed document")
+    if getattr(parsed, "bozo", False):
+        if not parsed.entries:
+            raise ValueError("malformed feed document")
+        # Entries parsed despite a malformed document. That is usable but not
+        # clean, and "usable" should not be reported as "healthy".
+        log.warning("rss %s: malformed document, salvaged %d entries", source.id, len(parsed.entries))
+        _MALFORMED.add(source.id)
 
     now = datetime.now(timezone.utc)
     items: list[Item] = []
@@ -124,6 +133,7 @@ def fetch(cfg: Config) -> TierResult:
 
     items: list[Item] = []
     failed: list[str] = []
+    _MALFORMED.clear()
 
     for source in cfg.rss:
         try:
@@ -139,5 +149,9 @@ def fetch(cfg: Config) -> TierResult:
     if failed and len(failed) == len(cfg.rss):
         return TierResult(tier="rss", items=[], ok=False, note="all feeds unavailable")
 
-    note = f"{len(failed)} of {len(cfg.rss)} feeds unavailable" if failed else ""
-    return TierResult(tier="rss", items=items, ok=not failed, note=note)
+    notes = []
+    if failed:
+        notes.append(f"{len(failed)} of {len(cfg.rss)} feeds unavailable")
+    if _MALFORMED:
+        notes.append(f"{len(_MALFORMED)} feeds malformed but salvaged")
+    return TierResult(tier="rss", items=items, ok=not notes, note="; ".join(notes))

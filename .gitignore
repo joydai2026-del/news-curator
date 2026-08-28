@@ -1,4 +1,6 @@
 # Build output. The published page is produced by CI, not committed to main.
+# (A CNAME for a custom domain lives at the repo ROOT, not here, and the build
+# copies it into site/ on every run.)
 site/
 
 # Python

@@ -89,12 +89,25 @@ class TestHealthLine:
 
 
 class TestStaleness:
-    def test_fresh_build_has_no_warning(self, now):
-        assert "last build" not in render({"T": []}, now=now, built_at=now)
+    """Staleness is a property of WHEN YOU LOOK, so it is evaluated in the
+    reader's browser. A server-side check could never fire: the build always
+    renders itself as zero seconds old."""
 
-    def test_old_build_is_flagged(self, now):
+    def test_build_time_is_embedded_machine_readable(self, now):
         html = render({"T": []}, now=now, built_at=now - timedelta(hours=9))
-        assert "last build 9h ago" in html
+        assert f'data-built="{(now - timedelta(hours=9)).isoformat()}"' in html
+
+    def test_threshold_is_embedded(self, now):
+        assert 'data-after="3"' in render({"T": []}, now=now, built_at=now)
+
+    def test_indicator_starts_hidden(self, now):
+        # It must not flash on a fresh page before the script runs.
+        html = render({"T": []}, now=now, built_at=now)
+        assert 'id="stale"' in html and 'hidden></span>' in html
+
+    def test_client_computes_the_age(self, now):
+        html = render({"T": []}, now=now, built_at=now)
+        assert "Date.parse(el.dataset.built)" in html and "last build " in html
 
 
 class TestRepoLink:
@@ -134,3 +147,54 @@ class TestRenderSite:
     def test_leaves_no_temp_file_behind(self, tmp_path, now):
         render_site({"T": [make_item("a")]}, [], now, tmp_path)
         assert list(tmp_path.glob("*.tmp")) == []
+
+
+class TestOutputBoundarySafety:
+    """Round 2: the renderer revalidates, it does not trust upstream."""
+
+    def test_unsafe_url_row_is_dropped_not_rendered(self, now):
+        # An Item built directly (bypassing the fetchers) must still not be
+        # able to put a javascript: href on a public page.
+        bad = make_item("Innocent looking headline")
+        bad.url = "javascript:alert(1)"
+        html = render({"T": [bad]}, now=now)
+        assert "javascript:" not in html.lower()
+        assert "Nothing matched" in html
+
+    def test_good_rows_survive_alongside_a_bad_one(self, now):
+        bad = make_item("Bad row", "https://example.com/bad")
+        bad.url = "javascript:alert(1)"
+        good = make_item("Good row", "https://example.com/good")
+        html = render({"T": [bad, good]}, now=now)
+        assert "Good row" in html and "Bad row" not in html
+
+
+class TestUpdatedTimeIsQualified:
+    """Round 2: an 'updated' timestamp must not be displayed as a publish time."""
+
+    def test_estimated_time_says_updated(self, now):
+        item = make_item("A story", hours_ago=3)
+        item.time_is_estimated = True
+        assert "updated 3h ago" in render({"T": [item]}, now=now)
+
+    def test_real_publish_time_is_unqualified(self, now):
+        html = render({"T": [make_item("A story", hours_ago=3)]}, now=now)
+        assert "3h ago" in html and "updated 3h ago" not in html
+
+
+class TestCname:
+    def test_cname_is_copied_into_the_output(self, tmp_path, now):
+        from curator.render import render_site
+
+        src = tmp_path / "CNAME"
+        src.write_text("news.example.org\n", encoding="utf-8")
+        out = tmp_path / "site"
+        render_site({"T": [make_item("a")]}, [], now, out, cname_source=src)
+        assert (out / "CNAME").read_text(encoding="utf-8").strip() == "news.example.org"
+
+    def test_absent_cname_is_fine(self, tmp_path, now):
+        from curator.render import render_site
+
+        out = tmp_path / "site"
+        render_site({"T": [make_item("a")]}, [], now, out, cname_source=tmp_path / "CNAME")
+        assert not (out / "CNAME").exists()

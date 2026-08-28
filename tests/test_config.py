@@ -99,3 +99,40 @@ class TestSources:
         self._topics(tmp_path)
         write(tmp_path, "sources.yaml", "settings:\n  repo_url: 'javascript:x'\nrss: []\n")
         assert load_config(tmp_path).repo_url is None
+
+
+class TestRound2Validation:
+    """Every editable number is checked at LOAD time, not at point of use."""
+
+    def _topics(self, tmp_path):
+        write(tmp_path, "topics.yaml", "topics:\n  - name: X\n    keywords:\n      - AI\n")
+
+    def test_bad_ranking_number_is_caught_at_load(self, tmp_path):
+        self._topics(tmp_path)
+        write(tmp_path, "sources.yaml", "ranking:\n  weight_recency: heavy\nrss: []\n")
+        with pytest.raises(ConfigError, match="ranking.weight_recency"):
+            load_config(tmp_path)
+
+    def test_out_of_range_threshold_is_caught(self, tmp_path):
+        self._topics(tmp_path)
+        write(tmp_path, "sources.yaml", "dedup:\n  title_similarity_threshold: 5\nrss: []\n")
+        with pytest.raises(ConfigError, match="between 0 and 1"):
+            load_config(tmp_path)
+
+    def test_non_boolean_enabled_is_caught(self, tmp_path):
+        self._topics(tmp_path)
+        write(tmp_path, "sources.yaml", "reddit:\n  enabled: yes please\nrss: []\n")
+        with pytest.raises(ConfigError, match="must be true or false"):
+            load_config(tmp_path)
+
+    def test_scalar_subreddits_is_caught(self, tmp_path):
+        self._topics(tmp_path)
+        write(tmp_path, "sources.yaml", "reddit:\n  subreddits: technology\nrss: []\n")
+        with pytest.raises(ConfigError, match="must be a list"):
+            load_config(tmp_path)
+
+    def test_the_shipped_config_actually_loads(self):
+        from pathlib import Path
+
+        cfg = load_config(Path(__file__).resolve().parent.parent)
+        assert cfg.topics and cfg.rss

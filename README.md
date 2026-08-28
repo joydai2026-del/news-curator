@@ -51,10 +51,15 @@ open site/index.html
 
 | Tier | Status | Auth | How reliable, honestly |
 |---|---|---|---|
-| **Hacker News** (Algolia API) | On | None | High. No key, no quota hit across 10 rapid calls, ~0.3 s each. |
-| **RSS feeds** (18 seeded) | On | None | High. The backbone. Every seeded feed was probed and parsed. |
-| **Reddit** | **Off by default** | None (OAuth recommended) | Low to medium. See below. |
+| **Hacker News** (Algolia API) | On | None | High. No key, no quota hit. Verified working from a GitHub Actions runner. |
+| **RSS feeds** (18 seeded) | On | None | High. The backbone. All 18 verified working from a GitHub Actions runner. |
+| **Reddit** | **Off by default** | None (OAuth recommended) | Low to medium, and untested on CI. See below. |
 | **X / Twitter** | **Not covered** | — | Indirect only, via Hacker News and RSS. See below. |
+
+Those first two rows are not aspirational. A real scheduled run on a GitHub
+runner fetched 330 items from Hacker News and 1,907 across all 18 feeds, with
+zero failures, which is the same result as a residential connection. Datacenter
+IPs are not a problem for either tier.
 
 Verify the first two yourself, right now, on your own machine:
 
@@ -118,8 +123,14 @@ Four signals, all tunable in `sources.yaml` under `ranking:`.
 
 Deduplication runs in two passes: identical canonical URL (certain), then
 similar titles (a guess). Only the certain pass feeds the "N sources" badge, so
-that badge means what it says. Differing numbers block a fuzzy merge, which is
-why `iOS 18.6.1` and `iOS 18.6.2` stay separate rows.
+that badge means what it says.
+
+Two guards keep the fuzzy pass from deleting real stories. Differing numbers
+veto a merge, so `iOS 18.6.1` and `iOS 18.6.2` stay separate. And the threshold
+sits at 0.90 rather than 0.85, because `Apple releases iOS 18.6.1` and `Apple
+delays iOS 18.6.1` score 0.875 with identical numbers. Character similarity
+cannot tell "releases" from "delays". The cost is asymmetric: a missed merge
+shows one extra row, a wrong merge silently deletes a story.
 
 ---
 
@@ -175,7 +186,7 @@ curator/
   fetchers/          hn.py, rss.py, reddit.py
 scripts/probe_sources.py   verify every source yourself
 docs/plans/                the v1 spec, including its adversarial review
-tests/                     121 tests, no network
+tests/                     140 tests, no network
 ```
 
 Three dependencies, all pinned: `requests`, `feedparser`, `PyYAML`. A tool that
@@ -191,9 +202,10 @@ python -m pytest
 
 ## Custom domain
 
-Add a `CNAME` file containing your domain to the published output, point a DNS
-`CNAME` record at `<user>.github.io`, then set the domain under Settings →
-Pages. DNS is the part no script can do for you.
+Commit a `CNAME` file containing your domain at the **repo root**. The build
+copies it into the published output on every run, so the domain does not reset
+on each deploy. Then point a DNS `CNAME` record at `<user>.github.io` and set
+the domain under Settings → Pages. DNS is the part no script can do for you.
 
 ## License
 

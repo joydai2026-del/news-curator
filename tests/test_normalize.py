@@ -83,3 +83,17 @@ class TestCanonicalUrl:
         a = canonical_url("https://www.example.com/story?utm_campaign=z")
         b = canonical_url("http://example.com/story/#section")
         assert a.split("://", 1)[1] == b.split("://", 1)[1]
+
+
+class TestUrlCredentials:
+    """Round 2: credentials in a URL are a phishing shape, not a link."""
+
+    def test_userinfo_is_rejected(self):
+        # https://github.com@evil.example reads as GitHub to a human.
+        assert safe_url("https://github.com@evil.example/path") is None
+
+    def test_user_and_password_rejected(self):
+        assert safe_url("https://user:pw@example.com/a") is None
+
+    def test_ordinary_url_still_accepted(self):
+        assert safe_url("https://example.com/a") == "https://example.com/a"

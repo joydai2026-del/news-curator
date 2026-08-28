@@ -115,3 +115,23 @@ class TestHelpers:
 
     def test_empty_titles_score_zero(self):
         assert title_similarity("", "anything") == 0.0
+
+
+class TestRound2Threshold:
+    """Opposite stories about the same release must not merge."""
+
+    def test_releases_versus_delays_stay_separate(self):
+        # Scores 0.875, which passed the old 0.85 threshold. Same numbers, so
+        # the numeric guard cannot catch it: only the threshold can.
+        items = [
+            make_item("Apple releases iOS 18.6.1", "https://a.com/1"),
+            make_item("Apple delays iOS 18.6.1", "https://b.com/2"),
+        ]
+        assert len(dedupe(items)) == 2
+
+    def test_genuine_duplicates_still_merge_at_the_higher_threshold(self):
+        items = [
+            make_item("Apple ships a brand new laptop today", "https://a.com/1"),
+            make_item("Apple ships a brand new laptop today.", "https://b.com/2"),
+        ]
+        assert len(dedupe(items)) == 1

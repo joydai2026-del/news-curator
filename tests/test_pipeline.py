@@ -88,3 +88,13 @@ class TestPublishGuard:
         (tmp_path / "topics.yaml").write_text("topics:\n  - name: X\n    keywords: AI\n", encoding="utf-8")
         (tmp_path / "sources.yaml").write_text("rss: []\n", encoding="utf-8")
         assert main(["--root", str(tmp_path), "--offline"]) == 2
+
+
+class TestRound2EmptyTopicsGuard:
+    def test_empty_topics_still_cannot_overwrite_a_page(self, tmp_path):
+        # The guard used to be conditioned on topics being configured, so
+        # `topics: []` walked straight past it and published a blank page.
+        (tmp_path / "topics.yaml").write_text("topics: []\n", encoding="utf-8")
+        (tmp_path / "sources.yaml").write_text("rss: []\n", encoding="utf-8")
+        assert main(["--root", str(tmp_path), "--offline", "--out", str(tmp_path / "site")]) == 1
+        assert not (tmp_path / "site" / "index.html").exists()

@@ -64,11 +64,21 @@ def title_similarity(a: str, b: str) -> float:
 
 
 def same_story(a: Item, b: Item, threshold: float) -> bool:
-    """Fuzzy 'these are the same article' test, with a numeric guard.
+    """Fuzzy 'these are the same article' test, with two guards.
 
-    Differing numbers veto the merge: `iOS 18.6.1` and `iOS 18.6.2` are two
-    releases, and `raises $20M` and `raises $200M` are two funding rounds, even
-    though both pairs score far above any sane similarity threshold.
+    **Numeric guard.** Differing numbers veto the merge: `iOS 18.6.1` and
+    `iOS 18.6.2` are two releases, and `raises $20M` and `raises $200M` are two
+    funding rounds, even though both pairs score far above any threshold.
+
+    **Threshold.** Default 0.90, raised from 0.85 after review found that
+    `Apple releases iOS 18.6.1` and `Apple delays iOS 18.6.1` scored 0.875 and
+    merged. Those are opposite stories about the same release, and the numeric
+    guard cannot catch them because the numbers are identical. Character
+    similarity simply cannot tell "releases" from "delays", so the threshold has
+    to sit above where a single verb swap lands.
+
+    The cost of being wrong is asymmetric: a missed merge shows one extra row,
+    a wrong merge silently deletes a story and misattributes the survivor.
     """
     if numbers_in(a.title) != numbers_in(b.title):
         return False
@@ -107,7 +117,7 @@ def _preference(item: Item) -> tuple:
     )
 
 
-def dedupe(items: list[Item], *, threshold: float = 0.85, time_bucket_hours: float = 36.0) -> list[Item]:
+def dedupe(items: list[Item], *, threshold: float = 0.90, time_bucket_hours: float = 36.0) -> list[Item]:
     ordered = sorted(items, key=_preference)
 
     # Pass 1: identical link. Certain, and the only source of echo provenance.

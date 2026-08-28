@@ -119,8 +119,10 @@ def main(argv: list[str] | None = None) -> int:
     visible = sum(len(v) for v in ranked.values())
 
     # The guard is on VISIBLE rows, and it runs after filtering, because that is
-    # the only number that describes what a reader would actually get.
-    if visible == 0 and cfg.topics and not args.allow_empty:
+    # the only number that describes what a reader would actually get. It is not
+    # conditioned on topics being configured either: an empty topics list still
+    # produces an empty page, and that page would still overwrite a good one.
+    if visible == 0 and not args.allow_empty:
         log.error(
             "no story matched any topic. Refusing to overwrite the published page "
             "with an empty one. Re-run with --allow-empty to override."
@@ -135,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         out_dir,
         site_name=args.site_name or cfg.site_name,
         repo_url=_default_repo_url(cfg),
+        cname_source=args.root / "CNAME",
     )
     log.info("wrote %s (%d rows across %d topics)", path, visible, len(ranked))
     return 0

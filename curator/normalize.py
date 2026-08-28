@@ -99,6 +99,11 @@ def safe_url(raw: str) -> str | None:
             return None
     except ValueError:
         return None
+    # Credentials in a URL are either an accident or an attempt to make a
+    # hostile host look like a familiar one (https://github.com@evil.example).
+    # Neither belongs in an href on a public page.
+    if parts.username or parts.password:
+        return None
     return candidate
 
 

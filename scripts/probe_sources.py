@@ -41,7 +41,9 @@ def probe_feed(url: str, ua: str, timeout: float) -> dict:
             parsed = feedparser.parse(resp.content)
             row["entries"] = len(parsed.entries)
             row["bozo"] = bool(getattr(parsed, "bozo", False))
-            row["ok"] = len(parsed.entries) > 0
+            # A malformed document that happens to yield entries is not "ok".
+            # Reporting it as clean is how a slowly rotting feed stays invisible.
+            row["ok"] = len(parsed.entries) > 0 and not row["bozo"]
         else:
             row["entries"] = 0
             row["ok"] = False

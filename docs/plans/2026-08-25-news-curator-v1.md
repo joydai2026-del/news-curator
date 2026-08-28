@@ -557,10 +557,49 @@ upstream owner was hardcoded into the footer and User-Agent (a fork would have
 advertised the original), and there was no reproducible probe receipt behind the
 feed table (`scripts/probe_sources.py` now regenerates it on demand).
 
-**Round 2** was run as a verification pass over the applied fixes. Its result is
-recorded in `docs/decisions/` if it produced further changes; the test suite
-(121 tests, no network) pins every reproduced defect above as a regression test,
-so a later change cannot silently reintroduce one.
+**Round 2** re-ran against the applied fixes and asked for line-level evidence
+on each one: **11 of 15 VERIFIED FIXED, 4 PARTIALLY FIXED, plus 6 new
+findings.** All were addressed.
+
+The four partial fixes are the interesting ones, because each was a case of
+fixing the reported instance without closing the class:
+
+| Partial | What was still open | Closed by |
+|---|---|---|
+| Unsafe URLs | `canonical_url` rejected them, but the RENDERER trusted `Item.url` and would happily emit a hand-built `javascript:` href. URL credentials were also accepted. | Revalidate at the output boundary; reject userinfo (`https://github.com@evil.example`). |
+| Empty-page guard | Ran after filtering, but was conditioned on `cfg.topics`, so `topics: []` walked straight past it. | Guard on visible rows unconditionally. |
+| Malformed feeds | Oversized feeds were rejected, but a malformed document that yielded any entry was still reported healthy. | `bozo` surfaces as "malformed but salvaged" in the health line and marks the tier degraded. |
+| Estimated timestamps | `time_is_estimated` was tracked internally and then displayed as a bare "3h ago", claiming a publication time we never had. | Those rows render "updated 3h ago". |
+
+New findings worth recording:
+
+1. **The staleness indicator could never fire.** It compared build time against
+   `now`, which are the same value at render, so it was always zero. Staleness
+   is a property of *when you look*, so it moved into the reader's browser: the
+   build timestamp ships as `data-built` and the age is computed on view.
+2. **A request cap does not bound time.** 60 Hacker News requests at a
+   15-second timeout is 15 minutes, which was the entire CI job budget. Added a
+   wall-clock budget (120 s default) alongside the request cap, and raised the
+   job timeout to 20 minutes.
+3. **Fuzzy dedup still merged opposite stories.** "Apple releases iOS 18.6.1"
+   and "Apple **delays** iOS 18.6.1" score 0.875 with identical numbers, so the
+   numeric guard could not help. The threshold moved to 0.90. Character
+   similarity cannot tell "releases" from "delays", so the threshold has to sit
+   above where a single verb swap lands. The cost is asymmetric: a missed merge
+   shows one extra row, a wrong merge silently deletes a story.
+4. **Only three config values were validated.** Ranking, dedup, Hacker News and
+   Reddit numbers were cast at point of use, turning a YAML typo into either a
+   mid-run crash or a silent coercion. All are now checked at load.
+5. **The custom-domain instructions did not work.** The README said to add a
+   `CNAME`, but nothing copied it into the published output, so a custom domain
+   would reset on every deploy. The build now copies it.
+6. **Mutable action tags with write permissions.** Accepted risk, deliberately:
+   these are first-party `actions/*` and `@vN` is GitHub's own documented usage.
+   Recorded here so it is a decision rather than an oversight.
+
+The test suite (**140 tests, no network**) pins every reproduced defect from
+both rounds as a regression test, so a later change cannot silently reintroduce
+one.
 
 ### Verification at the time of writing
 
