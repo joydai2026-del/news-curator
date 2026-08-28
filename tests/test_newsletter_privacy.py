@@ -23,6 +23,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -210,3 +211,168 @@ def test_logs_do_carry_the_adapter_slugs_and_counts(run):
     for adapter in adapters.ADAPTERS:
         assert adapter.id in blob
     assert "extracted=" in blob and "dropped_links=" in blob
+
+
+# --------------------------------------------------------------------------
+# 4. every boundary at once (round 1, S5)
+# --------------------------------------------------------------------------
+"""Why the section below exists.
+
+The three sections above stop at `lane.fetch`, and their "provably clean"
+assertions ask the sanitizer whether the sanitizer's own output is clean. Both
+of round 1's leaks passed all of them. So this section crosses every boundary a
+URL actually travels, with fixtures chosen to carry the exact shapes that
+leaked, and asks the LAST artifact in the chain, the rendered HTML, whether the
+strings are there. It knows nothing about the sanitizer's definition of clean.
+
+The chain: Gmail's own base64/MIME decode -> lane.fetch -> serialize ->
+JSON file -> load_newsletter_artifact -> dedupe against a publisher decoy ->
+render_html.
+"""
+
+LEAK_HTML = load_html("leakshapes")
+
+# The literal substrings that must not survive to the page. Each one is a
+# distinct M2 shape, and the first test below proves the fixture carries them.
+E2E_LEAKS = (
+    "fixture-reader@example.invalid",
+    "fixture-reader%40example.invalid",
+    "fixture-reader%2540example.invalid",
+    "SUBleak7f3a9c2b4d6e8f0a",
+    "SUBleak93d17ea4b8f2605c1d9e7a3",
+    "subid=JJ7742",
+    "JJ7742",
+    "token=aBcDeFgHiJkLmNoP",
+    "aBcDeFgHiJkLmNoP",
+    "ref=jj7742",
+    "jj7742",
+    "tracking.tldrnewsletter.com",
+    "link.mail.beehiiv.com",
+)
+
+# Links that SHOULD survive. Without these, a renderer that dropped every card
+# would pass every leak assertion above.
+#
+# `E2E_STRIPPED` is the `?subid=JJ7742` story with its identifier removed: it
+# proves the sanitizer STRIPPED the parameter rather than throwing the link
+# away, which is the difference between a working lane and an empty one.
+E2E_STRIPPED = "https://example.com/inference-chip-story"
+# `E2E_CLEAN` needs no cleaning at all. It is asserted on the ITEMS rather than
+# the page because the publisher decoy wins the fuzzy merge and displays its
+# own URL; what matters here is that the lane passed it through untouched.
+E2E_CLEAN = "https://publisher.example/quantum-chip-story"
+
+
+def e2e_render():
+    """The whole chain, run once, returning the final HTML and the survivors."""
+    import json as json_mod
+    from tempfile import TemporaryDirectory
+
+    from curator.dedup import dedupe
+    from curator.models import Item
+    from curator.newsletter import gmail as gmail_module
+    from curator.newsletter.__main__ import serialize
+    from curator.pipeline import NEWSLETTER_CATEGORY_NAME, load_newsletter_artifact
+    from curator.render import render_html
+    from tests.test_newsletter_fixtures import as_raw, build_message
+    from tests.test_newsletter_gmail import FakeResponse, FakeSession
+
+    # 1. through the REAL Gmail client, so the base64 + MIME decode is in the
+    #    chain too. Only the HTTP session is faked.
+    message = build_message("tldr", html=LEAK_HTML, sent=NOW - timedelta(hours=2))
+    session = FakeSession(
+        listing=FakeResponse(200, {"messages": [{"id": "m1"}]}),
+        messages={"m1": FakeResponse(200, {"raw": as_raw(message)})},
+    )
+
+    class RealClientOverFakeSession:
+        """`lane.fetch`'s `client` seam, wired to the real gmail module."""
+
+        def has_credentials(self, env):
+            return True
+
+        def fetch(self, senders, after, *, env=None, limit=30, timeout=20.0):
+            return gmail_module.fetch(
+                senders, after, env=ENV, session=session, limit=limit, timeout=timeout
+            )
+
+    st = state_module.NewsletterState(watermark=NOW - timedelta(hours=6), salt="fixture-salt")
+    result = lane.fetch(CFG, st, NOW, env=ENV, client=RealClientOverFakeSession())
+
+    # 2. serialize -> a real JSON file -> reconstruct
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "artifact.json"
+        path.write_text(json_mod.dumps(serialize(result)), encoding="utf-8")
+        items, _tier, _meta = load_newsletter_artifact(path)
+
+    # 3. dedupe against a publisher decoy carrying a near-identical headline,
+    #    which is the fuzzy merge that put a newsletter URL on a publisher card.
+    #    Its URL differs from the newsletter copy's on purpose: an identical
+    #    URL merges in pass 1 and proves nothing, while a near-identical TITLE
+    #    with a different URL is the pass-2 merge that put a newsletter link
+    #    into a publisher card's cluster.
+    decoy = Item(
+        title="Apple ships the quantum chip",
+        url="https://publisher.example/2026/08/quantum-chip",
+        canonical_url="https://publisher.example/2026/08/quantum-chip",
+        source_id="verge",
+        source_name="The Verge",
+        published_at=NOW - timedelta(hours=3),
+    )
+    survivors = dedupe(list(items) + [decoy])
+
+    # 4. render
+    html = render_html({NEWSLETTER_CATEGORY_NAME: survivors}, [], NOW)
+    return html, survivors, items
+
+
+def test_the_leak_fixture_really_carries_every_shape_that_leaked():
+    """Non-vacuity, asserted before anything is asserted to be absent."""
+    assert "SYNTHETIC FIXTURE" in LEAK_HTML
+    for leak in E2E_LEAKS:
+        if leak in ("fixture-reader%2540example.invalid",):
+            continue  # the doubly-encoded form is a sanitizer test, not a fixture shape
+        assert leak in LEAK_HTML, f"the fixture no longer carries {leak!r}"
+    assert E2E_CLEAN in LEAK_HTML
+
+
+def test_the_end_to_end_chain_actually_produced_a_page():
+    html, survivors, items = e2e_render()
+    assert items, "the lane produced no items, so the leak assertions prove nothing"
+    assert survivors and "<article" in html
+    assert E2E_STRIPPED in html, "a stripped link must still reach the page as a link"
+    assert E2E_CLEAN in {i.url for i in items}, "a clean link must pass through untouched"
+
+
+def test_the_publisher_decoy_wins_the_fuzzy_merge_without_taking_the_newsletter_url():
+    """The pass-2 merge really happened, and the cluster stayed empty."""
+    _html, survivors, items = e2e_render()
+    assert len(survivors) == len(items), "one row merged away, so the merge path ran"
+    (merged,) = [s for s in survivors if s.source_name == "The Verge"]
+    assert merged.cluster == [], "no newsletter URL rode the cluster onto a publisher card"
+
+
+@pytest.mark.parametrize("leak", E2E_LEAKS)
+def test_no_leak_shape_survives_to_the_rendered_page(leak):
+    html, _survivors, _items = e2e_render()
+    assert leak not in html, f"{leak!r} reached the rendered page"
+
+
+def test_no_href_on_the_page_carries_an_address_shaped_query():
+    """The output-boundary form of the rule, independent of the sanitizer."""
+    import html as html_mod
+    from urllib.parse import urlsplit
+
+    page, _survivors, _items = e2e_render()
+    hrefs = [html_mod.unescape(h) for h in re.findall(r'href="([^"]+)"', page)]
+    assert hrefs, "no links on the page means this test proves nothing"
+    for href in hrefs:
+        query = urlsplit(href).query
+        assert "@" not in query and "%40" not in query.lower(), href
+
+
+def test_the_unresolvable_tracker_story_renders_with_no_link_at_all():
+    """The give-up path, end to end: a card, and no href pointing at a tracker."""
+    _page, _survivors, items = e2e_render()
+    linkless = [i for i in items if not i.url]
+    assert linkless, "the fixture's opaque tracker link must have been dropped"

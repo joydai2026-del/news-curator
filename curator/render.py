@@ -504,12 +504,24 @@ def _cluster_links(card: _Card) -> str:
     Revalidated here like every other URL. These addresses came from a source we
     do not control, travelled through the deduper, and are about to become
     hrefs on a public page.
+
+    The newsletter sanitizer runs here too, on EVERY cluster link, even though
+    the deduper now refuses newsletter URLs upstream. This is the output
+    boundary, and a defence that only exists upstream is one refactor away
+    from being gone; review round 1 found exactly that gap in this function.
+    A cleanable link is cleaned (tracking params stripped); a link the
+    sanitizer refuses outright is dropped, entry and all.
     """
+    from .newsletter.sanitize import sanitize as nl_sanitize
+
     links = []
     for entry in card.item.cluster:
         if not isinstance(entry, dict):
             continue
         href = safe_url(str(entry.get("url") or ""))
+        if not href:
+            continue
+        href = nl_sanitize(href)
         if not href:
             continue
         name = str(entry.get("source_name") or "") or (urlsplit(href).hostname or "the source")

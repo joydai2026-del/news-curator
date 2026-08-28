@@ -32,8 +32,14 @@ CFG = {"enabled": True, "max_items": 50, "max_age_hours": 48, "max_messages": 30
 class FakeGmail:
     """Stands in for the module, not for a session. Records what it was asked."""
 
-    def __init__(self, messages=None, *, ok=True, reason=gmail.OK, credentials=True):
-        self.result = gmail.GmailResult(ok=ok, reason=reason, messages=list(messages or []))
+    def __init__(self, messages=None, *, ok=True, reason=gmail.OK, credentials=True,
+                 truncated=False, fetch_failures=0):
+        found = list(messages or [])
+        self.result = gmail.GmailResult(
+            ok=ok, reason=reason, messages=found,
+            listed=len(found) + fetch_failures,
+            truncated=truncated, fetch_failures=fetch_failures,
+        )
         self.credentials = credentials
         self.calls: list[tuple[list[str], datetime, int]] = []
 
@@ -204,6 +210,108 @@ def test_the_watermark_returned_is_the_run_time_and_the_caller_commits_it(tmp_pa
     result = run(st=st)
     assert result.watermark == NOW
     assert not path.exists(), "fetch() must not write the cursor itself"
+
+
+# --------------------------------------------------------------------------
+# the cursor never jumps over mail it did not read (round 1, M4)
+# --------------------------------------------------------------------------
+
+class TestTheCursorOnAShortBatch:
+    def sent_two_hours_ago(self):
+        return [parsed(name, sent=NOW - timedelta(hours=2)) for name in SENDERS]
+
+    def test_a_truncated_batch_holds_the_cursor_at_the_newest_message_read(self):
+        """`now` would put the unread tail outside the next window forever."""
+        client = FakeGmail(self.sent_two_hours_ago(), truncated=True)
+        result = lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
+        assert result.ok and result.items, "a truncated run still publishes what it read"
+        assert result.watermark == NOW - timedelta(hours=2)
+        assert result.watermark != NOW
+
+    def test_an_unreadable_message_also_holds_the_cursor(self):
+        client = FakeGmail(self.sent_two_hours_ago(), fetch_failures=1)
+        result = lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
+        assert result.watermark == NOW - timedelta(hours=2)
+
+    def test_a_short_batch_says_so_in_the_status_line(self):
+        client = FakeGmail(self.sent_two_hours_ago(), truncated=True, fetch_failures=2)
+        result = lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
+        assert result.lossy and result.truncated and result.unreadable_messages == 2
+        assert "more mail matched" in result.note
+        assert "2 messages could not be read" in result.note
+        for forbidden in ("@", "http"):
+            assert forbidden not in result.note, "the note reports counts, never identities"
+
+    def test_a_complete_clean_batch_still_advances_to_now(self):
+        result = lane.fetch(CFG, fresh_state(), NOW, env=ENV,
+                            client=FakeGmail(self.sent_two_hours_ago()))
+        assert result.watermark == NOW and not result.lossy
+        assert result.note == gmail.REASON_TEXT[gmail.OK]
+
+    def test_the_cursor_never_moves_backwards(self):
+        """Old mail in the overlap window must not drag the watermark back."""
+        st = state_module.NewsletterState(watermark=NOW - timedelta(hours=1), salt="s")
+        old = [parsed("tldr", sent=NOW - timedelta(hours=5))]
+        result = lane.fetch(CFG, st, NOW, env=ENV, client=FakeGmail(old, truncated=True))
+        assert result.watermark == st.watermark
+
+    def test_an_empty_truncated_batch_keeps_the_committed_cursor(self):
+        st = fresh_state()
+        result = lane.fetch(CFG, st, NOW, env=ENV, client=FakeGmail([], truncated=True))
+        assert result.watermark == st.watermark
+
+
+# --------------------------------------------------------------------------
+# sender authentication (round 1, S2)
+# --------------------------------------------------------------------------
+
+class TestSenderAuthentication:
+    def test_a_dkim_pass_from_the_adapters_domain_is_published(self):
+        result = run([parsed("tldr", sent=NOW - timedelta(hours=1))])
+        assert result.status["tldr"].published == 3
+        assert result.unauthenticated_messages == 0
+        assert result.unauthenticated_missing == 0
+
+    def test_a_spoofed_from_header_is_counted_and_dropped(self):
+        """The attack: anyone can write `From: dan@tldrnewsletter.com`.
+
+        The receiving server's DKIM stamp is the half they cannot write, and
+        here it names a domain the adapter does not allow.
+        """
+        spoofed = parsed("tldr", sent=NOW - timedelta(hours=1), dkim_domain="attacker.example")
+        result = run([spoofed])
+        assert result.items == []
+        assert result.unauthenticated_messages == 1
+        assert result.status["tldr"].seen == 0, "it is dropped before it is parsed"
+
+    def test_a_failing_dkim_verdict_is_dropped_even_on_the_right_domain(self):
+        failed = parsed("tldr", sent=NOW - timedelta(hours=1), dkim_verdict="fail")
+        result = run([failed])
+        assert result.items == [] and result.unauthenticated_messages == 1
+
+    def test_a_missing_header_fails_closed_with_its_own_counter(self):
+        """Gmail writes this header on delivery, so a message without one is a
+        surprise. Fail closed, and make the surprise visible on the first run."""
+        bare = parsed("tldr", sent=NOW - timedelta(hours=1), authenticated=False)
+        result = run([bare])
+        assert result.items == []
+        assert result.unauthenticated_missing == 1 and result.unauthenticated_messages == 0
+        assert "failed sender authentication" in result.note
+
+    def test_a_subdomain_signature_still_authenticates(self):
+        """The live senders sign as `newsletter.theneurondaily.com`."""
+        live = parsed("theneuron", sent=NOW - timedelta(hours=1),
+                      sender="team@newsletter.theneurondaily.com")
+        result = run([live])
+        assert result.status["theneuron"].published >= 1
+        assert result.unauthenticated_messages == 0
+
+    def test_a_lookalike_domain_does_not_authenticate(self):
+        evil = parsed("milkroad", sent=NOW - timedelta(hours=1),
+                      sender="hello@evilmilkroad.com")
+        result = run([evil])
+        assert result.unmatched_messages == 1, "it is not even routed to an adapter"
+        assert result.items == []
 
 
 # --------------------------------------------------------------------------

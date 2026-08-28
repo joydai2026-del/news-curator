@@ -16,15 +16,19 @@ import pytest
 
 from curator.normalize import safe_url
 from curator.newsletter.sanitize import (
+    carries_address,
     is_suspect,
     is_token_like,
     is_tracker_host,
     sanitize,
-    strip_tracking,
 )
 
 TOKEN = "SUB7f3a9c2b4d6e8f0a1b2c3d4e5f607182"
 CLEAN = "https://www.chipdesk.example/2026/08/inference-chip"
+
+# A fake reader address. `.invalid` is reserved by RFC 2606 and can never
+# resolve; nothing here is a real address of anyone's.
+FAKE_READER = "fixture-reader@example.invalid"
 
 
 # --------------------------------------------------------------------------
@@ -112,14 +116,65 @@ def test_tracking_parameters_are_stripped():
     assert sanitize(url) == CLEAN
 
 
-def test_meaningful_parameters_survive_stripping():
-    assert strip_tracking("https://lab.example/search?q=agents&page=2") == (
-        "https://lab.example/search?q=agents&page=2"
+def test_only_the_four_publisher_content_parameters_survive():
+    """The allowlist, stated as behaviour: named stays, unnamed goes."""
+    assert sanitize("https://lab.example/?p=12345") == "https://lab.example/?p=12345"
+    assert sanitize("https://lab.example/story?id=8812&ref=jj7742") == (
+        "https://lab.example/story?id=8812"
     )
+    assert sanitize("https://lab.example/search?q=agents&page=2") == "https://lab.example/search"
+
+
+def test_an_allowlisted_name_carrying_a_token_value_drops_the_whole_link():
+    """Dropping just the parameter would point the link at the wrong article."""
+    assert sanitize(f"https://lab.example/story?id={TOKEN}") is None
 
 
 def test_fragment_is_dropped():
     assert sanitize(f"{CLEAN}#section-two") == CLEAN
+
+
+# --------------------------------------------------------------------------
+# the five shapes review round 1 proved leaked (M2)
+# --------------------------------------------------------------------------
+
+def test_the_reader_address_in_a_query_value_is_refused():
+    """The M2 headline instance: reached the live page through a TLDR wrapper."""
+    leak = f"https://example.com/big-ai-story?email={FAKE_READER.replace('@', '%40')}"
+    assert sanitize(leak) is None
+    assert is_suspect(leak)
+
+
+def test_the_reader_address_wrapped_in_a_tracker_is_refused_after_unwrapping():
+    from urllib.parse import quote
+
+    destination = f"https://example.com/big-ai-story?email={FAKE_READER.replace('@', '%40')}"
+    wrapped = f"https://tracking.tldrnewsletter.com/CL0/{quote(destination, safe='')}/1/abc"
+    assert sanitize(wrapped) is None
+
+
+def test_the_reader_address_in_a_path_segment_is_refused():
+    assert sanitize(f"https://example.com/a/{FAKE_READER}/article") is None
+    assert sanitize(f"https://example.com/a/{FAKE_READER.replace('@', '%40')}/article") is None
+
+
+def test_a_doubly_encoded_address_cannot_hide():
+    assert carries_address("https://example.com/x?e=reader%2540example.invalid")
+    assert sanitize("https://example.com/x?e=reader%2540example.invalid") is None
+
+
+@pytest.mark.parametrize(
+    "leak, cleaned",
+    [
+        ("https://example.com/article?subid=JJ7742", "https://example.com/article"),
+        ("https://example.com/article?token=aBcDeFgHiJkLmNoP", "https://example.com/article"),
+        ("https://example.com/article?ref=jj7742", "https://example.com/article"),
+    ],
+)
+def test_short_and_low_entropy_identifiers_no_longer_survive(leak, cleaned):
+    """None of these three tripped the old token-shape blocklist."""
+    assert sanitize(leak) == cleaned
+    assert is_suspect(leak), "the stripped form must be flagged at the boundary too"
 
 
 # --------------------------------------------------------------------------
@@ -136,6 +191,46 @@ def test_is_suspect_flags_tracker_hosts_and_tokens():
 def test_is_suspect_accepts_an_ordinary_article_url():
     assert not is_suspect(CLEAN)
     assert not is_suspect("https://newsroom.example/2026/08/28/the-rise-of-small-language-models")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        CLEAN,
+        f"{CLEAN}?utm_source=x",
+        f"{CLEAN}?subid=JJ7742",
+        "https://lab.example/story?id=8812",
+        "https://lab.example/search?q=agents",
+        f"https://example.com/a/{FAKE_READER}/article",
+        f"https://link.mail.beehiiv.com/ss/c/{TOKEN}",
+        "not a url",
+        "",
+    ],
+)
+def test_is_suspect_is_exactly_not_a_sanitizer_fixed_point(url):
+    """The invariant the output-boundary check leans on.
+
+    `is_suspect(u)` is true for everything the sanitizer would reject AND
+    everything it would merely strip, so `not is_suspect(u)` means `u` is a
+    string this module would have emitted itself.
+    """
+    assert is_suspect(url) == (sanitize(url) != url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"{CLEAN}?utm_source=x&subid=JJ7742#frag",
+        f"https://tracking.tldrnewsletter.com/CL0/https:%2F%2Flab.example%2Fp%3Fid%3D9/1/{TOKEN}",
+        "https://lab.example/story?id=8812&ref=abc",
+    ],
+)
+def test_sanitize_output_is_never_itself_suspect(url):
+    """Idempotence, which is what makes the invariant above usable."""
+    out = sanitize(url)
+    if out is not None:
+        assert not is_suspect(out)
+        assert sanitize(out) == out
 
 
 def test_token_heuristic_separates_slugs_from_identifiers():

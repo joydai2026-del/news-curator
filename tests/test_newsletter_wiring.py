@@ -198,6 +198,118 @@ class TestNewsletterCardMarker:
         assert "data-newsletter" not in html
 
 
+class TestNewsletterUrlsNeverRideTheCluster:
+    """Review round 1, M3: the cluster was the one channel a newsletter URL
+    could reach a card that carries none of the newsletter guards."""
+
+    def test_fuzzy_merge_refuses_the_newsletter_copy_url(self):
+        from curator.dedup import dedupe
+
+        publisher = Item(
+            title="Apple ships a quantum chip",
+            url="https://publisher.example/story",
+            canonical_url="https://publisher.example/story",
+            source_id="verge",
+            source_name="The Verge",
+            published_at=NOW - timedelta(hours=2),
+        )
+        newsletter = Item(
+            title="Apple ships the quantum chip",
+            url="https://cleaned.example/story?email=fixture-reader%40example.invalid",
+            canonical_url="https://cleaned.example/story",
+            source_id="newsletter:tldr",
+            source_name="TLDR",
+            published_at=NOW - timedelta(hours=1),
+            is_newsletter=True,
+            is_aggregator=True,
+            newsletter_sender="TLDR",
+            native_categories={"newsletters"},
+        )
+        (survivor,) = dedupe([publisher, newsletter])
+        assert survivor.source_name == "The Verge"  # publisher wins the merge
+        assert survivor.cluster == []  # and the newsletter URL rode nothing
+        assert "newsletters" in survivor.native_categories  # cross-tag survives
+
+    def test_publisher_url_may_enter_a_newsletter_cards_cluster(self):
+        from curator.dedup import dedupe
+
+        newsletter = Item(
+            title="Only the newsletter had it first",
+            url="https://cleaned.example/first",
+            canonical_url="https://cleaned.example/first",
+            source_id="newsletter:tldr",
+            source_name="TLDR",
+            published_at=NOW - timedelta(hours=4),
+            is_newsletter=True,
+            is_aggregator=True,
+            newsletter_sender="TLDR",
+        )
+        publisher = Item(
+            title="Only the newsletter had it, first",
+            url="https://publisher.example/first",
+            canonical_url="https://publisher.example/first",
+            source_id="verge",
+            source_name="The Verge",
+            published_at=NOW - timedelta(hours=3),
+        )
+        (survivor,) = dedupe([newsletter, publisher])
+        assert survivor.source_name == "The Verge"
+        assert survivor.cluster == []
+
+
+class TestReservedCategoryId:
+    def test_reserved_name_is_rejected(self, tmp_path):
+        from curator.config import ConfigError, load_topics
+
+        topics = tmp_path / "topics.yaml"
+        topics.write_text("categories:\n  - name: Newsletters\n    keywords: [ai]\n")
+        with pytest.raises(ConfigError, match="reserved"):
+            load_topics(topics)
+
+    def test_reserved_id_is_rejected(self, tmp_path):
+        from curator.config import ConfigError, load_topics
+
+        topics = tmp_path / "topics.yaml"
+        topics.write_text("categories:\n  - name: My Topic\n    id: newsletters\n    keywords: [ai]\n")
+        with pytest.raises(ConfigError, match="reserved"):
+            load_topics(topics)
+
+
+class TestClusterLinksAreSanitizedAtTheOutputBoundary:
+    def render_with_cluster(self, url: str) -> str:
+        from curator.render import render_html
+
+        item = Item(
+            title="A story with an alternate address",
+            url="https://publisher.example/main",
+            canonical_url="https://publisher.example/main",
+            source_id="verge",
+            source_name="The Verge",
+            published_at=NOW - timedelta(hours=1),
+            cluster=[{"source_name": "Elsewhere", "url": url}],
+        )
+        return render_html({"AI": [item]}, [], NOW)
+
+    def test_a_tracker_cluster_link_is_dropped(self):
+        html = self.render_with_cluster(
+            "https://link.mail.beehiiv.com/ss/c/OPAQUEFAKETOKEN123456"
+        )
+        assert "beehiiv" not in html
+        assert "Elsewhere" not in html
+
+    def test_an_email_bearing_cluster_link_is_dropped(self):
+        html = self.render_with_cluster(
+            "https://publisher.example/other?email=fixture-reader%40example.invalid"
+        )
+        assert "example.invalid" not in html
+        assert "%40" not in html
+
+    def test_a_clean_cluster_link_survives(self):
+        html = self.render_with_cluster("https://other.example/coverage")
+        assert 'href="https://other.example/coverage"' in html
+        assert "Elsewhere" in html
+
+
 class TestSerializeRoundTrip:
     def test_lane_result_survives_the_artifact_boundary(self, tmp_path):
         record = {

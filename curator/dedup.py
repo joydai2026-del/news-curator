@@ -110,12 +110,20 @@ def _collect_cluster(keep: Item, drop: Item) -> None:
 
     Entries a dropped row had already collected ride along either way, so a
     chain of merges does not lose the outlets it gathered on the way.
+
+    NEWSLETTER URLS NEVER ENTER A CLUSTER. Review round 1 proved this was the
+    one channel a newsletter-derived link could ride onto a card with
+    `is_newsletter=False`, where every newsletter guard (the image skip, the
+    `data-newsletter` marker, the workflow check) is blind to it. The reader
+    loses nothing: the newsletter's coverage of the story is a paraphrase of
+    the same article, and the publisher link the survivor already carries is
+    the better address. The privacy rule wins over completeness.
     """
     if len(keep.cluster) >= MAX_CLUSTER_LINKS:
         return
 
     incoming: list[dict] = []
-    if drop.canonical_url != keep.canonical_url and drop.url:
+    if drop.canonical_url != keep.canonical_url and drop.url and not drop.is_newsletter:
         incoming.append({"source_name": drop.source_name, "url": drop.url})
     incoming.extend(entry for entry in drop.cluster if isinstance(entry, dict))
 

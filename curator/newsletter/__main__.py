@@ -38,10 +38,13 @@ log = logging.getLogger(__name__)
 
 ARTIFACT_VERSION = 1
 
+CONFIG_ERROR = "config_error"
+
 # Reasons a human has to act on, surfaced as workflow warnings. `disabled` is
 # a configuration choice, not a problem, so it is deliberately not here.
 WARN_REASONS = {"auth_revoked", "auth_failed", "missing_credentials",
-                "api_error", "network_error", "no_adapters_enabled"}
+                "api_error", "network_error", "no_adapters_enabled",
+                CONFIG_ERROR}
 
 
 def _field(record, name: str, default=""):
@@ -73,6 +76,13 @@ def serialize(result: lane.LaneResult) -> dict:
         "reason": result.reason,
         "note": result.note,
         "unmatched_messages": result.unmatched_messages,
+        # What this run did NOT see. Counts only, and they travel with the
+        # artifact so the build job can print them instead of the fetch job
+        # being the only place a short batch was ever visible.
+        "truncated": result.truncated,
+        "unreadable_messages": result.unreadable_messages,
+        "unauthenticated_messages": result.unauthenticated_messages,
+        "unauthenticated_missing": result.unauthenticated_missing,
         "watermark": result.watermark.isoformat() if result.watermark else None,
         "hashes": list(result.hashes),
         "status": {
@@ -107,10 +117,13 @@ def main(argv: list[str] | None = None) -> int:
         # job still exits 0 with a dark artifact so the page can say so.
         log.error("config error: %s", exc)
         payload = {"version": ARTIFACT_VERSION, "ok": False, "dark": True,
-                   "reason": "config_error", "note": "configuration invalid",
+                   "reason": CONFIG_ERROR, "note": "configuration invalid",
                    "unmatched_messages": 0, "watermark": None, "hashes": [],
                    "status": {}, "items": []}
         args.out.write_text(json.dumps(payload), encoding="utf-8")
+        # This path used to return before the annotation below, so the ONE
+        # reason that always needs a human got the quietest exit in the file.
+        print(f"::warning::newsletter lane is dark this run: {CONFIG_ERROR}")
         return 0
 
     now = datetime.now(timezone.utc)
@@ -126,6 +139,16 @@ def main(argv: list[str] | None = None) -> int:
         # A GitHub Actions annotation, visible on the run summary. Counts and
         # slugs only, per the lane's logging rule.
         print(f"::warning::newsletter lane is dark this run: {result.reason}")
+    if result.lossy:
+        # Not dark, and still a thing to look at: the run read less than the
+        # window held, so the cursor deliberately did not advance to now.
+        print(
+            f"::warning::newsletter lane read a short batch: truncated={result.truncated}, "
+            f"unreadable={result.unreadable_messages}"
+        )
+    rejected = result.unauthenticated_messages + result.unauthenticated_missing
+    if rejected:
+        print(f"::warning::newsletter lane dropped {rejected} messages on sender authentication")
     return 0
 
 

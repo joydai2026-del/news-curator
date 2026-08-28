@@ -165,6 +165,72 @@ def sender_address(msg: Message) -> str:
 
 
 # --------------------------------------------------------------------------
+# who actually sent it
+# --------------------------------------------------------------------------
+
+# `dkim=pass header.d=example.com` inside an Authentication-Results header.
+# The two halves are matched separately because a real header interleaves
+# several methods (spf, dkim, dmarc) with their own parameters, in any order.
+_AUTH_DKIM = re.compile(r"\bdkim\s*=\s*(?P<verdict>[a-z]+)", re.I)
+_AUTH_DOMAIN = re.compile(r"\bheader\.(?:d|i)\s*=\s*@?(?P<domain>[A-Za-z0-9.\-]+)", re.I)
+
+AUTH_PASS = "pass"  # DKIM passed and signed a domain the adapter allows
+AUTH_FAIL = "fail"  # a header is present and it does not authorise this sender
+AUTH_MISSING = "missing"  # no Authentication-Results header at all
+
+
+def dkim_results(msg: Message) -> list[tuple[str, str]]:
+    """Every `(verdict, signing domain)` pair in the Authentication-Results set.
+
+    A message can carry several of these headers; the mail server writes them
+    on delivery and a sender cannot forge the one the RECEIVING server wrote,
+    which is the whole reason this is worth reading. Malformed values become
+    empty strings rather than exceptions: this is untrusted input.
+    """
+    out: list[tuple[str, str]] = []
+    for raw in msg.get_all("Authentication-Results") or []:
+        text = str(raw or "")
+        # One header can carry several methods. Split on `;` so a `dkim=pass`
+        # in one clause is not paired with a `header.d` from another.
+        for clause in text.split(";"):
+            verdict = _AUTH_DKIM.search(clause)
+            if not verdict:
+                continue
+            domain = _AUTH_DOMAIN.search(clause)
+            out.append((
+                verdict.group("verdict").lower(),
+                (domain.group("domain").lower().strip(".") if domain else ""),
+            ))
+    return out
+
+
+def authentication(msg: Message, adapter: "Adapter") -> str:
+    """AUTH_PASS, AUTH_FAIL or AUTH_MISSING for this message and adapter.
+
+    The gap this closes: Gmail's `from:` search operator matches the From
+    HEADER, which anyone can write. Without this check, someone who learns the
+    newsletter account's address could put arbitrary headlines and links on a
+    public page under a trusted newsletter's name. No XSS needed; the content
+    itself is the payload.
+
+    **Fail-closed, including on a missing header, and graded C until a live
+    run says otherwise.** Gmail stamps Authentication-Results on delivery, so
+    every real message should carry one, and the fixtures assert the shape.
+    But no message from the real mailbox has been through this code yet. The
+    missing case therefore gets its OWN counter rather than being folded into
+    the failures: if real mail turns up without the header, the lane's status
+    line says so on the first run instead of silently reading as empty.
+    """
+    results = dkim_results(msg)
+    if not results:
+        return AUTH_MISSING
+    for verdict, domain in results:
+        if verdict == "pass" and domain and adapter.allows_domain(domain):
+            return AUTH_PASS
+    return AUTH_FAIL
+
+
+# --------------------------------------------------------------------------
 # HTML -> blocks
 # --------------------------------------------------------------------------
 
@@ -385,16 +451,43 @@ class Adapter:
     senders: tuple[str, ...]
     parse: Callable[[Message], list[Story]]
 
+    def allows_domain(self, domain: str) -> bool:
+        """Is this domain the adapter's, or a subdomain of it?
+
+        Suffix matching at a DOT BOUNDARY, which is the only kind that is safe.
+        The live inbox needs it: The Neuron sends from
+        `newsletter.theneurondaily.com` and Milk Road from `mail.milkroad.com`,
+        neither of which is the bare allowlisted domain. `evilmilkroad.com`
+        must not match `milkroad.com`, and the `"." +` is what enforces that.
+        """
+        domain = (domain or "").strip().lower().strip(".")
+        if not domain:
+            return False
+        for entry in self.senders:
+            entry = entry.lower()
+            if "@" in entry:
+                entry = entry.rpartition("@")[2]
+            if domain == entry or domain.endswith("." + entry):
+                return True
+        return False
+
     def matches(self, address: str) -> bool:
+        """Does this From address belong to this adapter?
+
+        An exact address entry matches only itself; a bare domain entry matches
+        that domain and its subdomains.
+        """
         address = (address or "").strip().lower()
-        if not address:
+        if not address or "@" not in address:
             return False
         domain = address.rpartition("@")[2]
         for entry in self.senders:
             entry = entry.lower()
-            if address == entry:
-                return True
-            if "@" not in entry and (domain == entry or domain.endswith("." + entry)):
+            if "@" in entry:
+                if address == entry:
+                    return True
+                continue
+            if domain == entry or domain.endswith("." + entry):
                 return True
         return False
 
@@ -415,6 +508,14 @@ class Adapter:
         return ParseResult(stories=kept, report=report)
 
 
+# Which of these are LIVE, as of the mailbox survey on 2026-08-28: tldr,
+# theneuron and milkroad had mail in the surveyed week and send from
+# `tldrnewsletter.com`, `newsletter.theneurondaily.com` and `mail.milkroad.com`
+# respectively, which is why subdomain suffix matching is load-bearing rather
+# than defensive. therundown and bensbites stay in the allowlist as adapters
+# but had NO mail in that week, so their extraction is tested only against the
+# synthetic fixtures: their real-world format is grade C until a real message
+# from each has been through this parser.
 ADAPTERS: tuple[Adapter, ...] = (
     Adapter(
         id="tldr",
@@ -437,13 +538,17 @@ ADAPTERS: tuple[Adapter, ...] = (
     Adapter(
         id="theneuron",
         name="The Neuron",
-        senders=("theneurondaily.com", "mail.theneurondaily.com"),
+        # The bare domain is what `matches()` needs; the subdomain is listed as
+        # well because `sender_queries()` turns each entry into a Gmail `from:`
+        # term, and naming the live sending host there is not worth guessing at.
+        senders=("theneurondaily.com", "newsletter.theneurondaily.com",
+                 "mail.theneurondaily.com"),
         parse=_beehiiv_stories,
     ),
     Adapter(
         id="milkroad",
         name="Milk Road",
-        senders=("milkroad.com", "mail.milkroad.com"),
+        senders=("milkroad.com", "mail.milkroad.com"),  # live sender: the subdomain
         parse=_beehiiv_stories,
     ),
 )

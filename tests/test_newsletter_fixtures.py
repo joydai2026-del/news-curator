@@ -72,6 +72,23 @@ def load_html(name: str) -> str:
     return (FIXTURES / f"{name}.html").read_text(encoding="utf-8")
 
 
+def auth_header(domain: str, *, verdict: str = "pass") -> str:
+    """The Authentication-Results line Gmail writes on delivery.
+
+    Shaped like the real thing on purpose: several methods in one header,
+    separated by semicolons, with the DKIM verdict and its signing domain in
+    the same clause. The lane requires `dkim=pass` for a domain its adapter
+    allows, so this is what makes a fixture message authentic.
+    """
+    return (
+        "mx.google.com; "
+        f"dkim={verdict} header.d={domain} header.b=FAKESIG; "
+        f"spf={verdict} (google.com: domain of bounce@{domain} designates "
+        f"198.51.100.7 as permitted sender) smtp.mailfrom=bounce@{domain}; "
+        f"dmarc={verdict} (p=REJECT sp=REJECT dis=NONE) header.from={domain}"
+    )
+
+
 def build_message(
     name: str,
     *,
@@ -79,6 +96,9 @@ def build_message(
     sent: datetime = SENT,
     sender: str | None = None,
     html: str | None = None,
+    dkim_domain: str | None = None,
+    dkim_verdict: str = "pass",
+    authenticated: bool = True,
 ) -> EmailMessage:
     """One synthetic newsletter as a real MIME message.
 
@@ -88,15 +108,23 @@ def build_message(
       base64       text/html with base64 transfer encoding
       nested       multipart/mixed > multipart/alternative, plus an attachment
                    that must NOT be mistaken for the newsletter body
+
+    `authenticated=False` builds a message with NO Authentication-Results
+    header (the fail-closed case), and `dkim_domain` / `dkim_verdict` build one
+    that is present and does not authorise the sender.
     """
     shape = shape or SHAPES.get(name, "alternative")
     body = load_html(name) if html is None else html
+    from_address = sender or SENDERS[name]
 
     msg = EmailMessage()
-    msg["From"] = sender or SENDERS[name]
+    msg["From"] = from_address
     msg["To"] = FAKE_READER
     msg["Subject"] = SUBJECTS.get(name, "Newsletter")
     msg["Date"] = format_datetime(sent)
+    if authenticated:
+        signing = dkim_domain or from_address.rpartition("@")[2]
+        msg["Authentication-Results"] = auth_header(signing, verdict=dkim_verdict)
 
     if shape == "html_only":
         msg.set_content(body, subtype="html")

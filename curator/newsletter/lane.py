@@ -14,10 +14,20 @@ Three properties the rest of the codebase depends on:
   * **Never raises.** Every failure comes back as `LaneResult(dark=True,
     reason=<slug>)`. A revoked refresh token darkens one lane and leaves a
     visible warning; it does not fail the hourly build of six healthy tabs.
-  * **The caller advances the cursor.** `fetch()` returns the hashes and the
-    watermark it WOULD commit. The orchestrator calls `state.advance()` only
-    after the page is written. A run that fetched mail and then died must
-    re-read that mail next hour, not skip it.
+  * **The caller advances the cursor, and only as far as the run actually got.**
+    `fetch()` returns the hashes and the watermark it WOULD commit; the
+    orchestrator calls `state.advance()` only after the page is written, so a
+    run that fetched mail and then died re-reads that mail next hour. The
+    watermark is `now` ONLY when the batch was complete and every message was
+    readable. When Gmail had more mail than the run took, or a message could
+    not be fetched, the watermark stops at the newest message actually
+    processed and the shortfall is named in the status line. Advancing to `now`
+    after a short batch is how mail gets silently skipped, which is exactly
+    what the design doc forbids.
+  * **Who sent it is checked, not assumed.** Gmail's `from:` operator matches
+    the From header, which anyone can write. Every message must carry a
+    DKIM `pass` for a domain the adapter allows, or it is counted and dropped
+    before it is parsed. See `adapters.authentication`.
 
 Privacy, restated because this is where items are born: `image_url` is always
 empty (no og:image fetch, no image-cache entry, ever), `url` is either a
@@ -87,19 +97,47 @@ class LaneResult:
     unmatched_messages: int = 0  # mail from a sender with no adapter
     hashes: list[str] = field(default_factory=list)
     watermark: datetime | None = None
+    truncated: bool = False  # more mail matched than this run took
+    unreadable_messages: int = 0  # listed, then could not be fetched
+    unauthenticated_messages: int = 0  # DKIM present and failing, or wrong domain
+    unauthenticated_missing: int = 0  # no Authentication-Results header at all
 
     @property
     def note(self) -> str:
-        return gmail_module.REASON_TEXT.get(self.reason, self.reason)
+        """The status line, plus anything the run lost. Counts only."""
+        base = gmail_module.REASON_TEXT.get(self.reason, self.reason)
+        extra = []
+        if self.truncated:
+            extra.append("more mail matched than this run read; cursor held back")
+        if self.unreadable_messages:
+            extra.append(f"{self.unreadable_messages} messages could not be read")
+        rejected = self.unauthenticated_messages + self.unauthenticated_missing
+        if rejected:
+            extra.append(f"{rejected} messages failed sender authentication")
+        return f"{base}; {'; '.join(extra)}" if extra else base
+
+    @property
+    def lossy(self) -> bool:
+        """This run did not see everything the window held.
+
+        Kept separate from `ok`: a truncated run is a SUCCESSFUL run that must
+        not move the cursor as if it had finished.
+        """
+        return self.truncated or self.unreadable_messages > 0
 
     @property
     def pending_adapters(self) -> list[str]:
         return sorted(s.adapter_id for s in self.status.values() if s.state == "pending")
 
 
-def enabled(env: dict | None = None, *, flag: bool = False) -> bool:
-    """The feature flag. Both halves required: the switch AND the secrets."""
-    return bool(flag) and gmail_module.has_credentials(os.environ if env is None else env)
+def enabled(env: dict | None = None, *, flag: bool = False, client=gmail_module) -> bool:
+    """The feature flag. Both halves required: the switch AND the secrets.
+
+    `fetch()` calls this rather than re-deriving it, so the invariant has one
+    home. It used to read `cfg["enabled"]` and check credentials inline, which
+    meant this function stated a rule nothing enforced.
+    """
+    return bool(flag) and client.has_credentials(os.environ if env is None else env)
 
 
 # --------------------------------------------------------------------------
@@ -233,7 +271,9 @@ def fetch(
 
     if not want:
         return LaneResult(ok=True, dark=True, reason=DISABLED, watermark=state.watermark)
-    if not client.has_credentials(source_env):
+    if not enabled(source_env, flag=want, client=client):
+        # The switch is on and the secrets are not there. A different status
+        # from `disabled`, because this one is a thing to fix.
         return LaneResult(
             ok=False, dark=True, reason=gmail_module.MISSING_CREDENTIALS, watermark=state.watermark
         )
@@ -267,13 +307,36 @@ def fetch(
     seen_now: set[str] = set()
     records: list[dict] = []
     unmatched = 0
+    unauthenticated = 0
+    unauthenticated_missing = 0
+    newest_processed: datetime | None = None
 
     for msg in result.messages:
+        # Processed = this message was read and judged, whatever the verdict.
+        # That is the set the watermark may safely be based on.
+        sent = _sent_at(msg, now)
+        if newest_processed is None or sent > newest_processed:
+            newest_processed = sent
+
         address = adapters_module.sender_address(msg)
         adapter = adapters_module.for_sender(address)
         if adapter is None or adapter.id not in status:
             unmatched += 1
             continue
+
+        verdict = adapters_module.authentication(msg, adapter)
+        if verdict != adapters_module.AUTH_PASS:
+            # The From header said this was TLDR; the receiving server's own
+            # DKIM stamp did not agree. Counted by adapter slug, never by
+            # address or subject, and dropped before anything is parsed.
+            if verdict == adapters_module.AUTH_MISSING:
+                unauthenticated_missing += 1
+            else:
+                unauthenticated += 1
+            log.info("newsletter message failed sender authentication (%s, %s)",
+                     adapter.id, verdict)
+            continue
+
         entry = status[adapter.id]
         entry.seen += 1
 
@@ -281,7 +344,6 @@ def fetch(
         entry.extracted += parsed.report.stories_found
         entry.dropped_links += parsed.report.links_dropped
 
-        sent = _sent_at(msg, now)
         if sent < cutoff:
             continue
         for story in parsed.stories:
@@ -305,13 +367,41 @@ def fetch(
     for record in records:
         status[record["source_id"].split(":", 1)[1]].published += 1
 
-    # Only stories that actually got published are remembered. One that fell
-    # off the cap must be eligible again next run, not silently burned.
+    # Only stories that actually got published are remembered, so one that fell
+    # off the cap is not in the hash list and cannot be suppressed as a repeat.
+    # It comes back only if the next window still covers its message, which the
+    # overlap usually gives and the retention window eventually takes away.
+    # That is a bounded loss of a STORY, and it is a different thing from
+    # losing a MESSAGE, which is what the watermark below is about.
     published_hashes = [state.story_hash(r["title"], r["url"]) for r in records]
 
+    # The cursor. `now` is only correct when this run consumed the whole
+    # window: round 1 proved that advancing to `now` after a truncated batch
+    # puts the unread tail permanently outside the next window. When anything
+    # was missed, the cursor stops at the newest message actually processed,
+    # so the wall-clock gap between that message and now is re-read next hour
+    # instead of being skipped. It never moves backwards, because re-reading a
+    # window the state already covers buys nothing the hash list does not.
+    #
+    # Honest limit, and it is the reason `truncated` is also on the status
+    # line: Gmail lists newest first, so a truncated batch loses the OLDEST
+    # tail, which holding the cursor here does not by itself recover. Draining
+    # that tail needs pagination, which this lane deliberately does not do.
+    # What this change buys is that the loss is REPORTED and that mail
+    # arriving mid-run is not burned. Pagination is the follow-up.
+    lossy = result.truncated or result.fetch_failures > 0
+    watermark = now
+    if lossy:
+        watermark = state.watermark
+        if newest_processed is not None:
+            bounded = min(newest_processed, now)
+            watermark = max(watermark, bounded) if watermark else bounded
+
     log.info(
-        "newsletter lane: %d messages, %d unmatched, %d items after dedup and cap",
-        len(result.messages), unmatched, len(records),
+        "newsletter lane: %d messages, %d unmatched, %d unauthenticated, "
+        "%d items after dedup and cap, truncated=%s, unreadable=%d",
+        len(result.messages), unmatched, unauthenticated + unauthenticated_missing,
+        len(records), result.truncated, result.fetch_failures,
     )
     for entry in status.values():
         log.info(
@@ -328,5 +418,9 @@ def fetch(
         reason=gmail_module.OK,
         unmatched_messages=unmatched,
         hashes=published_hashes,
-        watermark=now,
+        watermark=watermark,
+        truncated=result.truncated,
+        unreadable_messages=result.fetch_failures,
+        unauthenticated_messages=unauthenticated,
+        unauthenticated_missing=unauthenticated_missing,
     )

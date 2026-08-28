@@ -123,6 +123,16 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
         bits.append(f"pending adapters: {', '.join(pending)}")
     if raw.get("unmatched_messages"):
         bits.append(f"{raw['unmatched_messages']} messages from senders without an adapter")
+    # The fetch job's "what this run did NOT see" counters. A short batch and
+    # an authentication rejection are exactly the states that must not hide
+    # behind a healthy item count.
+    if raw.get("truncated"):
+        bits.append("short batch, cursor held back")
+    if raw.get("unreadable_messages"):
+        bits.append(f"{raw['unreadable_messages']} messages unreadable")
+    rejected = int(raw.get("unauthenticated_messages") or 0) + int(raw.get("unauthenticated_missing") or 0)
+    if rejected:
+        bits.append(f"{rejected} messages failed sender authentication")
     note = str(raw.get("note") or "") if dark else "; ".join(bits)
     tier = TierResult(tier="newsletters", items=items, ok=ok, note=note)
 

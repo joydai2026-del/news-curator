@@ -11,19 +11,47 @@ link that carries no identifier, or refuse. Refusing is a normal outcome, not
 an error, and the caller renders the story WITHOUT a link when it happens. The
 design doc calls this the PRIVACY RULE and it is not negotiable here.
 
-Three rules, applied in this order:
+**The failure mode is "lose a link", never "leak an identifier".** Review round
+1 proved the earlier design had it backwards. The gate used to be a BLOCKLIST of
+token shapes: a query parameter it did not recognise was KEPT. So
+`?email=jj%40example.com`, `?subid=JJ7742`, `?token=aBcDeFgHiJkLmNoP` and an
+address sitting in a path segment all sailed through onto a public page and into
+a public git history, permanently. Every miss in a blocklist is irreversible.
+The rest of this codebase reaches for allowlists in exactly this spot
+(`normalize.ALLOWED_SCHEMES`, the adapter sender allowlist, the topics
+allowlist), and now so does this module.
+
+Four rules, applied in this order:
 
   1. **Static extraction only.** Many trackers carry the destination with them:
      a `?url=` parameter, a percent-encoded path segment (the shape TLDR's
      sendgrid-style `/CL0/https:%2F%2F.../1/...` links use), a base64 payload.
      Those unwrap locally, for free, and are recursed a bounded number of times.
-  2. **Strip tracking parameters.** The junk-parameter list in
-     `curator.normalize` is IMPORTED and extended here rather than copied. A
-     second copy would drift from the first within a month.
-  3. **When in doubt, drop the link.** If the URL is still on a known tracker
-     host, or still carries an opaque token-shaped component anywhere, this
-     returns None. A story with no link is a small loss. A leaked subscriber id
-     is permanent.
+     A link still wrapped when the depth bound runs out is refused, not shipped
+     half-unwrapped.
+  2. **Refuse anything that smells like an address.** If `@` or `%40` survives
+     anywhere in the host, path, query or fragment (checked through repeated
+     percent-decoding, so `%2540` cannot hide), the answer is None. The
+     subscriber's own address is the highest-value identifier in the system and
+     it gets its own rule rather than a heuristic.
+  3. **Drop the whole query string except a tiny publisher-content allowlist.**
+     `p`, `id`, `story`, `v` are the parameters a publisher genuinely uses to
+     name an article. Everything else goes, whether or not this module has ever
+     heard of it, and the fragment goes with it. That is the bounded gate: a
+     leak now requires an attacker to hide an identifier inside one of four
+     named parameters, instead of merely inventing a parameter name.
+  4. **When in doubt, drop the link.** Still on a known tracker host, or an
+     opaque token-shaped path segment, or a token-shaped value inside one of
+     the four allowlisted parameters: None. A story with no link is a small
+     loss. A leaked subscriber id is permanent.
+
+`is_suspect()` is the output-boundary twin of all four rules and is deliberately
+the STRONGER predicate: it is true for anything `sanitize()` would reject OR
+merely strip, so a URL that passes it is one this module would emit verbatim.
+That makes it usable as a last-line assertion over rendered hrefs. It is scoped
+to NEWSLETTER-DERIVED links: an ordinary feed URL carrying `?page=2` is suspect
+by this definition, which is correct for this lane and wrong as a general
+judgement of a publisher link.
 
 **No network resolution, deliberately.** Following the redirect would resolve
 the destination perfectly, and it would do it by SENDING the tracking token
@@ -44,27 +72,16 @@ import binascii
 import re
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
-# Imported, not copied: one junk-parameter list for the whole codebase. The
-# names are private to normalize.py by convention, and reaching for them here is
-# the deliberate lesser evil against two lists that silently diverge.
-from ..normalize import _JUNK_PARAM_PREFIXES as _BASE_JUNK_PREFIXES
-from ..normalize import _JUNK_PARAMS as _BASE_JUNK_PARAMS
 from ..normalize import safe_url
 
-# Parameters that identify the SUBSCRIBER or the send, never the article.
-# Single letters look reckless and are not: `e`, `u`, `r`, `mid` are the
-# recipient handles used by Mailchimp, Substack and friends. A publisher URL
-# that genuinely needs one of these is rarer than a leak.
-_NEWSLETTER_JUNK_PARAMS = {
-    "e", "u", "r", "rid", "sid", "aid", "mid", "bhid", "_bhlid",
-    "ck_subscriber_id", "subscriber_id", "subscriberid", "recipient",
-    "recipient_id", "vero_id", "vero_conv", "emci", "emdi", "ceid",
-    "lctg", "goal", "s_i", "sc_customer", "elqTrackId", "elq",
-}
-_NEWSLETTER_JUNK_PREFIXES = ("ck_", "vero_", "mkt_", "hsa_", "_hs", "pk_", "mtm_", "oly_", "trk_")
-
-JUNK_PARAMS = {p.lower() for p in _BASE_JUNK_PARAMS} | {p.lower() for p in _NEWSLETTER_JUNK_PARAMS}
-JUNK_PARAM_PREFIXES = tuple(_BASE_JUNK_PREFIXES) + _NEWSLETTER_JUNK_PREFIXES
+# The junk-parameter blocklist this module used to import from `normalize` is
+# GONE, deliberately. Round 1 proved it was the wrong tool here: it named the
+# parameters we had thought of (`e`, `ck_subscriber_id`, `utm_*`) and kept
+# everything else, so `?subid=`, `?token=` and `?ref=` all published. The
+# allowlist below subsumes it for newsletter links: nothing survives unless it
+# is named. `normalize.canonical_url` still does blocklist stripping for the
+# six ordinary feed lanes, where losing a query parameter is a real cost and a
+# subscriber id is not the threat.
 
 # Query parameters that sometimes carry the destination. The value still has to
 # parse as an absolute http(s) URL before it is believed.
@@ -87,16 +104,20 @@ _TRACKER_HOST_PATTERNS = (
     re.compile(r"^(link|links|click|clicks|track|tracking)\.mail\..+"),
 )
 
-# Subdomains that are tracker-shaped. On their own they prove nothing (plenty
-# of real sites live at mail.example.com), so they only condemn a URL when the
-# path also carries an opaque token.
-_TRACKER_SUBDOMAINS = ("link", "links", "click", "clicks", "track", "tracking",
-                       "email", "e", "em", "go", "t")
-
 _OPAQUE_CHARS = re.compile(r"^[A-Za-z0-9_\-=~%+.]+$")
 _LOWER_SLUG = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 
+# The whole allowlist. A publisher article URL essentially never needs a query
+# parameter to say WHICH article; these four are the exceptions that show up on
+# real CMSes (`?p=` on WordPress, `?id=`/`?story=` on wire services, `?v=` on
+# YouTube). Adding a fifth is a decision, not a bug fix: every name added here
+# is a name an identifier could hide behind.
+CONTENT_PARAMS = frozenset({"p", "id", "story", "v"})
+
 MAX_UNWRAP_DEPTH = 4
+# How many times to percent-decode before deciding a component holds no `@`.
+# Two hops catches `%40` and `%2540`; a third is free insurance.
+_DECODE_HOPS = 3
 
 
 def _host(url: str) -> str:
@@ -152,31 +173,32 @@ def is_token_like(text: str) -> bool:
     return len(text) >= 40
 
 
-def _components(url: str) -> list[str]:
-    parts = urlsplit(url)
-    out = [seg for seg in (parts.path or "").split("/") if seg]
-    out += [value for _, value in parse_qsl(parts.query, keep_blank_values=True)]
-    if parts.fragment:
-        out.append(parts.fragment)
-    return out
+def looks_like_address(text: str) -> bool:
+    """Does this component contain an `@`, however many times it is encoded?
 
-
-def is_suspect(url: str) -> bool:
-    """True when publishing this URL could publish who subscribed.
-
-    Used by the privacy test as the single yes/no the whole lane is judged on.
+    A plain `@`, a `%40`, a `%2540`. The subscriber address is the one string
+    the old shape-based detector structurally could not see (`@` was missing
+    from `_OPAQUE_CHARS`), which is why it now gets a rule of its own.
     """
-    candidate = safe_url(url)
-    if candidate is None:
-        return True
-    if is_tracker_host(candidate):
-        return True
-    host = _host(candidate)
-    first_label = host.split(".")[0] if host else ""
-    tokens = [c for c in _components(candidate) if is_token_like(c)]
-    if first_label in _TRACKER_SUBDOMAINS and tokens:
-        return True
-    return bool(tokens)
+    seen = text or ""
+    for _ in range(_DECODE_HOPS):
+        if "@" in seen or "%40" in seen.lower():
+            return True
+        nxt = unquote(seen)
+        if nxt == seen:
+            return False
+        seen = nxt
+    return False
+
+
+def carries_address(url: str) -> bool:
+    """True when any part of the URL carries an address-shaped component."""
+    parts = urlsplit(url)
+    fields = [parts.netloc, parts.path, parts.query, parts.fragment]
+    fields += [seg for seg in (parts.path or "").split("/") if seg]
+    for name, value in parse_qsl(parts.query, keep_blank_values=True):
+        fields += [name, value]
+    return any(looks_like_address(f) for f in fields)
 
 
 def _decoded_url(raw: str) -> str | None:
@@ -212,21 +234,40 @@ def _unwrap_once(url: str) -> str | None:
     return None
 
 
-def strip_tracking(url: str) -> str | None:
-    """Drop junk parameters and the fragment, keep everything else verbatim."""
+def _publisher_url(url: str) -> str | None:
+    """The bounded gate: rules 2, 3 and 4 on an already-unwrapped URL.
+
+    Split out from `sanitize()` so `is_suspect()` can be defined in terms of
+    the real answer rather than in terms of a second, drifting predicate. The
+    old code had `sanitize` ask `is_suspect` and `is_suspect` re-derive the
+    rules; a shape one of them missed, both missed.
+    """
     candidate = safe_url(url)
     if candidate is None:
         return None
+    if is_tracker_host(candidate):
+        return None
+    if carries_address(candidate):
+        return None
+
     parts = urlsplit(candidate)
-    keep = [
-        (k, v)
-        for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k.lower() not in JUNK_PARAMS
-        and not any(k.lower().startswith(p.lower()) for p in JUNK_PARAM_PREFIXES)
-    ]
+    if any(is_token_like(seg) for seg in (parts.path or "").split("/") if seg):
+        return None
+
+    keep: list[tuple[str, str]] = []
+    for name, value in parse_qsl(parts.query, keep_blank_values=True):
+        if name.lower() not in CONTENT_PARAMS:
+            continue  # rule 3: unrecognised means gone, not kept
+        if is_token_like(value):
+            # An allowlisted NAME carrying a token-shaped VALUE is the one way
+            # left to smuggle an id. Dropping the parameter would silently
+            # point the link at the wrong article, so the link goes instead.
+            return None
+        keep.append((name, value))
+
     # Fragment dropped: it never identifies a different article, and trackers
     # do sometimes hide the recipient there.
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(keep), ""))
+    return safe_url(urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(keep), "")))
 
 
 def sanitize(raw: str, *, max_depth: int = MAX_UNWRAP_DEPTH) -> str | None:
@@ -243,9 +284,26 @@ def sanitize(raw: str, *, max_depth: int = MAX_UNWRAP_DEPTH) -> str | None:
         if not nxt or nxt == url:
             break
         url = nxt
-    stripped = strip_tracking(url)
-    if stripped is None:
-        return None
-    if is_suspect(stripped):
-        return None
-    return safe_url(stripped)
+    else:
+        # Depth exhausted with a wrapper still on top. Publishing the outer hop
+        # would publish the tracker's own token, so this is a refusal.
+        remaining = _unwrap_once(url)
+        if remaining and remaining != url:
+            return None
+    return _publisher_url(url)
+
+
+def is_suspect(url: str) -> bool:
+    """True when this URL is NOT what the sanitizer would publish.
+
+    Stronger than "would be rejected": it is also true when the sanitizer would
+    merely STRIP something, so `is_suspect(u) is False` means `u` is exactly
+    what this module emits. That is what makes it usable as an output-boundary
+    assertion over rendered hrefs, where the question is "did anything reach
+    the page that this module would not have written itself".
+
+    Formally: `is_suspect(u)` iff `sanitize(u) != u` (None included).
+    """
+    if safe_url(url) is None:
+        return True
+    return sanitize(url) != url

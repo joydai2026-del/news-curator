@@ -81,16 +81,34 @@ REASON_TEXT = {
 
 @dataclass
 class GmailResult:
-    """What one mailbox read produced, including how it degraded."""
+    """What one mailbox read produced, including how it degraded.
+
+    `listed` used to be the whole story of degradation, and nothing read it.
+    Round 1 proved the consequence: 40 messages waiting, 30 fetched, watermark
+    advanced to now, ten messages permanently outside the next window. So the
+    two ways a batch can be short of the mailbox are now named fields, and
+    `complete` is the single question the lane asks before advancing a cursor.
+    """
 
     ok: bool
     reason: str
     messages: list[Message] = field(default_factory=list)
     listed: int = 0  # ids Gmail offered, before the per-run cap
+    truncated: bool = False  # more mail matched the query than this run took
+    fetch_failures: int = 0  # ids that were listed and then could not be read
 
     @property
     def note(self) -> str:
         return REASON_TEXT.get(self.reason, self.reason)
+
+    @property
+    def complete(self) -> bool:
+        """Every message that matched the query is in `messages`.
+
+        The ONLY condition under which the caller may treat the window as
+        fully consumed and move its watermark to the wall clock.
+        """
+        return not self.truncated and self.fetch_failures == 0
 
 
 def has_credentials(env: dict | None = None) -> bool:
@@ -170,7 +188,17 @@ def _access_token(session: requests.Session, env, timeout: float) -> str:
     raise _Unavailable(AUTH_REVOKED if revoked else AUTH_FAILED)
 
 
-def _list_message_ids(session, token: str, query: str, limit: int, timeout: float) -> list[str]:
+def _list_message_ids(
+    session, token: str, query: str, limit: int, timeout: float
+) -> tuple[list[str], bool]:
+    """The ids for this window, plus "and there are more where those came from".
+
+    Gmail answers a page at a time and hands back a `nextPageToken` when the
+    query matched more than the page. This function does not paginate (an
+    hourly job with a per-run cap should not try to drain an unbounded
+    backlog), so that token is the honest signal that this run saw a PREFIX of
+    the window, and it is returned rather than dropped.
+    """
     response = _request(
         session,
         "GET",
@@ -188,10 +216,12 @@ def _list_message_ids(session, token: str, query: str, limit: int, timeout: floa
         payload = response.json() or {}
     except ValueError:
         raise _Unavailable(API_ERROR) from None
+    more = bool(payload.get("nextPageToken"))
     rows = payload.get("messages")
     if not isinstance(rows, list):
-        return []
-    return [str(row.get("id")) for row in rows if isinstance(row, dict) and row.get("id")]
+        return [], more
+    ids = [str(row.get("id")) for row in rows if isinstance(row, dict) and row.get("id")]
+    return ids, more
 
 
 def _get_message(session, token: str, message_id: str, timeout: float) -> Message | None:
@@ -255,14 +285,23 @@ def fetch(
     client = session or requests.Session()
     try:
         token = _access_token(client, source, timeout)
-        ids = _list_message_ids(client, token, build_query(senders, after), limit, timeout)
+        ids, more = _list_message_ids(client, token, build_query(senders, after), limit, timeout)
+        taken = ids[: max(0, int(limit))]
         messages: list[Message] = []
-        for message_id in ids[: max(0, int(limit))]:
+        for message_id in taken:
             parsed = _get_message(client, token, message_id, timeout)
             if parsed is not None:
                 messages.append(parsed)
-        log.info("gmail: listed %d messages, parsed %d", len(ids), len(messages))
-        return GmailResult(ok=True, reason=OK, messages=messages, listed=len(ids))
+        truncated = more or len(taken) < len(ids)
+        failures = len(taken) - len(messages)
+        log.info(
+            "gmail: listed %d messages, parsed %d, truncated=%s, unreadable=%d",
+            len(ids), len(messages), truncated, failures,
+        )
+        return GmailResult(
+            ok=True, reason=OK, messages=messages, listed=len(ids),
+            truncated=truncated, fetch_failures=failures,
+        )
     except _Unavailable as exc:
         log.warning("gmail lane unavailable: %s", exc.reason)
         return GmailResult(ok=False, reason=exc.reason)

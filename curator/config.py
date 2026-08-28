@@ -243,6 +243,17 @@ def _parse_categories(raw: dict, path: Path) -> list[Category]:
         if not cid:
             raise ConfigError(f"{path.name}: category '{name}' produces an empty id; give it an explicit 'id'.")
 
+        # `newsletters` belongs to the pipeline's pseudo-category (the tab the
+        # newsletter lane renders into). A user category reusing the id or the
+        # name would silently share its bucket: items would be duplicated, one
+        # tab would swallow the other, and the lane's cap would replace the
+        # category's. Reviewed and rejected loudly instead.
+        if cid == "newsletters" or name.casefold() == "newsletters":
+            raise ConfigError(
+                f"{path.name}: category '{name}' uses the reserved name/id 'newsletters', "
+                "which belongs to the newsletter lane's own tab. Pick another name or id."
+            )
+
         keywords = _str_list(entry.get("keywords"), f"category '{name}' keywords", path)
         sources_raw = entry.get("sources")
         if sources_raw is not None and not isinstance(sources_raw, list):

@@ -49,6 +49,74 @@ def test_subdomain_senders_match_the_registered_domain():
     assert adapter is not None and adapter.id == "therundown"
 
 
+@pytest.mark.parametrize(
+    "address, expected",
+    [
+        # The two live senders in the surveyed inbox are both subdomains.
+        ("team@newsletter.theneurondaily.com", "theneuron"),
+        ("hello@mail.milkroad.com", "milkroad"),
+        ("dan@tldrnewsletter.com", "tldr"),
+        # A lookalike is not a subdomain: the match is at a dot boundary.
+        ("hello@evilmilkroad.com", None),
+        ("hello@milkroad.com.attacker.example", None),
+        ("hello@notmilkroad.com", None),
+        # A bare domain is not an address.
+        ("milkroad.com", None),
+    ],
+)
+def test_domain_matching_is_a_suffix_match_at_a_dot_boundary(address, expected):
+    adapter = adapters.for_sender(address)
+    assert (adapter.id if adapter else None) == expected
+
+
+def test_an_exact_address_entry_does_not_widen_to_its_domain_twice():
+    """`dan@tldrnewsletter.com` is listed exactly; the bare domain is too."""
+    tldr = adapters.by_id("tldr")
+    assert tldr.matches("someone-else@tldrnewsletter.com"), "the bare domain entry covers it"
+    assert not tldr.matches("dan@tldrnewsletter.com.attacker.example")
+
+
+# --------------------------------------------------------------------------
+# sender authentication (round 1, S2)
+# --------------------------------------------------------------------------
+
+def test_a_real_shaped_header_reads_as_a_pass():
+    msg = build_message("tldr")
+    tldr = adapters.by_id("tldr")
+    assert adapters.dkim_results(msg), "the fixture must carry a header to parse"
+    assert adapters.authentication(msg, tldr) == adapters.AUTH_PASS
+
+
+def test_a_signature_from_another_domain_is_a_fail():
+    msg = build_message("tldr", dkim_domain="attacker.example")
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_FAIL
+
+
+def test_a_missing_header_is_its_own_verdict():
+    msg = build_message("tldr", authenticated=False)
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_MISSING
+
+
+def test_a_pass_in_one_clause_is_not_paired_with_a_domain_from_another():
+    """`spf=pass ... header.d` from a different method must not authorise DKIM."""
+    msg = build_message("tldr", authenticated=False)
+    msg["Authentication-Results"] = (
+        "mx.google.com; dkim=fail header.d=attacker.example; "
+        "spf=pass smtp.mailfrom=bounce@tldrnewsletter.com header.d=tldrnewsletter.com"
+    )
+    assert adapters.authentication(msg, adapters.by_id("tldr")) == adapters.AUTH_FAIL
+
+
+def test_a_subdomain_signature_authenticates_the_parent_domain():
+    msg = build_message("theneuron", dkim_domain="newsletter.theneurondaily.com")
+    assert adapters.authentication(msg, adapters.by_id("theneuron")) == adapters.AUTH_PASS
+
+
+def test_a_lookalike_signing_domain_does_not_authenticate():
+    msg = build_message("milkroad", dkim_domain="evilmilkroad.com")
+    assert adapters.authentication(msg, adapters.by_id("milkroad")) == adapters.AUTH_FAIL
+
+
 def test_sender_queries_cover_only_the_enabled_adapters():
     terms = adapters.sender_queries(["tldr"])
     assert "tldrnewsletter.com" in terms

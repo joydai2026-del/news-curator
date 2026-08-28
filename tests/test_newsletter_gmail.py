@@ -145,13 +145,47 @@ def test_a_network_failure_retries_exactly_once_then_reports():
     assert len(session.calls) == 2, "one retry, and only one"
 
 
-def test_a_single_unfetchable_message_does_not_lose_the_others():
+def test_a_single_unfetchable_message_does_not_lose_the_others_and_the_loss_is_reported():
+    """Round 1: the old version of this test encoded the loss as correct.
+
+    Keeping the readable message is right. Returning `ok=True` and saying
+    nothing about the one that vanished is what let the caller advance a cursor
+    past mail it never read.
+    """
     session = FakeSession(
         listing=FakeResponse(200, {"messages": [{"id": "m1"}, {"id": "gone"}]}),
         messages={"m1": raw_response("tldr")},
     )
     result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
     assert result.ok and len(result.messages) == 1 and result.listed == 2
+    assert result.fetch_failures == 1, "the message that could not be read must be counted"
+    assert not result.complete, "a batch missing a message is not a complete batch"
+
+
+def test_a_clean_full_batch_reports_itself_complete():
+    session = FakeSession(
+        listing=FakeResponse(200, {"messages": [{"id": "m1"}]}),
+        messages={"m1": raw_response("tldr")},
+    )
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
+    assert result.complete and not result.truncated and result.fetch_failures == 0
+
+
+def test_more_mail_than_the_cap_is_reported_as_truncated():
+    """The M4 shape: 40 waiting, 30 taken, and nobody told."""
+    listing = FakeResponse(200, {"messages": [{"id": f"m{i}"} for i in range(40)]})
+    session = FakeSession(listing=listing, messages={f"m{i}": raw_response("tldr") for i in range(40)})
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session, limit=30)
+    assert len(result.messages) == 30 and result.listed == 40
+    assert result.truncated and not result.complete
+
+
+def test_a_next_page_token_is_truncation_even_when_the_page_fits():
+    """Gmail says "there is more" and this run is not going to go get it."""
+    listing = FakeResponse(200, {"messages": [{"id": "m1"}], "nextPageToken": "more"})
+    session = FakeSession(listing=listing, messages={"m1": raw_response("tldr")})
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session, limit=30)
+    assert result.truncated and not result.complete
 
 
 # --------------------------------------------------------------------------
@@ -169,11 +203,12 @@ def test_messages_come_back_parsed():
     assert SENDERS["tldr"] in senders[0]
 
 
-def test_the_per_run_message_cap_is_honoured():
+def test_the_per_run_message_cap_is_honoured_and_says_it_capped():
     listing = FakeResponse(200, {"messages": [{"id": f"m{i}"} for i in range(10)]})
     session = FakeSession(listing=listing, messages={f"m{i}": raw_response("tldr") for i in range(10)})
     result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session, limit=3)
     assert len(result.messages) == 3
+    assert result.truncated
 
 
 def test_decode_raw_rejects_junk():
