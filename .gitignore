@@ -17,3 +17,6 @@ receipt.json
 
 # OS
 .DS_Store
+
+# Vault context symlink (house convention)
+.vault

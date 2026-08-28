@@ -26,6 +26,27 @@ codebase avoids.
 itself or as `og:image` on the article. It is hotlinked, never rehosted, and
 never invented: an item with no declared image keeps this empty and the renderer
 decides what to do about that.
+
+v2 adds four fields, and every one of them is a place a machine could have been
+tempted to write prose. None of them is:
+
+`description` — the summary the SOURCE wrote, cleaned the same way the title is
+and nothing more. Not a generated abstract, not a first paragraph scraped from
+the article, not an LLM's idea of the gist. A source that shipped no summary
+leaves this empty and the card renders without one, which is the honest answer
+and looks fine.
+
+`cluster` — other addresses for the SAME story, gathered when dedup collapsed
+two rows that pointed at different URLs. It is what lets an unfolded card say
+"also covered by" and name them. Bounded and unique, because it is display data
+and an unbounded list of near-identical links is noise, not evidence.
+
+`is_newsletter` / `newsletter_sender` — identity for the newsletter lane. They
+are declared here, and honoured by the renderer and the image enricher, before
+anything fetches mail: the privacy rules that hang off them (never load an
+image, never touch the image cache, never render a link we could not clean) are
+much easier to get right as a property of the model than as a special case
+bolted onto a lane later.
 """
 
 from __future__ import annotations
@@ -48,11 +69,22 @@ class Item:
     is_aggregator: bool = False
     time_is_estimated: bool = False  # True when only an "updated" time existed
     image_url: str = ""  # publisher-declared preview image, hotlinked, may be empty
+    description: str = ""  # the SOURCE's own summary, cleaned. Never generated.
+
+    # Newsletter-lane identity. Set by the newsletter fetcher, honoured by the
+    # renderer (no image, "via <sender>", unlinked headline when no clean URL
+    # could be recovered) and by the image enricher (never fetched, never
+    # cached).
+    is_newsletter: bool = False
+    newsletter_sender: str = ""
 
     # Filled in downstream.
     echo_platforms: set[str] = field(default_factory=set)
     native_categories: set[str] = field(default_factory=set)
     matched_keywords: list[str] = field(default_factory=list)
+    # Alternate addresses for this same story, one dict per merged-away copy:
+    # {"source_name": ..., "url": ...}. Grown only by dedup, bounded there.
+    cluster: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.platform:

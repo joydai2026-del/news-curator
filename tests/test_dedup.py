@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from curator.dedup import dedupe, numbers_in, title_similarity
+from curator.dedup import MAX_CLUSTER_LINKS, dedupe, numbers_in, title_similarity
 from tests.conftest import make_item
 
 
@@ -115,6 +115,97 @@ class TestHelpers:
 
     def test_empty_titles_score_zero(self):
         assert title_similarity("", "anything") == 0.0
+
+
+class TestClusterCollection:
+    """What a merge leaves behind: the other address the story lived at.
+
+    The badge and the cluster are two different claims and the split is the
+    point. "2 sources" is a numeric claim and may only rest on the certain pass.
+    An "also covered by" link is a fact about an address, so it survives a fuzzy
+    merge, and it is also what finally makes the fuzzy pass auditable by eye: a
+    wrong merge is now visible on the page instead of invisible in a log.
+    """
+
+    def test_a_fuzzy_merge_records_the_outlet_it_folded_away(self):
+        items = [
+            make_item("Apple ships a new laptop today", "https://a.com/1",
+                      source_name="Ars", platform="a", weight=2.0),
+            make_item("Apple ships a new laptop today!", "https://b.com/2",
+                      source_name="The Register", platform="b"),
+        ]
+        survivor = dedupe(items)[0]
+        assert survivor.cluster == [{"source_name": "The Register", "url": "https://b.com/2"}]
+
+    def test_the_certain_pass_adds_no_alternate_address(self):
+        # Same canonical URL means there IS no other address. What happened is
+        # that a second source carried the same link, and the "N sources" badge
+        # already reports that, numerically and precisely.
+        items = [
+            make_item("A story", "https://example.com/x", source_name="A", platform="a"),
+            make_item("A story", "https://www.example.com/x?utm_source=t",
+                      source_name="B", platform="b"),
+        ]
+        survivor = dedupe(items)[0]
+        assert survivor.cluster == []
+        assert len(survivor.echo_platforms) == 2
+
+    def test_the_certain_pass_still_carries_an_inherited_cluster_along(self):
+        # A chain of merges must not drop the outlets gathered on the way.
+        carrier = make_item("A story", "https://example.com/x",
+                            source_name="B", platform="b")
+        carrier.cluster = [{"source_name": "Third", "url": "https://third.com/z"}]
+        items = [
+            make_item("A story", "https://example.com/x",
+                      source_name="A", platform="a", weight=2.0),
+            carrier,
+        ]
+        assert dedupe(items)[0].cluster == [
+            {"source_name": "Third", "url": "https://third.com/z"}
+        ]
+
+    def test_the_same_address_is_never_recorded_twice(self):
+        keeper = make_item("Apple ships a new laptop today", "https://a.com/1",
+                           source_name="Ars", weight=3.0)
+        dupes = [
+            make_item("Apple ships a new laptop today!", "https://b.com/2",
+                      source_name="The Register", platform="b"),
+            make_item("Apple ships a new laptop today.", "https://b.com/2",
+                      source_name="The Register", platform="c"),
+        ]
+        survivor = dedupe([keeper, *dupes])[0]
+        assert [entry["url"] for entry in survivor.cluster] == ["https://b.com/2"]
+
+    def test_the_keepers_own_address_is_not_listed_as_an_alternate(self):
+        keeper = make_item("Apple ships a new laptop today", "https://a.com/1", weight=3.0)
+        other = make_item("Apple ships a new laptop today!", "https://b.com/2", platform="b")
+        other.cluster = [{"source_name": "Loop", "url": "https://a.com/1"}]
+        survivor = dedupe([keeper, other])[0]
+        assert all(entry["url"] != "https://a.com/1" for entry in survivor.cluster)
+
+    def test_the_cluster_is_bounded(self):
+        # A wire story syndicated forty times must not put forty links behind
+        # one headline. This is display data, and it has a ceiling.
+        keeper = make_item("Reuters wire story about a thing", "https://a.com/1", weight=5.0)
+        copies = [
+            make_item("Reuters wire story about a thing!", f"https://b{n}.com/2",
+                      source_name=f"Outlet {n}", platform=f"p{n}")
+            for n in range(MAX_CLUSTER_LINKS + 4)
+        ]
+        survivor = dedupe([keeper, *copies])[0]
+        assert len(survivor.cluster) == MAX_CLUSTER_LINKS
+
+    def test_a_survivor_that_merged_nothing_has_an_empty_cluster(self):
+        assert dedupe([make_item("Alone", "https://a.com/1")])[0].cluster == []
+
+    def test_a_description_is_never_inherited_from_a_merged_away_row(self):
+        # A picture is a picture. A blurb is prose one outlet wrote about their
+        # own piece, and showing The Register's sentence under Ars Technica's
+        # headline is the same misattribution the aggregator rule prevents.
+        keeper = make_item("Apple ships a new laptop today", "https://a.com/1", weight=3.0)
+        other = make_item("Apple ships a new laptop today!", "https://b.com/2",
+                          platform="b", description="Someone else's summary.")
+        assert dedupe([keeper, other])[0].description == ""
 
 
 class TestRound2Threshold:

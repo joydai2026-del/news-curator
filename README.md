@@ -12,6 +12,30 @@ costs nothing.
 
 ---
 
+## What the page looks like
+
+A responsive grid of Discover cards. Each card is a picture at a 3:2 crop, the
+headline under it, two lines of the source's own description, and a foot with
+the source, the age, and a "2 sources" marker when more than one platform
+carried the same link.
+
+- **Click a card and it unfolds in place**, spanning the row, showing the full
+  description, the exact publication time, the keywords that matched, any other
+  outlets that covered the same story, and the outbound link. Click again, or
+  press Escape, and the grid closes back up. The toggle is a real button, so
+  the keyboard works.
+- **Category tabs** filter the grid, and each tab keeps its own exact ranking. A
+  story belonging to three categories is **one card cross-tagged with three
+  slugs**, never three copies, which is why the story count on the page is a
+  count of stories.
+- **A search box** filters the visible cards by title and description as you
+  type. It is pure front end: there is no backend to search, and none is wanted.
+- **A story with no picture gets a typographic card** in its category's accent
+  colour rather than a hole in the grid. Hacker News and Show HN items almost
+  never carry an image, and an image that fails to load in your browser lands on
+  the same panel.
+- One column on a phone, light and dark, no web fonts, no framework.
+
 ## What it covers
 
 Six sections, each with its own keyword list **and** its own curated feeds:
@@ -187,6 +211,16 @@ Deduplication runs in two passes: identical canonical URL (certain), then
 similar titles (a guess). Only the certain pass feeds the "N sources" badge, so
 that badge means what it says.
 
+A merge that collapsed two DIFFERENT addresses records the one it folded away,
+and the unfolded card lists them under "also covered by", capped at six. That is
+a fact about an address rather than a claim about corroboration, which is why it
+survives the fuzzy pass when the badge does not. It also makes the fuzzy pass
+auditable by eye for the first time: a wrong merge is now visible on the page
+instead of invisible in a log line. A description is never inherited from a
+merged-away row, because a blurb is prose one outlet wrote about their own
+piece, and printing it under another outlet's headline is the same
+misattribution the aggregator rule exists to prevent.
+
 Two guards keep the fuzzy pass from deleting real stories. Differing numbers
 veto a merge, so `iOS 18.6.1` and `iOS 18.6.2` stay separate. And the threshold
 sits at 0.90 rather than 0.85, because `Apple releases iOS 18.6.1` and `Apple
@@ -199,17 +233,25 @@ shows one extra row, a wrong merge silently deletes a story.
 ## What this promises, and what it does not
 
 **It promises:** every headline is the text its source handed us at build time,
-linked to the address that source gave. Each row also carries the address of the
-preview image its publisher declared, which the page does not yet display.
-Nothing is written, rewritten or summarized by a machine. There is no LLM
-anywhere in this pipeline.
+linked to the address that source gave, and every description is the summary
+that source wrote for its own story. Each card also shows the preview image its
+publisher declared, hotlinked from the publisher. Nothing is written, rewritten
+or summarized by a machine. There is no LLM anywhere in this pipeline.
 
 **It does not promise:**
 
+- That your browser makes no third-party requests. It used to: v1.1 carried the
+  image address and drew nothing. The page now draws the picture, so your
+  browser fetches it from the publisher's server. It is sent with
+  `referrer: no-referrer`, at the document level and per image, so the publisher
+  is not told which page it was fetched from.
 - That a link is still live or still carries that title. Building the page reads
   a linked page only as far as the end of its head, to find the image tag the
   publisher put there for exactly this purpose. No article text is stored or
   summarized, so a link may have moved, changed or died since the build.
+- That an "also covered by" list is complete. It names the outlets the
+  deduplicator folded into this story on this run, which is not the same as
+  every outlet that covered it.
 - That anything in a linked article is true. No claim is checked.
 - That a keyword match means the story is genuinely *about* your topic. Matching
   proves a phrase appears in a headline. That is a weaker claim, it is checkable
@@ -276,15 +318,23 @@ Images are **hotlinked, never re-hosted**. Nothing is downloaded, resized or
 re-encoded, so the publisher keeps their CDN and can change or withdraw the image
 at any time.
 
-The renderer currently carries the address as a `data-image` attribute on each
-row rather than drawing an `<img>`. The layout that uses it is a separate
-decision; the data is there for whatever it turns out to be. A row whose
-publisher declared no image carries no attribute, so a layout can tell "none
-declared" from "declared as nothing".
+The card draws it as a real `<img>`, lazily, with `referrerpolicy="no-referrer"`
+and a document-level `<meta name="referrer" content="no-referrer">`. The address
+also stays on the article as a `data-image` attribute, which is how the deploy
+workflow counts image coverage. A card whose publisher declared no image carries
+no attribute at all, so "none declared" is still distinguishable from "declared
+as nothing", and that card renders the typographic panel instead. So does one
+whose image fails to load in your browser: the panel is the layer underneath
+every image, not a second code path that could rot.
+
+Newsletter items never load an image and never enter the cache, because a
+newsletter URL can carry a subscriber identifier. That rule is enforced in the
+enricher as well as in the pipeline, on purpose: a privacy rule living in one
+layer is one refactor away from being gone.
 
 ---
 
-## Layout
+## Repository layout
 
 ```
 topics.yaml          the file you edit: six categories, keywords + curated feeds
@@ -297,12 +347,12 @@ curator/
   dedup.py           canonical URL, then title similarity
   rank.py            the five signals
   images.py          og:image parsing, and the committed cache
-  render.py          the static page
+  render.py          the static page: cards, tabs, search, unfold
   pipeline.py        CLI entry point
   fetchers/          hn.py, rss.py, reddit.py
 scripts/probe_sources.py   verify every source yourself
 docs/plans/                the v1 spec, its adversarial review, and the v1.1 notes
-tests/                     262 tests, network blocked in conftest
+tests/                     the suite, network blocked in conftest
 ```
 
 Three dependencies, all pinned: `requests`, `feedparser`, `PyYAML`. A tool that

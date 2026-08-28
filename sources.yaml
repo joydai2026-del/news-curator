@@ -254,3 +254,26 @@ reddit:
     - MachineLearning
     - artificial
     - LocalLLaMA
+
+# ---------------------------------------------------------------------------
+# The newsletter lane. Reads a dedicated newsletter-only Gmail account through
+# a separate, secrets-scoped Actions job and renders the stories as their own
+# tab. Everything about the account (its address included) lives OUTSIDE this
+# repository: the three OAuth values are GitHub Actions secrets, and the lane
+# is dark for any fork that has not wired its own.
+#
+# `enabled: true` here is only half the switch. The lane also requires the
+# three GMAIL_* secrets at runtime, so a fork with this file unchanged still
+# builds a page with no newsletter tab, no extra dependency, and no failure.
+#
+# `adapters` names the per-sender allowlist (curator/newsletter/adapters.py).
+# A sender without an adapter is counted and reported, never parsed blind.
+# ---------------------------------------------------------------------------
+newsletter:
+  enabled: true
+  adapters: [tldr, therundown, bensbites, theneuron, milkroad]
+  max_items: 50        # the lane's own cap; category caps are untouched
+  max_age_hours: 48    # same retention window as everything else
+  max_messages: 30     # messages fetched per hourly run
+  overlap_hours: 6     # poll window overlaps the committed watermark
+  request_timeout: 20

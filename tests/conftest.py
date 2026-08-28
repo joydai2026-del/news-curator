@@ -21,6 +21,9 @@ def make_item(
     weight: float = 1.0,
     score: int | None = None,
     aggregator: bool = False,
+    description: str = "",
+    newsletter: bool = False,
+    sender: str = "",
 ) -> Item:
     return Item(
         title=title,
@@ -33,7 +36,26 @@ def make_item(
         source_weight=weight,
         score=score,
         is_aggregator=aggregator,
+        description=description,
+        is_newsletter=newsletter,
+        newsletter_sender=sender,
     )
+
+
+def make_newsletter_item(title: str, url: str = "", *, sender: str = "Import AI", **kw) -> Item:
+    """A newsletter item, including the case the privacy rule exists for.
+
+    An EMPTY url is not a broken fixture. It is the sanitizer reporting that it
+    could not recover a clean publisher address from a link carrying a
+    subscriber identifier, and the renderer has to show the story anyway,
+    without a link. `canonical_url` is still a stable identity, prefixed so it
+    can never collide with a real address.
+    """
+    item = make_item(title, url or "https://example.invalid/placeholder", newsletter=True,
+                     sender=sender, **kw)
+    item.url = url
+    item.canonical_url = "newsletter:" + (url or title)
+    return item
 
 
 @pytest.fixture

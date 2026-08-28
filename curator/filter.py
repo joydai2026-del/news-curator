@@ -110,6 +110,10 @@ def assign_categories(items: list[Item], categories: list[Category]) -> dict[str
             clone.matched_keywords = hits
             clone.echo_platforms = set(item.echo_platforms)
             clone.native_categories = set(item.native_categories)
+            # Same reason as the two sets above: `copy.copy` shares mutable
+            # fields, and a shared list is one downstream mutation away from
+            # cross-category contamination.
+            clone.cluster = list(item.cluster)
             buckets[category.name].append(clone)
     return buckets
 
