@@ -7,6 +7,9 @@ browser (double click, or `open <file>`). Nothing is deployed and no pipeline fi
 |---|---|
 | `a-pressreader.html` | A. PressReader faithful |
 | `b-broadsheet.html` | B. Broadsheet |
+| `b2-broadsheet-premium.html` | B2. Broadsheet premium |
+| `b3-ranked-digest.html` | B3. Ranked digest, text first |
+| `b4-bento-grid.html` | B4. Bento grid |
 | `c-evolved-minimal.html` | C. Evolved minimal |
 
 ## A. PressReader faithful
@@ -48,6 +51,26 @@ digg's tech page. A slim "Latest from" rail groups the same stories by source on
 each category becomes a full-width panel in a scroll-snap carousel: swipe or tap a tab, and the two
 stay in sync. Where the same link arrived from two feeds it appears once with a real "2 sources" count,
 counted from the snapshot, never estimated. Optimizes for reading volume fast on a phone.
+
+## B4. Bento grid (follow-up: add color, stop the endless scroll)
+
+B3's typography rebuilt as a Swiss editorial grid. Every category is one bordered block of boxed cells
+with visible 1px hairlines: a small label cell, one large lead cell, and six smaller text cells, each
+holding a rank number, a headline, one line of summary, and the source with a relative time. Each
+category gets its own muted tint from one family (sand, mist blue, blush, sage, lavender, warm gray,
+sky, clay), used only on the label cell and the lead cell so the blocks are told apart by color without
+anything getting loud. Dark mode turns those tints into very dark desaturated versions on near-black.
+The block stops at seven stories: the last cell reads "+N more" and expands that block in place to the
+full top 20, then collapses again, so the default page is bounded instead of an endless feed. The top
+bar adds a Today | Yesterday control that filters every block by day, and a grid / list toggle that
+switches the whole page between this bento view and B3's numbered list. Cells carry a content-type
+glyph only where the number is real: Hacker News items show the comment count Hacker News itself
+reported, and newsletter items would show an envelope. On the phone each category is a full-width
+panel in the same swipe carousel as B3, cells stacked in one column and still bounded.
+
+Two notes about the day filter, kept honest: the snapshot is a 48-hour window, and the six tech topic
+feeds arrive with no publish time at all. Stories without a date are never hidden by the day filter,
+and the label cell says so ("30 stories · these feeds carry no publish time").
 
 ## C. Evolved minimal
 
