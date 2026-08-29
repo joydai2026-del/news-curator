@@ -104,6 +104,12 @@ jobs:
           python -m curator.pipeline --root . --out ./site --verbose
           --newsletter-artifact ./newsletter_artifact.json
 
+      - name: Copy static pages
+        # Hand-authored pages that ship alongside the generated index
+        # (currently the privacy page the OAuth consent screen links to).
+        run: |
+          if [ -d static ]; then cp -R static/. site/; fi
+
       - name: Verify the rendered page has real content
         # A green exit code and an existing file do not prove a page is any
         # good: a blank render passes both. Assert on the output itself.
