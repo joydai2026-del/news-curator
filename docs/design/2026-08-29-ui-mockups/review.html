@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News Curator UI redesign: 3 directions for review</title>
+<style>
+:root { --bg:#fafafa; --fg:#1a1a1a; --line:#e3e3e3; --head:#111; --muted:#777;
+        --ok:#1a7f37; --part:#b58900; --no:#c0392b; --nobg:#fdecea; --partbg:#fdf6e3; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font:16px/1.6 -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Noto Sans SC", sans-serif; }
+.wrap { max-width:1100px; margin:0 auto; padding:32px 20px 80px; }
+h1 { font-size:28px; color:var(--head); margin:0 0 4px; }
+.sub { color:var(--muted); margin:0 0 28px; }
+figure { margin:0 0 12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; }
+figure img { max-width:100%; border:1px solid var(--line); border-radius:8px; display:block; }
+figcaption { padding:10px 4px 0; }
+figcaption b { font-size:19px; }
+.meta { color:var(--muted); font-size:14px; margin-top:4px; }
+.open-link { display:inline-block; margin:10px 0 2px; padding:8px 14px; background:#111; color:#fff;
+             border-radius:8px; text-decoration:none; font-size:14px; }
+.notes { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin:0 0 36px; font-size:14.5px; }
+.notes ul { margin:6px 0; padding-left:20px; }
+.tldr { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 20px; margin-bottom:32px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>News Curator redesign: three directions</h1>
+<p class="sub">Built 2026-08-29 with real stories fetched live this morning (general news from CNN, Fox, BBC, Guardian, CNBC, CBS; trending from Hacker News + Buzzing; Chinese lane from cnBeta, Solidot, RFI, CNA; your 179 current tech stories). Local only, nothing deployed.</p>
+
+<div class="tldr">
+Each screenshot below is the English desktop view. Every direction also has a working interactive version: click "Open interactive" to try the EN / 中文 toggle, saved searches, category navigation, and dark mode. Pick keep / modify / delete on each design and add a sentence of feedback, then export at the bottom.
+</div>
+
+<figure data-design="a-pressreader" data-label="A · PressReader faithful">
+  <img src="shot-a-pressreader.png" alt="Direction A: PressReader faithful mockup screenshot">
+  <figcaption>
+    <b>A · PressReader faithful</b>
+    <div class="meta">Sticky left sidebar (language toggle, sections with icons, saved searches), per-section colored rules, 3-column mixed grid with hero image cards. Closest to the reference you liked.</div>
+    <a class="open-link" href="a-pressreader.html" target="_blank">Open interactive version</a>
+  </figcaption>
+</figure>
+
+<figure data-design="b-broadsheet" data-label="B · Broadsheet">
+  <img src="shot-b-broadsheet.png" alt="Direction B: Broadsheet newspaper mockup screenshot">
+  <figcaption>
+    <b>B · Broadsheet</b>
+    <div class="meta">Digital newspaper front page: masthead, category color bands, one large lead story per section with a ranked headline list beside it, serif headlines. Text-only lead stories (like Hacker News items) use a compact text lead with a 2x2 story grid under it.</div>
+    <a class="open-link" href="b-broadsheet.html" target="_blank">Open interactive version</a>
+  </figcaption>
+</figure>
+
+<figure data-design="c-evolved-minimal" data-label="C · Evolved minimal">
+  <img src="shot-c-evolved-minimal.png" alt="Direction C: Evolved minimal mockup screenshot">
+  <figcaption>
+    <b>C · Evolved minimal</b>
+    <div class="meta">Your current Apple-minimal card style kept, adding the left rail with story counts, section breaks, image-forward cards, and the language toggle. The lowest-risk evolution of what is live today.</div>
+    <a class="open-link" href="c-evolved-minimal.html" target="_blank">Open interactive version</a>
+  </figcaption>
+</figure>
+
+<div class="notes">
+  <b>Shared notes (all three)</b>
+  <ul>
+    <li>All story content is real, fetched this morning. Nothing invented.</li>
+    <li>The EN / 中文 toggle swaps UI labels and the story set (Chinese sources in Chinese mode). Trending shows bilingual titles from Buzzing.</li>
+    <li>Newsletter cards never show images (privacy rule kept). No newsletter stories were live at fetch time, so that section shows its real empty state.</li>
+    <li>Saved searches live in your browser only (per device). Syncing across Mac and iPhone would need a small backend; say so if you want that.</li>
+    <li>Light and dark mode both work; screenshots show light.</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>
+<!-- ============================================================================
+     Design review layer (locked by JJ 2026-08-04, general convention, do not re-ask).
+
+     This is NOT the same thing as report-review-layer.html. Do not mix them up:
+       · report-review-layer  -> documents and reports. Comment paragraph by paragraph,
+                                 eight tone tags (Cut / Rewrite / Too long / ...).
+       · design-review-layer  -> visual design work. **Three buttons per version:
+                                 Keep / Change / Cut**, plus one line of notes.
+
+     JJ's words: "For visual design, the review HTML has to be different from the document one.
+     I just need three buttons: keep this version / modify / delete. I pick first, then give one
+     piece of feedback underneath. I need this on EVERY design, so I can give you feedback one
+     by one."
+
+     WARNING, learned the hard way on 2026-08-04, read this: **always hand her a local file
+     (`open <path>`) for any page carrying this layer. Never publish it as an Artifact.**
+     Artifacts run in a sandboxed cross-origin iframe, so the author cannot read its localStorage,
+     and the sandbox itself blocks downloads and clipboard access. "Export feedback" silently does
+     nothing and an entire review round is lost. This layer now also renders the result as
+     selectable text on the page, so even if the download is blocked it can be copied by hand.
+
+     Usage: wrap every design image you want reviewed in
+     <figure data-design="unique-id" data-label="human readable name">.
+     This layer attaches the buttons and the note field to each one automatically. Choices and
+     text persist in localStorage (closing the page does not lose them). "Export feedback"
+     bottom-right copies to the clipboard and downloads markdown in one click.
+
+     Translated to English 2026-08-06 per JJ's standing rule: English by default everywhere
+     unless she explicitly asks for Chinese. Chinese original kept at
+     design-review-layer.html.zh-bak-2026-08-06.
+============================================================================ -->
+<style>
+.dr-bar{display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap}
+.dr-bar button{flex:1 1 0;min-width:74px;font:600 14px/1 -apple-system,"PingFang SC",sans-serif;
+  padding:11px 8px;border-radius:8px;border:1px solid var(--line,#ddd);background:transparent;
+  color:var(--dim,#666);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.dr-bar button:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.dr-bar button[aria-pressed=true]{color:#fff;border-color:transparent}
+.dr-bar button[data-v=keep][aria-pressed=true]{background:#2e7d46}
+.dr-bar button[data-v=modify][aria-pressed=true]{background:#b8860b}
+.dr-bar button[data-v=delete][aria-pressed=true]{background:#b23a2f}
+.dr-note{width:100%;margin:6px 0 0;padding:9px 11px;border-radius:8px;font:15px/1.6 -apple-system,"PingFang SC",sans-serif;
+  border:1px solid var(--line,#ddd);background:var(--paper,#fff);color:var(--ink,#111);resize:vertical;min-height:42px}
+.dr-note::placeholder{color:var(--dim,#999)}
+figure[data-design]{position:relative}
+figure[data-design].dr-done>img{outline:3px solid var(--dr,transparent);outline-offset:-3px}
+#dr-fab{position:fixed;right:14px;bottom:14px;z-index:99;display:flex;gap:8px;align-items:center}
+#dr-fab button{font:600 15px/1 -apple-system,"PingFang SC",sans-serif;padding:13px 16px;border-radius:11px;
+  border:0;background:#191b1f;color:#fff;box-shadow:0 3px 14px rgba(0,0,0,.28);cursor:pointer}
+#dr-count{font:600 13px/1 ui-monospace,Menlo,monospace;background:#fff;color:#191b1f;border-radius:9px;
+  padding:9px 11px;box-shadow:0 3px 14px rgba(0,0,0,.2)}
+@media print{.dr-bar,#dr-fab{display:none}}
+</style>
+<div id="dr-fab"><span id="dr-count"></span><button type="button" id="dr-export">Export feedback</button></div>
+<script>
+(function(){
+  var KEY = "design-review:" + location.pathname;
+  var S = {};
+  try { S = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch(e) { S = {}; }
+  var COLOR = {keep:"#2e7d46", modify:"#b8860b", "delete":"#b23a2f"};
+  var LABEL = {keep:"Keep", modify:"Change", "delete":"Cut"};
+
+  function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} count(); }
+  function count(){
+    var n = Object.keys(S).filter(function(k){ return S[k] && S[k].v; }).length;
+    var el = document.getElementById("dr-count");
+    if (el) el.textContent = n + "/" + document.querySelectorAll("figure[data-design]").length;
+  }
+
+  document.querySelectorAll("figure[data-design]").forEach(function(fig){
+    var id = fig.getAttribute("data-design");
+    var st = S[id] || (S[id] = {v:"", note:""});
+
+    var bar = document.createElement("div");
+    bar.className = "dr-bar";
+    ["keep","modify","delete"].forEach(function(v){
+      var b = document.createElement("button");
+      b.type = "button"; b.dataset.v = v; b.textContent = LABEL[v];
+      b.setAttribute("aria-pressed", st.v === v ? "true" : "false");
+      b.addEventListener("click", function(){
+        st.v = (st.v === v) ? "" : v;              // clicking the same button again clears it
+        bar.querySelectorAll("button").forEach(function(x){
+          x.setAttribute("aria-pressed", x.dataset.v === st.v ? "true" : "false");
+        });
+        fig.classList.toggle("dr-done", !!st.v);
+        fig.style.setProperty("--dr", COLOR[st.v] || "transparent");
+        save();
+      });
+      bar.appendChild(b);
+    });
+    fig.appendChild(bar);
+
+    var ta = document.createElement("textarea");
+    ta.className = "dr-note"; ta.rows = 1; ta.value = st.note || "";
+    ta.placeholder = "What you want to say about this version (optional)";
+    ta.addEventListener("input", function(){ st.note = ta.value; save(); });
+    fig.appendChild(ta);
+
+    if (st.v){ fig.classList.add("dr-done"); fig.style.setProperty("--dr", COLOR[st.v]); }
+  });
+
+  document.getElementById("dr-export").addEventListener("click", function(){
+    var lines = ["# Design review feedback", "", "> " + document.title + "  ·  " + new Date().toLocaleString(), ""];
+    var any = false;
+    document.querySelectorAll("figure[data-design]").forEach(function(fig){
+      var id = fig.getAttribute("data-design");
+      var st = S[id] || {};
+      if (!st.v && !(st.note||"").trim()) return;
+      any = true;
+      lines.push("## " + (fig.getAttribute("data-label") || id));
+      lines.push("- Verdict: **" + (LABEL[st.v] || "not chosen") + "**");
+      if ((st.note||"").trim()) lines.push("- Notes: " + st.note.trim());
+      lines.push("");
+    });
+    if (!any) lines.push("(nothing selected yet)");
+    var md = lines.join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(md).catch(function(){});
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([md], {type:"text/markdown"}));
+    a.download = "design-review-feedback.md"; a.click();
+    // WARNING: downloads and clipboard are silently blocked inside a sandboxed iframe, so the
+    // result MUST also be rendered on the page for manual copying. On 2026-08-04 an entire round
+    // of feedback was lost because this only relied on the download.
+    var box = document.getElementById("dr-out");
+    if (!box) {
+      box = document.createElement("textarea");
+      box.id = "dr-out"; box.readOnly = true;
+      box.style.cssText = "width:100%;min-height:220px;margin:14px 0 0;padding:12px;border-radius:9px;"
+        + "border:1px solid var(--line,#ddd);font:13px/1.6 ui-monospace,Menlo,monospace;"
+        + "background:var(--card,#fff);color:var(--ink,#111)";
+      (document.querySelector(".wrap") || document.body).appendChild(box);
+    }
+    box.value = md;
+    box.scrollIntoView({behavior:"smooth", block:"center"});
+    box.focus(); box.select();
+    var b = document.getElementById("dr-export"), t = b.textContent;
+    b.textContent = "Ready, see bottom of page"; setTimeout(function(){ b.textContent = t; }, 1800);
+  });
+
+  count();
+})();
+</script>
