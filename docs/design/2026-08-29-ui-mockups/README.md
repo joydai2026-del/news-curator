@@ -10,6 +10,7 @@ browser (double click, or `open <file>`). Nothing is deployed and no pipeline fi
 | `b2-broadsheet-premium.html` | B2. Broadsheet premium |
 | `b3-ranked-digest.html` | B3. Ranked digest, text first |
 | `b4-bento-grid.html` | B4. Bento grid |
+| `b5-glass-bento.html` | B5. Glass bento with a left rail |
 | `c-evolved-minimal.html` | C. Evolved minimal |
 
 ## A. PressReader faithful
@@ -71,6 +72,32 @@ panel in the same swipe carousel as B3, cells stacked in one column and still bo
 Two notes about the day filter, kept honest: the snapshot is a 48-hour window, and the six tech topic
 feeds arrive with no publish time at all. Stories without a date are never hidden by the day filter,
 and the label cell says so ("30 stories · these feeds carry no publish time").
+
+## B5. Glass bento with a left rail (follow-up: color, pictures, liquid glass)
+
+B4's grid plus the three things the particle.news reference made concrete. A sticky left sidebar holds
+the wordmark, the EN / 中文 toggle, every section with its muted dot and a live story count, and the
+saved searches; it highlights whichever block you are reading and scrolls to a block when clicked. It
+folds away below 940 pixels, where a compact masthead and the horizontal tab bar take over.
+
+Pictures return at low dose. Only the lead cell of a block carries one, taken from the picture the feed
+itself supplied, cropped to fill its cell and never placed under a colored gradient overlay. Where a
+block's top story arrived without a picture, the lead is the highest ranked story in that block that did
+have one, and the rank numbers stay the real ranks. In this snapshot that works out to **eight photos on
+the whole page**: CNN, BBC, the Guardian, Fox, RFI and the tech feeds ship images, while CNBC, CBS,
+Hacker News, Buzzing, cnBeta, Solidot and CNA ship none, so those blocks keep B4's tinted typographic
+lead. Newsletter cells never load an image under any circumstances.
+
+The chrome is liquid glass: the sticky top bar, the sidebar, the Today | Yesterday and grid / list
+capsules and the "+N more" buttons are translucent frosted panels (`backdrop-filter: blur(20px)
+saturate(1.8)`, a hairline inner border, a soft wide shadow, 16 to 20 pixel corners) floating over a
+fixed page wash built from the same category pastels at four to six percent. The story cells stay crisp
+hairline boxes, because glass on every cell turns the page to mush. Browsers without `backdrop-filter`
+fall back to a solid translucent panel. Dark mode keeps true black with the tints as very dark
+desaturated versions.
+
+Images are hotlinked from the publishers with lazy loading, as in directions A, B and C. If a publisher
+blocks hotlinking the cell drops back to the tinted typographic lead rather than showing a broken box.
 
 ## C. Evolved minimal
 
