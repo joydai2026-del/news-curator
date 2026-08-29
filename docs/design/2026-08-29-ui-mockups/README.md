@@ -33,6 +33,22 @@ anywhere. This optimizes for editorial authority and information density. It fit
 per screen and reads like a newspaper, which is also its risk: it is the furthest from the current
 site and the most sensitive to short or missing summaries.
 
+## B2. Broadsheet premium (follow-up to JJ's pick of B)
+
+B's structure with the coloring removed. No colored bands: section headers are quiet uppercase labels
+over a single hairline, the palette is near-black on white with three grays and one restrained blue,
+headlines are set in a system serif, and dark mode is true black. Optimizes for looking expensive and
+calm rather than loud. Same lead-plus-ranked-list shape as B.
+
+## B3. Ranked digest, text first (follow-up to the digg.com/tech note)
+
+B2's styling with pictures taken out of the reading list. Each category is a numbered list of up to 20
+stories: headline, one line of summary, then source, day heading and relative time, in the shape of
+digg's tech page. A slim "Latest from" rail groups the same stories by source on desktop. On the phone
+each category becomes a full-width panel in a scroll-snap carousel: swipe or tap a tab, and the two
+stay in sync. Where the same link arrived from two feeds it appears once with a real "2 sources" count,
+counted from the snapshot, never estimated. Optimizes for reading volume fast on a phone.
+
 ## C. Evolved minimal
 
 The current site's Apple style card aesthetic kept intact, with the missing structure added. A left
