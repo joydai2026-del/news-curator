@@ -6,7 +6,7 @@
    "image": "https://1endpoint.dev/_enfyra/nuxt-seo/og?path=%2F",
    "outcome": "ok",
    "checked_at": "2026-08-30T11:20:37+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://a11ce.com/llama-3.1-405b.html": {
    "image": "https://a11ce.com/og/llama-3.1-405b.png",
@@ -18,25 +18,31 @@
    "image": "https://live-production.wcms.abc-cdn.net.au/228704f43c5a1c7837340c945eedf7b2?impolicy=wcms_watermark_news&cropH=1687&cropW=3000&xPos=0&yPos=88&width=862&height=485&imformat=generic",
    "outcome": "ok",
    "checked_at": "2026-08-30T11:20:37+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://agenthotline.ai/": {
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-30T07:24:34+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://aimujib.com/": {
    "image": "https://aimujib.com/og-share.png",
    "outcome": "ok",
    "checked_at": "2026-08-30T01:02:43+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://aipass.ai/": {
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-30T07:24:34+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
+  },
+  "https://arxiv.org/abs/2608.14614": {
+   "image": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png",
+   "outcome": "ok",
+   "checked_at": "2026-08-30T14:22:12+00:00",
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://arxiv.org/abs/2608.25880": {
    "image": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png",
@@ -54,7 +60,7 @@
    "image": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png",
    "outcome": "ok",
    "checked_at": "2026-08-30T05:23:35+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://arxiv.org/abs/2608.27141": {
    "image": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png",
@@ -84,7 +90,7 @@
    "image": "https://ichef.bbci.co.uk/news/1024/branded_news/787d/live/19ed92c0-a305-11f1-a291-b542ee92de7c.png",
    "outcome": "ok",
    "checked_at": "2026-08-29T13:20:41+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://bilanc.co/blog/llms-as-feature-extractors-for-classical-ml": {
    "image": "https://bilanc.co/og-image.png",
@@ -102,19 +108,19 @@
    "image": "https://imgproxy.divecdn.com/TROl9mmg3iFkea1T5VegQ9KyXxJmyJUORsv-x3faI9o/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNDk2MTY2MTgyLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-29T17:20:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://biopharmadive.com/news/biotech-charts-biopharma-xbi-deals-mergers-ipos/828794": {
    "image": "https://imgproxy.divecdn.com/y_Ojn4iqdSLCDGgXs4TNOd7pUhCJfU4S_UsDW9E4lMg/g:nowe:0:217/c:4928:2784/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMjgxODMyMjUyLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-29T17:20:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://biopharmadive.com/news/fda-covid-vaccines-moderna-generate-profound-bixlenvo/828929": {
    "image": "https://imgproxy.divecdn.com/EK5xKj0ydykvmwFmBqsauREtdhrHAUsAiyI6JgDkO1s/g:nowe:0:0/c:1207:682/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNDgzOTIxNzkzLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-29T17:20:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://biopharmadive.com/news/fda-priovant-pfizer-lisraya-brepocitinib-approved/829021": {
    "image": "https://imgproxy.divecdn.com/CIOIJLkQH0ZuYDOReCK9zdAxjPQrqXz9F_y8r-gway8/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9saXNyYXlhLWJvdHRsZS5wbmc=.webp",
@@ -144,7 +150,7 @@
    "image": "https://static.biospace.com/dims4/default/805c4e5/2147483647/strip/true/crop/622x350+1+0/resize/1440x810!/quality/90/?url=https%3A%2F%2Fk1-prod-biospace.s3.us-east-2.amazonaws.com%2Fbrightspot%2Flegacy%2FBioSpace-Assets%2FB273FC9F-322C-4B0B-B56C-61B3A1861B20.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-29T21:21:01+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://bitcoinmagazine.com/markets/bitcoin-shrugs-off-fed-chair-comments": {
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/08/Pics-4.jpg",
@@ -156,7 +162,7 @@
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/08/Pics-6.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-28T22:25:15+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://bitcoinmagazine.com/news/capital-b-raises-money-for-bitcoin": {
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/08/Capital-B-Raises-E21M-From-Adam-Back-and-TOBAM-To-Buy-More-BTC.jpg",
@@ -200,6 +206,12 @@
    "checked_at": "2026-08-28T16:50:24+00:00",
    "seen_at": "2026-08-29T20:22:42+00:00"
   },
+  "https://capytoolkit.com/blog/developer-tools/running-llm-browser-verifying-webgpu-model-hashes-local-inference": {
+   "image": "https://cdn.capytoolkit.com/img/2026/08/running-llm-browser-verifying-webgpu-model-hashes-local-inference.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-08-30T14:22:12+00:00",
+   "seen_at": "2026-08-30T14:22:12+00:00"
+  },
   "https://claude.com/blog/how-warp-builds-self-improving-agents-on-claude": {
    "image": "https://cdn.prod.website-files.com/68a44d4040f98a4adf2207b6/6a8f1a88683b6dcd40c0dbc2_og_how-warp-builds-self-improving-agents-on-claude.jpg",
    "outcome": "ok",
@@ -222,7 +234,7 @@
    "image": "https://cnews24.ru/uploads/51a/51a4593a4e7d4d86d3ca43738b6165224954bfc6.png",
    "outcome": "ok",
    "checked_at": "2026-08-29T17:20:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://cureffi.org/2025/03/11/base-editing": {
    "image": null,
@@ -252,7 +264,7 @@
    "image": "https://devblogs.microsoft.com/all-things-azure/wp-content/uploads/sites/83/2026/08/article-feature.webp",
    "outcome": "ok",
    "checked_at": "2026-08-30T11:20:37+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://docs.stripe.com/llms.txt": {
    "image": null,
@@ -264,7 +276,7 @@
    "image": "https://www.drugdiscoverytrends.com/wp-content/uploads/2026/08/maviret.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-28T17:01:57+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://drugdiscoverytrends.com/as-the-dream-of-the-autonomous-clinical-trial-dawns-agent-supervision-is-todays-human-job": {
    "image": "https://www.drugdiscoverytrends.com/wp-content/uploads/2026/08/0ed6b5bf-f0d7-4a72-ba89-93118b9f578e.png",
@@ -282,7 +294,7 @@
    "image": "https://embracethered.com/blog/images/2026/claude-automode/claude-auto-mode-rce.png",
    "outcome": "ok",
    "checked_at": "2026-08-30T06:35:26+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://europeanspaceflight.com/esa-awards-e544-million-in-european-launcher-challenge-contracts": {
    "image": "https://europeanspaceflight.com/wp-content/uploads/2026/08/ESA-Awards-544-Million-Euros-in-European-Launcher-Challenge-Contracts.webp",
@@ -294,7 +306,7 @@
    "image": "https://europeanspaceflight.com/wp-content/uploads/2026/08/Orbexs-Sutherland-Spaceport-Assets-Sold-to-Scottish-Development-Agency.webp",
    "outcome": "ok",
    "checked_at": "2026-08-28T16:50:24+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://exploring-better-ways.bellroy.com/what-we-optimise-for-when-we-reach-for-an-llm.html": {
    "image": null,
@@ -348,7 +360,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2022/11/Getty_1368735831_antibody-scaled.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-28T20:13:52+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://genengnews.com/topics/omics/ucsf-qbi-awarded-46m-to-translate-landmark-autism-map-into-precision-therapies": {
    "image": "https://www.genengnews.com/wp-content/uploads/2019/06/Jun13_2019_Getty_165801453_AutismPuzzleBoy_cropped.jpg",
@@ -360,7 +372,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/08/Low-Res_DS_Kniegelenke_Abb_v1.png.jpeg",
    "outcome": "ok",
    "checked_at": "2026-08-28T20:13:52+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://genengnews.com/topics/translational-medicine/genetic-toolkit-isolates-neuron-types-in-drosophila-brain": {
    "image": "https://www.genengnews.com/wp-content/uploads/2021/09/GettyImages-1024014660-scaled.jpg",
@@ -378,19 +390,19 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2025/06/GettyImages-2196144747-scaled.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-28T20:13:52+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://github.com/AniketWathore/bolnee-chat": {
    "image": "https://opengraph.githubassets.com/63d1cbc62b669b110c444f130f17e654366c740eb4d115901845824c2bc0dbb4/AniketWathore/bolnee-chat",
    "outcome": "ok",
    "checked_at": "2026-08-30T11:20:37+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://github.com/Clawdlinux/agentgate": {
    "image": "https://opengraph.githubassets.com/12f0db5473aa00bbc7195e74c4b4cfe47532b3f691c166af27d3748d3b4ef4c9/Clawdlinux/agentgate",
    "outcome": "ok",
    "checked_at": "2026-08-30T07:24:34+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://github.com/Framework-Drift/governed-pass": {
    "image": "https://opengraph.githubassets.com/0516a6b114eb36f234216db02c213246335d71ce8090957bffd8233072731128/Framework-Drift/governed-pass",
@@ -444,13 +456,13 @@
    "image": "https://opengraph.githubassets.com/58ddbad179048771dc8b97d6c7b98f06e4d54ac6da613dd74c3408bc9773c4f0/abhayKashyap03/usage-notch",
    "outcome": "ok",
    "checked_at": "2026-08-30T05:23:35+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://github.com/anthropics/claude-code/issues/66504": {
    "image": "https://opengraph.githubassets.com/2f65f288ecef9b7abbbc45a8b013c193607a99804c62fd8348a82563f639ca95/anthropics/claude-code/issues/66504",
    "outcome": "ok",
    "checked_at": "2026-08-30T13:21:19+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://github.com/argus-testing/argus": {
    "image": "https://opengraph.githubassets.com/2d9ee29298750e453692a07afb3915d37dd380e74e093d009ed2f1407601c818/argus-testing/argus",
@@ -546,7 +558,7 @@
    "image": "https://opengraph.githubassets.com/64aeb70c0e32941b2137074de5b8413bbcd098dabe1aa815ce52882be0be1d12/veryfront/veryfront-code",
    "outcome": "ok",
    "checked_at": "2026-08-30T05:23:35+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://grith.ai/blog/grith-is-live": {
    "image": "https://grith.ai/og-image.png",
@@ -570,7 +582,7 @@
    "image": "https://hbr.org/resources/images/article_assets/2026/05/May26_06_OscarDuarte.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-29T22:21:30+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://ianbarber.blog/2026/08/11/lsps-for-llms": {
    "image": "https://s0.wp.com/_si/?t=eyJpbWciOiJodHRwczpcL1wvaTAud3AuY29tXC9pYW5iYXJiZXIuYmxvZ1wvd3AtY29udGVudFwvdXBsb2Fkc1wvMjAyNFwvMTFcL2Nyb3BwZWQtbG9nby1yZW1vdmViZy1wcmV2aWV3LnBuZz9maXQ9NDI1JTJDNDI1JnNzbD0xIiwidHh0IjoiSWFuXHUyMDE5cyBCbG9nIiwidGVtcGxhdGUiOiJlZGdlIiwiZm9udCI6IiIsImJsb2dfaWQiOjIzODYzMzU2NX0.fq3U-V5MT1pTFs8OrXpT6sb83b9JfIPBwAcqO8AHRQQMQ",
@@ -636,7 +648,7 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-30T10:22:32+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://lists.debian.org/debian-vote/2026/08/msg00360.html": {
    "image": null,
@@ -660,13 +672,13 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-30T08:28:33+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://makralabs.org/about": {
    "image": "https://www.makralabs.org/opengraph-image.png",
    "outcome": "ok",
    "checked_at": "2026-08-29T22:21:30+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://markwilliamscook.substack.com/p/how-catstxt-showed-llmstxt-evidence": {
    "image": null,
@@ -696,7 +708,7 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/08/phishing.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-28T23:19:21+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://medcitynews.com/2026/08/precision-medicine-transformed-oncology-its-time-to-do-the-same-for-sepsis": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2021/06/GettyImages-500048664.jpg",
@@ -714,7 +726,13 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/08/lisraya-bottle_resized.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-28T22:00:26+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
+  },
+  "https://medcitynews.com/2026/08/the-missing-piece-in-lowering-the-cost-of-care-predictability": {
+   "image": "https://medcitynews.com/wp-content/uploads/sites/7/2021/05/GettyImages-861132240.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-08-30T14:22:12+00:00",
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://medcitynews.com/2026/08/the-silent-epidemic-why-diabetic-foot-ulcers-have-been-overlooked-for-three-decades": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2019/07/GettyImages-873585844.jpg",
@@ -744,13 +762,13 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-30T12:31:36+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://nasaspaceflight.com/2026/08/esa-european-launcher-challenge-contracts": {
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2026/08/NSF-2026-08-29-11-53-55-612.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-29T11:19:37+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://nasaspaceflight.com/2026/08/iss-roundup-082626": {
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2026/08/55488983002_c62211a050_o-525x350.jpg",
@@ -762,7 +780,7 @@
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2026/08/IMG_0596.jpeg",
    "outcome": "ok",
    "checked_at": "2026-08-29T20:22:42+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://nature.com/articles/d41586-026-02506-4": {
    "image": "https://media.nature.com/lw1200/magazine-assets/d41586-026-02506-4/d41586-026-02506-4_53116512.jpg",
@@ -774,19 +792,19 @@
    "image": "https://media.springernature.com/m685/springer-static/image/art%3A10.1038%2Fs41562-026-02550-0/MediaObjects/41562_2026_2550_Fig1_HTML.png",
    "outcome": "ok",
    "checked_at": "2026-08-30T12:31:36+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://neutronbytes.com/2026/08/28/iaea-revamps-major-nuclear-power-database": {
    "image": "https://neutronbytes.com/wp-content/uploads/2026/08/CFR600.png",
    "outcome": "ok",
    "checked_at": "2026-08-28T23:00:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://neutronbytes.com/2026/08/28/u-s-army-opens-the-checkbook-for-2-2-billion-to-build-microreactors-at-five-locations": {
    "image": "https://neutronbytes.com/wp-content/uploads/2022/02/transportable-micro-reactor.png",
    "outcome": "ok",
    "checked_at": "2026-08-28T20:13:52+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://news.ycombinator.com/item?id=49481969": {
    "image": null,
@@ -822,13 +840,13 @@
    "image": null,
    "outcome": "error",
    "checked_at": "2026-08-30T03:28:43+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://news.ycombinator.com/item?id=49497992": {
    "image": null,
    "outcome": "error",
    "checked_at": "2026-08-30T12:31:36+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://newsletter.eng-leadership.com/p/good-culture-is-the-biggest-productivity": {
    "image": "https://substackcdn.com/image/fetch/$s_!mpv7!,w_1200,h_675,c_fill,f_jpg,q_auto:good,fl_progressive:steep,g_auto/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fc7e34287-d1ea-4437-960e-c80e70dd341e_1600x844.jpeg",
@@ -848,6 +866,12 @@
    "checked_at": "2026-08-28T22:00:26+00:00",
    "seen_at": "2026-08-29T12:30:39+00:00"
   },
+  "https://noaifridays.com/": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-08-30T14:22:12+00:00",
+   "seen_at": "2026-08-30T14:22:12+00:00"
+  },
   "https://npr.org/2026/08/28/nx-s1-5905370/nasa-nancy-grace-roman-space-telescope-dark-energy-supernova": {
    "image": "https://npr.brightspotcdn.com/dims3/default/strip/false/crop/1536x864+0+80/resize/1400/quality/85/format/jpeg/?url=http%3A%2F%2Fnpr-brightspot.s3.amazonaws.com%2F42%2Fb8%2Fee547c464a7589d76ce4a933f883%2Froman-element-assembly-wheel-1536x1024.jpg",
    "outcome": "ok",
@@ -858,7 +882,7 @@
    "image": null,
    "outcome": "error",
    "checked_at": "2026-08-29T20:22:42+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://oactodev.github.io/ninety-quid/report": {
    "image": null,
@@ -876,7 +900,7 @@
    "image": "https://open-energy-transition.github.io/earthpv/assets/figures/social-preview.png",
    "outcome": "ok",
    "checked_at": "2026-08-30T08:28:33+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://openai.com/index/our-decision-on-cursor-following-its-acquisition-by-spacex": {
    "image": "https://images.ctfassets.net/kftzwdyauwt9/6RFKP8tysuxOLxVaiCRlu/ac31b03c2aeb6e3da620f2db89c7b6e9/index-our-decision-on-cursor-following-its-acquisition-by-spacex.png?w=1600&h=900&fit=fill",
@@ -1008,7 +1032,7 @@
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/08/08013_Santiago.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-29T04:25:58+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://pwning.systems/posts/llm-memory-program-analysis": {
    "image": "https://pwning.systems/og.png",
@@ -1020,7 +1044,7 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-29T22:21:30+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://quantumcomputingreport.com/astar-and-nus-researchers-achieve-qubit-compression-for-bio-molecular-docking-on-ibm-hardware": {
    "image": null,
@@ -1116,7 +1140,7 @@
    "image": null,
    "outcome": "error",
    "checked_at": "2026-08-29T17:20:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://roderick.dev/writing/2026-08-28-obsessing-harnesses": {
    "image": "https://www.roderick.dev/og-image.png",
@@ -1128,13 +1152,13 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-30T10:22:32+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://science.nasa.gov/mission/roman-space-telescope": {
    "image": "https://assets.science.nasa.gov/content/dam/science/missions/rst/spacecraft-illustrations/Roman_BeautyPass2026-med.png/jcr:content/renditions/cq5dam.web.1280.1280.png",
    "outcome": "ok",
    "checked_at": "2026-08-29T17:20:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://science.org/doi/10.1126/sciadv.aed9960": {
    "image": null,
@@ -1152,13 +1176,13 @@
    "image": "https://cdn.mos.cms.futurecdn.net/P7Ce6Xjjx8atfp8h9bD2H5-2048-80.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-29T17:20:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://spaceflightnow.com/2026/08/29/roman-space-telescope-nasas-next-great-observatory-poised-for-sunday-launch": {
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-29T22:21:30+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://spacenews.com/long-march-6c-launches-7-satellites-change-7-rocket-rolled-back-to-assembly-building": {
    "image": "https://spacenews.com/wp-content/uploads/2026/08/CZ6C-7sats-25aug2026-TSLC-CASC.png",
@@ -1182,7 +1206,7 @@
    "image": "https://spectrum.ieee.org/media-library/a-spacecraft-with-a-yellow-tube-like-section-with-rocket-engine-nozzles-at-one-end-a-middle-section-composed-of-a-truss-and-whi.png?id=67669096&width=1200&height=600&coordinates=0%2C529%2C0%2C529",
    "outcome": "ok",
    "checked_at": "2026-08-28T16:50:24+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://syntasso.io/post/ai-agent-guardrails-don-t-work-safer-platforms-do": {
    "image": "https://static.wixstatic.com/media/a65811_626c675ee6764c0796b9f7f65c818021~mv2.jpg/v1/fill/w_768,h_512,al_c/a65811_626c675ee6764c0796b9f7f65c818021~mv2.jpg",
@@ -1260,7 +1284,7 @@
    "image": "https://techcrunch.com/wp-content/uploads/2026/03/Dario-Amodei-Anthropic-1.jpg?w=1024",
    "outcome": "ok",
    "checked_at": "2026-08-29T19:18:55+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://techcrunch.com/2026/08/29/were-not-doing-30-bets-a-year-vijay-pande-on-betting-small-after-running-4-billion-at-a16z": {
    "image": "https://techcrunch.com/wp-content/uploads/2026/08/Vijay-Pande.png?resize=1200,800",
@@ -1296,7 +1320,7 @@
    "image": "https://platform.theverge.com/wp-content/uploads/sites/2/2026/01/STK269_ANTHROPIC_2_A.jpg?quality=90&strip=all&crop=0%2C10.732984293194%2C100%2C78.534031413613&w=1200",
    "outcome": "ok",
    "checked_at": "2026-08-29T18:26:17+00:00",
-   "seen_at": "2026-08-30T13:21:19+00:00"
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://theverge.com/entertainment/985866/h4rris-nihil-young-edm-suno-ai": {
    "image": "https://platform.theverge.com/wp-content/uploads/sites/2/2026/08/268714_finding_and_shaming_AI_grifters_CVirginia.jpg?quality=90&strip=all&crop=0%2C11.150136769481%2C85.33125%2C67.014037093516&w=1200",
@@ -1333,6 +1357,12 @@
    "outcome": "ok",
    "checked_at": "2026-08-29T18:26:17+00:00",
    "seen_at": "2026-08-30T07:24:34+00:00"
+  },
+  "https://twitter.com/chandlerwilcox/status/2093742530659766324": {
+   "image": "https://pbs.twimg.com/profile_images/2076747898528964608/4yHPo5Ym_400x400.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-08-30T14:22:12+00:00",
+   "seen_at": "2026-08-30T14:22:12+00:00"
   },
   "https://utilitydive.com/news/federal-authorities-disrupt-china-hacking-US-critical-infrastructure/829094": {
    "image": "https://imgproxy.divecdn.com/cnTGJ1dXPApSNLfgkPTKanTaglonOirM8Ar4LLiqPTI/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy02MjU3NTMzOTJfWVk0RHIwRS5qcGc=.webp",
