@@ -122,6 +122,12 @@
    "checked_at": "2026-09-01T04:29:25+00:00",
    "seen_at": "2026-09-01T09:29:43+00:00"
   },
+  "https://assertfail.gewalli.se/2026/08/23/Semantic-lightness-and-the-rise-of-LLMs.html": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
   "https://au.pcmag.com/ai/116091/meta-security-researchers-ai-agent-accidentally-deleted-her-emails": {
    "image": "https://sm.pcmag.com/t/pcmag_au/news/m/meta-secur/meta-security-researchers-ai-agent-accidentally-deleted-her_7uyw.1200.jpg",
    "outcome": "ok",
@@ -180,13 +186,13 @@
    "image": "https://imgproxy.divecdn.com/RD21L2-dmmvv-pSMpGSONH98yYJ7lfq6SfY19YwpEps/g:nowe:0:100/c:8192:4628/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMzY2Nzk1NzQ2LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T15:26:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://biopharmadive.com/news/fda-approve-mimrylo-takeda-protagonist-polycythemia-vera/829153": {
    "image": "https://imgproxy.divecdn.com/LsSfH33ptdBW4ga9OqgN8LZ4ffU3YbPMz3k9HM6jqIo/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9UYWtlZGFfUGhvdG9fMS5KUEc=.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T16:26:56+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://biopharmadive.com/news/fda-covid-vaccines-moderna-generate-profound-bixlenvo/828929": {
    "image": "https://imgproxy.divecdn.com/EK5xKj0ydykvmwFmBqsauREtdhrHAUsAiyI6JgDkO1s/g:nowe:0:0/c:1207:682/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNDgzOTIxNzkzLmpwZw==.webp",
@@ -204,13 +210,13 @@
    "image": "https://imgproxy.divecdn.com/RW4OQBVmGwnbE-4aU-t6goDsHAyScpmABjahuatd8jg/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0yMjYxMjA1MzY0LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T16:26:56+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://biopharmadive.com/news/novartis-bristol-myers-autoimmune-cell-therapy-trial-halt/829218": {
    "image": "https://imgproxy.divecdn.com/K9BeCHgHdR7vdNgSfHOx0AEffyDRj6Bacre6SddR800/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9jYXItdF9jYW5jZXJfY2VsbF90aGVyYXB5LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T22:24:05+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://biopharmadive.com/news/outer-bio-skin-biotech-michael-polansky-cosmetics-pharma/828910": {
    "image": null,
@@ -234,7 +240,7 @@
    "image": "https://imgproxy.divecdn.com/fc9iyl_Qq0agjlxrx4kVgrzpgMhENFu_4IDBdrD93ts/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9JbmR1c3RyeV9kaXZlX2hlYWRlcl9WZXJpbHlfTlZJRElBX05FVy5wbmc=.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T09:33:15+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://biospace.com/job-trends/nearly-1-4-dealing-with-long-term-unemployment-call-it-quits-on-biopharma-job-searches": {
    "image": "https://static.biospace.com/dims4/default/805c4e5/2147483647/strip/true/crop/622x350+1+0/resize/1440x810!/quality/90/?url=https%3A%2F%2Fk1-prod-biospace.s3.us-east-2.amazonaws.com%2Fbrightspot%2Flegacy%2FBioSpace-Assets%2FB273FC9F-322C-4B0B-B56C-61B3A1861B20.jpg",
@@ -318,7 +324,7 @@
    "image": "https://brekken.com/assets/img/posts/2026-08-28-truly-random-seed-phrase/og-image.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T09:29:43+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://bsky.app/profile/anthropicbot.bsky.social/post/3muaaxs5nx424": {
    "image": "https://cdn.bsky.app/img/avatar_thumbnail/plain/did:plc:r6zamcgevu2oujnhslsgblol/bafkreig67qqqiz4iqei5yniym3cbwrhdnvmzcg2n3e2zjmkicfs3xx7o6m",
@@ -360,19 +366,19 @@
    "image": "https://img.canarymedia.com/content/uploads/Portsmouth-Marine-wind-turbine-parts_AP26012662836755.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=7672a3e169cea6224093f9e882186b34",
    "outcome": "ok",
    "checked_at": "2026-09-01T08:34:34+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://canarymedia.com/articles/politics/super-pac-crushing-clean-energy-foes": {
    "image": "https://img.canarymedia.com/content/uploads/Dont-Mess-With-Solar-billboard-truck-DCGettyImages-2280948571.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=5b28c7d2c258e3955157c47f9827198b",
    "outcome": "ok",
    "checked_at": "2026-09-01T08:34:34+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://canarymedia.com/articles/solar/obama-presidential-center-community-solar": {
    "image": "https://img.canarymedia.com/content/uploads/OF052126KG-129.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=9e30ad59553ceb431ef7248035945b5f",
    "outcome": "ok",
    "checked_at": "2026-09-01T08:34:34+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://canarymedia.com/articles/solar/virginia-rooftop-solar-bulk-buy-program": {
    "image": "https://img.canarymedia.com/content/uploads/Leen-Arlington-Virginia-22We-Went-Solar22.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=9a280c543ac4c8b635dbf4c077da97d4",
@@ -390,7 +396,13 @@
    "image": "https://celeris.ai/assets/og-celeris-1-magnus.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T05:26:41+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://checklyhq.com/blog/agentic-rewrite-nodejs-to-go": {
+   "image": "https://images.prismic.io/checklyhq/DkQueTTRxgYbz44l_OG.png?auto=format,compress",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://claude.com/blog/how-warp-builds-self-improving-agents-on-claude": {
    "image": "https://cdn.prod.website-files.com/68a44d4040f98a4adf2207b6/6a8f1a88683b6dcd40c0dbc2_og_how-warp-builds-self-improving-agents-on-claude.jpg",
@@ -402,7 +414,7 @@
    "image": "https://storage.googleapis.com/gweb-cloudblog-publish/images/03_ThreatIntelligenceWebsiteBannerIdeas_BA.max-2600x2600.png",
    "outcome": "ok",
    "checked_at": "2026-08-31T21:22:55+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://cnet.com/tech/services-and-software/anthropic-sued-alleged-false-advertising-claude-max-subscription-usage-limits": {
    "image": "https://www.cnet.com/wp-content/uploads/sites/2/gettyimages-2216579136_a1fb87.jpg",
@@ -504,7 +516,7 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-01T10:29:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://docs.stripe.com/llms.txt": {
    "image": null,
@@ -528,13 +540,13 @@
    "image": "https://www.drugdiscoverytrends.com/wp-content/uploads/2026/08/MerckModerna.png",
    "outcome": "ok",
    "checked_at": "2026-08-31T18:30:40+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://drugdiscoverytrends.com/the-oral-exposure-challenge-in-protacs-what-drug-developers-need-to-solve-early": {
    "image": "https://www.drugdiscoverytrends.com/wp-content/uploads/2026/08/474543812439961.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T16:26:56+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://drugdiscoverytrends.com/tufts-model-estimates-82x-roi-and-up-to-21-million-in-value-from-medable-ai-agent": {
    "image": "https://www.drugdiscoverytrends.com/wp-content/uploads/2026/08/medable_agents.png",
@@ -572,11 +584,17 @@
    "checked_at": "2026-08-28T16:50:24+00:00",
    "seen_at": "2026-08-30T14:22:12+00:00"
   },
+  "https://europeanspaceflight.com/pld-space-adds-e108-million-to-series-c-funding-round": {
+   "image": "https://europeanspaceflight.com/wp-content/uploads/2026/09/PLD-Space-Adds-E108-million-to-Series-C-Funding-Round-.webp",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
   "https://europeanspaceflight.com/ses-awards-ohb-e1-billion-for-iris2-meo-satellites": {
    "image": "https://europeanspaceflight.com/wp-content/uploads/2026/08/SES-Awards-OHB-1-billion-Euros-for-IRIS2-MEO-Satellites.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T11:24:19+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://exploring-better-ways.bellroy.com/what-we-optimise-for-when-we-reach-for-an-llm.html": {
    "image": null,
@@ -630,13 +648,13 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/08/GettyImages-1422443070.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T19:20:08+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://genengnews.com/topics/bioprocessing/synthetically-engineered-marine-bacteria-could-play-key-role-in-decarbonizing-the-atmosphere-at-industrial-scales": {
    "image": "https://www.genengnews.com/wp-content/uploads/2026/08/GettyImages-94146417-1.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T13:27:33+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://genengnews.com/topics/cancer/aprea-expands-development-of-wee1-inhibitor-after-seeing-early-clinical-activity-signs-vs-cancer": {
    "image": "https://www.genengnews.com/wp-content/uploads/2026/08/Getty_1405940919_Cancer-696x392-1.jpg",
@@ -648,13 +666,13 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2025/08/GettyImages-2190708939.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T18:30:40+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://genengnews.com/topics/cancer/stockwatch-revolution-shares-stay-flat-despite-historic-fda-approval-of-oral-pancreatic-cancer-therapy": {
    "image": "https://www.genengnews.com/wp-content/uploads/2026/08/Pancreatic-Cancer-GettyImages-1467893187-696x391-1.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-30T18:26:04+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://genengnews.com/topics/drug-discovery/ancient-peptides-resurrected-from-lactoferrins-evolutionary-past-could-point-to-new-antibiotics": {
    "image": "https://www.genengnews.com/wp-content/uploads/2025/06/GettyImages-1574239031.jpg",
@@ -672,7 +690,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2025/03/Low-Res_GettyImages-1127490587.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T16:26:56+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://genengnews.com/topics/infectious-diseases/molecular-pathways-driving-autoantibody-production-following-sars-cov-2-infection-identified": {
    "image": "https://www.genengnews.com/wp-content/uploads/2022/11/Getty_1368735831_antibody-scaled.jpg",
@@ -684,7 +702,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2023/08/GettyImages_1332513809_TumorMicroenvironment.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T22:24:05+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://genengnews.com/topics/omics/ucsf-qbi-awarded-46m-to-translate-landmark-autism-map-into-precision-therapies": {
    "image": "https://www.genengnews.com/wp-content/uploads/2019/06/Jun13_2019_Getty_165801453_AutismPuzzleBoy_cropped.jpg",
@@ -702,7 +720,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/08/GettyImages-2286341317.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T15:26:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://genengnews.com/topics/translational-medicine/genetic-toolkit-isolates-neuron-types-in-drosophila-brain": {
    "image": "https://www.genengnews.com/wp-content/uploads/2021/09/GettyImages-1024014660-scaled.jpg",
@@ -912,13 +930,13 @@
    "image": "https://opengraph.githubassets.com/970a7fed629fbb2408d62bb2db83e7327e715834cd2340a30a741d744a4a037e/open-energy-transition/earthpv",
    "outcome": "ok",
    "checked_at": "2026-08-31T18:30:40+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://github.com/orbsh/wiki/blob/main/tail-prompt-optimization-en.md": {
    "image": "https://opengraph.githubassets.com/589b8334305a78bedb056edfea5d812c7dfe2535c633fa89f26c22a5a4597e78/orbsh/wiki",
    "outcome": "ok",
    "checked_at": "2026-09-01T10:29:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://github.com/physicsrob/torchwright_doom": {
    "image": "https://opengraph.githubassets.com/4aee51d230a131607b8c9baa34357681af42ce0954beeb90aa087714a8e384cc/physicsrob/torchwright_doom",
@@ -990,7 +1008,7 @@
    "image": "https://opengraph.githubassets.com/cb80d26c7535ff6b77df4c8e97a81e7f7186c29fbc61f61f65df71995f4c2b6d/timgioh/PromptLab-Local-First-LLM-Prompt-Testing-in-Your-Browser",
    "outcome": "ok",
    "checked_at": "2026-09-01T08:34:34+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://github.com/todotge/canonical-basis": {
    "image": "https://opengraph.githubassets.com/5ec828cdf3c4dbb8d580be1edb9f6c0ed4b64c66c6913eee0685409e4b1d71f9/todotge/canonical-basis",
@@ -1128,7 +1146,7 @@
    "image": null,
    "outcome": "error",
    "checked_at": "2026-08-31T14:28:14+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://labiotech.eu/partner/saudi-arabia-gene-editing-oncology": {
    "image": null,
@@ -1218,13 +1236,13 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/03/investment.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T23:22:37+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/ai-wont-transform-health-systems-ceos-will-six-principles-to-drive-the-transformation": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2022/04/GettyImages-547411534.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T13:27:33+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/astrazeneca-amgen-tezspire-eosinophilic-esophagitis-tslp-antibody-inflammation-immunology-azn-amgn": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2021/08/GettyImages-1317445583.jpg",
@@ -1248,13 +1266,13 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2023/02/Healthcare-Moves-1-scaled.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T01:09:48+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/medcity-femfwd-how-midwives-can-support-the-maternal-health-crisis": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/08/MF036-WIDE.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T01:09:48+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/precision-medicine-transformed-oncology-its-time-to-do-the-same-for-sepsis": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2021/06/GettyImages-500048664.jpg",
@@ -1278,19 +1296,19 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2017/03/GettyImages-565978761.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-30T15:22:21+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/takeda-protagonist-rusfertide-mimrylo-polycythemia-vera-blood-cancer-mpn-pv-tak-pgtx": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/08/Mimrylo_19MG_cropped.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T19:20:08+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/the-missing-piece-in-lowering-the-cost-of-care-predictability": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2021/05/GettyImages-861132240.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-30T14:22:12+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/the-silent-epidemic-why-diabetic-foot-ulcers-have-been-overlooked-for-three-decades": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2019/07/GettyImages-873585844.jpg",
@@ -1302,7 +1320,7 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2025/10/GettyImages-2199586292.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-30T15:22:21+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medcitynews.com/2026/08/what-do-the-latest-iteration-of-consumer-drug-platforms-offer": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2025/11/prescription-drugs.jpg",
@@ -1332,13 +1350,13 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-31T21:22:55+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medium.com/@fsaint/the-best-home-for-your-agent-is-in-your-junk-drawer-3afe0b0976e8": {
    "image": "https://miro.medium.com/v2/resize:fit:1200/1*_sY_r5LmBq0i36D274PJjg.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T03:31:43+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://medium.com/@therealcomtom/running-modern-llms-on-a-2gb-gpu-517512813bb0": {
    "image": "https://miro.medium.com/v2/resize:fit:1200/1*FcrTlLXTVNXiIn-ucsYogA.jpeg",
@@ -1362,7 +1380,7 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-01T10:29:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://nasaspaceflight.com/2026/08/esa-european-launcher-challenge-contracts": {
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2026/08/NSF-2026-08-29-11-53-55-612.jpg",
@@ -1380,7 +1398,7 @@
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2025/05/julia-streak-3.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T21:22:55+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://nasaspaceflight.com/2026/08/roman-telescope-launch": {
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2026/08/IMG_0596.jpeg",
@@ -1392,7 +1410,7 @@
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2026/08/NSF-2026-08-31-01-01-10-310.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T01:04:19+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://nature.com/articles/d41586-026-02506-4": {
    "image": "https://media.nature.com/lw1200/magazine-assets/d41586-026-02506-4/d41586-026-02506-4_53116512.jpg",
@@ -1422,7 +1440,7 @@
    "image": "https://neutronbytes.com/wp-content/uploads/2026/08/work-scope.png",
    "outcome": "ok",
    "checked_at": "2026-08-31T15:26:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://neutronbytes.com/2026/08/31/the-nuclear-renaissance-needs-certified-hands-they-are-in-short-supply": {
    "image": "https://neutronbytes.com/wp-content/uploads/2026/08/nr2.png",
@@ -1536,7 +1554,7 @@
    "image": "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgyX55D-CaiCUjtdVxpPtJoOIVFRMnkxA5ZoZen-FNz0cFe3S0zsI_yF0AbUM2nMsqNgV_ayiHdVphPxJrD-3oP-z2lRowfEfmxV4aXo-UNnYkdYgNZgo0n8RJf5W8CsD6vSJAMzfksIl3QGsHJdauMeoD9GbEqKA-qKycckMpZlOYds2o9LPmfmvW2IgM/w1200-h630-p-k-no-nu/kyberias.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T09:29:43+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://nickbostrom.com/ethics/ai": {
    "image": null,
@@ -1632,7 +1650,7 @@
    "image": "https://payloadspace.com/wp-content/uploads/2026/01/frontside.png",
    "outcome": "ok",
    "checked_at": "2026-08-31T13:27:33+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://payloadspace.com/iceye-opens-three-international-offices-in-a-single-week": {
    "image": "https://payloadspace.com/wp-content/uploads/2026/08/Netherlands-PR-web-1.webp",
@@ -1656,7 +1674,7 @@
    "image": "https://payloadspace.com/wp-content/uploads/2026/08/Roman_BeautyPass2026-med-1024x576.png",
    "outcome": "ok",
    "checked_at": "2026-08-30T22:22:20+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pgaleone.eu/ai/2026/08/29/losing-savviness": {
    "image": "https://pgaleone.eu/images/me.jpeg",
@@ -1676,11 +1694,71 @@
    "checked_at": "2026-08-29T10:22:18+00:00",
    "seen_at": "2026-08-29T18:26:17+00:00"
   },
+  "https://powermag.com/ansaldo-us-gas-turbine-market-equipment-crunch": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/09/fig5-ansaldo-ae643-c.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/coal-got-an-order-nuclear-got-a-meeting": {
+   "image": "https://www.powermag.com/wp-content/uploads/2025/12/centralia-power-plant-september-2020-scaled.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/condenser-chemistry-management-from-grab-samples-to-predictive-digital-twins": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/08/condenser-hero-c-twin.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/european-countries-boost-variety-of-renewable-energy-projects": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/09/fig1-dniester-psp-pumped-storage-hydro-c.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/is-the-smart-money-buying-operators-rather-than-megawatts": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/09/corporate-agreement-reached-with-a-handshake-2026-01-07-01-01-44-utc.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/make-every-data-center-a-power-hub": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/08/datacenterpower-power-1024x576.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/making-energy-intensity-a-controlled-variable": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/09/fig2-twinthread-electricity-production-c.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/power-digest-september-2026": {
+   "image": "https://www.powermag.com/wp-content/uploads/2025/08/power-digest-word-art.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://powermag.com/reactor-restart-rekindling-japans-nuclear-renaissance": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/09/splash-kashiwazaki-kariwa-tepco-c.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
   "https://powermag.com/revolve-renewable-power-secures-24-million-from-mexico-bank-for-project-financing": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/08/wind-power-station-loyal-generators-with-blades-e1746212456974.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-28T16:50:24+00:00",
    "seen_at": "2026-08-29T16:23:21+00:00"
+  },
+  "https://powermag.com/saeul-3s-nine-year-nuclear-odyssey-to-operation": {
+   "image": "https://www.powermag.com/wp-content/uploads/2026/09/splash-saeul3-khnp-c.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pub.towardsai.net/grok-bots-10-features-that-actually-separate-it-from-the-ai-agent-pack-f5a619dfea79?sk=0e14b9868c1a24635ce509b7a518c187": {
    "image": "https://miro.medium.com/v2/resize:fit:1200/1*QZb4LI8atUoWHQ89cUcbIA.png",
@@ -1842,37 +1920,37 @@
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/cover-scaled.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T10:29:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pv-magazine.com/2026/09/01/indias-solar-module-capacity-outpaces-demand-leaving-factories-running-at-just-35-40-utilization": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/05/Production-line.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T10:29:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pv-magazine.com/2026/09/01/japan-to-exclude-silicon-solar-from-new-subsidies-prioritize-perovskite": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2022/01/22-0125.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T08:34:34+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pv-magazine.com/2026/09/01/mexicos-cfe-plans-to-deploy-5-4-gw-of-solar-by-2030": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2025/03/Bandeira-Mexico.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T08:34:34+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pv-magazine.com/2026/09/01/new-research-confirms-negligible-letid-degradation-in-topcon-solar-cells": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/Unbenannt.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T10:29:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pv-magazine.com/2026/09/01/philippines-to-develop-pv-exemption-areas": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/aldrin-brosas-Yfh7E4KWDZ0-unsplash.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T09:29:43+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pv-magazine.com/2026/09/01/researchers-team-with-queensland-manufacturer-to-drive-perovskite-silicon-tandem-solar-cell-development": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/Si-perovskite-tandem-solar-cells-scaled.jpg",
@@ -1892,11 +1970,29 @@
    "checked_at": "2026-09-01T04:29:25+00:00",
    "seen_at": "2026-09-01T10:29:17+00:00"
   },
+  "https://pv-magazine.com/2026/09/01/ukraine-auctions-150-mw-of-solar": {
+   "image": "https://www.pv-magazine.com/wp-content/uploads/2026/03/karollyne-videira-hubert-EWODLTtoclQ-unsplash-e1773659214407.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://pv-magazine.com/2026/09/01/una-startup-estadounidense-desarrolla-drones-para-modificar-nubes-y-aumentar-hasta-un-30-la-produccion-de-plantas-fotovoltaicas": {
+   "image": "https://www.pv-magazine.com/wp-content/uploads/2020/09/Clouds.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
+  "https://pv-magazine.com/2026/09/01/vehicle-integrated-pv-key-to-protecting-ev-batteries-rather-than-extending-range": {
+   "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/25C0255_030-scaled.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
+  },
   "https://pv-magazine.com/2026/09/01/waaree-energies-wins-700-mw-solar-plus-storage-project-from-seci-plans-37-million-arizona-factory-upgrade": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2025/12/Waaree-Solar-Americas.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T06:40:58+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://pwning.systems/posts/llm-memory-program-analysis": {
    "image": "https://pwning.systems/og.png",
@@ -1914,7 +2010,7 @@
    "image": null,
    "outcome": "error",
    "checked_at": "2026-09-01T07:28:23+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://quantumcomputingreport.com/astar-and-nus-researchers-achieve-qubit-compression-for-bio-molecular-docking-on-ibm-hardware": {
    "image": null,
@@ -1932,13 +2028,13 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-276.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T07:28:23+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://quantumcomputingreport.com/diraq-to-deploy-eight-qubit-silicon-quantum-computer-at-equinix-sydney-data-center": {
    "image": null,
    "outcome": "error",
    "checked_at": "2026-09-01T07:28:23+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://quantumcomputingreport.com/governor-newsom-awards-9-74m-to-scale-southern-california-quantum-ecosystem": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-249.png",
@@ -1986,7 +2082,7 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-278.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T07:28:23+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://quantumcomputingreport.com/pasqal-completes-business-combination-with-bleichroeder-acquisition-corp-ii-begins-trading-on-nasdaq": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-243.png",
@@ -2004,7 +2100,7 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-274.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T07:28:23+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://quantumcomputingreport.com/quantrolox-and-qureca-partner-to-launch-quantum-edge-academy-for-hands-on-hardware-training": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-265.png",
@@ -2022,13 +2118,13 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-269.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T07:28:23+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://quantumcomputingreport.com/yaqumo-and-screen-holdings-partner-on-nedo-project-to-build-optical-modules-for-neutral-atom-qpus": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-280.png",
    "outcome": "ok",
    "checked_at": "2026-09-01T07:28:23+00:00",
-   "seen_at": "2026-09-01T09:29:43+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://quantumzeitgeist.com/quantum-materials-research-advanced-light": {
    "image": "https://quantumzeitgeist.com/wp-content/uploads/QC1-5-jpg.webp",
@@ -2064,7 +2160,7 @@
    "image": "https://substackcdn.com/image/fetch/$s_!Wx7s!,w_1200,h_675,c_fill,f_jpg,q_auto:good,fl_progressive:steep,g_auto/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Ffc16cc1f-d8f0-4d6f-b1af-5a7fb6a04093_1658x1116.png",
    "outcome": "ok",
    "checked_at": "2026-08-31T01:04:19+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://renderweekly.art/": {
    "image": "https://renderweekly.art/assets/og-image.png?v=render-site-00013-dhl",
@@ -2107,6 +2203,12 @@
    "outcome": "ok",
    "checked_at": "2026-08-29T17:20:55+00:00",
    "seen_at": "2026-08-30T16:23:45+00:00"
+  },
+  "https://science.nasa.gov/mission/roman-space-telescope/adopt-a-pixel": {
+   "image": "https://assets.science.nasa.gov/content/dam/science/missions/rst/spacecraft-illustrations/Roman_BeautyPass2026-large.png/jcr:content/renditions/cq5dam.web.1280.1280.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://science.org/doi/10.1126/sciadv.aed9960": {
    "image": null,
@@ -2166,7 +2268,7 @@
    "image": "https://i0.wp.com/spacenews.com/wp-content/uploads/2026/05/Anniversary-Logo.jpg?fit=1187%2C1024&ssl=1",
    "outcome": "ok",
    "checked_at": "2026-08-31T15:26:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://spacenews.com/long-march-6c-launches-7-satellites-change-7-rocket-rolled-back-to-assembly-building": {
    "image": "https://spacenews.com/wp-content/uploads/2026/08/CZ6C-7sats-25aug2026-TSLC-CASC.png",
@@ -2178,7 +2280,7 @@
    "image": "https://spacenews.com/wp-content/uploads/2024/08/Astronaut001-headerImage-1200x930-1.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T14:28:14+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://spacenews.com/the-electronics-under-the-hood-of-space-networking": {
    "image": "https://spacenews.com/wp-content/uploads/2026/08/1500-1000-space-minds-innoflight-smallsat26-scaled.jpg",
@@ -2190,7 +2292,7 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-08-30T19:19:02+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://spacepolicyonline.com/news/trump-honors-artemis-ii-crew-signs-executive-order-to-establish-a-u-s-space-academy": {
    "image": null,
@@ -2220,7 +2322,7 @@
    "image": "https://s0.wp.com/_si/?t=eyJpbWciOiJodHRwczpcL1wvaTAud3AuY29tXC9zdHJhdGVjaGVyeS5jb21cL3dwLWNvbnRlbnRcL3VwbG9hZHNcLzIwMThcLzAzXC9jcm9wcGVkLWFuZHJvaWQtY2hyb21lLTUxMng1MTItMS5wbmc_Zml0PTUxMiUyQzUxMiZzc2w9MSIsInR4dCI6IlN0cmF0ZWNoZXJ5IGJ5IEJlbiBUaG9tcHNvbiIsInRlbXBsYXRlIjoiZWRnZSIsImZvbnQiOiIiLCJibG9nX2lkIjoxODgwNDM0MTV9.5VWck4PcKPWCTPe_HVznn3n3xsgn-G0b3d2OeiNNC7cMQ",
    "outcome": "ok",
    "checked_at": "2026-09-01T10:29:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://swapniltalekar.substack.com/p/three-months-of-running-personal": {
    "image": null,
@@ -2334,7 +2436,7 @@
    "image": "https://techcrunch.com/wp-content/uploads/2026/04/GettyImages-2255009714.jpg?resize=1200,800",
    "outcome": "ok",
    "checked_at": "2026-09-01T01:09:48+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://techcrunch.com/2026/08/31/harvard-law-dropout-raises-6m-for-blue-voice-to-build-a-harvey-for-police-officers": {
    "image": "https://techcrunch.com/wp-content/uploads/2026/08/BlueVoice_Founders.png?resize=1200,600",
@@ -2353,6 +2455,12 @@
    "outcome": "ok",
    "checked_at": "2026-08-31T19:20:08+00:00",
    "seen_at": "2026-09-01T09:29:43+00:00"
+  },
+  "https://techcrunch.com/2026/08/31/lachy-groom-backs-indian-startup-aiming-to-keep-aircraft-aloft-for-a-year": {
+   "image": "https://techcrunch.com/wp-content/uploads/2026/08/alteon-airplane.jpg?resize=1200,800",
+   "outcome": "ok",
+   "checked_at": "2026-09-01T11:24:29+00:00",
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://techcrunch.com/2026/08/31/meeting-notetaker-circleback-adds-a-free-tier-to-attract-more-customers": {
    "image": "https://techcrunch.com/wp-content/uploads/2024/11/Circleback-Home.jpeg?resize=1200,737",
@@ -2376,13 +2484,13 @@
    "image": "https://techcrunch.com/wp-content/uploads/2026/05/ai-agents-GettyImages-2229880232.jpg?resize=1200,675",
    "outcome": "ok",
    "checked_at": "2026-08-31T16:26:56+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://technologyreview.com/2026/08/31/1143180/hugging-face-hack-could-indicate-cultural-issues-at-openai": {
    "image": "https://wp.technologyreview.com/wp-content/uploads/2026/08/openai-human4a.jpg?resize=1200,600",
    "outcome": "ok",
    "checked_at": "2026-08-31T18:30:40+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://testingbranch.com/distillation-targeted-labels": {
    "image": "https://www.testingbranch.com/assets/images/llm_distillation/header.jpg",
@@ -2400,13 +2508,13 @@
    "image": "https://image.theregister.com/5287988.jpg?imageId=5287988&x=0&y=0&cropw=100&croph=100&panox=0&panoy=0&panow=100&panoh=100&width=1200&height=683",
    "outcome": "ok",
    "checked_at": "2026-09-01T09:29:43+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://thestar.com.my/tech/tech-news/2026/09/01/anthropic-signs-35-billion-cloud-deal-with-nvidia-backed-lambda-source-says": {
    "image": "https://apicms.thestar.com.my/uploads/images/2026/09/01/4087307.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-01T03:31:43+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://thestreet.com/technology/mark-zuckerberg-shocking-message-meta-employee-layoffs-artificial-intelligence": {
    "image": null,
@@ -2556,7 +2664,7 @@
    "image": "https://imgproxy.divecdn.com/LvGTle_LbXYyl978h_m2pnTCKeze7dIiht-aAFXytFE/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMzU2OTc2MzM3LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T16:26:56+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://utilitydive.com/news/federal-authorities-disrupt-china-hacking-US-critical-infrastructure/829094": {
    "image": "https://imgproxy.divecdn.com/cnTGJ1dXPApSNLfgkPTKanTaglonOirM8Ar4LLiqPTI/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy02MjU3NTMzOTJfWVk0RHIwRS5qcGc=.webp",
@@ -2574,13 +2682,13 @@
    "image": "https://imgproxy.divecdn.com/jdk-Yii3_oAUM3aevims0pa2AZtqhH1-IxPBaSScjBg/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNTU1OTg1MTUyLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T15:26:17+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://utilitydive.com/news/stakeholders-square-off-over-proposed-doe-appliance-program-changes/829155": {
    "image": "https://imgproxy.divecdn.com/sANGzn-29ymZJS6lU3v2LU5WfWhOesHY9jZvxSthRG4/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS93YXNoX21hY2hpbmVzLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T19:20:08+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://utilitydive.com/news/testing-of-long-term-enhanced-geothermal-production-begins-in-utah/828975": {
    "image": null,
@@ -2598,13 +2706,13 @@
    "image": "https://imgproxy.divecdn.com/BUqwNSqXMAyPLQdA3nTVyBfx_E78IF30wAmtwvn2BDc/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS8zMjIyOF9OQV9Hcm93dGhfQWN0aXZhdGlvbl9OUl9IZWFkZXJfaW1hZ2VfMTA0MHg2MTYucG5n.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T09:33:15+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://utilitydive.com/spons/the-rules-of-data-center-development-are-evolving-is-your-strategy-1/828795": {
    "image": "https://imgproxy.divecdn.com/giV7xay9K8ePphn0dkSnokaDT8ZUL4_kYEQ97DXmL6M/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9CRTI2MDQxM19waG90b19zZXJ2ZXJfbGlmdF9jYWdlXzAyM184UEFtcXY3LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-08-31T09:33:15+00:00",
-   "seen_at": "2026-09-01T10:29:17+00:00"
+   "seen_at": "2026-09-01T11:24:29+00:00"
   },
   "https://velocitynote.app/": {
    "image": "https://velocitynote.app/og-cover.png",
