@@ -1,0 +1,21 @@
+{
+  "contract": "publication",
+  "dataclass": "PublicationAuthorization",
+  "expect": "valid",
+  "note": "Authorization binds tenant, publisher, destination, issue date, digest, policy revision, and expiry. The digest binds the APPROVAL; the identity above is the at-most-once key and deliberately excludes it.",
+  "payload": {
+    "authorization_id": "auth-000005",
+    "identity": {
+      "tenant_id": "tenant-owner-private",
+      "publisher_identity_ref": "signer-publisher-01",
+      "destination": "relay-set-a",
+      "issue_date": "2026-09-01"
+    },
+    "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "policy_revision": 1,
+    "approved_by_actor_id": "actor-human-owner",
+    "approved_at": "2026-09-01T12:00:00+00:00",
+    "expires_at": "2026-09-02T12:00:00+00:00",
+    "approval_credential_id": "cred-approve-01"
+  }
+}

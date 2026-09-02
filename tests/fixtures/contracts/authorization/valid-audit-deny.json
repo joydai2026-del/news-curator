@@ -1,0 +1,19 @@
+{
+  "contract": "authorization",
+  "dataclass": "AuthorizationAudit",
+  "expect": "valid",
+  "note": "A deny is audited exactly like an allow, and carries no private payload content.",
+  "payload": {
+    "audit_id": "audit-000191",
+    "tenant_id": "tenant-owner-private",
+    "principal_id": "principal-agent-import",
+    "actor_id": "actor-cli-01",
+    "action": "delete_data",
+    "required_scope": "data:delete",
+    "decision": "deny",
+    "reason_code": "scope_not_granted",
+    "occurred_at": "2026-09-01T12:00:00+00:00",
+    "credential_id": "cred-import-01",
+    "revocation_version": 7
+  }
+}

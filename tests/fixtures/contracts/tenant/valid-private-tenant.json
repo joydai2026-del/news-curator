@@ -1,0 +1,13 @@
+{
+  "contract": "tenant",
+  "dataclass": "Tenant",
+  "expect": "valid",
+  "note": "The single private tenant of the pilot. A public product would be a separate tenant row, never this one with the flag flipped.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "display_name": "Private reading hub",
+    "default_publication_class": "private",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "is_public_projection_tenant": false
+  }
+}

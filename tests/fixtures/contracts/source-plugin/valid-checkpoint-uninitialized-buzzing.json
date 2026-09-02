@@ -1,0 +1,21 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceCheckpoint",
+  "expect": "valid",
+  "note": "The honest starting state for every route: no durable cursor exists anywhere in the source layer today, so the first checkpoint written is uninitialized rather than a fabricated cursor.",
+  "payload": {
+    "plugin_id": "rss",
+    "source_id": "buzzing",
+    "tenant_id": "tenant-owner-private",
+    "state": "uninitialized",
+    "cursor": "",
+    "watermark": null,
+    "last_settled_run_id": "",
+    "health_receipt_id": "",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "etag": "",
+    "last_modified": "",
+    "consecutive_failures": 0,
+    "backoff_until": null
+  }
+}

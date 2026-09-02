@@ -1,0 +1,13 @@
+{
+  "contract": "tenant",
+  "dataclass": "Tenant",
+  "expect": "invalid",
+  "note": "There is no third publication class. Private and public are the only projections.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "display_name": "Private reading hub",
+    "default_publication_class": "shared",
+    "created_at": "2026-09-01T12:00:00+00:00"
+  },
+  "violates": "shared is not a member of PublicationClass"
+}

@@ -1,0 +1,21 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceCheckpoint",
+  "expect": "valid",
+  "note": "A dead-but-200 route: it returns 50 parseable items whose newest is 237 days old. Cross-run failure counting is what exposes it; the live per-run health record cannot.",
+  "payload": {
+    "plugin_id": "rss",
+    "source_id": "blockworks",
+    "tenant_id": "tenant-owner-private",
+    "state": "blocked",
+    "cursor": "2026-01-06T00:00:00+00:00",
+    "watermark": "2026-01-06T00:00:00+00:00",
+    "last_settled_run_id": "run-2026-01-06-17",
+    "health_receipt_id": "hrec-2026-01-06-17",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "etag": "",
+    "last_modified": "",
+    "consecutive_failures": 237,
+    "backoff_until": "2026-09-01T18:00:00+00:00"
+  }
+}

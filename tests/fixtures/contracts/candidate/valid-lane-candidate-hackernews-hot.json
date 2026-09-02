@@ -1,0 +1,20 @@
+{
+  "contract": "candidate",
+  "dataclass": "LaneCandidate",
+  "expect": "valid",
+  "note": "A Hot candidate from the real hackernews route, which contributes 266 in-window items per cycle.",
+  "payload": {
+    "run_id": "run-2026-09-01-12",
+    "tenant_id": "tenant-owner-private",
+    "lane": "hot",
+    "story_id": "story-000042",
+    "story_cluster_id": "cluster-000012",
+    "lane_score": 0.81,
+    "reason": "covered by 4 independent sources within 24h",
+    "generator_version": "hot-generator-1",
+    "evidence_ids": [
+      "ev-000200",
+      "ev-000201"
+    ]
+  }
+}

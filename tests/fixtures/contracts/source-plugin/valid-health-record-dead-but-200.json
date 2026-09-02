@@ -1,0 +1,18 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceHealthRecord",
+  "expect": "valid",
+  "note": "The measured failure class the health contract exists to catch: a healthy-looking payload with 50 items whose newest is 237 days old.",
+  "payload": {
+    "source_id": "blockworks",
+    "plugin_id": "rss",
+    "status": "stale",
+    "usable_items": 50,
+    "newest_item_age_hours": 5698.0,
+    "max_age_hours": 48.0,
+    "observed_at": "2026-09-01T12:00:00+00:00",
+    "reason_code": "newest_item_beyond_window",
+    "consecutive_failures": 237,
+    "last_success_at": "2026-01-06T00:00:00+00:00"
+  }
+}

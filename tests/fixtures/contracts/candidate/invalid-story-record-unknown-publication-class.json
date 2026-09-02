@@ -1,0 +1,18 @@
+{
+  "contract": "candidate",
+  "dataclass": "StoryRecord",
+  "expect": "invalid",
+  "note": "There is no third publication class. Private and public are the only projections, matching the tenant contract.",
+  "payload": {
+    "story_cluster_id": "cluster-000012",
+    "tenant_id": "tenant-owner-private",
+    "publication_class": "shared",
+    "canonical_source_document_id": "doc-cnn-000001",
+    "source_document_ids": [
+      "doc-cnn-000001"
+    ],
+    "created_at": "2026-09-01T11:30:00+00:00",
+    "updated_at": "2026-09-01T12:00:00+00:00"
+  },
+  "violates": "shared is not a member of PublicationClass"
+}

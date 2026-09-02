@@ -1,0 +1,22 @@
+{
+  "contract": "authorization",
+  "dataclass": "PrincipalClaims",
+  "expect": "invalid",
+  "note": "An invented scope must not be silently accepted as a near-match for an existing one.",
+  "payload": {
+    "principal_id": "principal-agent-import",
+    "tenant_id": "tenant-owner-private",
+    "membership_id": "member-agent-import",
+    "actor_id": "actor-cli-01",
+    "actor_kind": "agent",
+    "audience": "news-curator-private-api",
+    "issued_at": "2026-09-01T11:55:00+00:00",
+    "expires_at": "2026-09-01T12:55:00+00:00",
+    "credential_id": "cred-import-01",
+    "revocation_version": 7,
+    "scopes": [
+      "stories:write"
+    ]
+  },
+  "violates": "stories:write is not a member of Scope"
+}

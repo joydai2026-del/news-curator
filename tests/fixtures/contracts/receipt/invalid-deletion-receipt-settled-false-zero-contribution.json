@@ -1,0 +1,83 @@
+{
+  "contract": "receipt",
+  "dataclass": "DeletionReceipt",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: all seven projections resolved, but zero_contribution_verdict is false. A settled deletion cannot claim completeness while admitting the rebuild did not prove zero contribution.",
+  "payload": {
+    "envelope": {
+      "receipt_id": "drec-000008",
+      "tenant_id": "tenant-owner-private",
+      "kind": "deletion",
+      "state": "settled",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "actor_id": "actor-human-owner",
+      "reason_code": "",
+      "settled_at": "2026-09-01T12:05:00+00:00"
+    },
+    "target_kind": "evidence_item",
+    "target_ids": [
+      "ev-000101"
+    ],
+    "correction_watermark": "2026-09-01T12:00:00+00:00",
+    "invalidated_snapshot_ids": [
+      "snap-000007"
+    ],
+    "rebuild_id": "rebuild-000010",
+    "zero_contribution_verdict": false,
+    "projections": [
+      {
+        "projection": "profile_and_ranking",
+        "resolved": true,
+        "resolution_kind": "rebuild_zero_contribution",
+        "target_ref": "rebuild-000010",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "search_index",
+        "resolved": true,
+        "resolution_kind": "index_invalidation",
+        "target_ref": "idx-2026-09-01-b",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "knowledge_artifacts",
+        "resolved": true,
+        "resolution_kind": "no_artifacts_quoted",
+        "target_ref": "",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "caches",
+        "resolved": true,
+        "resolution_kind": "cache_invalidation",
+        "target_ref": "edge",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "exports",
+        "resolved": true,
+        "resolution_kind": "no_exports_recorded",
+        "target_ref": "",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "public_projections",
+        "resolved": true,
+        "resolution_kind": "no_public_projection",
+        "target_ref": "",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "mirrors",
+        "resolved": true,
+        "resolution_kind": "no_mirrors_recorded",
+        "target_ref": "",
+        "user_visible_disclosure": ""
+      }
+    ],
+    "mirrored_targets": [],
+    "audit_chain_queryable": true
+  },
+  "violates": "invariant: a settled deletion receipt requires zero_contribution_verdict true"
+}

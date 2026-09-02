@@ -1,0 +1,28 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorReceipt",
+  "expect": "valid",
+  "note": "The prior attempt (mrec-000022) ended in conflict. This attempt settles, but only because it carries a recorded resolution_ref: a human compared the two versions and cleared the write, which is a resolution, not an automatic retry.",
+  "payload": {
+    "receipt_id": "mrec-000024",
+    "tenant_id": "tenant-owner-private",
+    "artifact_id": "art-000031",
+    "artifact_version": 4,
+    "adapter_id": "vault-wiki",
+    "target_id": "wiki/example/post-quantum-migration.md",
+    "state": "settled",
+    "idempotency_key": "mirror-art-000031-v4-vault-wiki",
+    "attempted_at": "2026-09-01T13:00:00+00:00",
+    "expected_prior_checksum": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "attempted_checksum": "aaaa111111111111111111111111111111111111111111111111111111111111",
+    "readback_checksum": "aaaa111111111111111111111111111111111111111111111111111111111111",
+    "settled_at": "2026-09-01T13:00:00+00:00",
+    "reason_code": "",
+    "created_revision_id": "",
+    "prior_receipt_ids": [
+      "mrec-000022"
+    ],
+    "prior_attempt_state": "conflict",
+    "resolution_ref": "human-resolved-2026-09-01-by-owner"
+  }
+}

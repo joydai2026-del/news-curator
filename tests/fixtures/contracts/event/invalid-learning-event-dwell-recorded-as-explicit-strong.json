@@ -1,0 +1,25 @@
+{
+  "contract": "event",
+  "dataclass": "LearningEvent",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: a dwell event recorded with evidence_class explicit and confidence strong. Policy revision 1's frozen row for dwell is passive / live / weak. Dwell is supporting evidence only and must never present as a deliberate strong action.",
+  "payload": {
+    "event_id": "evt-000506",
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "event_type": "dwell",
+    "occurred_at": "2026-09-01T12:00:00+00:00",
+    "recorded_at": "2026-09-01T12:00:00+00:00",
+    "surface": "web_story_page",
+    "idempotency_key": "dwell-story-000042-sess-0092",
+    "evidence_class": "explicit",
+    "origin": "live",
+    "confidence": "strong",
+    "policy_revision": 1,
+    "story_id": "story-000042",
+    "session_id": "sess-0092",
+    "duration_ms": 41000
+  },
+  "violates": "invariant: evidence_class and origin must match the frozen event-semantics row for this event_type"
+}

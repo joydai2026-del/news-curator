@@ -1,0 +1,21 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceCapabilities",
+  "expect": "valid",
+  "note": "The live hackernews route: the only adapter that actually consumes the search queries every route is handed. Declaring it ends that undeclared behavioural split. supports_incremental_checkpoint is false because checkpoint is greenfield.",
+  "payload": {
+    "plugin_id": "hackernews",
+    "plugin_version": "1.0.0",
+    "supports_poll": true,
+    "supports_push": false,
+    "supports_full_text": false,
+    "supports_trend_signal": true,
+    "supports_social_signal": true,
+    "supports_deletion": false,
+    "supports_incremental_checkpoint": false,
+    "consumes_search_queries": true,
+    "languages": [
+      "en"
+    ]
+  }
+}

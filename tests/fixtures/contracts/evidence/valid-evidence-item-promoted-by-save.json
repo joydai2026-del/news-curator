@@ -1,0 +1,30 @@
+{
+  "contract": "evidence",
+  "dataclass": "EvidenceItem",
+  "expect": "valid",
+  "note": "The same visit shape after an independent save corroborated it: medium confidence, weight 0.5, and the corroborating row named. Promotion is never silent.",
+  "payload": {
+    "evidence_id": "ev-000102",
+    "tenant_id": "tenant-owner-private",
+    "raw_import_id": "raw-000002",
+    "source_item_id": "visit-000102",
+    "occurred_at": "2026-08-21T09:14:00+00:00",
+    "recorded_at": "2026-09-01T12:00:00+00:00",
+    "evidence_class": "observed",
+    "origin": "imported",
+    "confidence": "medium",
+    "weight": 0.5,
+    "policy_revision": 1,
+    "story_id": "story-000043",
+    "canonical_url": "https://example.com/b",
+    "entity_ids": [],
+    "topic_tags": [
+      "crypto"
+    ],
+    "corroborated": true,
+    "corroborating_evidence_ids": [
+      "ev-000200"
+    ],
+    "retracted_by_event_id": null
+  }
+}

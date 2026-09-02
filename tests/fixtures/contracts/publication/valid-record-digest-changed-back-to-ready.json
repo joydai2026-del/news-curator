@@ -1,0 +1,22 @@
+{
+  "contract": "publication",
+  "dataclass": "PublicationRecord",
+  "expect": "valid",
+  "note": "The digest changed, so the authorization was invalidated and the record returned to ready. Note the idempotency key is UNCHANGED: the same issue date keeps one publication identity, which is what stops a re-approval publishing twice.",
+  "payload": {
+    "identity": {
+      "tenant_id": "tenant-owner-private",
+      "publisher_identity_ref": "signer-publisher-01",
+      "destination": "relay-set-a",
+      "issue_date": "2026-09-01"
+    },
+    "state": "ready",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "authorization_id": null,
+    "content_digest": "9999999999999999999999999999999999999999999999999999999999999999",
+    "idempotency_key": "pub-tenant-owner-private|signer-publisher-01|relay-set-a|2026-09-01",
+    "attempt": 0,
+    "settled_receipt_id": "",
+    "reason_code": "digest_changed_authorization_invalidated"
+  }
+}

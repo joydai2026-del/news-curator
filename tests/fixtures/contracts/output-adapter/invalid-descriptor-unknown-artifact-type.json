@@ -1,0 +1,18 @@
+{
+  "contract": "output-adapter",
+  "dataclass": "OutputAdapterDescriptor",
+  "expect": "invalid",
+  "note": "A raw import is not a knowledge artifact and must never be an eligible output class.",
+  "payload": {
+    "adapter_id": "vault-wiki",
+    "adapter_version": "1.0.0",
+    "eligible_artifact_types": [
+      "report",
+      "raw_import"
+    ],
+    "requires_approval": false,
+    "supports_dry_run": true,
+    "supports_readback": true
+  },
+  "violates": "raw_import is not a member of ArtifactType"
+}

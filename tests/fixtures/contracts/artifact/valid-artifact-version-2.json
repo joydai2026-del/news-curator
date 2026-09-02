@@ -1,0 +1,20 @@
+{
+  "contract": "artifact",
+  "dataclass": "ArtifactVersion",
+  "expect": "valid",
+  "note": "Version 2 appends onto version 1. The checksum is what a mirror compares against, so a target can be proven to hold this exact version.",
+  "payload": {
+    "artifact_id": "art-000031",
+    "version": 2,
+    "parent_version": 1,
+    "checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_reference": "restricted://artifacts/000031/2",
+    "actor_id": "actor-human-owner",
+    "settled_at": "2026-09-01T12:00:00+00:00",
+    "citations": [
+      "story-000042",
+      "doc-cnn-000001"
+    ],
+    "redacted_by_event_id": null
+  }
+}

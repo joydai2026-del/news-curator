@@ -1,0 +1,23 @@
+{
+  "contract": "event",
+  "dataclass": "LearningEvent",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: an imported_browser_visit recorded as evidence_class explicit, origin live, confidence strong. Policy revision 1's frozen row for imported_browser_visit is observed / imported / weak. A weak imported signal must never be written as a live explicit strong event.",
+  "payload": {
+    "event_id": "evt-000504",
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "event_type": "imported_browser_visit",
+    "occurred_at": "2026-08-20T09:14:00+00:00",
+    "recorded_at": "2026-09-01T12:00:00+00:00",
+    "surface": "import_batch",
+    "idempotency_key": "visit-000103-import",
+    "evidence_class": "explicit",
+    "origin": "live",
+    "confidence": "strong",
+    "policy_revision": 1,
+    "story_id": "story-000043"
+  },
+  "violates": "invariant: evidence_class and origin must match the frozen event-semantics row for this event_type"
+}

@@ -1,0 +1,14 @@
+{
+  "contract": "search",
+  "dataclass": "SearchResponse",
+  "expect": "valid",
+  "note": "The case the contract exists for: a genuinely empty result is a SUCCESS with zero results, distinguishable from a failure.",
+  "payload": {
+    "outcome": "ok",
+    "index_version": "idx-2026-09-01-a",
+    "policy_revision": 1,
+    "total_matched": 0,
+    "results": [],
+    "error_code": ""
+  }
+}

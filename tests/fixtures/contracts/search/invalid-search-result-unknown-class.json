@@ -1,0 +1,18 @@
+{
+  "contract": "search",
+  "dataclass": "SearchResult",
+  "expect": "invalid",
+  "note": "Search spans stories and knowledge artifacts. A third result class would need its own authorization projection.",
+  "payload": {
+    "result_class": "newsletter",
+    "canonical_id": "story-000042",
+    "tenant_id": "tenant-owner-private",
+    "publication_class": "private",
+    "title": "Example headline",
+    "match_reason": "term match",
+    "ordering_key": "0.8140|story-000042",
+    "provenance_ref": "doc-cnn-000001",
+    "score": 0.814
+  },
+  "violates": "newsletter is not a member of SearchResultClass"
+}

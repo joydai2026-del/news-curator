@@ -1,0 +1,23 @@
+{
+  "contract": "publication",
+  "dataclass": "PublicationRecord",
+  "expect": "valid",
+  "note": "Paired with valid-record-digest-changed-back-to-ready.json to cover the sequence publication.md promises: digest A published, the basket changed to digest B, a fresh authorization was granted, and the retry executes here as attempt 2 with a NEW authorization_id and content_digest. The idempotency_key is IDENTICAL in both fixtures because it is derived from identity alone, so at most one publication identity ever exists for 2026-09-01 regardless of how many times the basket was re-authorized.",
+  "payload": {
+    "identity": {
+      "tenant_id": "tenant-owner-private",
+      "publisher_identity_ref": "signer-publisher-01",
+      "destination": "relay-set-a",
+      "issue_date": "2026-09-01"
+    },
+    "state": "publishing",
+    "updated_at": "2026-09-01T13:00:00+00:00",
+    "authorization_id": "auth-000006",
+    "content_digest": "9999999999999999999999999999999999999999999999999999999999999999",
+    "idempotency_key": "pub-tenant-owner-private|signer-publisher-01|relay-set-a|2026-09-01",
+    "attempt": 2,
+    "settled_receipt_id": "",
+    "reason_code": "",
+    "prior_state": "authorized"
+  }
+}

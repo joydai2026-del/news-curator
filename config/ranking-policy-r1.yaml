@@ -1,0 +1,386 @@
+# Ranking policy, revision 1. Frozen at contract freeze (SC-41).
+#
+# This file is the ONLY place normal ranking values change. No weight, cap,
+# exploration share, decay, window, quota, or event weight requires a code edit
+# (SC-07). Human and agent paths read this same file.
+#
+# Every value carries its rationale inline. Where a number is derived from
+# measured data, the measurement is the Gate 0c receipt of 2026-09-01:
+# 75 configured routes, 3,924 items collected per cycle, 2,355 of them inside
+# the 48h window (60%), top route 486 in-window items (20.6% of the in-window
+# pool), top five routes 1,350 combined (57%).
+#
+# Status of these numbers: they are a defensible STARTING revision, not a tuned
+# one. Revision 2 is expected after the first real slates run. Grade C for
+# "these are the right values"; grade B for "these are internally consistent
+# with the plan and with the measured volumes".
+
+policy:
+  revision: 1                     # First frozen revision. Revisions are immutable; a change mints revision 2.
+  policy_id: ranking-policy-r1    # Stable id referenced by every ranking receipt and evidence row.
+  status: frozen                  # frozen | superseded. A superseded revision stays readable so past editions replay.
+  created_at: "2026-09-01"        # Contract-freeze date. Past editions are reproducible against this revision.
+  applies_to_tenant_class: private  # The private pilot tenant. A public tenant gets its own revision, never this one.
+
+# ---------------------------------------------------------------------------
+# Edition shape
+# ---------------------------------------------------------------------------
+edition:
+  # 24 slots: large enough that a 3-per-source cap (12.5%) is meaningful and
+  # that four lanes each get a real allocation, small enough to stay a reading
+  # session rather than a dump of the 2,355-item in-window pool.
+  size: 24
+  # Fresh visits open on Updates (the owner's ruling; SC-38).
+  default_lane: updates
+  # Lane priority is the FIRST tie-break for primary-lane assignment (SC-24).
+  # Updates first because it is the default lane; Surprise last because a story
+  # that qualifies anywhere else does not need the protected exploration slot.
+  lane_priority: [updates, hot, interested, surprise]
+  # Tie-break order after lane priority. Frozen so a receipt replays exactly.
+  tie_break: [lane_priority, lane_score_desc, story_id_asc]
+
+lane_quotas:
+  # Only the PRIMARY lane consumes quota. Secondary lane reasons stay visible.
+  updates: 8      # Largest share: the default lane on every open, and the freshest evidence.
+  hot: 6          # Cross-source velocity. Supported by real volume: HN 266 + buzzing 486 in-window.
+  interested: 6   # Equal to Hot. Deliberately NOT dominant: the profile is empty until imports land.
+  surprise: 4     # 16.7% of the edition. Matches exploration.protected_min_slots below.
+  # 8 + 6 + 6 + 4 = 24 = edition.size. The verifier fails a slate where they disagree.
+
+backfill:
+  # When dedupe or the final verifier rejects an item, take the next eligible
+  # story from that SAME primary lane's remaining ranked pool. Deterministic,
+  # so a receipt replay produces the identical slate.
+  strategy: same_lane_next_ranked
+  # If a lane's pool is exhausted, the edition ships short rather than silently
+  # borrowing another lane's quota and misreporting the lane mix.
+  allow_cross_lane_borrow: false
+
+# ---------------------------------------------------------------------------
+# Transparent scorer: component weights
+#
+# final_score = relevance + freshness + trend + editor_consensus
+#             + deliberate_surprise + diversity
+#             - repetition_penalty - source_fatigue_penalty
+#
+# Each component is normalized to 0.0-1.0 by its own scorer, then multiplied by
+# the weight below. Weights sum to 1.0 on the positive side so a final score is
+# readable as a 0-1 quantity; penalties subtract on top.
+#
+# What gets PERSISTED in ComponentScores is the weighted contribution, not the
+# raw normalized value, so each stored component is bounded by weight * cap and
+# final_score is exactly the signed sum above. Both are recomputed from this
+# file at validation time (docs/contracts/candidate.md invariant 11): a score
+# set cannot assert a final_score its own components never produced.
+# ---------------------------------------------------------------------------
+components:
+  relevance:
+    enabled: true
+    weight: 0.30        # Largest single weight: relevance is the product's reason to exist.
+    cap: 1.0
+    # Until a profile snapshot exists, relevance falls back to topic-config match
+    # only, and the reason string must say the profile is not yet available.
+    fallback_when_no_profile: topic_config_match
+  freshness:
+    enabled: true
+    weight: 0.22        # Second largest. The pipeline already discards items older than 48h, so this ranks WITHIN the window.
+    cap: 1.0
+    half_life_hours: 12 # 12h half-life: 67 of 75 routes are fresh and the top routes refresh sub-hourly, so a day-old item should already be visibly discounted.
+  trend:
+    enabled: true
+    weight: 0.16        # Cross-source velocity and reach over a declared window, not newsletter count.
+    cap: 1.0
+    window_hours: 24    # One day. Shorter than the 48h intake window so "trending" cannot mean "was busy two days ago".
+    min_independent_sources: 2  # Two INDEPENDENT sources. Aggregator echoes (echo_eligible=false routes) do not count toward this.
+  editor_consensus:
+    enabled: true
+    weight: 0.12        # Newsletters are a delayed 12-24h source, so consensus supports rather than leads.
+    cap: 1.0
+    min_editors: 2      # One editor picking a story is a data point, not consensus.
+  deliberate_surprise:
+    enabled: true
+    weight: 0.10        # Deliberately small in the SCORE: exploration is protected by slot allocation, not by outscoring relevance.
+    cap: 1.0
+  diversity:
+    enabled: true
+    weight: 0.10        # A positive nudge toward under-represented topics and sources during ordering.
+    cap: 1.0
+  repetition_penalty:
+    enabled: true
+    weight: 0.25        # Subtracted. Larger than any single positive weight except relevance, so a repeat cannot win on freshness alone.
+    cap: 1.0
+  source_fatigue_penalty:
+    enabled: true
+    weight: 0.18        # Subtracted. Measured need: the top route alone is 20.6% of the in-window pool and the top five are 57%.
+    cap: 1.0
+
+# ---------------------------------------------------------------------------
+# Exploration
+# ---------------------------------------------------------------------------
+exploration:
+  # Protected allocation: reserved slots that relevance cannot consume.
+  protected_min_slots: 4          # 4 of 24 = 16.7%. Equals the Surprise quota, so exploration is structurally guaranteed, not emergent.
+  # Should-fix (2026-09-01 freeze review): this ceiling is currently
+  # UNREACHABLE. Exploration is scoped to the Surprise lane (quota 4) and
+  # allow_cross_lane_borrow is false below, so 6 can never be filled by
+  # Surprise alone. Recorded here rather than silently changed: raising this
+  # requires either letting exploration span a second lane (a WHAT decision)
+  # or lowering it to 4 to match the reachable ceiling. Left at 6 pending
+  # that decision; do not read it as an achievable value today.
+  protected_max_slots: 6          # Ceiling so exploration cannot crowd out the lanes the reader opens on.
+  # Surprise is NOT randomness. A candidate must clear real quality gates.
+  gates:
+    max_age_hours: 48             # Same window the pipeline already enforces. An old surprise is just an old story.
+    min_source_weight: 1.0        # Default source weight. Excludes any route deliberately down-weighted.
+    require_echo_eligible: true   # Aggregator-echo routes are discovery paths, not independent corroboration.
+    min_independent_sources: 1    # One real publisher is enough for surprise; two is required for trend.
+    exclude_stale_routes: true    # Excludes the five routes that contributed zero in-window items (three of them dead-but-200 for 77-237 days).
+
+# ---------------------------------------------------------------------------
+# Repetition and fatigue windows
+# ---------------------------------------------------------------------------
+repetition:
+  # Repetition control clusters by STORY CLUSTER, never by raw URL: the same
+  # story reaches us under many URLs across 75 routes.
+  key: story_cluster_id
+  window_hours: 72                # Three days. Covers a developing story's normal Updates re-entry without letting it reappear daily.
+  max_appearances_per_window: 1   # A cluster appears at most once per window unless it re-qualifies for Updates with CHANGED evidence.
+  updates_reentry_requires_changed_evidence: true  # The one legitimate repeat: the story genuinely moved.
+  max_reentry_share: 0.10         # At most 10% of the edition (2 of 24) may be re-entries, so Updates cannot become a rerun channel.
+
+source_fatigue:
+  window_hours: 24                # One reading day.
+  max_items_per_source_per_edition: 3   # 3 of 24 = 12.5%, below the 20.6% share the top route would otherwise take.
+  max_items_per_source_per_window: 6    # Across a day's editions.
+  # Aggregator routes are capped harder: they surface other publishers' work and
+  # two of them are already flagged link_resolution_degraded and non-corroborating.
+  max_items_per_aggregator_per_edition: 2
+
+# ---------------------------------------------------------------------------
+# Edition bands (SC-20's seven, and SC-08A's four required-active)
+#
+# Every band declares active plus a floor, a cap, or both. A disabled band is
+# EXPLICIT here; an omitted field is a validation failure, never an implied
+# disable. An active band outside its bounds fails the slate, which cannot then
+# publish or be described as balanced.
+#
+# Values are shares of the settled edition (0.0-1.0) unless noted.
+# ---------------------------------------------------------------------------
+bands:
+  relevance:
+    active: true                  # SC-08A: MUST be active.
+    required_active: true
+    measure: share_scoring_at_or_above_floor
+    component_floor: 0.35         # A story below 0.35 relevance is not "relevant" for band purposes.
+    # Re-derived 2026-09-01 (contract-freeze review, must-fix J). The original
+    # 0.60 floor was arithmetically unreachable: it requires 15 of 24 entries
+    # at or above component_floor, leaving room for only 9 non-relevant slots,
+    # but Hot (6) and Surprise (4) are DEFINED to run outside strong profile
+    # matches -- 10 slots -- so a well-formed edition could land at 14/24 =
+    # 0.583 and fail closed on day one, most likely with an empty profile.
+    # 0.55 requires only 14 of 24 (58.3%), which is exactly the Updates (8) +
+    # Interested (6) lanes clearing the floor on their own: achievable without
+    # assuming Hot or Surprise also clear it. Still a starting value (grade C);
+    # revision 2 replaces it once real slates measure the true split.
+    floor: 0.55
+    cap: 1.00                     # No upper bound: an all-relevant edition is not a defect.
+  freshness:
+    active: true                  # SC-08A: MUST be active.
+    required_active: true
+    measure: share_published_within_hours
+    within_hours: 24              # Tighter than the 48h intake window: the band is what makes the feed feel same-day.
+    # Re-derived 2026-09-01 (contract-freeze review, must-fix J). The original
+    # 0.70 floor was justified by citing "60% of collected items are inside
+    # 48h" -- but that is a measurement of the 48h window, not the 24h window
+    # this band actually checks. Since every item within 24h is also within
+    # 48h, the 24h share can never EXCEED the measured 48h share (0.60), so a
+    # 0.70 floor was mathematically unreachable regardless of route quality.
+    # No 24h-specific measurement exists in the Gate 0c receipt. 0.50 is a
+    # defensible starting floor safely below the 0.60 ceiling (grade C);
+    # revision 2 replaces it with a directly measured 24h share.
+    floor: 0.50
+    cap: 1.00
+  trend:
+    active: true
+    required_active: false        # Not on SC-08A's required list, but given a concrete value per SC-20.
+    measure: share_with_trend_evidence
+    floor: 0.15                   # At least ~4 of 24 carry independent cross-source movement.
+    cap: 0.60                     # Above 60% the edition is just a popularity board, which Hot already is on its own.
+  deliberate_surprise:
+    active: true
+    required_active: false
+    measure: share_out_of_profile_eligible
+    floor: 0.10                   # Never zero: exploration is protected.
+    cap: 0.25                     # 6 of 24. Matches exploration.protected_max_slots.
+  source_diversity:
+    active: true                  # SC-08A: MUST be active.
+    required_active: true
+    measure: max_share_single_source
+    cap: 0.125                    # 3 of 24. Directly below the 20.6% share the highest-volume route would otherwise claim.
+    # Should-fix (2026-09-01 freeze review): this cap is numerically IDENTICAL
+    # to source_fatigue.max_items_per_source_per_edition (3) / edition.size
+    # (24). Whether a source sitting at exactly the cap (3/24 = 0.125) counts
+    # as a band violation is intentionally undefined here: measure is
+    # max_share_single_source and the recompute check treats cap as
+    # inclusive (achieved <= cap passes), so exactly 3 items from one source
+    # is legal under both rules. Recorded so the two configs are read as
+    # consistent by design, not coincidentally equal.
+    min_distinct_sources: 10      # Of 75 configured routes, at least 10 must be represented in any edition.
+  topic_diversity:
+    active: true
+    required_active: false
+    measure: max_share_single_topic
+    cap: 0.375                    # 9 of 24. One topic may lead a day's news without owning it.
+    min_distinct_topics: 4        # Of 10 configured categories.
+  # Should-fix (2026-09-01 freeze review): the plan requires diversity across
+  # "topic, source, geography when available, and explanation type". This
+  # revision covers topic and source only. Geography and explanation-type
+  # diversity are DEFERRED, not implemented and not silently dropped: neither
+  # has a measured signal yet (no route carries a geography field, and
+  # "explanation type" presumes a taxonomy of reasons this freeze does not
+  # define). Revision 2 picks these up once that groundwork exists.
+  repetition:
+    active: true                  # SC-08A: MUST be active.
+    required_active: true
+    measure: share_repeat_within_window
+    floor: 0.00
+    cap: 0.10                     # At most 2 of 24 may be within-window re-entries. Mirrors repetition.max_reentry_share.
+
+band_exceptions:
+  # A required-active band may be disabled ONLY through a recorded, versioned
+  # exception with a stated reason. Disabling one without a record here fails
+  # policy validation (SC-08A). Empty is the correct state today.
+  []
+
+# ---------------------------------------------------------------------------
+# Per-event evidence weights (the plan's event-semantics table)
+#
+# class: SC-04's observed | inferred | explicit | passive
+# origin: live | imported   (a separate axis, so an imported row can never
+#         present as a live explicit action)
+# confidence: strong | medium | weak
+# weight: signed contribution to matched profile features
+# ---------------------------------------------------------------------------
+event_weights:
+  more_like_this:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 1.00                  # The reference strong-positive signal. Every other weight is relative to it.
+  less_like_this:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: -1.00                 # Symmetric with the positive. Lowers MATCHED features only.
+    creates_global_source_block: false  # Explicitly false: negative feedback never silently blocks a whole source.
+  already_knew_this:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 0.00                  # Zero AFFINITY change: it is knowledge-state evidence, not dislike.
+    novelty_delta: -0.80          # It lowers novelty and knowledge-gap value for that topic instead.
+  surprise_me:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 0.00                  # Not an affinity signal at all.
+    exploration_delta: 0.50       # It raises the eligible out-of-profile allocation, within the quality gates above.
+  save:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 1.00                  # Durable interest. The strongest available evidence alongside explicit feedback.
+  save_answer:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 1.00                  # Same strength as save: the reader chose to keep it.
+  ask_ai_question:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 0.90                  # Curiosity is strong but is a question, not an endorsement.
+    knowledge_gap_delta: 0.80     # The question topic becomes a recorded gap.
+  ask_ai_follow_up:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 0.60                  # Lower than the first question: depth is tracked as its own feature, not double-counted as breadth.
+    depth_delta: 0.50
+  create_report:
+    class: explicit
+    origin: live
+    confidence: strong
+    weight: 1.00                  # An explicit artifact request. Equal to save.
+  read_more:
+    class: explicit
+    origin: live
+    confidence: medium
+    weight: 0.50                  # Medium: a deliberate click, but reading intent is not yet an endorsement.
+  accordion_expand:
+    class: observed
+    origin: live
+    confidence: medium
+    # Should-fix (2026-09-01 freeze review): the plan describes this signal
+    # as "medium to weak". This freeze picked medium, the stronger end,
+    # recorded explicitly here rather than left as a silent choice: an
+    # accordion expand is a deliberate click (unlike dwell/scroll), which
+    # argues for medium over weak.
+    weight: 0.25                  # Weakest of the deliberate actions. Deduplicated per session below.
+    dedupe_window_minutes: 30     # Repeated expands of the same row inside 30 minutes count once.
+  return_to_story:
+    class: observed
+    origin: live
+    confidence: medium
+    weight: 0.50                  # Only after the accidental-repeat controls in browser_corroboration apply.
+  dwell:
+    class: passive
+    origin: live
+    confidence: weak
+    weight: 0.10                  # Supporting evidence only.
+    can_mark_read: false          # Dwell alone NEVER writes a completed-read event (SC-11).
+  scroll:
+    class: passive
+    origin: live
+    confidence: weak
+    weight: 0.10                  # Same treatment as dwell.
+    can_mark_read: false
+  imported_mail_unread_state:
+    class: observed
+    origin: imported
+    confidence: weak
+    weight: 0.10                  # Exposure and cadence evidence only.
+    can_create_opened_at: false   # No documented per-open timestamp exists. An invented one is rejected at schema level (SC-11).
+    enabled: false                # Stays OFF until a complete inventory receipt exists (SC-11A).
+  imported_browser_visit:
+    class: observed
+    origin: imported
+    confidence: weak
+    weight: 0.10                  # One visit is exposure, never a save.
+    promotable_to: medium         # May rise only through browser_corroboration below.
+    promoted_weight: 0.50         # The promoted value, equal to return_to_story.
+    enabled: false                # Stays OFF until the owner scopes the date range and exclusions.
+
+# ---------------------------------------------------------------------------
+# Fail-closed corroboration policy for weak imported visits (SC-11B)
+#
+# Both fields are REQUIRED. If either is absent, or timestamps cannot support
+# sessionization, repeated visits remain weak. That is the fail-closed default.
+# ---------------------------------------------------------------------------
+browser_corroboration:
+  browser_session_gap_minutes: 30       # 30 minutes of inactivity ends a session. Standard analytics boundary; long enough to survive a coffee break, short enough that a next-morning return is a new session.
+  browser_return_min_distinct_sessions: 3  # Three separate sessions. Two can be one interrupted reading; three is a pattern.
+  # A single independent explicit action promotes immediately, without needing
+  # the session threshold at all.
+  promoting_events: [save, ask_ai_question, more_like_this, less_like_this, create_report]
+  require_both_policy_fields: true      # Missing either field keeps every visit weak, rather than defaulting to a guess.
+
+# ---------------------------------------------------------------------------
+# Evidence decay
+# ---------------------------------------------------------------------------
+decay:
+  # Half-life by confidence band. Explicit choices should outlive passive ones.
+  strong_half_life_days: 90     # A quarter. Explicit preferences are durable but not permanent.
+  medium_half_life_days: 45     # Half of strong.
+  weak_half_life_days: 21       # Three weeks. Passive and imported exposure fades fastest.
+  floor: 0.01                   # Below 1% of original weight an event stops contributing, so the profile builder can bound its window.

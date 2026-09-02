@@ -1,0 +1,29 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourcePluginRegistration",
+  "expect": "valid",
+  "note": "The registry row for the hackernews plugin. A plugin is never implicitly enabled: state is explicitly enabled, and capabilities are embedded so the row and its declared capabilities cannot drift apart.",
+  "payload": {
+    "plugin_id": "hackernews",
+    "plugin_version": "1.0.0",
+    "tenant_id": "tenant-owner-private",
+    "config_reference": "sources.yaml#hackernews",
+    "capabilities": {
+      "plugin_id": "hackernews",
+      "plugin_version": "1.0.0",
+      "supports_poll": true,
+      "supports_push": false,
+      "supports_full_text": false,
+      "supports_trend_signal": true,
+      "supports_social_signal": true,
+      "supports_deletion": false,
+      "supports_incremental_checkpoint": false,
+      "consumes_search_queries": true,
+      "languages": [
+        "en"
+      ]
+    },
+    "state": "enabled",
+    "registered_at": "2026-09-01T12:00:00+00:00"
+  }
+}

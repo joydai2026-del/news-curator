@@ -1,0 +1,14 @@
+{
+  "contract": "tenant",
+  "dataclass": "Actor",
+  "expect": "valid",
+  "note": "An agent actor bound to the same tenant as the human it acts for. Events written by this actor stay distinguishable from human-written ones.",
+  "payload": {
+    "actor_id": "actor-cli-01",
+    "tenant_id": "tenant-owner-private",
+    "actor_kind": "agent",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "user_id": "user-owner",
+    "label": "authenticated CLI"
+  }
+}

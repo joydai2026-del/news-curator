@@ -1,0 +1,15 @@
+{
+  "contract": "event",
+  "dataclass": "EventSemantics",
+  "expect": "valid",
+  "note": "The semantics row policy validation checks dwell against. can_mark_read is false, which is SC-11 stated as data rather than prose.",
+  "payload": {
+    "event_type": "dwell",
+    "default_evidence_class": "passive",
+    "default_confidence": "weak",
+    "profile_effect": "supporting evidence only",
+    "creates_global_source_block": false,
+    "can_mark_read": false,
+    "promotable_by_corroboration": false
+  }
+}

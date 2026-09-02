@@ -1,0 +1,22 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorReceipt",
+  "expect": "invalid",
+  "note": "Settling on a write acknowledgement instead of a checksum-matched readback is the failure the state machine exists to prevent.",
+  "payload": {
+    "receipt_id": "mrec-000023",
+    "tenant_id": "tenant-owner-private",
+    "artifact_id": "art-000031",
+    "artifact_version": 2,
+    "adapter_id": "vault-wiki",
+    "target_id": "wiki/example/post-quantum-migration.md",
+    "state": "settled",
+    "idempotency_key": "mirror-art-000031-v2-vault-wiki",
+    "attempted_at": "2026-09-01T12:00:00+00:00",
+    "expected_prior_checksum": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "attempted_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "readback_checksum": "",
+    "settled_at": "2026-09-01T12:00:00+00:00"
+  },
+  "violates": "invariant: state settled requires readback_checksum == attempted_checksum"
+}

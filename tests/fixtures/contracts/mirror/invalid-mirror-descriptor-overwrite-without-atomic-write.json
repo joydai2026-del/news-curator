@@ -1,0 +1,15 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorAdapterDescriptor",
+  "expect": "invalid",
+  "note": "The provider-capability gate stated as data: overwrite-in-place offered by a target that cannot enforce the precondition.",
+  "payload": {
+    "adapter_id": "document-workspace",
+    "adapter_version": "1.0.0",
+    "write_mode": "overwrite_compare_and_set",
+    "proves_atomic_conditional_write": false,
+    "precondition_kind": "none",
+    "supports_readback": true
+  },
+  "violates": "invariant: overwrite_compare_and_set requires proves_atomic_conditional_write"
+}

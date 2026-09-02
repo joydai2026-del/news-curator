@@ -1,0 +1,13 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceRights",
+  "expect": "valid",
+  "note": "Gate 0c disposition D4: the rights field is DECLARED here and DEFERRED. It is populated when discover/poll is built, because programmatic route discovery is what makes machine-readable terms load-bearing.",
+  "payload": {
+    "terms_id": "unrecorded",
+    "verified": false,
+    "deferred": true,
+    "public_projection_eligible": null,
+    "verbatim_quote_eligible": null
+  }
+}

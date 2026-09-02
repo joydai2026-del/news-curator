@@ -1,0 +1,26 @@
+{
+  "contract": "publication",
+  "dataclass": "PublishingBasket",
+  "expect": "invalid",
+  "note": "should-fix: the original invariant forbade only state authorized. A basket claiming settled, publishing, unknown, or failed-safe would let a plain container of items impersonate a publication record, which only PublicationRecord may hold.",
+  "payload": {
+    "basket_id": "basket-2026-09-01",
+    "tenant_id": "tenant-owner-private",
+    "destination": "relay-set-a",
+    "issue_date": "2026-09-01",
+    "item_story_ids": [
+      "story-1000",
+      "story-1001",
+      "story-1002",
+      "story-1003",
+      "story-1004"
+    ],
+    "required_item_count": 5,
+    "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "state": "settled",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "readiness_signal": true,
+    "revision": 5
+  },
+  "violates": "invariant: a basket is draft or ready at most; every state past ready lives on the publication record"
+}

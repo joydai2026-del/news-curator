@@ -1,0 +1,17 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceCheckpoint",
+  "expect": "invalid",
+  "note": "A checkpoint state outside the frozen vocabulary would let a route resume from an undefined position.",
+  "payload": {
+    "plugin_id": "rss",
+    "source_id": "buzzing",
+    "tenant_id": "tenant-owner-private",
+    "state": "resumed",
+    "cursor": "",
+    "watermark": null,
+    "last_settled_run_id": "",
+    "updated_at": "2026-09-01T12:00:00+00:00"
+  },
+  "violates": "resumed is not a member of CheckpointState"
+}

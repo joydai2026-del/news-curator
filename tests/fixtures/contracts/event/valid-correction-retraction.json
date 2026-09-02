@@ -1,0 +1,19 @@
+{
+  "contract": "event",
+  "dataclass": "CorrectionEvent",
+  "expect": "valid",
+  "note": "A retraction appends. The original evidence row is never edited or deleted, and every snapshot covering it is invalidated.",
+  "payload": {
+    "event_id": "corr-000011",
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "action": "retract",
+    "target_kind": "evidence_item",
+    "target_id": "ev-000101",
+    "reason_code": "owner_requested_removal",
+    "occurred_at": "2026-09-01T12:00:00+00:00",
+    "invalidated_snapshot_ids": [
+      "snap-000007"
+    ]
+  }
+}

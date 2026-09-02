@@ -1,0 +1,110 @@
+{
+  "contract": "receipt",
+  "dataclass": "RankingReceipt",
+  "expect": "invalid",
+  "note": "The exact adversarial reproduction from the freeze review: the receipt names hot as story-000042's primary lane. hot IS a scored lane for that story (0.81), so the membership check alone lets it through, but the recomputed tie-break winner from this receipt's own lane_priority is updates. A receipt naming any other qualified lane must be rejected.",
+  "payload": {
+    "envelope": {
+      "receipt_id": "rrec-000014",
+      "tenant_id": "tenant-owner-private",
+      "kind": "ranking",
+      "state": "settled",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "actor_id": "actor-system",
+      "reason_code": "",
+      "settled_at": "2026-09-01T12:00:00+00:00"
+    },
+    "run_id": "run-2026-09-01-14",
+    "edition_date": "2026-09-01",
+    "profile_snapshot_id": "snap-000007",
+    "profile_version": 7,
+    "pre_rank_candidate_ids": [
+      "story-000042"
+    ],
+    "lane_scores": [
+      [
+        "story-000042",
+        "updates",
+        0.74
+      ],
+      [
+        "story-000042",
+        "hot",
+        0.81
+      ]
+    ],
+    "lane_priority": [
+      "updates",
+      "hot",
+      "interested",
+      "surprise"
+    ],
+    "primary_lane_by_story": [
+      [
+        "story-000042",
+        "hot"
+      ]
+    ],
+    "secondary_lane_reasons": [
+      [
+        "story-000042",
+        "updates",
+        "developing cluster: two new source documents since the last edition"
+      ]
+    ],
+    "transparent_scores": [
+      {
+        "run_id": "run-2026-09-01-14",
+        "story_id": "story-000042",
+        "scorer_kind": "transparent",
+        "scorer_version": "transparent-1",
+        "authoritative": true,
+        "components": {
+          "relevance": 0.28,
+          "freshness": 0.2,
+          "trend": 0.13,
+          "editor_consensus": 0.07,
+          "deliberate_surprise": 0.0,
+          "diversity": 0.06,
+          "repetition_penalty": 0.0,
+          "source_fatigue_penalty": 0.02,
+          "final_score": 0.72
+        },
+        "plain_reason": "developing story you follow, 4 independent sources in the last 24h"
+      }
+    ],
+    "final_order": [
+      {
+        "position": 1,
+        "story_id": "story-000042",
+        "primary_lane": "hot",
+        "final_score": 0.72,
+        "plain_reason": "developing story you follow, 4 independent sources in the last 24h",
+        "backfilled": false
+      }
+    ],
+    "bands": [],
+    "lane_quotas": [
+      [
+        "updates",
+        8
+      ],
+      [
+        "hot",
+        6
+      ],
+      [
+        "interested",
+        6
+      ],
+      [
+        "surprise",
+        4
+      ]
+    ],
+    "verifier_verdict": "pass",
+    "shadow_scores": []
+  },
+  "violates": "invariant: primary_lane_by_story must be the recomputed tie-break winner from lane_priority then lane_score"
+}

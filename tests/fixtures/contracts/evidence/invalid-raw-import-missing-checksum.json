@@ -1,0 +1,18 @@
+{
+  "contract": "evidence",
+  "dataclass": "RawImport",
+  "expect": "invalid",
+  "note": "Without a checksum, a re-import cannot be recognised as the same bytes, and SC-03's zero-duplicate guarantee has nothing to key on.",
+  "payload": {
+    "raw_import_id": "raw-000003",
+    "tenant_id": "tenant-owner-private",
+    "owner_actor_id": "actor-human-owner",
+    "source_kind": "browser_history",
+    "schema_version": "history-export-1",
+    "storage_reference": "restricted://raw/000003",
+    "imported_at": "2026-09-01T12:00:00+00:00",
+    "consent_version": "consent-2026-09-01",
+    "retention_state": "active"
+  },
+  "violates": "required field checksum is absent"
+}

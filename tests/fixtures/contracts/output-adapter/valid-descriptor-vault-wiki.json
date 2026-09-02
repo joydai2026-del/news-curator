@@ -1,0 +1,22 @@
+{
+  "contract": "output-adapter",
+  "dataclass": "OutputAdapterDescriptor",
+  "expect": "valid",
+  "note": "A private mirror target. It needs no publish approval because nothing leaves the private boundary, and it declares no publisher identity.",
+  "payload": {
+    "adapter_id": "vault-wiki",
+    "adapter_version": "1.0.0",
+    "eligible_artifact_types": [
+      "question",
+      "answer",
+      "report",
+      "insight",
+      "save"
+    ],
+    "requires_approval": false,
+    "supports_dry_run": true,
+    "supports_readback": true,
+    "publisher_identity_ref": "",
+    "emits_public_content": false
+  }
+}

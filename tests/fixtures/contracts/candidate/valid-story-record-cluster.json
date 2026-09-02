@@ -1,0 +1,24 @@
+{
+  "contract": "candidate",
+  "dataclass": "StoryRecord",
+  "expect": "valid",
+  "note": "The consolidated story cluster record. One row per canonical story, independent of any lane assignment; candidate generators and search read this and never branch on a provider name.",
+  "payload": {
+    "story_cluster_id": "cluster-000012",
+    "tenant_id": "tenant-owner-private",
+    "publication_class": "private",
+    "canonical_source_document_id": "doc-cnn-000001",
+    "source_document_ids": [
+      "doc-cnn-000001",
+      "doc-fox-000004"
+    ],
+    "created_at": "2026-09-01T11:30:00+00:00",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "topic_tags": [
+      "ai"
+    ],
+    "synthesis_evidence_ids": [
+      "ev-000200"
+    ]
+  }
+}

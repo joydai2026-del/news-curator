@@ -1,0 +1,25 @@
+{
+  "contract": "candidate",
+  "dataclass": "ScoredCandidate",
+  "expect": "valid",
+  "note": "A shadow score set stored beside the authoritative one. It runs in parallel and can never feed slate assembly.",
+  "payload": {
+    "run_id": "run-2026-09-01-12",
+    "story_id": "story-000042",
+    "scorer_kind": "shadow_learned",
+    "scorer_version": "shadow-0.1",
+    "authoritative": false,
+    "components": {
+      "relevance": 0.3,
+      "freshness": 0.19,
+      "trend": 0.14,
+      "editor_consensus": 0.06,
+      "deliberate_surprise": 0.0,
+      "diversity": 0.05,
+      "repetition_penalty": 0.0,
+      "source_fatigue_penalty": 0.03,
+      "final_score": 0.71
+    },
+    "plain_reason": "shadow only, stored for evaluation"
+  }
+}

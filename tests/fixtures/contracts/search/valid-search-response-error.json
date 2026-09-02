@@ -1,0 +1,14 @@
+{
+  "contract": "search",
+  "dataclass": "SearchResponse",
+  "expect": "valid",
+  "note": "An index failure is an explicit error with a code. It never renders as an empty state.",
+  "payload": {
+    "outcome": "error",
+    "index_version": "idx-2026-09-01-a",
+    "policy_revision": 1,
+    "total_matched": 0,
+    "results": [],
+    "error_code": "index_unavailable"
+  }
+}

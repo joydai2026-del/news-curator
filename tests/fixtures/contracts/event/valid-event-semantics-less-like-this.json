@@ -1,0 +1,15 @@
+{
+  "contract": "event",
+  "dataclass": "EventSemantics",
+  "expect": "valid",
+  "note": "Negative feedback lowers matched features and must never silently block a whole source.",
+  "payload": {
+    "event_type": "less_like_this",
+    "default_evidence_class": "explicit",
+    "default_confidence": "strong",
+    "profile_effect": "decrease matched features only",
+    "creates_global_source_block": false,
+    "can_mark_read": false,
+    "promotable_by_corroboration": false
+  }
+}

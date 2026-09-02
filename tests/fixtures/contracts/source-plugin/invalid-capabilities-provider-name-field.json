@@ -1,0 +1,23 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceCapabilities",
+  "expect": "invalid",
+  "note": "Core contracts stay vendor-neutral. A provider name belongs in an adapter's own configuration, never in a frozen contract field.",
+  "payload": {
+    "plugin_id": "rss",
+    "plugin_version": "1.0.0",
+    "supports_poll": true,
+    "supports_push": false,
+    "supports_full_text": false,
+    "supports_trend_signal": false,
+    "supports_social_signal": false,
+    "supports_deletion": false,
+    "supports_incremental_checkpoint": false,
+    "consumes_search_queries": false,
+    "languages": [
+      "en"
+    ],
+    "vendor": "example-vendor-inc"
+  },
+  "violates": "unknown field vendor"
+}

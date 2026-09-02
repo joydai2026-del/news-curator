@@ -1,0 +1,22 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceCapabilities",
+  "expect": "valid",
+  "note": "The adapter serving 72 of the 75 live routes, including the highest-volume one (486 in-window items per cycle). It ignores search queries, and now says so.",
+  "payload": {
+    "plugin_id": "rss",
+    "plugin_version": "1.0.0",
+    "supports_poll": true,
+    "supports_push": false,
+    "supports_full_text": false,
+    "supports_trend_signal": false,
+    "supports_social_signal": false,
+    "supports_deletion": false,
+    "supports_incremental_checkpoint": false,
+    "consumes_search_queries": false,
+    "languages": [
+      "en",
+      "zh"
+    ]
+  }
+}

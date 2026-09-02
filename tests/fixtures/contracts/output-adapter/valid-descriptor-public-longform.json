@@ -1,0 +1,19 @@
+{
+  "contract": "output-adapter",
+  "dataclass": "OutputAdapterDescriptor",
+  "expect": "valid",
+  "note": "A public destination: approval required, an isolated publisher identity, and public emission declared up front rather than decided at call time.",
+  "payload": {
+    "adapter_id": "longform-relay",
+    "adapter_version": "0.1.0",
+    "eligible_artifact_types": [
+      "report",
+      "insight"
+    ],
+    "requires_approval": true,
+    "supports_dry_run": true,
+    "supports_readback": true,
+    "publisher_identity_ref": "signer-publisher-01",
+    "emits_public_content": true
+  }
+}

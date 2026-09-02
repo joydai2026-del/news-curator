@@ -1,0 +1,22 @@
+{
+  "contract": "event",
+  "dataclass": "LearningEvent",
+  "expect": "invalid",
+  "note": "Without an idempotency key a retried agent call duplicates the event, and human and agent paths stop producing identical records.",
+  "payload": {
+    "event_id": "evt-000503",
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-cli-01",
+    "actor_kind": "agent",
+    "event_type": "save",
+    "occurred_at": "2026-09-01T12:00:00+00:00",
+    "recorded_at": "2026-09-01T12:00:00+00:00",
+    "surface": "agent_api",
+    "evidence_class": "explicit",
+    "origin": "live",
+    "confidence": "strong",
+    "policy_revision": 1,
+    "story_id": "story-000042"
+  },
+  "violates": "required field idempotency_key is absent"
+}

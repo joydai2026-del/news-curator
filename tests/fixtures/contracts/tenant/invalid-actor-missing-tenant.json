@@ -1,0 +1,12 @@
+{
+  "contract": "tenant",
+  "dataclass": "Actor",
+  "expect": "invalid",
+  "note": "An actor with no tenant could write rows nothing isolates.",
+  "payload": {
+    "actor_id": "actor-orphan",
+    "actor_kind": "human",
+    "created_at": "2026-09-01T12:00:00+00:00"
+  },
+  "violates": "required field tenant_id is absent"
+}

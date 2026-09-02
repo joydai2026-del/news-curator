@@ -1,0 +1,14 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorAdapterDescriptor",
+  "expect": "valid",
+  "note": "A git-backed target: the commit parent is a genuine server-enforced precondition, so overwrite-in-place is allowed here.",
+  "payload": {
+    "adapter_id": "vault-wiki",
+    "adapter_version": "1.0.0",
+    "write_mode": "overwrite_compare_and_set",
+    "proves_atomic_conditional_write": true,
+    "precondition_kind": "commit_parent",
+    "supports_readback": true
+  }
+}

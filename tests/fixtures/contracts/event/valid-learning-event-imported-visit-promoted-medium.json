@@ -1,0 +1,22 @@
+{
+  "contract": "event",
+  "dataclass": "LearningEvent",
+  "expect": "valid",
+  "note": "The one legal departure from the frozen weak default: policy revision 1 marks imported_browser_visit promotable_to medium through SC-11B's corroboration policy. evidence_class and origin still match the frozen row exactly; only confidence rises, and only to the recorded promotion value.",
+  "payload": {
+    "event_id": "evt-000505",
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "event_type": "imported_browser_visit",
+    "occurred_at": "2026-08-22T09:14:00+00:00",
+    "recorded_at": "2026-09-01T12:00:00+00:00",
+    "surface": "import_batch",
+    "idempotency_key": "visit-000102-import",
+    "evidence_class": "observed",
+    "origin": "imported",
+    "confidence": "medium",
+    "policy_revision": 1,
+    "story_id": "story-000043"
+  }
+}

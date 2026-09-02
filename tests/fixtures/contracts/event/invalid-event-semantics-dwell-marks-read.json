@@ -1,0 +1,16 @@
+{
+  "contract": "event",
+  "dataclass": "EventSemantics",
+  "expect": "invalid",
+  "note": "The exact SC-11 violation: a passive signal claiming the authority to mark a story read.",
+  "payload": {
+    "event_type": "dwell",
+    "default_evidence_class": "passive",
+    "default_confidence": "weak",
+    "profile_effect": "marks the story read",
+    "creates_global_source_block": false,
+    "can_mark_read": true,
+    "promotable_by_corroboration": false
+  },
+  "violates": "invariant: a passive or weak event may not set can_mark_read"
+}
