@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: a settled output with no acknowledgement and no settled_at. state and receipt_state matching each other (both settled) is not proof anything was actually acknowledged by the destination.",
   "payload": {
-    "receipt_id": "orec-000015",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "orec-000015",
     "adapter_id": "longform-relay",
     "publisher_identity_ref": "signer-publisher-01",
     "destination": "relay-set-a",

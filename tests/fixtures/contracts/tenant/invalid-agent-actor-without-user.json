@@ -1,0 +1,15 @@
+{
+  "contract": "tenant",
+  "dataclass": "Actor",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent. An agent Actor that names no human. Actor is exempt from the Ownership shape (it is the record an actor_id points AT) but it is the binding that makes an agent-written row attributable, so an unbound agent actor unbinds every row it writes.",
+  "payload": {
+    "actor_id": "actor-cli-01",
+    "tenant_id": "tenant-owner-private",
+    "actor_kind": "agent",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "user_id": null,
+    "label": "authenticated CLI"
+  },
+  "violates": "a human or agent Actor requires a non-empty user_id"
+}

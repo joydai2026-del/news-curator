@@ -5,13 +5,15 @@
   "note": "An incomplete inventory keeps the source import-disabled. That is the whole point of SC-11A: absence of a receipt is a disable, not a default-on.",
   "payload": {
     "envelope": {
-      "receipt_id": "irec-000004",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "irec-000004",
       "kind": "import_inventory",
       "state": "partial",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-human-owner",
       "reason_code": "fields_missing",
       "settled_at": null
     },

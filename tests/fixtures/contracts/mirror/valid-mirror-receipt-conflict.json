@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "Someone edited the target between versions. Conflict is terminal for this attempt: no overwrite, no automatic retry.",
   "payload": {
-    "receipt_id": "mrec-000022",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000022",
     "artifact_id": "art-000031",
     "artifact_version": 3,
     "adapter_id": "vault-wiki",

@@ -5,13 +5,15 @@
   "note": "The clean-looking receipt that leaves content sitting on an external target. SC-05 calls this a false deletion.",
   "payload": {
     "envelope": {
-      "receipt_id": "drec-000004",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "drec-000004",
       "kind": "deletion",
       "state": "settled",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-human-owner",
       "reason_code": "",
       "settled_at": "2026-09-01T12:00:00+00:00"
     },

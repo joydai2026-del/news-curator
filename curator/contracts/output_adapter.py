@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .enums import ArtifactType, PublicationState, ReceiptState
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class DryRunResult:
 
 
 @dataclass(frozen=True)
-class OutputReceipt:
+class OutputReceipt(Ownership):
     """Publish or delivery safety record.
 
     ``state`` is the publication state machine; ``receipt_state`` is the
@@ -60,7 +61,6 @@ class OutputReceipt:
     """
 
     receipt_id: str
-    tenant_id: str
     adapter_id: str
     publisher_identity_ref: str
     destination: str

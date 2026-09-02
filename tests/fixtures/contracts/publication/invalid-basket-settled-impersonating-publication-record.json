@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "should-fix: the original invariant forbade only state authorized. A basket claiming settled, publishing, unknown, or failed-safe would let a plain container of items impersonate a publication record, which only PublicationRecord may hold.",
   "payload": {
-    "basket_id": "basket-2026-09-01",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "basket_id": "basket-2026-09-01",
     "destination": "relay-set-a",
     "issue_date": "2026-09-01",
     "item_story_ids": [

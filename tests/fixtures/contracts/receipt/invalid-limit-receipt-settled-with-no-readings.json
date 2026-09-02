@@ -1,0 +1,27 @@
+{
+  "contract": "receipt",
+  "dataclass": "LimitReceipt",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent. A limit receipt stamped settled whose readings list is EMPTY. The freshness loop is vacuous over an empty list, so a receipt that read no meter at all settled green: the strongest instance of 'meters cannot be read', not an exception to it. The sibling deletion receipt already refuses an empty projections list for the same reason.",
+  "payload": {
+    "envelope": {
+      "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-system",
+      "actor_kind": "system",
+      "user_id": null,
+      "receipt_id": "lrec-000009",
+      "kind": "host_limits",
+      "state": "settled",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "reason_code": "",
+      "settled_at": "2026-09-01T12:05:00+00:00"
+    },
+    "meter_source": "host_analytics_api",
+    "attributed_operation_class": "slate_build",
+    "readings": [],
+    "shed_actions": [],
+    "final_state": "settled"
+  },
+  "violates": "a settled limit receipt must read at least one meter; an empty readings list settles green while proving nothing was read"
+}

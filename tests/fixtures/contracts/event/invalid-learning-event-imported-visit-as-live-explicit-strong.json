@@ -4,10 +4,11 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: an imported_browser_visit recorded as evidence_class explicit, origin live, confidence strong. Policy revision 1's frozen row for imported_browser_visit is observed / imported / weak. A weak imported signal must never be written as a live explicit strong event.",
   "payload": {
-    "event_id": "evt-000504",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-human-owner",
     "actor_kind": "human",
+    "user_id": "user-owner",
+    "event_id": "evt-000504",
     "event_type": "imported_browser_visit",
     "occurred_at": "2026-08-20T09:14:00+00:00",
     "recorded_at": "2026-09-01T12:00:00+00:00",

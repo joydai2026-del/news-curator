@@ -5,13 +5,15 @@
   "note": "Reproduced adversarial payload: an incomplete, credential-unverified import inventory marked settled and enabled anyway. Absence of a real receipt must never read as a default-on.",
   "payload": {
     "envelope": {
-      "receipt_id": "irec-000006",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "irec-000006",
       "kind": "import_inventory",
       "state": "settled",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-human-owner",
       "reason_code": "",
       "settled_at": "2026-09-01T12:00:00+00:00"
     },

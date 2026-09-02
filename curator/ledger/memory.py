@@ -17,10 +17,23 @@ from curator.contracts.enums import CorrectionAction
 from curator.contracts.event import CorrectionEvent, LearningEvent
 from curator.contracts.evidence import EvidenceItem
 from curator.contracts.receipt import DeletionReceipt
+from curator.ledger.ownership import ownership_violations
 
 
 class LedgerError(Exception):
     """Raised when a caller attempts something the ledger contract forbids."""
+
+
+def _reject_bad_ownership(record: object, *, label: str) -> None:
+    """Every write path recomputes the ownership rule; none of them trusts it.
+
+    The contract package is declarative, so nothing stops a caller from
+    constructing an owned record with a blank actor or a missing subject. This
+    is the gate that stops such a record being STORED.
+    """
+    problems = ownership_violations(record)
+    if problems:
+        raise LedgerError(f"{label}: " + "; ".join(problems))
 
 
 class InMemoryLedgerStore:
@@ -31,14 +44,27 @@ class InMemoryLedgerStore:
         # Rows keyed by their own id. Insertion order is preserved by dict
         # ordering, which effective_events relies on for deterministic output.
         self._events: dict[str, LearningEvent] = {}
-        self._idempotency_index: dict[tuple[str, str], str] = {}
+        # Keyed on (tenant_id, user_id, idempotency_key), decided 2026-09-02.
+        # A tenant-scoped key alone let a same-tenant collision on the SAME
+        # idempotency_key text but a DIFFERENT user_id return the OTHER user's
+        # row: bob posting with alice's key silently got alice's event handed
+        # back, and bob's own event was dropped on the floor. A client may
+        # reuse the same key text across different users safely, because the
+        # identity is scoped per user (see docs/contracts/event.md).
+        self._idempotency_index: dict[tuple[str, str, str], str] = {}
         self._corrections: dict[str, CorrectionEvent] = {}
         self._evidence: dict[str, EvidenceItem] = {}
         self._deletion_receipts: dict[str, DeletionReceipt] = {}
 
     def append_event(self, event: LearningEvent) -> LearningEvent:
+        if type(event) is not LearningEvent:
+            raise LedgerError(
+                f"learning event: unknown record type {type(event).__name__}; "
+                "expected the exact frozen LearningEvent class"
+            )
+        _reject_bad_ownership(event, label="learning event")
         with self._lock:
-            idem_key = (event.tenant_id, event.idempotency_key)
+            idem_key = (event.tenant_id, event.user_id, event.idempotency_key)
             existing_id = self._idempotency_index.get(idem_key)
             if existing_id is not None:
                 return self._events[existing_id]
@@ -49,6 +75,7 @@ class InMemoryLedgerStore:
             return event
 
     def append_correction(self, correction: CorrectionEvent) -> CorrectionEvent:
+        _reject_bad_ownership(correction, label="correction event")
         with self._lock:
             if correction.event_id in self._corrections:
                 raise LedgerError(
@@ -58,6 +85,7 @@ class InMemoryLedgerStore:
             return correction
 
     def append_evidence(self, evidence: EvidenceItem) -> EvidenceItem:
+        _reject_bad_ownership(evidence, label="evidence item")
         with self._lock:
             if evidence.evidence_id in self._evidence:
                 raise LedgerError(
@@ -88,6 +116,18 @@ class InMemoryLedgerStore:
             )
 
     def record_deletion_receipt(self, receipt: DeletionReceipt) -> DeletionReceipt:
+        # The WRAPPER first: it is the only place the envelope's kind can be
+        # checked against the type of receipt being stored. A DeletionReceipt
+        # carrying a ``ranking`` envelope passed every ownership check before
+        # this line existed, because ``ranking`` is a legal kind, just not
+        # this receipt's kind.
+        if type(receipt) is not DeletionReceipt:
+            raise LedgerError(
+                f"deletion receipt: unknown record type {type(receipt).__name__}; "
+                "expected the exact frozen DeletionReceipt class"
+            )
+        _reject_bad_ownership(receipt, label="deletion receipt")
+        _reject_bad_ownership(receipt.envelope, label="deletion receipt envelope")
         with self._lock:
             unresolved = [row for row in receipt.projections if not row.resolved]
             if receipt.envelope.state == "settled" and unresolved:

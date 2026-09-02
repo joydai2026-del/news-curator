@@ -5,13 +5,15 @@
   "note": "Reproduced adversarial payload: a settled receipt whose relevance and freshness bands carry floor 0.0 (looser than policy revision 1's 0.55 and 0.50) and whose achieved values still clear that looser floor. The receipt self-certifies bounds the named policy revision never granted.",
   "payload": {
     "envelope": {
-      "receipt_id": "rrec-000012",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-system",
+      "actor_kind": "system",
+      "user_id": "user-owner",
+      "receipt_id": "rrec-000012",
       "kind": "ranking",
       "state": "settled",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-system",
       "reason_code": "",
       "settled_at": "2026-09-01T12:00:00+00:00"
     },

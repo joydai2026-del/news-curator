@@ -4,6 +4,10 @@
   "expect": "invalid",
   "note": "There is no published state. The terminal success state is settled, and every adapter shares the same seven states.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

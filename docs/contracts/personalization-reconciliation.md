@@ -44,12 +44,12 @@ tenancy, provenance, and lifecycle, all of which are additive.
 | Shipped field | Type and constraint (Grade B, read from the migration) | New-contract counterpart | Verdict |
 |---|---|---|---|
 | `user_id` | `uuid primary key references auth.users(id) on delete cascade` | `tenant.User.user_id` | **Adopt with change.** The id concept maps cleanly. The `on delete cascade` does not: see conflict C1. |
-| — | absent | `tenant_id` (required on every private record) | **Delta D1. Add.** |
-| — | absent | `actor_id` (required to tell a human write from an agent write) | **Delta D2. Add.** |
-| `revision` | `bigint not null default 0 check (revision >= 0)`, server-owned, increments by one | `ActionRequirement.requires_revision_check`; `PublishingBasket.revision` | **Adopt as-is.** This is exactly the compare-and-set discipline the new contracts require for artifact, mirror, basket, and policy writes. The new contracts should follow this pattern, not the reverse. |
-| `locale` | `not null default 'en' check (locale in ('en','zh'))` | **No counterpart.** `NormalizedSourceDocument.language` is a document property, not a reader preference. | **Delta D3.** The new contracts have no home for a reader locale. Keep it here. |
-| `interests` | `text[] not null default '{}'`, ≤20 entries, each 1-80 chars and ≤160 bytes, trimmed | `ProfileSnapshot.topic_affinities` | **Conceptual difference, not a conflict. See below.** |
-| `saved_searches` | `jsonb not null default '[]'`, ≤20 objects, ≤8192 serialized bytes; each exactly `{id, query, enabled}` with unique trimmed ids | `SearchQuery` (a request, not a stored object) | **Delta D4.** A saved search stores only free text: no lane, topic, source, or class filters. |
+| none | absent | `tenant_id` (required on every private record) | **Delta D1. Add.** |
+| none | absent | `actor_id` (required to tell a human write from an agent write) | **Delta D2. Add.** |
+| `revision` | `bigint not null default 0 check (revision >= 0)`, server-owned, increments by one | `ActionRequirement.requires_revision_check`; basket revision field | **Adopt as-is.** This is exactly the compare-and-set discipline the new contracts require for artifact, mirror, basket, and policy writes. The new contracts should follow this pattern, not the reverse. |
+| `locale` | `not null default 'en' check (locale in ('en','zh'))` | **No counterpart.** The normalized-document language field is a document property, not a reader preference. | **Delta D3.** The new contracts have no home for a reader locale. Keep it here. |
+| `interests` | `text[] not null default '{}'`, ≤20 entries, each 1-80 chars and ≤160 bytes, trimmed | derived profile topic-affinity field | **Conceptual difference, not a conflict. See below.** |
+| `saved_searches` | `jsonb not null default '[]'`, ≤20 objects, ≤8192 serialized bytes; each exactly `{id, query, enabled}` with unique trimmed ids | search request contract (a request, not a stored object) | **Delta D4.** A saved search stores only free text: no lane, topic, source, or class filters. |
 | `created_at`, `updated_at` | `timestamptz not null default statement_timestamp()`, `updated_at` maintained by trigger | `created_at` on most records; `recorded_at` on evidence | **Adopt as-is.** |
 
 ### The one conceptual difference worth stating plainly
@@ -82,9 +82,9 @@ the system of record for what the system *believes*.
 | Update path | **No direct update grant.** All updates go through the CAS function. | `requires_revision_check` on artifact, mirror, basket, and policy writes | **Adopt as-is, and generalize it.** |
 | Caller identity | `security definer` function derives `caller_id := auth.uid()`; the client never sends a user id or a chosen revision on update | `PrincipalClaims.principal_id` verified, never trusted from the payload | **Aligned.** |
 | Credential in the browser | Publishable key only; a service-role key is prohibited in both flows | "The browser receives no service-role key" | **Aligned.** |
-| Scopes | None. Any authenticated session may read, insert, and delete its own row. | Closed `Scope` vocabulary, per-action | **Delta D5.** Acceptable for declared preferences; not acceptable once this row can influence ranking. |
-| Audit | None. No allow/deny record. | Every allow and every deny writes an `AuthorizationAudit` row | **Delta D6.** |
-| Delete | `grant delete ... to authenticated` on the owner's own row, plus `on delete cascade` from `auth.users` | Append-only. A deletion is a correction event plus a receipt naming every derived projection. | **Conflicts C1 and C2.** |
+| Scopes | None. Any authenticated session may read, insert, and delete its own row. | Closed `Scope` vocabulary, per-action | **Delta D5.** Acceptable for declared preferences; not acceptable once this row can influence sequence calculation. |
+| Audit | None. No allow/deny record. | Every allow and every deny writes an authorization audit row | **Delta D6.** |
+| Delete | `grant delete ... to authenticated` on the owner's own row, plus `on delete cascade` from `auth.users` | Append-only. A delete request is a correction event plus a receipt naming every derived projection. | **Conflicts C1 and C2.** |
 
 ## The exact deltas
 

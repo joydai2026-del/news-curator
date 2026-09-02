@@ -5,13 +5,15 @@
   "note": "Reproduced adversarial payload: all seven projections resolved, but zero_contribution_verdict is false. A settled deletion cannot claim completeness while admitting the rebuild did not prove zero contribution.",
   "payload": {
     "envelope": {
-      "receipt_id": "drec-000008",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "drec-000008",
       "kind": "deletion",
       "state": "settled",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-human-owner",
       "reason_code": "",
       "settled_at": "2026-09-01T12:05:00+00:00"
     },

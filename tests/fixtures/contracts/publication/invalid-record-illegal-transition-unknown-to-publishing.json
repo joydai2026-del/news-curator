@@ -4,6 +4,10 @@
   "expect": "invalid",
   "note": "unknown -> publishing is exactly the automatic retry of an ambiguous send the state machine forbids. There is no such edge in PUBLICATION_TRANSITIONS, on purpose: resolving unknown is a readback, never a retry.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

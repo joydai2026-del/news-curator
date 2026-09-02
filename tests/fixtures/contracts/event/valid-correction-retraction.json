@@ -4,9 +4,11 @@
   "expect": "valid",
   "note": "A retraction appends. The original evidence row is never edited or deleted, and every snapshot covering it is invalidated.",
   "payload": {
-    "event_id": "corr-000011",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "event_id": "corr-000011",
     "action": "retract",
     "target_kind": "evidence_item",
     "target_id": "ev-000101",

@@ -7,17 +7,19 @@ backend) against the same contract.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from curator.contracts.enums import CheckpointState
+from curator.contracts.enums import ActorKind, CheckpointState
 from curator.contracts.source_plugin import SourceCheckpoint
 from curator.sources.checkpoint import (
     CheckpointCorruptError,
     CheckpointNotSettledError,
+    CheckpointOwnershipError,
     CheckpointRegressionError,
     CheckpointSchemaVersionError,
     JsonFileCheckpointStore,
@@ -41,9 +43,12 @@ def _settled(
     consecutive_failures: int = 0,
 ) -> SourceCheckpoint:
     return SourceCheckpoint(
+        tenant_id="default",
+        actor_id="actor-system",
+        actor_kind=ActorKind.SYSTEM,
+        user_id=None,
         plugin_id="feed",
         source_id=source_id,
-        tenant_id="default",
         state=CheckpointState.SETTLED,
         cursor=cursor,
         watermark=watermark,
@@ -56,9 +61,12 @@ def _settled(
 
 def _unsettled(*, source_id: str = "example-feed") -> SourceCheckpoint:
     return SourceCheckpoint(
+        tenant_id="default",
+        actor_id="actor-system",
+        actor_kind=ActorKind.SYSTEM,
+        user_id=None,
         plugin_id="feed",
         source_id=source_id,
-        tenant_id="default",
         state=CheckpointState.ADVANCING,
         cursor="2026-08-01T00:00:00+00:00",
         watermark=NOW,
@@ -187,6 +195,35 @@ def test_json_file_store_refuses_unknown_schema_version():
         store.load("example-feed")
 
 
+def test_json_file_store_refuses_a_schema_version_1_file():
+    """Version 1 predates the shared Ownership shape, so a v1 row carries no
+    actor and no user. It is REFUSED, never silently read as if the missing
+    fields were empty. Safe to refuse rather than migrate because no v1 file
+    exists in production: this store is greenfield and nothing writes it yet."""
+    store = JsonFileCheckpointStore(FIXTURES / "v1.json")
+    with pytest.raises(CheckpointSchemaVersionError):
+        store.load("example-feed")
+
+
+def test_json_file_store_refuses_a_file_missing_user_id():
+    """The KEY is required even though the VALUE may be null for a system
+    actor. Omission is corrupt, not "acts for no human"."""
+    store = JsonFileCheckpointStore(FIXTURES / "missing_user_id.json")
+    with pytest.raises(CheckpointCorruptError):
+        store.load("example-feed")
+
+
+def test_json_file_store_refuses_a_non_system_actor_with_no_user(tmp_path):
+    """The same null rule the contract freeze and the SQL check enforce,
+    stated on the durable file: only a system actor may act for no human."""
+    payload = json.loads((FIXTURES / "valid.json").read_text())
+    payload["checkpoints"]["example-feed"]["actor_kind"] = "agent"
+    path = tmp_path / "checkpoints.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(CheckpointCorruptError):
+        JsonFileCheckpointStore(path).load("example-feed")
+
+
 # --- atomicity: crash between temp write and rename -------------------------
 
 
@@ -239,6 +276,10 @@ def test_json_file_round_trip_via_fixture_matches_expected_shape():
     assert checkpoint.state == CheckpointState.SETTLED
     assert checkpoint.cursor == "2026-08-01T00:00:00+00:00"
     assert checkpoint.health_receipt_id == "health-0001"
+    assert checkpoint.tenant_id == "default"
+    assert checkpoint.actor_id == "actor-system"
+    assert checkpoint.actor_kind == ActorKind.SYSTEM
+    assert checkpoint.user_id is None
     assert checkpoint.watermark == datetime(2026, 8, 1, tzinfo=timezone.utc)
 
 
@@ -257,3 +298,157 @@ def test_schema_version_constant_matches_fixture():
     with (FIXTURES / "valid.json").open() as handle:
         payload = json.load(handle)
     assert payload["version"] == SCHEMA_VERSION
+
+
+# --- ownership: blank is not null, on the read path and on advance ----------
+
+
+@pytest.mark.parametrize("actor_kind", ("system", "human"))
+@pytest.mark.parametrize("blank", ("", "   "), ids=("empty", "whitespace"))
+def test_json_file_store_refuses_a_blank_user_id(tmp_path, actor_kind, blank):
+    """`not null` is not `non-blank`. Three encodings of "no human" (null, "",
+    "   ") where the contract says there is one would let a deletion sweep
+    filtering ``user_id is null`` miss the blank rows."""
+    payload = json.loads((FIXTURES / "valid.json").read_text())
+    entry = payload["checkpoints"]["example-feed"]
+    entry["actor_kind"] = actor_kind
+    entry["user_id"] = blank
+    path = tmp_path / "checkpoints.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(CheckpointCorruptError):
+        JsonFileCheckpointStore(path).load("example-feed")
+
+
+@pytest.mark.parametrize("key", ("tenant_id", "actor_id", "plugin_id"))
+@pytest.mark.parametrize("blank", ("", "   "), ids=("empty", "whitespace"))
+def test_json_file_store_refuses_a_blank_identity_key(tmp_path, key, blank):
+    """An empty actor_id is the exact unattributed value this shape removed as
+    a default. It was still a legal VALUE on this read path."""
+    payload = json.loads((FIXTURES / "valid.json").read_text())
+    payload["checkpoints"]["example-feed"][key] = blank
+    path = tmp_path / "checkpoints.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(CheckpointCorruptError):
+        JsonFileCheckpointStore(path).load("example-feed")
+
+
+ADVANCE_DEFECTS = (
+    ("blank actor_id", {"actor_id": ""}),
+    ("whitespace actor_id", {"actor_id": "   "}),
+    ("blank tenant_id", {"tenant_id": ""}),
+    ("blank user_id", {"user_id": ""}),
+    ("whitespace user_id", {"user_id": "   "}),
+    ("human actor with no user", {"actor_kind": ActorKind.HUMAN, "user_id": None}),
+    ("wrong-cased actor_kind", {"actor_kind": "System"}),
+)
+
+
+@pytest.mark.parametrize(
+    "defect,changes", ADVANCE_DEFECTS, ids=[d for d, _ in ADVANCE_DEFECTS]
+)
+@pytest.mark.parametrize("store_kind", ("memory", "file"))
+def test_advance_rejects_a_broken_ownership_shape(tmp_path, defect, changes, store_kind):
+    """The write path recomputes the rule instead of trusting the caller.
+
+    ``SourceCheckpoint`` is a frozen DECLARATIVE dataclass, so it constructs
+    every one of these happily; the store is what refuses to persist them.
+    """
+    import dataclasses
+
+    store = (
+        MemoryCheckpointStore()
+        if store_kind == "memory"
+        else JsonFileCheckpointStore(tmp_path / "checkpoints.json")
+    )
+    store.advance(_settled())  # positive control: the clean record is accepted
+
+    with pytest.raises(CheckpointOwnershipError):
+        store.advance(dataclasses.replace(_settled(source_id="other-feed"), **changes))
+
+
+def test_load_derives_the_ownership_rule_instead_of_restating_it(tmp_path, monkeypatch):
+    """`load` must read the frozen tiers, not a hand-written copy of them.
+
+    `load` used to re-implement the blank checks and the null rule inline. It
+    read none of the classification tuples, so the day `SourceCheckpoint`
+    becomes subject-bound (a per-user checkpoint is on the roadmap, and the
+    change is one line in a tuple) `load` would have kept accepting a
+    null-user file that `advance`, the fixture corpus, and the `not null`
+    column all reject. Reclassifying it here proves `load` follows the tuple.
+    """
+    from curator import ownership as ownership_module
+
+    payload = json.loads((FIXTURES / "valid.json").read_text())
+    assert payload["checkpoints"]["example-feed"]["user_id"] is None
+    path = tmp_path / "checkpoints.json"
+    path.write_text(json.dumps(payload))
+
+    # Positive control: subjectless today, so the null-user file loads.
+    assert JsonFileCheckpointStore(path).load("example-feed") is not None
+
+    monkeypatch.setattr(
+        ownership_module,
+        "_SUBJECTLESS",
+        tuple(
+            cls
+            for cls in ownership_module._SUBJECTLESS
+            if cls is not SourceCheckpoint
+        ),
+    )
+    monkeypatch.setattr(
+        ownership_module,
+        "_SUBJECT_BOUND",
+        (*ownership_module._SUBJECT_BOUND, SourceCheckpoint),
+    )
+    with pytest.raises(CheckpointCorruptError):
+        JsonFileCheckpointStore(path).load("example-feed")
+
+
+# --- canonical ownership ids (round-4 must-fix 1) ---------------------------
+
+
+NONCANONICAL_IDS = (" tenant-1 ", "\ttenant-1", "tenant​1", "　")
+
+
+@pytest.mark.parametrize("value", NONCANONICAL_IDS, ids=[repr(v) for v in NONCANONICAL_IDS])
+@pytest.mark.parametrize("field", ("tenant_id", "actor_id"))
+def test_advance_refuses_a_noncanonical_ownership_id(field, value):
+    """Non-blank was never enough on a durable cursor either.
+
+    ``" default "`` and ``"default"`` are two encodings of one tenant, so a
+    checkpoint written under the padded spelling is invisible to every query
+    that uses the canonical one. The rule is not restated here: ``advance``
+    calls the same ``ownership_violations`` the ledger write paths call.
+    """
+    store = MemoryCheckpointStore()
+    store.advance(_settled())  # positive control: the canonical shape is stored
+    with pytest.raises(CheckpointOwnershipError):
+        store.advance(dataclasses.replace(_settled(), **{field: value}))
+
+
+@pytest.mark.parametrize("value", NONCANONICAL_IDS, ids=[repr(v) for v in NONCANONICAL_IDS])
+def test_load_refuses_a_file_whose_ownership_id_is_not_canonical(value, tmp_path):
+    """The same rule on the READ path, which is where a bad file arrives.
+
+    A checkpoint file is written by an earlier run of a GitHub Actions job, so
+    ``load`` is the boundary a hand-edited or half-migrated file crosses.
+    """
+    payload = json.loads((FIXTURES / "valid.json").read_text())
+    payload["checkpoints"]["example-feed"]["tenant_id"] = value
+    path = tmp_path / "checkpoints.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(CheckpointCorruptError):
+        JsonFileCheckpointStore(path).load("example-feed")
+
+
+def test_a_noncanonical_user_id_is_refused_on_both_load_and_advance(tmp_path):
+    """``user_id`` is nullable, so its canonical check has its own path."""
+    store = MemoryCheckpointStore()
+    with pytest.raises(CheckpointOwnershipError):
+        store.advance(dataclasses.replace(_settled(), user_id=" user-1 "))
+    payload = json.loads((FIXTURES / "valid.json").read_text())
+    payload["checkpoints"]["example-feed"]["user_id"] = "user​1"
+    path = tmp_path / "checkpoints.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(CheckpointCorruptError):
+        JsonFileCheckpointStore(path).load("example-feed")

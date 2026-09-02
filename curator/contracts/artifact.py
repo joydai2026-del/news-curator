@@ -11,15 +11,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .enums import ArtifactStatus, ArtifactType, PublicationClass
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
-class KnowledgeArtifact:
+class KnowledgeArtifact(Ownership):
     """The canonical private record. Mirrors are copies, never the original."""
 
     artifact_id: str
-    tenant_id: str
-    actor_id: str
     artifact_type: ArtifactType
     status: ArtifactStatus
     publication_class: PublicationClass
@@ -31,11 +30,15 @@ class KnowledgeArtifact:
 
 
 @dataclass(frozen=True)
-class ArtifactVersion:
+class ArtifactVersion(Ownership):
     """One immutable version. A revision appends; it never rewrites history.
 
     ``checksum`` is the value a mirror compares against, so an external target
     can be proven to hold this exact version and no other.
+
+    Ownership is inherited (2026-09-02). This row previously carried
+    ``actor_id`` and no ``tenant_id`` at all, so its isolation depended
+    entirely on a join to its parent artifact.
     """
 
     artifact_id: str
@@ -43,7 +46,6 @@ class ArtifactVersion:
     parent_version: int | None
     checksum: str
     content_reference: str
-    actor_id: str
     settled_at: datetime
     citations: tuple[str, ...] = field(default_factory=tuple)
     # Set when a correction redacted this version's content. The version row
@@ -52,11 +54,10 @@ class ArtifactVersion:
 
 
 @dataclass(frozen=True)
-class ArtifactRelation:
+class ArtifactRelation(Ownership):
     """The conversation-to-artifact graph, both directions retained."""
 
     relation_id: str
-    tenant_id: str
     conversation_id: str
     artifact_id: str
     relation_type: str

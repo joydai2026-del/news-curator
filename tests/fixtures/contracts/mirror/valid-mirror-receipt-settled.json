@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "Settled only because the readback checksum equals the attempted one. A 2xx response alone would not have settled this.",
   "payload": {
-    "receipt_id": "mrec-000021",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000021",
     "artifact_id": "art-000031",
     "artifact_version": 2,
     "adapter_id": "vault-wiki",

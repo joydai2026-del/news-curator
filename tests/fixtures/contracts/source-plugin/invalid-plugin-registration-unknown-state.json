@@ -4,9 +4,12 @@
   "expect": "invalid",
   "note": "A registry state outside the frozen vocabulary would let a plugin be treated as pollable without ever passing through registered/enabled.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
     "plugin_id": "hackernews",
     "plugin_version": "1.0.0",
-    "tenant_id": "tenant-owner-private",
     "config_reference": "sources.yaml#hackernews",
     "capabilities": {
       "plugin_id": "hackernews",

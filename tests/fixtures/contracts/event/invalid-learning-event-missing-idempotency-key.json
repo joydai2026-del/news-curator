@@ -4,10 +4,11 @@
   "expect": "invalid",
   "note": "Without an idempotency key a retried agent call duplicates the event, and human and agent paths stop producing identical records.",
   "payload": {
-    "event_id": "evt-000503",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-cli-01",
     "actor_kind": "agent",
+    "user_id": "user-owner",
+    "event_id": "evt-000503",
     "event_type": "save",
     "occurred_at": "2026-09-01T12:00:00+00:00",
     "recorded_at": "2026-09-01T12:00:00+00:00",

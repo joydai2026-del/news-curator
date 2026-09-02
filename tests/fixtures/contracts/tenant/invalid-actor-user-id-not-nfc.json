@@ -1,0 +1,15 @@
+{
+  "contract": "tenant",
+  "dataclass": "Actor",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent (round 6). Actor.user_id in Unicode form NFD: 'jose' plus U+0301 COMBINING ACUTE ACCENT. It renders identically to the NFC spelling, so the two are one human in two encodings, and before round 6 Actor.user_id carried no canonical check at all, only the blank rule.",
+  "payload": {
+    "actor_id": "actor-human-owner",
+    "tenant_id": "tenant-owner-private",
+    "actor_kind": "human",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "user_id": "josé-owner",
+    "label": ""
+  },
+  "violates": "user_id must be in Unicode normalization form NFC"
+}

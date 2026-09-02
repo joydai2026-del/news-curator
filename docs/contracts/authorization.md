@@ -56,7 +56,8 @@ One row per allow AND one per deny. Carries no private payload content.
 | Field | Type | Constraint |
 |---|---|---|
 | `audit_id` | str | Required. |
-| `tenant_id`, `principal_id`, `actor_id` | str | Required. |
+| `principal_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `action` | str | Required. |
 | `required_scope` | `Scope` | Required. |
 | `decision` | `Decision` | Required. `allow` or `deny`. |
@@ -81,7 +82,7 @@ table). An implementer reads `ACTION_MATRIX`, never retypes this table.
 | Give feedback | `feedback:write` | no | **yes** | no | no |
 | Save artifact | `artifacts:write` | no | yes | **yes** | no |
 | Mirror artifact | `mirrors:write` | no | yes | **yes** | no |
-| Change ranking policy | `policy:admin` | no | no | **yes** | no |
+| Change sequence policy | `policy:admin` | no | no | **yes** | no |
 | Import approved history | `imports:write` | **yes** | yes | no | **yes** |
 | Export data | `data:export` | no | yes | no | no |
 | Delete data | `data:delete` | **yes** | **yes** | no | **yes** |
@@ -97,7 +98,7 @@ Credential isolation, stated as `forbidden_on_paths`:
 |---|---|
 | `data:delete` | ingestion, import, export, read |
 | `publish:execute` | the credential that granted `publish:approve`, and ingestion |
-| `signer:use` | ingestion, ranking, import, export |
+| `signer:use` | ingestion, sequence calculation, import, export |
 | `imports:write` | delete, publish, signer |
 
 ## Invariants
@@ -116,6 +117,16 @@ Credential isolation, stated as `forbidden_on_paths`:
    private route examples, tenant identifiers, or private schemas.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `AuthorizationAudit` inherits the four
+  `Ownership` fields. `PrincipalClaims` deliberately does NOT: it is the
+  caller's ASSERTED identity, verified by the server before anything is
+  allowed, not a private record stored inside a tenant. That exemption is
+  recorded with its reason in the freeze test's exempt map, not left implicit.
+
+- **2026-09-02, subject attribution.** `AuthorizationAudit` is SUBJECT-BOUND:
+  the record that an action was allowed or denied is about the person who tried
+  it, so `user_id` is required non-blank.
 
 - The plan's matrix has 12 rows; the table above splits two of them into 14
   actions (read split from search, and Save/Save answer's action pair split

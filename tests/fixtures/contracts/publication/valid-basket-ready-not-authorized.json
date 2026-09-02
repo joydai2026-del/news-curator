@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "Five eligible items make the basket READY. Readiness is a signal and authorizes nothing: the state is ready, not authorized.",
   "payload": {
-    "basket_id": "basket-2026-09-01",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "basket_id": "basket-2026-09-01",
     "destination": "relay-set-a",
     "issue_date": "2026-09-01",
     "item_story_ids": [

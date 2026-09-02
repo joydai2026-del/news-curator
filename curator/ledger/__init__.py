@@ -8,6 +8,13 @@ index, mirrors).
 from __future__ import annotations
 
 from .base import LedgerStore
-from .memory import InMemoryLedgerStore
+from .memory import InMemoryLedgerStore, LedgerError
+from .ownership import is_subject_bound, ownership_violations
 
-__all__ = ["LedgerStore", "InMemoryLedgerStore"]
+__all__ = [
+    "InMemoryLedgerStore",
+    "LedgerError",
+    "LedgerStore",
+    "is_subject_bound",
+    "ownership_violations",
+]

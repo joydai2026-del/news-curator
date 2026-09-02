@@ -43,7 +43,8 @@ must name what it evaluated, not just return a verdict.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `receipt_id`, `tenant_id`, `adapter_id`, `destination` | str | Required. |
+| `receipt_id`, `adapter_id`, `destination` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `publisher_identity_ref` | str | Required. |
 | `content_digest` | str | Required. |
 | `idempotency_key` | str | Required. Derived from the publication identity, never from the digest. |
@@ -98,6 +99,15 @@ must name what it evaluated, not just return a verdict.
    check and name it in `blocking_checks`.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `OutputReceipt` inherits the four `Ownership`
+  fields. `OutputAdapterDescriptor` and `DryRunResult` do not: the descriptor
+  is adapter configuration and the dry-run result is a computed answer, not a
+  stored private row.
+
+- **2026-09-02, subject attribution.** `OutputReceipt` is SUBJECT-BOUND: it
+  proves one human's edition reached a destination, so `user_id` is required
+  non-blank.
 
 - The adapter roster names destination CLASSES, not vendors, which is why the
   table above reads "document workspace" and "long-form relay". The concrete

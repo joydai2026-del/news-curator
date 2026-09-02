@@ -4,9 +4,12 @@
   "expect": "invalid",
   "note": "A checkpoint state outside the frozen vocabulary would let a route resume from an undefined position.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
     "plugin_id": "rss",
     "source_id": "buzzing",
-    "tenant_id": "tenant-owner-private",
     "state": "resumed",
     "cursor": "",
     "watermark": null,

@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "A Hot candidate from the real hackernews route, which contributes 266 in-window items per cycle.",
   "payload": {
-    "run_id": "run-2026-09-01-12",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "run_id": "run-2026-09-01-12",
     "lane": "hot",
     "story_id": "story-000042",
     "story_cluster_id": "cluster-000012",

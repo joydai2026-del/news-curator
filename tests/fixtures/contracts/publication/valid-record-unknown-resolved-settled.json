@@ -4,6 +4,10 @@
   "expect": "valid",
   "note": "An ambiguous publish resolved by a positive readback: the operator confirmed the content actually landed at the destination, so the record moves from unknown to settled through the frozen readback-resolution edge, never a retry.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

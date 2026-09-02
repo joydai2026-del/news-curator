@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "The consolidated story cluster record. One row per canonical story, independent of any lane assignment; candidate generators and search read this and never branch on a provider name.",
   "payload": {
-    "story_cluster_id": "cluster-000012",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "story_cluster_id": "cluster-000012",
     "publication_class": "private",
     "canonical_source_document_id": "doc-cnn-000001",
     "source_document_ids": [

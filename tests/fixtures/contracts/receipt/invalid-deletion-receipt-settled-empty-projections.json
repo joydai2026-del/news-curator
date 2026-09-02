@@ -5,13 +5,15 @@
   "note": "Reproduced adversarial payload: a settled deletion with zero projections enumerated. A row that is never listed is not unresolved, so the way to get a green receipt was to enumerate nothing. This must fail.",
   "payload": {
     "envelope": {
-      "receipt_id": "drec-000006",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "drec-000006",
       "kind": "deletion",
       "state": "settled",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-human-owner",
       "reason_code": "",
       "settled_at": "2026-09-01T12:05:00+00:00"
     },

@@ -4,6 +4,10 @@
   "expect": "valid",
   "note": "An ambiguous publish resolved by a conclusive negative readback: the operator confirmed nothing landed, so the record moves from unknown to failed-safe and a fresh approval path is required to try again.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

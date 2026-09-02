@@ -6,7 +6,8 @@
   "payload": {
     "actor_id": "actor-orphan",
     "actor_kind": "human",
-    "created_at": "2026-09-01T12:00:00+00:00"
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "user_id": "user-owner"
   },
   "violates": "required field tenant_id is absent"
 }

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .enums import ActorKind, Decision, Scope
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
@@ -175,13 +176,11 @@ ACTION_MATRIX: tuple[ActionRequirement, ...] = (
 
 
 @dataclass(frozen=True)
-class AuthorizationAudit:
+class AuthorizationAudit(Ownership):
     """One per allow and one per deny. Carries no private payload content."""
 
     audit_id: str
-    tenant_id: str
     principal_id: str
-    actor_id: str
     action: str
     required_scope: Scope
     decision: Decision

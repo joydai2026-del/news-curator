@@ -5,13 +5,15 @@
   "note": "The exact adversarial reproduction from the freeze review: the receipt names hot as story-000042's primary lane. hot IS a scored lane for that story (0.81), so the membership check alone lets it through, but the recomputed tie-break winner from this receipt's own lane_priority is updates. A receipt naming any other qualified lane must be rejected.",
   "payload": {
     "envelope": {
-      "receipt_id": "rrec-000014",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-system",
+      "actor_kind": "system",
+      "user_id": "user-owner",
+      "receipt_id": "rrec-000014",
       "kind": "ranking",
       "state": "settled",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-system",
       "reason_code": "",
       "settled_at": "2026-09-01T12:00:00+00:00"
     },

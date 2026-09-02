@@ -51,11 +51,12 @@ Legal transitions, and no others:
 
 | Field | Type | Constraint |
 |---|---|---|
-| `receipt_id`, `tenant_id`, `artifact_id` | str | Required. |
+| `receipt_id`, `artifact_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `artifact_version` | int | Required. |
 | `adapter_id`, `target_id` | str | Required. |
 | `state` | `MirrorState` | Required. |
-| `idempotency_key` | str | Required. |
+| `idempotency_key` | str | Required. Unique with `tenant_id` and `user_id`. |
 | `attempted_at` | datetime | Required. |
 | `expected_prior_checksum` | str | Required. The compare-and-set precondition. |
 | `attempted_checksum` | str | Required. |
@@ -98,13 +99,34 @@ whether `conflict` and `unknown` block retries: those are unconditional.
    recorded.
 4. Every write uses compare-and-set against BOTH the target id and the last
    acknowledged checksum.
-5. `idempotency_key` is stable per (artifact, version, adapter, target), so a
-   replayed attempt is recognised rather than duplicated.
+5. The stored idempotency identity is `(tenant_id, user_id, idempotency_key)`.
+   A client derives the key stably per artifact, version, adapter, and target.
+   Two users in one tenant may reuse the same key text, while the same triple
+   is rejected by the named database constraint
+   `mirror_receipts_tenant_user_idempotency_key_key`.
 6. Every settled receipt is enumerable by artifact, because a deletion has to
    walk them: an unretractable external copy is what turns a deletion receipt
    from settled to partial (see [receipt.md](receipt.md)).
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `MirrorReceipt` inherits the four `Ownership`
+  fields. `MirrorAdapterDescriptor` does not: it is adapter configuration, not
+  a private record, and carries no tenant. A permanent seeded fixture
+  (`invalid-mirror-receipt-missing-user-id-key.json`) proves that omitting the
+  `user_id` KEY is corrupt rather than read as "acts for no human".
+
+- **2026-09-02, subject attribution.** `MirrorReceipt` is SUBJECT-BOUND. It
+  records an external copy of one human's artifact, so it must be enumerable per
+  person for a deletion receipt to be provably complete; `user_id` is required
+  non-blank even under a system writer. Its `artifact_id` link is now a
+  composite `(artifact_id, tenant_id)` foreign key, so a receipt cannot name an
+  artifact in another tenant.
+
+- **2026-09-02, idempotency identity.** The migration enforces one mirror
+  receipt per `(tenant_id, user_id, idempotency_key)`. There is no mirror write
+  path in `LedgerStore` today, so this round adds no in-memory behavior that
+  could pretend to prove a write surface which does not exist.
 
 - The plan's mirror state list is exactly the five states above. No `retrying`
   or `queued` state was added: a retry is a new attempt with its own receipt,

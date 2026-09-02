@@ -31,11 +31,11 @@ dropping either document.
 |---|---|---|
 | `fetch` / `validate_options` | **Live.** Failure containment, parallel fan-out with stable ordering, per-spec transport narrowing, disabled-route short circuit. | Nothing. Restated verbatim. |
 | `health` | **Live**, per-run. Seven-value status vocabulary, stable reason codes, no URL and no raw exception text in the record. | `SourceHealthRecord`: a durable cross-run record with `consecutive_failures` and `last_success_at`. |
-| `normalize` | **Live but inlined** per adapter. Bounded text, item caps, canonical URL handling. | A declared contract member and one target schema (`NormalizedSourceDocument`), so two adapters cannot silently diverge. |
+| `normalize` | **Live but inlined** per adapter. Bounded text, item caps, canonical URL handling. | A declared contract member and one normalized-document target schema, so two adapters cannot silently diverge. |
 | `provenance` | **Partial.** Per-item source id, name, platform, weight, aggregator and echo flags, estimated-time flag; run-level configuration and content digests. | `fetched_at` (when we SAW it, which no item records today), `adapter_version`, `raw_response_digest`. |
 | `capabilities` | **Implicit only.** Option-key allowlists and registry introspection. | `SourceCapabilities`, an explicit descriptor. |
 | `discover` / `poll` | **Partial.** Every route is hand-authored config; no conditional GET anywhere; one global cycle. | A declared `discover` member taking a checkpoint. |
-| `checkpoint` | **GREENFIELD. Nothing implements it.** The only hook is an inert `SourceContext.durable_store` field that is declared and never read or written. | `SourceCheckpoint`, entirely new. |
+| `checkpoint` | **GREENFIELD. Nothing implements it.** The only hook is an inert `SourceContext.durable_store` field that is declared and never read or written. | A checkpoint contract, entirely new. |
 
 **Migration note on checkpoint.** There is no durable cursor anywhere in the
 source layer. The nearest in-repo precedent is the newsletter lane's watermark,
@@ -63,7 +63,8 @@ consumes them while the rest silently ignore them.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `plugin_id`, `source_id`, `tenant_id` | str | Required. |
+| `plugin_id`, `source_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECTLESS: `user_id` null only under a `system` actor. See [tenant.md](tenant.md#ownership). |
 | `state` | `CheckpointState` | Required. `uninitialized`, `advancing`, `settled`, `blocked`. |
 | `cursor` | str | Required, may be empty only while `uninitialized`. |
 | `watermark` | datetime or null | Null only while `uninitialized`. |
@@ -82,7 +83,8 @@ yet, only `ENABLED` may be polled.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `plugin_id`, `plugin_version`, `tenant_id`, `config_reference` | str | Required. |
+| `plugin_id`, `plugin_version`, `config_reference` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECTLESS: `user_id` null only under a `system` actor. See [tenant.md](tenant.md#ownership). |
 | `capabilities` | `SourceCapabilities` | Required. Embedded, so a registry row and its declared capabilities cannot drift apart. |
 | `state` | `PluginState` | Required. `registered`, `enabled`, `disabled`, `retired`. |
 | `registered_at` | datetime | Required. |
@@ -91,7 +93,8 @@ yet, only `ENABLED` may be polled.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `document_id`, `tenant_id`, `title`, `url`, `canonical_url`, `language` | str | Required. |
+| `document_id`, `title`, `url`, `canonical_url`, `language` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECTLESS: `user_id` null only under a `system` actor. See [tenant.md](tenant.md#ownership). |
 | `provenance` | `SourceProvenance` | **Required.** A document with no provenance cannot be attributed, corrected, or deleted. |
 | `summary` | str | Default empty. The SOURCE's own summary, bounded. Never generated. |
 | `image_url` | str | Default empty. |
@@ -142,6 +145,25 @@ discovery is what makes machine-readable terms load-bearing.
    collector already emits.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `SourceCheckpoint`, `SourcePluginRegistration`,
+  and `NormalizedSourceDocument` inherit the four `Ownership` fields.
+  `SourceCapabilities`, `SourceRights`, `SourceProvenance`, and
+  `SourceHealthRecord` do not: they are declared capability, terms, provenance,
+  and health records that carry no tenant. The durable checkpoint file
+  (`curator/sources/checkpoint.py`) went to SCHEMA VERSION 2 for this: all four
+  fields are serialized, all four are required keys on read, and a version 1
+  file is refused rather than migrated (safe because the store is greenfield
+  and nothing writes it in production yet, grade B).
+
+- **2026-09-02, subject attribution.** All three are SUBJECTLESS: a source
+  cursor, a plugin registry row, and a normalized public document are about a
+  FEED, not a person, so `user_id` may be null under a `system` actor. A human
+  or agent actor on one of them still requires a non-blank `user_id`, and blank
+  is never legal. The checkpoint reader now rejects a blank `plugin_id`,
+  `tenant_id`, or `actor_id` as well as a missing one (a string is not an id),
+  and `advance` recomputes the whole ownership rule before persisting, raising
+  `CheckpointOwnershipError`.
 
 - The plan lists `discover` or `poll` as one capability. `SourcePlugin` declares
   `discover(spec, context, checkpoint)` only. A separate `poll` member would be

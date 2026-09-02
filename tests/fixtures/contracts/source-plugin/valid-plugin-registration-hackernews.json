@@ -4,9 +4,12 @@
   "expect": "valid",
   "note": "The registry row for the hackernews plugin. A plugin is never implicitly enabled: state is explicitly enabled, and capabilities are embedded so the row and its declared capabilities cannot drift apart.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
     "plugin_id": "hackernews",
     "plugin_version": "1.0.0",
-    "tenant_id": "tenant-owner-private",
     "config_reference": "sources.yaml#hackernews",
     "capabilities": {
       "plugin_id": "hackernews",

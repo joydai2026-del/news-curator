@@ -5,13 +5,15 @@
   "note": "The rebuild proves zero contribution and six of seven projections resolve, but one external mirror copy cannot be retracted. The receipt settles PARTIAL and names it to the user. A green receipt here would be a false deletion.",
   "payload": {
     "envelope": {
-      "receipt_id": "drec-000003",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "drec-000003",
       "kind": "deletion",
       "state": "partial",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-human-owner",
       "reason_code": "external_copy_retained",
       "settled_at": null
     },
@@ -44,7 +46,7 @@
         "projection": "knowledge_artifacts",
         "resolved": true,
         "resolution_kind": "version_redaction",
-        "target_ref": "art-000031@2",
+        "target_ref": "art-000031-v2",
         "user_visible_disclosure": ""
       },
       {

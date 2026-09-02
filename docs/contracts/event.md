@@ -20,8 +20,7 @@ save.
 | Field | Type | Constraint |
 |---|---|---|
 | `event_id` | str | Required. |
-| `tenant_id`, `actor_id` | str | Required. |
-| `actor_kind` | `ActorKind` | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `event_type` | `EventType` | Required. Closed vocabulary of 16 members. |
 | `occurred_at`, `recorded_at` | datetime | Required. |
 | `surface` | str | Required. Which surface emitted it. |
@@ -38,6 +37,20 @@ save.
 `idempotency_key` is required rather than optional because SC-18 requires the
 human control and the agent API to produce IDENTICAL records. A retried agent
 call with no key produces a second row, and the two paths stop matching.
+
+**Derivation rule (decided 2026-09-02, round 6): the identity is
+`(tenant_id, user_id, idempotency_key)`, scoped PER USER.** Before this the
+identity was `(tenant_id, idempotency_key)` alone, so two different users in
+the same tenant reusing the same key TEXT collided: whichever user's event
+landed first silently absorbed the second user's retry, returning the FIRST
+user's row to the second user and dropping the second user's event with no
+way to find or delete it later. Scoping the key by user closes that: **a
+client may reuse the same key text across different users safely**, because
+identity is not shared across the user boundary. `curator/ledger/memory.py`
+keys `InMemoryLedgerStore`'s idempotency index on the same triple, and
+`supabase/migrations/202609020001_learning_ledger.sql` carries
+`unique (tenant_id, user_id, idempotency_key)`, so the two surfaces cannot
+drift. See `ledger-storage.md` for the storage-side detail.
 
 ### `EventSemantics`
 
@@ -58,7 +71,8 @@ semantics row is rejected rather than defaulted.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `event_id`, `tenant_id`, `actor_id` | str | Required. |
+| `event_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `action` | `CorrectionAction` | Required. `correct`, `retract`, `delete_request`. |
 | `target_kind`, `target_id` | str | Required. |
 | `reason_code` | str | Required. Stable code. |
@@ -116,6 +130,18 @@ Initial weights are in `config/ranking-policy-r1.yaml` under `event_weights`.
    the effective-event projection excludes retracted contributions.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `LearningEvent` and `CorrectionEvent` inherit the
+  four `Ownership` fields. The visible change is `user_id`: a human or agent
+  event must now name the human it belongs to, so an event can no longer name
+  an actor and no person. A permanent seeded fixture
+  (`invalid-learning-event-human-actor-without-user.json`) proves it is
+  rejected.
+
+- **2026-09-02, subject attribution.** Both are SUBJECT-BOUND: `user_id` is
+  required non-blank whatever the `actor_kind`, so a system-written event about
+  a person cannot name nobody. Blank (`""` or whitespace) is rejected everywhere
+  the shape is checked, not only null.
 
 - `EventType` has 16 members: the plan's table rows, with Ask AI question and
   follow-up separated (the plan says follow-up depth is a distinct feature) and

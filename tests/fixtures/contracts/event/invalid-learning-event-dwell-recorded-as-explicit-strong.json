@@ -4,10 +4,11 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: a dwell event recorded with evidence_class explicit and confidence strong. Policy revision 1's frozen row for dwell is passive / live / weak. Dwell is supporting evidence only and must never present as a deliberate strong action.",
   "payload": {
-    "event_id": "evt-000506",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-human-owner",
     "actor_kind": "human",
+    "user_id": "user-owner",
+    "event_id": "evt-000506",
     "event_type": "dwell",
     "occurred_at": "2026-09-01T12:00:00+00:00",
     "recorded_at": "2026-09-01T12:00:00+00:00",

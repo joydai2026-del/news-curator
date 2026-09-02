@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "The conversation-to-artifact graph. Depth records how far into a follow-up chain the request came from.",
   "payload": {
-    "relation_id": "rel-000044",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "relation_id": "rel-000044",
     "conversation_id": "conv-000009",
     "artifact_id": "art-000031",
     "relation_type": "requested_report",

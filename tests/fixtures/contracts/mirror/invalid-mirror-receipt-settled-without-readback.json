@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "Settling on a write acknowledgement instead of a checksum-matched readback is the failure the state machine exists to prevent.",
   "payload": {
-    "receipt_id": "mrec-000023",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000023",
     "artifact_id": "art-000031",
     "artifact_version": 2,
     "adapter_id": "vault-wiki",

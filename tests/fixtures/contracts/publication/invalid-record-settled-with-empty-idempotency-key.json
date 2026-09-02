@@ -4,6 +4,10 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: a settled record with an empty idempotency_key. The at-most-once key is exactly what stops a double send, so a settled record cannot carry none at all.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

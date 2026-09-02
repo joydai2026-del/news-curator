@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "A settled 24-slot edition matching policy revision 1 exactly: quotas 8/6/6/4, all seven bands present and inside their configured bounds, one deterministic backfill at position 18, and every band's achieved value consistent with the entries.",
   "payload": {
-    "run_id": "run-2026-09-01-12",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "run_id": "run-2026-09-01-12",
     "edition_date": "2026-09-01",
     "built_at": "2026-09-01T12:00:00+00:00",
     "policy_revision": 1,

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .enums import MirrorState, WriteMode
+from .tenant import Ownership
 
 # The only legal transitions. Anything else is a contract violation.
 MIRROR_TRANSITIONS: tuple[tuple[MirrorState, MirrorState], ...] = (
@@ -59,11 +60,10 @@ class MirrorAdapterDescriptor:
 
 
 @dataclass(frozen=True)
-class MirrorReceipt:
+class MirrorReceipt(Ownership):
     """One attempt to place one artifact version on one target."""
 
     receipt_id: str
-    tenant_id: str
     artifact_id: str
     artifact_version: int
     adapter_id: str

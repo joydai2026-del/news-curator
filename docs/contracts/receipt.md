@@ -20,11 +20,11 @@ Every receipt in the system carries these.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `receipt_id`, `tenant_id`, `kind` | str | Required. |
+| `receipt_id`, `kind` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. Tier and subject rules come from the generated receipt-kind table in Freeze notes. See [tenant.md](tenant.md#ownership). |
 | `state` | `ReceiptState` | Required. `settled`, `partial`, `failed`, `unknown`. |
 | `created_at` | datetime | Required. |
 | `policy_revision` | int | Required. |
-| `actor_id` | str | Default empty. |
 | `reason_code` | str | Default empty. |
 | `settled_at` | datetime or null | Non-null only when `settled`. |
 
@@ -35,7 +35,7 @@ never present as green.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `envelope` | `ReceiptEnvelope` | Required. |
+| `envelope` | shared envelope struct | Required. |
 | `run_id`, `edition_date` | str | Required. |
 | `profile_snapshot_id`, `profile_version` | str / int or null | Null before any import. |
 | `pre_rank_candidate_ids` | tuple of str | Required. |
@@ -76,7 +76,7 @@ never present as green.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `envelope` | `ReceiptEnvelope` | Required. |
+| `envelope` | shared envelope struct | Required. |
 | `target_kind`, `rebuild_id` | str | Required. |
 | `target_ids`, `invalidated_snapshot_ids` | tuple of str | Required. |
 | `correction_watermark` | datetime | Required. |
@@ -92,7 +92,7 @@ never present as green.
 
 | Projection | Required resolution |
 |---|---|
-| Profile snapshots and ranking | Rebuild proves zero contribution. |
+| Profile snapshots and ranked output | Rebuild proves zero contribution. |
 | Search indexes | Index invalidation or removal receipt. |
 | Knowledge artifacts quoting the evidence | Redaction or retraction receipt per artifact version. |
 | Caches | Invalidation receipt. |
@@ -149,7 +149,7 @@ One pilot day's host-budget record.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `envelope` | `ReceiptEnvelope` | Required. |
+| `envelope` | shared envelope struct | Required. |
 | `source_kind` | str | Required. |
 | `credential_verified` | bool | Required. |
 | `coverage_window_start`, `coverage_window_end` | datetime or null | Null when unknown. |
@@ -171,6 +171,100 @@ One pilot day's host-budget record.
    incomplete, credential-unverified inventory marked settled and enabled.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `ReceiptEnvelope` inherits the four `Ownership`
+  fields, which is what removed `actor_id`'s `default ""`. An unattributed
+  receipt used to be the field's own default value, so a writer that simply
+  never set it produced a receipt naming nobody. Every receipt that embeds the
+  envelope (`RankingReceipt`, `DeletionReceipt`, `LimitReceipt`,
+  `ImportInventoryReceipt`) inherits the requirement through it, and the
+  freeze validator applies the ownership rule to a NESTED envelope with the
+  same code path it uses for a top-level record. A permanent seeded fixture
+  (`invalid-limit-receipt-envelope-unattributed.json`) proves the old default
+  is now rejected.
+
+- **2026-09-02, subject attribution by KIND.** `ReceiptEnvelope` is the one
+  owned record whose tier is decided by a FIELD rather than by its class,
+  because it carries rows of both kinds. An envelope whose `kind` is `deletion`,
+  `import_inventory`, or `ranking` is SUBJECT-BOUND (it proves one human's
+  deletion, enumerates one human's imported archive, or explains the order of
+  one human's slate) and requires a non-blank `user_id`. Only an envelope whose
+  `kind` is `host_limits` is SUBJECTLESS and may carry null under a `system`
+  actor: a host budget is a property of the machine, not of a reader. Both kind lists are frozen in
+  `curator/contracts/__init__.py`, and a freeze test fails on any envelope kind
+  in the corpus that is in neither list, so a new receipt kind cannot land
+  unclassified.
+
+- **2026-09-02, the kind vocabulary is CLOSED and unknown kinds fail closed.**
+  `RECEIPT_KIND_TIERS` in `curator/contracts/__init__.py` is the single frozen
+  list, and the two tier tuples are derived from it, so they cannot disagree:
+
+  <!-- generated: receipt-kind-tiers -->
+| `kind` (wire value) | Tier | `user_id` |
+|---|---|---|
+| `deletion` | subject-bound | required non-blank |
+| `host_limits` | subjectless | may be null under a `system` actor |
+| `import_inventory` | subject-bound | required non-blank |
+| `ranking` | subject-bound | required non-blank |
+<!-- end generated -->
+
+  There is no fifth kind. Both validators resolve the tier for EVERY owned
+  record before anything branches on `user_id`, so an envelope stamped with a
+  kind outside this table is a violation whatever else it looks like. That
+  ordering is the fix: resolving the tier only on the null-`user_id` branch
+  meant a typo (`rankng`) was accepted whenever some non-blank `user_id`
+  happened to be present. Permanent seeded fixture:
+  `invalid-deletion-receipt-unknown-envelope-kind.json`.
+
+- **2026-09-02, each wrapper pins its own kind.** `RECEIPT_WRAPPER_KINDS`
+  is the frozen binding. It retains the exact wrapper class, its frozen
+  envelope field name, and its kind:
+
+  <!-- generated: receipt-wrapper-kinds -->
+| Wrapper | Envelope field | Envelope `kind` |
+|---|---|---|
+| `DeletionReceipt` | `envelope` | `deletion` |
+| `ImportInventoryReceipt` | `envelope` | `import_inventory` |
+| `LimitReceipt` | `envelope` | `host_limits` |
+| `RankingReceipt` | `envelope` | `ranking` |
+<!-- end generated -->
+
+  Without the binding a `DeletionReceipt` could carry an envelope stamped
+  `ranking`. That is a TYPE MISMATCH, not a tier hole: both of those kinds are
+  subject-bound and both demand a non-blank `user_id`, so every ownership check
+  passes while the receipt's TYPE says it proves a deletion and its envelope
+  says it explains a slate order. No ownership rule can catch it; only this
+  binding can. A wrapper is recognized only when its runtime type is the exact
+  frozen class object. The envelope is read only from that class's frozen field
+  name and its runtime type must be exactly `ReceiptEnvelope`. Enforced in
+  three places (the fixture invariant,
+  `curator.ownership.receipt_wrapper_violations`, and the ledger write path),
+  so no single one of them is the only guard. Permanent seeded fixture:
+  `invalid-deletion-receipt-envelope-kind-is-ranking.json`.
+
+- **2026-09-02, a wrapper carries EXACTLY ONE envelope.** Each class in the
+  closed frozen wrapper set has exactly one field whose resolved annotation
+  contains `ReceiptEnvelope`, and the frozen map names that field. The freeze
+  test checks this statically over those reviewed classes. Runtime code does no
+  annotation walk.
+
+  This is a CLOSED RULE, not a fourth narrowing. Wrapper detection has been
+  tightened three times: an unlisted wrapper failed open, then detection was by
+  field NAME rather than type, then only the FIRST envelope field was examined,
+  so a pinned `DeletionReceipt` subclass carrying a second envelope stamped
+  `ranking` and naming no human passed every layer. Each fix moved the same hole
+  one step along. The rule ends that: a wrapper proves exactly one thing, so a
+  pinned kind has no meaning over two envelopes and there is no correct
+  narrowing to reach for.
+
+  Frozen contracts are never subclassed. A wrapper subclass, including one
+  that overrides `envelope: object` or adds an aliased envelope field, is an
+  unknown record and is refused. A new wrapper is added as a new exact class in
+  the frozen tuples. What this refuses when its assumption is wrong: a future
+  chained or dual receipt cannot be modelled through inheritance or multiple
+  envelopes. It must be split into one receipt per envelope, or introduced as
+  a newly reviewed frozen record. The refusal is loud at the freeze gate or
+  first attempted write, which is cheaper than leaving an envelope unguarded.
 
 - `ReceiptEnvelope` is a shared struct rather than a base class, so a receipt
   type can be read without knowing an inheritance tree, and so the four

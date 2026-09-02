@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: corroborated is true but corroborating_evidence_ids is empty. A promotion must be traceable to the event that caused it; an unattributed promotion is indistinguishable from silently upgrading a weak signal.",
   "payload": {
-    "evidence_id": "ev-000104",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "evidence_id": "ev-000104",
     "raw_import_id": "raw-000002",
     "source_item_id": "visit-000104",
     "occurred_at": "2026-08-23T09:14:00+00:00",

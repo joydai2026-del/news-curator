@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "An ambiguous response. It blocks a fresh publish until a readback resolves it, rather than retrying and risking a duplicate.",
   "payload": {
-    "receipt_id": "orec-000012",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "orec-000012",
     "adapter_id": "longform-relay",
     "publisher_identity_ref": "signer-publisher-01",
     "destination": "relay-set-a",

@@ -5,13 +5,15 @@
   "note": "mirrored_targets names an external copy that never appears as a mirrors projection target_ref. All seven projections are listed and resolved, so the completeness check alone would miss this: the reconciliation check catches an external target the mirrors projection quietly forgot to name.",
   "payload": {
     "envelope": {
-      "receipt_id": "drec-000010",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "drec-000010",
       "kind": "deletion",
       "state": "settled",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-human-owner",
       "reason_code": "",
       "settled_at": "2026-09-01T12:05:00+00:00"
     },

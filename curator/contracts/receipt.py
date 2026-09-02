@@ -15,19 +15,23 @@ from datetime import datetime
 
 from .candidate import BandResult, ScoredCandidate, SlateEntry
 from .enums import BandVerdict, Lane, ReceiptState
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
-class ReceiptEnvelope:
-    """Fields every receipt in the system carries, whatever it proves."""
+class ReceiptEnvelope(Ownership):
+    """Fields every receipt in the system carries, whatever it proves.
+
+    Ownership is inherited (2026-09-02), which is what removed ``actor_id``'s
+    ``default ""``: an unattributed receipt used to be the default value, so a
+    writer that simply never set it produced a receipt naming nobody.
+    """
 
     receipt_id: str
-    tenant_id: str
     kind: str
     state: ReceiptState
     created_at: datetime
     policy_revision: int
-    actor_id: str = ""
     reason_code: str = ""
     settled_at: datetime | None = None
 

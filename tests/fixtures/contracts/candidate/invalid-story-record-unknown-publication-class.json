@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "There is no third publication class. Private and public are the only projections, matching the tenant contract.",
   "payload": {
-    "story_cluster_id": "cluster-000012",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "story_cluster_id": "cluster-000012",
     "publication_class": "shared",
     "canonical_source_document_id": "doc-cnn-000001",
     "source_document_ids": [

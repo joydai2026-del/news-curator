@@ -18,12 +18,12 @@ system; this is the original.
 | Field | Type | Constraint |
 |---|---|---|
 | `artifact_id` | str | Required. |
-| `tenant_id`, `actor_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `artifact_type` | `ArtifactType` | Required. `question`, `answer`, `report`, `insight`, `save`. |
 | `status` | `ArtifactStatus` | Required. `draft`, `settled`, `redacted`, `retracted`. |
 | `publication_class` | `PublicationClass` | Required. Private by default. |
 | `created_at` | datetime | Required. |
-| `current_version` | int | Required. Points at the newest `ArtifactVersion`. |
+| `current_version` | int | Required. Points at the newest version row. |
 | `title` | str | Default empty. |
 | `conversation_id`, `story_id` | str or null | Link back to what produced it. |
 
@@ -36,7 +36,7 @@ system; this is the original.
 | `parent_version` | int or null | Null for version 1. Otherwise **strictly less than** `version`. |
 | `checksum` | str | Required. The value a mirror compares against. |
 | `content_reference` | str | Required. Restricted storage reference. |
-| `actor_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `settled_at` | datetime | Required. |
 | `citations` | tuple of str | Default empty. Story and document ids the content cites. |
 | `redacted_by_event_id` | str or null | Set by a correction. The version row stays queryable. |
@@ -45,7 +45,8 @@ system; this is the original.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `relation_id`, `tenant_id`, `conversation_id`, `artifact_id` | str | Required. |
+| `relation_id`, `conversation_id`, `artifact_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `relation_type` | str | Required. |
 | `requested_type` | str | Default empty. |
 | `depth` | int | Default 0. How far into a follow-up chain the request came from. |
@@ -70,6 +71,20 @@ system; this is the original.
    evidence is insufficient. An answer that does neither is not settleable.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `KnowledgeArtifact`, `ArtifactVersion`, and
+  `ArtifactRelation` inherit the four `Ownership` fields instead of declaring
+  their own. `ArtifactVersion` GAINED `tenant_id`: it previously had none, so
+  its isolation rested entirely on a join to its parent artifact. The storage
+  side now carries a composite foreign key on `(artifact_id, tenant_id)`, so a
+  version cannot claim a tenant its parent does not have.
+
+- **2026-09-02, subject attribution.** All three are SUBJECT-BOUND (see the
+  two-tier rule in `tenant.md`): a per-person delete must find an artifact, its
+  versions, and the edges between them, so `user_id` is REQUIRED non-blank on
+  each, whatever wrote the row. `artifact_relations` also gained a composite
+  `(artifact_id, tenant_id)` foreign key, matching `artifact_versions`; the
+  single-column form let a relation name a parent artifact in another tenant.
 
 - `ArtifactType` has five members and deliberately excludes anything that is not
   reader-generated knowledge. A raw import is not an artifact, and a fixture

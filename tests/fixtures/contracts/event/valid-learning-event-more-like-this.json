@@ -4,10 +4,11 @@
   "expect": "valid",
   "note": "The reference strong-positive event. The same idempotency key submitted from the agent path must produce one row, not two.",
   "payload": {
-    "event_id": "evt-000501",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-human-owner",
     "actor_kind": "human",
+    "user_id": "user-owner",
+    "event_id": "evt-000501",
     "event_type": "more_like_this",
     "occurred_at": "2026-09-01T12:00:00+00:00",
     "recorded_at": "2026-09-01T12:00:00+00:00",

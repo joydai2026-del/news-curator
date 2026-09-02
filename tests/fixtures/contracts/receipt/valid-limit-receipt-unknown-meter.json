@@ -5,13 +5,15 @@
   "note": "A stale meter reads as unknown, never zero. Note the two meter kinds are not interchangeable: a cumulative budget can be shed, a per-invocation ceiling is enforced by the runtime and shedding cannot rescue it.",
   "payload": {
     "envelope": {
-      "receipt_id": "lrec-000009",
       "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-system",
+      "actor_kind": "system",
+      "user_id": null,
+      "receipt_id": "lrec-000009",
       "kind": "host_limits",
       "state": "unknown",
       "created_at": "2026-09-01T12:00:00+00:00",
       "policy_revision": 1,
-      "actor_id": "actor-system",
       "reason_code": "meter_stale",
       "settled_at": null
     },

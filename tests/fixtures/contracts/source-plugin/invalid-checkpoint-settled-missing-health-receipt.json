@@ -4,9 +4,12 @@
   "expect": "invalid",
   "note": "A settled checkpoint with no health_receipt_id cannot prove it advanced against a durable health record. health_receipt_id is a required field, so this is the empty-value case, not the absent-field case.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
     "plugin_id": "hackernews",
     "source_id": "hackernews",
-    "tenant_id": "tenant-owner-private",
     "state": "settled",
     "cursor": "item-000481203",
     "watermark": "2026-09-01T11:55:00+00:00",

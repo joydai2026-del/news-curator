@@ -16,20 +16,23 @@ from .enums import (
     EvidenceOrigin,
     RetentionState,
 )
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
-class RawImport:
+class RawImport(Ownership):
     """A restricted snapshot of one imported source file. Never a profile input.
 
     Import writes this and changes no profile state. Idempotency is by
     (tenant_id, source_kind, checksum) plus source_item_id downstream, so a
     re-import of the same bytes creates zero duplicate evidence.
+
+    Ownership is inherited (2026-09-02). The one-off ``owner_actor_id`` was
+    removed in favour of the shared ``actor_id``: a second spelling of the
+    same field is a second thing to forget to check.
     """
 
     raw_import_id: str
-    tenant_id: str
-    owner_actor_id: str
     # A source KIND, never a provider brand: "newsletter_archive",
     # "assistant_chat_export", "browser_history", "mailbox_state", "url_list".
     source_kind: str
@@ -44,7 +47,7 @@ class RawImport:
 
 
 @dataclass(frozen=True)
-class EvidenceItem:
+class EvidenceItem(Ownership):
     """One normalized, provenance-linked observation.
 
     ``evidence_class`` is SC-04's four-value axis. ``origin`` is a separate axis
@@ -54,7 +57,6 @@ class EvidenceItem:
     """
 
     evidence_id: str
-    tenant_id: str
     raw_import_id: str | None
     source_item_id: str
     occurred_at: datetime
@@ -80,7 +82,7 @@ class EvidenceItem:
 
 
 @dataclass(frozen=True)
-class ProfileSnapshot:
+class ProfileSnapshot(Ownership):
     """A rebuildable derived state. Ranking reads exactly one settled snapshot.
 
     A partial or failed rebuild never replaces the last settled snapshot
@@ -89,7 +91,6 @@ class ProfileSnapshot:
     """
 
     snapshot_id: str
-    tenant_id: str
     version: int
     evidence_watermark: datetime
     build_version: str

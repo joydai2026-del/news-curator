@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .enums import PublicationState
+from .tenant import Ownership
 
 PUBLICATION_TRANSITIONS: tuple[tuple[PublicationState, PublicationState], ...] = (
     (PublicationState.DRAFT, PublicationState.READY),
@@ -67,18 +68,28 @@ class PublicationIdentity:
 
 
 @dataclass(frozen=True)
-class PublicationAuthorization:
+class PublicationAuthorization(Ownership):
     """Immutable approval, bound to exactly what was approved.
 
     The digest binds AUTHORIZATION, not identity. A changed digest invalidates
     this authorization and returns the basket to ``ready`` for a fresh approval.
+
+    This is a stored, per-tenant row, so it carries the shared ``Ownership``
+    shape like every other private record. The inherited ``actor_id`` IS the
+    approver (the removed ``approved_by_actor_id`` was a second spelling of the
+    same thing), and ``user_id`` is the human that approver acted for. An
+    approval is always attributable to a person, so ``user_id`` is required
+    non-blank here even when the approving actor is an agent.
+
+    ``identity.tenant_id`` must equal the inherited ``tenant_id``: an approval
+    that names one tenant in its key and another in its ownership row would let
+    a member of tenant A authorize a publication belonging to tenant B.
     """
 
     authorization_id: str
     identity: PublicationIdentity
     content_digest: str
     policy_revision: int
-    approved_by_actor_id: str
     approved_at: datetime
     expires_at: datetime
     # The approving credential must never be the credential that executes the
@@ -87,8 +98,18 @@ class PublicationAuthorization:
 
 
 @dataclass(frozen=True)
-class PublicationRecord:
-    """The live state of one publication identity."""
+class PublicationRecord(Ownership):
+    """The live state of one publication identity.
+
+    A stored, per-tenant row, so it carries the shared ``Ownership`` shape. The
+    inherited ``actor_id`` is whoever executed the LAST transition recorded
+    here (the publisher credential for ``publishing`` and ``settled``, the
+    approver for ``authorized``), and ``user_id`` is the human that actor acted
+    for. A publication is always attributable to a person, so ``user_id`` is
+    required non-blank even when the executing actor is the system.
+
+    ``identity.tenant_id`` must equal the inherited ``tenant_id``.
+    """
 
     identity: PublicationIdentity
     state: PublicationState
@@ -119,11 +140,10 @@ class PublicationRecord:
 
 
 @dataclass(frozen=True)
-class PublishingBasket:
+class PublishingBasket(Ownership):
     """A basket of candidates. Readiness is a signal, never an authorization."""
 
     basket_id: str
-    tenant_id: str
     destination: str
     issue_date: str
     item_story_ids: tuple[str, ...]

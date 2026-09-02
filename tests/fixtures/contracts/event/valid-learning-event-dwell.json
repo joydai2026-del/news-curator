@@ -4,10 +4,11 @@
   "expect": "valid",
   "note": "41 seconds of dwell. Passive, weak, and carrying a duration. It supports other evidence and can never on its own mark the story read.",
   "payload": {
-    "event_id": "evt-000502",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-human-owner",
     "actor_kind": "human",
+    "user_id": "user-owner",
+    "event_id": "evt-000502",
     "event_type": "dwell",
     "occurred_at": "2026-09-01T12:00:00+00:00",
     "recorded_at": "2026-09-01T12:00:00+00:00",

@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "An unknown publication state cannot produce a settled receipt. That combination is how an ambiguous send becomes a silent double publish.",
   "payload": {
-    "receipt_id": "orec-000013",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "orec-000013",
     "adapter_id": "longform-relay",
     "publisher_identity_ref": "signer-publisher-01",
     "destination": "relay-set-a",

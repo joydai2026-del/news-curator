@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "checkpoints": {
+    "example-feed": {
+      "tenant_id": "default",
+      "plugin_id": "feed",
+      "source_id": "example-feed",
+      "state": "settled",
+      "cursor": "2026-08-01T00:00:00+00:00",
+      "watermark": "2026-08-01T00:00:00+00:00",
+      "last_settled_run_id": "run-0001",
+      "health_receipt_id": "health-0001",
+      "updated_at": "2026-08-01T00:05:00+00:00",
+      "etag": "",
+      "last_modified": "",
+      "consecutive_failures": 0,
+      "backoff_until": null
+    }
+  }
+}

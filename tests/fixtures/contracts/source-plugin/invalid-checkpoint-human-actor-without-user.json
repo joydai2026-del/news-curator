@@ -1,0 +1,25 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "SourceCheckpoint",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent. A SUBJECTLESS record (a source cursor, about a feed and not a person) written by a human actor that names no human. Subjectless only relaxes the rule for a system actor; a human or agent actor always names the human it acts for.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": null,
+    "plugin_id": "hackernews",
+    "source_id": "hackernews",
+    "state": "settled",
+    "cursor": "item-000481203",
+    "watermark": "2026-09-01T11:55:00+00:00",
+    "last_settled_run_id": "run-2026-09-01-12",
+    "health_receipt_id": "hrec-2026-09-01-12",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "etag": "",
+    "last_modified": "",
+    "consecutive_failures": 0,
+    "backoff_until": null
+  },
+  "violates": "a human or agent actor requires a non-empty user_id; only a system actor may act for no human"
+}

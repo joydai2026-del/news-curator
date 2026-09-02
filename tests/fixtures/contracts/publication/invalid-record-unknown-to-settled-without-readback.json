@@ -4,6 +4,10 @@
   "expect": "invalid",
   "note": "unknown -> settled is a legal EDGE, but only when a positive readback backs it. This record claims settled with prior_state unknown and no readback_verdict at all, which is the same auto-resolve the edge exists to prevent.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

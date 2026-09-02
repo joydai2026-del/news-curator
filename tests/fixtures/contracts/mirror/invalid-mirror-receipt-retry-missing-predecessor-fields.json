@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: removing prior_receipt_ids, prior_attempt_state, and resolution_ref from the conflict-retry fixture entirely (rather than leaving them empty) made the automatic retry valid, because the fields were optional. They are now required on every MirrorReceipt, so omitting them fails structurally.",
   "payload": {
-    "receipt_id": "mrec-000025",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000025",
     "artifact_id": "art-000031",
     "artifact_version": 3,
     "adapter_id": "vault-wiki",

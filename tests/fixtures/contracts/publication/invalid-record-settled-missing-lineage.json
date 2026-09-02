@@ -4,6 +4,10 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: removing prior_state and readback_verdict from a known-invalid unknown -> settled record made it pass. Lineage is mandatory for every state past draft, not only validated when the fields happen to be present.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

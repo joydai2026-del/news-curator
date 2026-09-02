@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "The happy path a settled publish actually requires: a non-empty acknowledgement_ref alongside settled_at, not merely a matching receipt_state.",
   "payload": {
-    "receipt_id": "orec-000014",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "orec-000014",
     "adapter_id": "longform-relay",
     "publisher_identity_ref": "signer-publisher-01",
     "destination": "relay-set-a",

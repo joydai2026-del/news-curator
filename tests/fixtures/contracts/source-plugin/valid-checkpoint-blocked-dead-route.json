@@ -4,9 +4,12 @@
   "expect": "valid",
   "note": "A dead-but-200 route: it returns 50 parseable items whose newest is 237 days old. Cross-run failure counting is what exposes it; the live per-run health record cannot.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
     "plugin_id": "rss",
     "source_id": "blockworks",
-    "tenant_id": "tenant-owner-private",
     "state": "blocked",
     "cursor": "2026-01-06T00:00:00+00:00",
     "watermark": "2026-01-06T00:00:00+00:00",

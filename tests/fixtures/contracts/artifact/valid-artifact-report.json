@@ -4,9 +4,11 @@
   "expect": "valid",
   "note": "A report artifact created from a conversation and linked back to the story evidence, both directions retained.",
   "payload": {
-    "artifact_id": "art-000031",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "artifact_id": "art-000031",
     "artifact_type": "report",
     "status": "settled",
     "publication_class": "private",

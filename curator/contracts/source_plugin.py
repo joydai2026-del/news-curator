@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence
 
 from .enums import CheckpointState, HealthStatus, PluginState
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ class SourceProvenance:
 
 
 @dataclass(frozen=True)
-class NormalizedSourceDocument:
+class NormalizedSourceDocument(Ownership):
     """The single schema every adapter's normalize step must produce.
 
     Candidate generators and ranking read this. They never branch on a
@@ -97,7 +98,6 @@ class NormalizedSourceDocument:
     """
 
     document_id: str
-    tenant_id: str
     title: str
     url: str
     canonical_url: str
@@ -111,7 +111,7 @@ class NormalizedSourceDocument:
 
 
 @dataclass(frozen=True)
-class SourceCheckpoint:
+class SourceCheckpoint(Ownership):
     """Durable per-route poll state. GREENFIELD: nothing implements this today.
 
     Advances only after the normalized writes for that batch settle. A blocked
@@ -122,7 +122,6 @@ class SourceCheckpoint:
 
     plugin_id: str
     source_id: str
-    tenant_id: str
     state: CheckpointState
     cursor: str
     watermark: datetime | None
@@ -163,7 +162,7 @@ class SourceHealthRecord:
 
 
 @dataclass(frozen=True)
-class SourcePluginRegistration:
+class SourcePluginRegistration(Ownership):
     """One registry row for a plugin (`source_plugins`, plan "Core records").
 
     A plugin is never implicitly enabled. ``REGISTERED`` means the row exists
@@ -174,7 +173,6 @@ class SourcePluginRegistration:
 
     plugin_id: str
     plugin_version: str
-    tenant_id: str
     config_reference: str
     capabilities: SourceCapabilities
     state: PluginState

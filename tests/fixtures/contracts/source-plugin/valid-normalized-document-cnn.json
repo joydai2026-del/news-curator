@@ -4,8 +4,11 @@
   "expect": "valid",
   "note": "A news-sitemap route's normalized output. fetched_at and adapter_version are the additions over the live Item, which records only when a story was published, not when we saw it.",
   "payload": {
-    "document_id": "doc-cnn-000001",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "document_id": "doc-cnn-000001",
     "title": "Example headline as the publisher wrote it",
     "url": "https://example.com/2026/09/01/example",
     "canonical_url": "https://example.com/2026/09/01/example",

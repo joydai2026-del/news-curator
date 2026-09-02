@@ -20,7 +20,7 @@ settled snapshot feeds ranking.
 | Field | Type | Constraint |
 |---|---|---|
 | `raw_import_id` | str | Required. |
-| `tenant_id`, `owner_actor_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `source_kind` | str | Required. A KIND, never a provider brand: `newsletter_archive`, `assistant_chat_export`, `browser_history`, `mailbox_state`, `url_list`. |
 | `checksum` | str | **Required.** Idempotency has nothing to key on without it. |
 | `schema_version` | str | Required. |
@@ -35,8 +35,8 @@ settled snapshot feeds ranking.
 
 | Field | Type | Constraint |
 |---|---|---|
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `evidence_id` | str | Required. |
-| `tenant_id` | str | Required. |
 | `raw_import_id` | str or null | Null only for live evidence with no import behind it. |
 | `source_item_id` | str | Required. With `checksum` this is what makes re-import produce zero duplicates. |
 | `occurred_at`, `recorded_at` | datetime | Required. When it happened, and when we learned of it. |
@@ -56,14 +56,15 @@ settled snapshot feeds ranking.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `snapshot_id`, `tenant_id` | str | Required. |
+| `snapshot_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `version` | int | Required, monotonic. |
 | `evidence_watermark` | datetime | Required. |
 | `build_version` | str | Required. |
 | `policy_revision` | int | Required. |
 | `settled_at` | datetime | **Required, non-null.** An unsettled build is not a snapshot row at all. |
 | `topic_affinities`, `entity_affinities`, `source_affinities` | tuple of (feature_id, weight, provenance) | Default empty. **Weighted entries, not bare strings**: a bare string can record THAT a topic is an affinity and nothing about how strongly, so `less_like_this` and `more_like_this` would land in the same place and decay would have no numeric input to read. `provenance` is a stable reference (an evidence id, or a comma-joined list) tracing the weight to the events that produced it. |
-| `knowledge_gaps` | tuple of str | Default empty. Unweighted: the plan treats gap topics as a set, not a scored ranking. |
+| `knowledge_gaps` | tuple of str | Default empty. The plan treats gap topics as an unweighted set, not a scored order. |
 | `novelty_tolerance` | float | Default 0.0. |
 
 ## Invariants
@@ -97,6 +98,22 @@ settled snapshot feeds ranking.
 | Assistant Q&A export | strong for curiosity and gaps | Filter to news-related threads before profile use. |
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** All three records inherit the four `Ownership`
+  fields. `RawImport.owner_actor_id` was REMOVED and replaced by the inherited
+  `actor_id`: a second spelling of the same field is a second thing to forget
+  to check, and a freeze test now rejects any `*_actor_id` variant. `RawImport`
+  keeps its own `(tenant_id, source_kind, checksum)` idempotency key
+  unchanged. `EvidenceItem` gained an actor, which it did not have at all.
+
+- **2026-09-02, subject attribution.** All three are SUBJECT-BOUND, so `user_id`
+  is REQUIRED non-blank even when the writer is the system. `EvidenceItem` and
+  `ProfileSnapshot` first shipped as `actor_kind: system` with a null `user_id`,
+  on the reading that the actor is "who wrote the row". That inverted `user_id`'s
+  purpose: evidence derived from one human's behaviour and a model of one
+  human's interests are ABOUT that person whoever computed them, and in a tenant
+  with more than one member they would have been unattributable, so
+  "delete everything about me" could not be executed or proven complete.
 
 - The plan describes an evidence "class" in two different senses: SC-04's four
   lineage values, and the event table's "strong explicit / weak imported"

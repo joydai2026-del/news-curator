@@ -45,6 +45,36 @@ Two contracts predate this freeze and are reconciled rather than replaced:
   to NAME an adapter, a configured source route, or a destination: those are
   listed as explicit (file, field) pairs in the test's
   `ADAPTER_IDENTITY_ALLOWLIST`, so a provider name in any other field fails.
+- **Every private record inherits `Ownership`.** `tenant_id`, `actor_id`,
+  `actor_kind`, and `user_id` are declared once, in
+  [tenant.md](tenant.md#ownership), and inherited by every private record, so
+  they are never re-declared, never spelled differently, and never optional.
+  `test_every_private_record_inherits_the_shared_ownership_shape` fails if a
+  contract dataclass carries tenant, actor, or user semantics without either
+  inheriting the shape or carrying a written exemption. Membership is decided by
+  NAME PATTERN (`*tenant_id`, `*actor_id`, `*user_id`), nested fields included,
+  so a renamed or nested guard cannot slip past it.
+- **`user_id` follows a TWO-TIER rule, and no record is unclassified.** One
+  question decides the tier: must a "delete everything about me" request find
+  this row? Yes means SUBJECT-BOUND and `user_id` is required non-blank whatever
+  wrote the row (a system writer does not erase the human subject). No means
+  SUBJECTLESS and `user_id` may be null, and then only for a `system` actor. The
+  tiers are frozen as data in `curator/contracts/__init__.py` with a written
+  reason per class, and `test_every_owned_record_is_classified_exactly_once`
+  fails if a new owned record lands in no tier or in two. Full table:
+  [tenant.md](tenant.md#ownership).
+- **CANONICAL is part of every guard, at every layer.** `not null`,
+  `non-blank` and `canonical` are three different rules. The fixture
+  invariant, the runtime guard in `curator/ownership.py`, and the SQL `check`
+  constraints all reject `""`, `"   "`, `" user-1 "`, `"\tuser-1"`,
+  `"user\u200b1"` and `"\u3000"` on `tenant_id`, `actor_id`, and a present
+  `user_id`. The invisible set is frozen once in
+  `curator/contracts/__init__.py` and the SQL text is generated from it.
+- **A guard field is REQUIRED, never optional-with-a-check.** An optional
+  guard skips its own check when it is omitted, so absence must fail
+  validation rather than default. This is the rule the contract-freeze
+  re-review produced, and the ownership shape is the last of the four
+  bypasses it found.
 - **No owner identifiers.** These files ship to the public repository, so an
   absolute home path and the owner's initials are both rejected across the
   whole frozen set by `test_owner_identifiers_are_absent_from_the_whole_frozen_set`.
@@ -56,6 +86,23 @@ Two contracts predate this freeze and are reconciled rather than replaced:
   repository contains today are B.
 - **Freeze notes.** Where the plan was silent, the smallest choice consistent
   with it was made and recorded in that file's "Freeze notes" section.
+- **Canonical tables are derived, never hand-edited.** The ownership
+  classification table in `tenant.md` and the receipt kind and wrapper tables
+  in `receipt.md` are rendered from the frozen tuples in
+  `curator/contracts/__init__.py` by
+  `python -m scripts.render_contract_tables`. Their marker names are
+  `ownership-classification`, `receipt-kind-tiers`, and
+  `receipt-wrapper-kinds`. Refusal cost: authors edit the tuples and re-render;
+  any direct table edit fails the freeze test byte for byte.
+- **Normative boundary.** Those generated blocks are the only normative
+  statement of ownership tiers, receipt kinds, and wrapper bindings. Any other
+  mention is informational. The outside-marker guard catches tier statements
+  in tables only; it deliberately does not scan general prose.
+- **Frozen contracts are exact classes.** They are never subclassed. A new
+  record is added to the frozen tuples, with its own reviewed wrapper field and
+  kind where applicable. The refusal cost is that extension requires a freeze
+  edit instead of inheritance, which keeps runtime classification closed and
+  auditable.
 - The plan frozen here is "News Curator Modular Product Scope and Architecture"
   (2026-09-01), which lives in the owner's private planning workspace, not in
   this repository. Sections are cited by name, and criteria by SC id.

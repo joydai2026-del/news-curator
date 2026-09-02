@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "A primary lane the story never qualified for cannot be replayed from the receipt, which breaks SC-24 reproducibility.",
   "payload": {
-    "run_id": "run-2026-09-01-12",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "run_id": "run-2026-09-01-12",
     "story_id": "story-000043",
     "story_cluster_id": "cluster-000013",
     "primary_lane": "surprise",

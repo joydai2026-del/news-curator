@@ -4,9 +4,12 @@
   "expect": "valid",
   "note": "The honest starting state for every route: no durable cursor exists anywhere in the source layer today, so the first checkpoint written is uninitialized rather than a fabricated cursor.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
     "plugin_id": "rss",
     "source_id": "buzzing",
-    "tenant_id": "tenant-owner-private",
     "state": "uninitialized",
     "cursor": "",
     "watermark": null,

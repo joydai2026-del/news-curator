@@ -69,23 +69,41 @@ a typo.
 
 ### `PublicationAuthorization`
 
+Inherits [`Ownership`](tenant.md#ownership) (2026-09-02). SUBJECT-BOUND: an
+approval is always attributable to a person, so `user_id` is required non-blank.
+
 | Field | Type | Constraint |
 |---|---|---|
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `authorization_id` | str | Required. |
-| `identity` | `PublicationIdentity` | Required. |
+| `identity` | `PublicationIdentity` | Required. `identity.tenant_id` must EQUAL the inherited `tenant_id`. |
 | `content_digest` | str | Required. Binds the approval to exactly what was approved. |
 | `policy_revision` | int | Required. |
-| `approved_by_actor_id` | str | Required. |
 | `approved_at`, `expires_at` | datetime | Required. |
 | `approval_credential_id` | str | Default empty. Must never equal the executing credential. |
+
+`approved_by_actor_id` was REMOVED on 2026-09-02: it was a second spelling of
+the shared `actor_id`, and it sat in the spelling test's own allowlist, so
+"one field, one spelling" held only for spellings nobody had shipped yet. This
+class also carried its tenant nested inside `identity`, which made it invisible
+to the flat-name ownership gate.
+
+The `identity.tenant_id` bind is an invariant with a seeded fixture: an approval
+that keys one tenant while being owned by another would let a member of tenant A
+authorize a publication belonging to tenant B.
 
 Immutable once written. A change produces a new authorization, never an edit.
 
 ### `PublicationRecord`
 
+Inherits [`Ownership`](tenant.md#ownership) (2026-09-02). SUBJECT-BOUND. The
+`actor_id` is whoever executed the LAST transition recorded here (the publisher
+credential for `publishing` and `settled`, the approver for `authorized`).
+
 | Field | Type | Constraint |
 |---|---|---|
-| `identity` | `PublicationIdentity` | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
+| `identity` | `PublicationIdentity` | Required. `identity.tenant_id` must EQUAL the inherited `tenant_id`. |
 | `state` | `PublicationState` | Required. |
 | `updated_at` | datetime | Required. |
 | `authorization_id` | str or null | **Non-null when `settled`.** |
@@ -96,16 +114,18 @@ Immutable once written. A change produces a new authorization, never an edit.
 | `reason_code` | str | Default empty. |
 | `prior_state` | str | Default empty. The state this record transitioned FROM. Empty skips transition validation; present, it must name a legal `PUBLICATION_TRANSITIONS` edge. |
 | `readback_verdict` | str | Default empty. One of `ReadbackVerdict`'s wire values. Required to leave `unknown`. |
+| `readback_receipt_ref` | str | Default empty. The receipt the verdict was read back from. Required to leave `unknown`: a verdict with nothing behind it is an assertion, not a readback. |
 
 ### `PublishingBasket`
 
 | Field | Type | Constraint |
 |---|---|---|
-| `basket_id`, `tenant_id`, `destination`, `issue_date` | str | Required. |
+| `basket_id`, `destination`, `issue_date` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
 | `item_story_ids` | tuple of str | Required. |
 | `required_item_count` | int | Required. |
 | `content_digest` | str | Required. |
-| `state` | `PublicationState` | Required. **`draft` or `ready` only.** Every state past `ready` (`authorized`, `publishing`, `settled`, `failed-safe`, `unknown`) belongs to `PublicationRecord`; a basket in one of those states would let a container of items impersonate a publication record. |
+| `state` | `PublicationState` | Required. **`draft` or `ready` only.** Every state past `ready` (`authorized`, `publishing`, `settled`, `failed-safe`, `unknown`) belongs to the publication record; a basket in one of those states would let a container of items impersonate a publication record. |
 | `updated_at` | datetime | Required. |
 | `readiness_signal` | bool | Default `false`. |
 | `revision` | int | Default 0. Compare-and-set on basket mutation. |
@@ -141,6 +161,21 @@ Immutable once written. A change produces a new authorization, never an edit.
    never mints a second key across the whole cycle.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `PublishingBasket` inherits the four `Ownership`
+  fields. `PublicationIdentity` deliberately does NOT: it is the at-most-once
+  KEY (tenant, publisher, destination, issue date), not a record, and adding an
+  actor to it would change the key and mint a second identity for the same
+  issue. `PublicationRecord` and `PublicationAuthorization` DO carry their own
+  `tenant_id`, `actor_id`, `actor_kind`, and `user_id`, inherited from
+  `Ownership` on 2026-09-02, and both are SUBJECT-BOUND. They also reference
+  the identity, which holds a `tenant_id` of its own, so the two must be
+  EQUAL: `identity.tenant_id` must match the inherited `tenant_id`, enforced
+  as an invariant with a permanent seeded fixture on EACH class
+  (`invalid-authorization-identity-tenant-mismatch.json` and
+  `invalid-record-identity-tenant-mismatch.json`). (Before 2026-09-02
+  they carried no flat tenant at all, which is what made them invisible to the
+  flat-name ownership gate.)
 
 - `failed-safe -> ready` is included as a legal transition. The plan lists
   `failed-safe` as a state but does not say what follows it; returning to `ready`

@@ -11,17 +11,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .enums import (
-    ActorKind,
     ConfidenceBand,
     CorrectionAction,
     EvidenceClass,
     EvidenceOrigin,
     EventType,
 )
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
-class LearningEvent:
+class LearningEvent(Ownership):
     """One append-only behavioral record. Never updated in place.
 
     ``idempotency_key`` is required, not optional, because the human surface and
@@ -30,9 +30,6 @@ class LearningEvent:
     """
 
     event_id: str
-    tenant_id: str
-    actor_id: str
-    actor_kind: ActorKind
     event_type: EventType
     occurred_at: datetime
     recorded_at: datetime
@@ -77,12 +74,10 @@ class EventSemantics:
 
 
 @dataclass(frozen=True)
-class CorrectionEvent:
+class CorrectionEvent(Ownership):
     """An immutable correction or retraction. It never edits the original row."""
 
     event_id: str
-    tenant_id: str
-    actor_id: str
     action: CorrectionAction
     target_kind: str
     target_id: str

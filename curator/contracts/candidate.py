@@ -11,10 +11,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .enums import BandVerdict, Lane, PublicationClass, ScorerKind
+from .tenant import Ownership
 
 
 @dataclass(frozen=True)
-class LaneCandidate:
+class LaneCandidate(Ownership):
     """One generator's proposal for one story in one lane.
 
     A story may appear once per lane. The primary lane is decided at merge, not
@@ -22,7 +23,6 @@ class LaneCandidate:
     """
 
     run_id: str
-    tenant_id: str
     lane: Lane
     story_id: str
     story_cluster_id: str
@@ -33,7 +33,7 @@ class LaneCandidate:
 
 
 @dataclass(frozen=True)
-class StoryRecord:
+class StoryRecord(Ownership):
     """The consolidated story cluster (`story_records`, plan "Core records").
 
     One row per canonical story cluster, independent of any single lane
@@ -42,7 +42,6 @@ class StoryRecord:
     """
 
     story_cluster_id: str
-    tenant_id: str
     publication_class: PublicationClass
     canonical_source_document_id: str
     source_document_ids: tuple[str, ...]
@@ -53,7 +52,7 @@ class StoryRecord:
 
 
 @dataclass(frozen=True)
-class MergedCandidate:
+class MergedCandidate(Ownership):
     """One canonical story after dedupe, carrying every lane it qualified for.
 
     SC-24 reproducibility: primary_lane must be recomputable from the persisted
@@ -62,7 +61,6 @@ class MergedCandidate:
     """
 
     run_id: str
-    tenant_id: str
     story_id: str
     story_cluster_id: str
     primary_lane: Lane
@@ -145,7 +143,7 @@ class SlateEntry:
 
 
 @dataclass(frozen=True)
-class Slate:
+class Slate(Ownership):
     """The settled edition. Only the final invariant verifier permits this.
 
     ``verifier_verdict`` gates settlement: a slate whose verifier failed cannot
@@ -153,7 +151,6 @@ class Slate:
     """
 
     run_id: str
-    tenant_id: str
     edition_date: str
     built_at: datetime
     policy_revision: int

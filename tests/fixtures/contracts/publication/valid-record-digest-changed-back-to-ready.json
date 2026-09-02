@@ -4,6 +4,10 @@
   "expect": "valid",
   "note": "The digest changed, so the authorization was invalidated and the record returned to ready. Note the idempotency key is UNCHANGED: the same issue date keeps one publication identity, which is what stops a re-approval publishing twice.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

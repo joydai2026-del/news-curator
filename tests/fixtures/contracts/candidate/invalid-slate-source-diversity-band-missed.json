@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "The source_diversity band reports 20.8% achieved against a 12.5% cap, roughly the share the highest-volume route takes of the raw in-window pool, and correctly carries verdict fail. The slate nevertheless claims a passing verifier verdict. That combination is the failure the invariant catches: an active band missed must fail the slate, so it cannot publish or be described as balanced. The entry list is the same 24 rows as the valid fixture, because the rule under test is verdict consistency, not the recomputation of the band value.",
   "payload": {
-    "run_id": "run-2026-09-01-13",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "run_id": "run-2026-09-01-13",
     "edition_date": "2026-09-01",
     "built_at": "2026-09-01T12:00:00+00:00",
     "policy_revision": 1,

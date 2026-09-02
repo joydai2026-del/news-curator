@@ -1,0 +1,23 @@
+{
+  "contract": "artifact",
+  "dataclass": "ArtifactVersion",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent. An artifact version with no tenant_id. Until this follow-up ArtifactVersion genuinely had no tenant column, so its isolation rested entirely on a join to its parent artifact.",
+  "payload": {
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "artifact_id": "art-000031",
+    "version": 2,
+    "parent_version": 1,
+    "checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_reference": "restricted://artifacts/000031/2",
+    "settled_at": "2026-09-01T12:00:00+00:00",
+    "citations": [
+      "story-000042",
+      "doc-cnn-000001"
+    ],
+    "redacted_by_event_id": null
+  },
+  "violates": "required field tenant_id is absent"
+}

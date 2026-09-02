@@ -4,8 +4,11 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: a second receipt with the same idempotency_key, state settled, readback_checksum matching attempted_checksum, and prior_receipt_ids pointing at the conflicted receipt, but with NO resolution_ref. That is an automatic retry that silently overwrote a target after a compare-and-set conflict, which SC-26 and the plan both forbid.",
   "payload": {
-    "receipt_id": "mrec-000025",
     "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000025",
     "artifact_id": "art-000031",
     "artifact_version": 3,
     "adapter_id": "vault-wiki",

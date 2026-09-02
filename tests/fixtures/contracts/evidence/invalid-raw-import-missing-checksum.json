@@ -4,9 +4,11 @@
   "expect": "invalid",
   "note": "Without a checksum, a re-import cannot be recognised as the same bytes, and SC-03's zero-duplicate guarantee has nothing to key on.",
   "payload": {
-    "raw_import_id": "raw-000003",
     "tenant_id": "tenant-owner-private",
-    "owner_actor_id": "actor-human-owner",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "raw_import_id": "raw-000003",
     "source_kind": "browser_history",
     "schema_version": "history-export-1",
     "storage_reference": "restricted://raw/000003",

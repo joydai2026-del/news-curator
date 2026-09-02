@@ -4,9 +4,11 @@
   "expect": "invalid",
   "note": "A new artifact type needs its own eligibility and mirror rules, so it cannot be introduced by writing a new string.",
   "payload": {
-    "artifact_id": "art-000032",
     "tenant_id": "tenant-owner-private",
     "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "artifact_id": "art-000032",
     "artifact_type": "newsletter_draft",
     "status": "settled",
     "publication_class": "private",

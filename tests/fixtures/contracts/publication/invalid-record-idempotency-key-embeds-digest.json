@@ -4,6 +4,10 @@
   "expect": "invalid",
   "note": "Reproduced adversarial payload: the digest changed, so a fresh idempotency_key was minted embedding the new digest suffix. This is the exact double-send the identity ruling exists to prevent: digest A publishes, the basket changes to digest B, a re-authorization mints a NEW key, and the same issue date publishes twice.",
   "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
     "identity": {
       "tenant_id": "tenant-owner-private",
       "publisher_identity_ref": "signer-publisher-01",

@@ -1,0 +1,14 @@
+{
+  "contract": "tenant",
+  "dataclass": "Tenant",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent (round 6). A tenant_id with a TRAILING U+2028 (LINE SEPARATOR). Tenant is exempt from Ownership (it is not an owned record, it is the isolation boundary an owned record's tenant_id NAMES), so before round 6 nothing checked this id for invisible characters at all: is_tenant_member compares tenant_id by exact string equality, so a membership row keyed on the canonical spelling would silently fail to match this tenant.",
+  "payload": {
+    "tenant_id": "tenant-owner-private ",
+    "display_name": "Private reading hub",
+    "default_publication_class": "private",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "is_public_projection_tenant": false
+  },
+  "violates": "tenant_id must not carry leading or trailing whitespace"
+}

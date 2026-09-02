@@ -32,7 +32,8 @@ Only the verifier permits settlement, and it runs after EITHER scorer.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `run_id`, `tenant_id` | str | Required. |
+| `run_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECTLESS: `user_id` null only under a `system` actor. See [tenant.md](tenant.md#ownership). |
 | `lane` | `Lane` | Required. |
 | `story_id`, `story_cluster_id` | str | Required. |
 | `lane_score` | float | Required. Persisted, because SC-24 replays from it. |
@@ -47,7 +48,8 @@ quota.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `run_id`, `tenant_id`, `story_id`, `story_cluster_id` | str | Required. |
+| `run_id`, `story_id`, `story_cluster_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECTLESS: `user_id` null only under a `system` actor. See [tenant.md](tenant.md#ownership). |
 | `primary_lane` | `Lane` | Required. **Must appear in `lane_scores`.** |
 | `lane_scores` | tuple of (Lane, float) | Required. Every lane the story qualified for. |
 | `lane_reasons` | tuple of (Lane, str) | Required. |
@@ -61,7 +63,8 @@ per canonical story, independent of any single lane assignment or edition.
 
 | Field | Type | Constraint |
 |---|---|---|
-| `story_cluster_id`, `tenant_id` | str | Required. |
+| `story_cluster_id` | str | Required. |
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECTLESS: `user_id` null only under a `system` actor. See [tenant.md](tenant.md#ownership). |
 | `publication_class` | `PublicationClass` | Required. |
 | `canonical_source_document_id` | str | Required. |
 | `source_document_ids` | tuple of str | Required. |
@@ -96,10 +99,20 @@ as a negative number.
 `SlateEntry`: `position`, `story_id`, `primary_lane`, `final_score`,
 `plain_reason`, `backfilled`.
 
-`Slate`: `run_id`, `tenant_id`, `edition_date`, `built_at`, `policy_revision`,
-`profile_snapshot_id` (nullable before imports), `entries`, `bands`,
-`verifier_verdict`, `lane_quotas`, `short_reason_code` (default empty;
-required whenever the entry count is below the summed quotas).
+`Slate`:
+
+| Field | Type | Constraint |
+|---|---|---|
+| `tenant_id`, `actor_id`, `actor_kind`, `user_id` | inherited from `Ownership` | Required, all four. SUBJECT-BOUND: `user_id` required, non-blank, regardless of writer. See [tenant.md](tenant.md#ownership). |
+| `run_id`, `edition_date` | str | Required. |
+| `built_at` | datetime | Required. |
+| `policy_revision` | int | Required. |
+| `profile_snapshot_id` | str or null | Nullable before imports. This is why the slate is SUBJECT-BOUND and its inputs are not: the only other link from a slate to a person is nullable, so a cold-start slate would name nobody and nothing would name it. |
+| `entries` | tuple of `SlateEntry` | Required. |
+| `bands` | tuple of `BandResult` | Required. |
+| `verifier_verdict` | str | Required. |
+| `lane_quotas` | tuple | Required. |
+| `short_reason_code` | str | Default empty. Required whenever the entry count is below the summed quotas. |
 
 ## Lane overlap, the rule this contract exists for
 
@@ -180,6 +193,33 @@ tie-break, that fixture goes red.
     ranking receipt replays the whole edition from.
 
 ## Freeze notes
+
+- **2026-09-02, ownership.** `LaneCandidate`, `StoryRecord`,
+  `MergedCandidate`, and `Slate` inherit the four `Ownership` fields.
+  `ScoredCandidate`, `ComponentScores`, `BandResult`, and `SlateEntry` stay
+  plain value objects; they are nested INSIDE an owned record and are never
+  stored on their own.
+
+- **2026-09-02, subject attribution (revised the same day).** `LaneCandidate`,
+  `StoryRecord`, and `MergedCandidate` are SUBJECTLESS: they are per-RUN
+  inputs that exist before any personalization, reachable by join from the
+  slate they feed, so a per-person delete finds them through that parent and
+  `user_id` may be null. Their fixtures carry `actor_kind: system` with a null
+  `user_id`. That relaxation applies to a `system` actor ONLY; a human or
+  agent actor on one of these still names the human it acts for, and blank is
+  never legal.
+
+  `Slate` is SUBJECT-BOUND. It was classified with the other three, on the
+  stated ground that it is "reachable from the edition it becomes", and that
+  ground does not hold: no frozen field implements that edge (`PublishingBasket`
+  carries item ids, not a slate or run reference), and the slate's only link to
+  a person, `profile_snapshot_id`, is NULLABLE. A cold-start slate would
+  therefore name nobody and nothing would name it, so a per-person delete
+  could not find it and a later backfill would have no join to use. The
+  `ranking` receipt kind moved with it, because a ranking receipt explains the
+  order of that same personalized slate. Decided by recoverability: a redundant
+  `user_id` costs a column, a missing one is unrecoverable. If a per-user
+  candidate store ever ships, the other three move too.
 
 - The plan gives the scoring formula but no numbers. Concrete initial values for
   every component weight and every band are in policy revision 1, derived from
