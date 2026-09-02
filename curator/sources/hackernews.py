@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 from urllib.parse import urlencode
 
+from ..contracts.source_plugin import SourceCapabilities
 from ..models import Item
 from ..normalize import canonical_url, clean_title, safe_url
 from .base import (
@@ -24,6 +25,7 @@ from .base import (
     success_result,
     validate_option_keys,
 )
+from .capabilities import ADAPTER_PLUGIN_VERSION
 from .errors import SafeTransportError
 
 
@@ -48,6 +50,37 @@ _OPTION_KEYS = {
 
 class HackerNewsAdapter:
     type_key = "hackernews"
+
+    def capabilities(self) -> SourceCapabilities:
+        """The one adapter whose declaration differs from every other.
+
+        ``consumes_search_queries`` is true because ``_query_plans`` reads
+        ``context.queries`` and turns each term into its own request; the other
+        five adapters are handed the same queries and never look. This is the
+        undeclared split Gate 0c measured, now declared and behaviourally
+        tested.
+
+        ``supports_trend_signal`` is true because ``fetch`` requests
+        ``tags=front_page`` and assigns ``native_rank`` from the SOURCE's own
+        returned order, not from a route the operator labelled trending.
+        ``supports_social_signal`` is true because ``_to_item`` reads ``points``
+        off the wire into ``Item.score``: those are votes cast by people.
+        ``supports_full_text`` stays false: ``_to_item`` sets no description.
+        """
+
+        return SourceCapabilities(
+            plugin_id=self.type_key,
+            plugin_version=ADAPTER_PLUGIN_VERSION,
+            supports_poll=True,
+            supports_push=False,
+            supports_full_text=False,
+            supports_trend_signal=True,
+            supports_social_signal=True,
+            supports_deletion=False,
+            supports_incremental_checkpoint=False,
+            consumes_search_queries=True,
+            languages=(),
+        )
 
     def validate_options(self, spec: SourceSpec) -> Mapping[str, Any]:
         values = validate_option_keys(spec, _OPTION_KEYS)
@@ -230,13 +263,17 @@ class HackerNewsAdapter:
                 note=";".join(notes),
             )
         if notes:
+            # The leading "partial" segment is the marker the cross-run health
+            # fold reads. _health in base.py rewrites BOTH status and
+            # reason_code when this run is also stale, so the note is the only
+            # channel a partial run survives on. See health_record.py.
             return success_result(
                 spec,
                 items,
                 now,
                 status_hint="degraded",
                 reason_code=notes[0],
-                note=";".join(notes),
+                note=";".join(("partial", *notes)),
             )
         return success_result(spec, items, now)
 

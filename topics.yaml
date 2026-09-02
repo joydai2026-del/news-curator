@@ -593,7 +593,12 @@ categories:
   - id: trending
     name: Trending
     sources:
-      - {id: buzzing, name: buzzing.cc, url: "https://www.buzzing.cc/feed.xml", language: zh, max_age_hours: 6, weight: 0.9, aggregator: true, platform: buzzing, echo_eligible: false}
+      # `type: atom` states the wire format this route actually serves. The
+      # recorded capture in tests/fixtures/feeds/buzzing.xml is Atom 1.0, and
+      # tests/test_source_route_typing.py proves the rss and atom adapters
+      # produce identical items from it, so this is a declaration, not a
+      # behaviour change.
+      - {id: buzzing, name: buzzing.cc, url: "https://www.buzzing.cc/feed.xml", type: atom, language: zh, max_age_hours: 6, weight: 0.9, aggregator: true, platform: buzzing, echo_eligible: false}
 
 # ============================================================================
 # A NOTE ON `hn_queries`

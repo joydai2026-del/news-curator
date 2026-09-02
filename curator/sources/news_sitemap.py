@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 from xml.etree import ElementTree as ET
 
+from ..contracts.source_plugin import SourceCapabilities
 from ..models import Item
 from ..normalize import canonical_url, clean_title, safe_url
 from .base import (
@@ -21,6 +22,7 @@ from .base import (
     success_result,
     validate_option_keys,
 )
+from .capabilities import ADAPTER_PLUGIN_VERSION
 
 
 SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
@@ -32,6 +34,29 @@ _OPTION_KEYS = {"max_items", "max_string_chars", "max_xml_nodes", "max_xml_depth
 
 class NewsSitemapAdapter:
     type_key = "news_sitemap"
+
+    def capabilities(self) -> SourceCapabilities:
+        """Google-style news sitemap over a plain GET.
+
+        Non-obvious value: ``supports_full_text`` is false and this adapter is
+        the strongest case for it. ``parse_news_sitemap`` builds ``Item``
+        without a ``description`` at all: a sitemap carries a title, a URL, a
+        publication date and an image, and nothing else this adapter reads.
+        """
+
+        return SourceCapabilities(
+            plugin_id=self.type_key,
+            plugin_version=ADAPTER_PLUGIN_VERSION,
+            supports_poll=True,
+            supports_push=False,
+            supports_full_text=False,
+            supports_trend_signal=False,
+            supports_social_signal=False,
+            supports_deletion=False,
+            supports_incremental_checkpoint=False,
+            consumes_search_queries=False,
+            languages=(),
+        )
 
     def validate_options(self, spec: SourceSpec) -> Mapping[str, Any]:
         values = validate_option_keys(spec, _OPTION_KEYS)

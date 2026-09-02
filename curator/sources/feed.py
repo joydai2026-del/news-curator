@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 import feedparser
 
+from ..contracts.source_plugin import SourceCapabilities
 from ..models import Item
 from ..normalize import canonical_url, clean_title, safe_url
 from .base import (
@@ -24,6 +25,7 @@ from .base import (
     success_result,
     validate_option_keys,
 )
+from .capabilities import ADAPTER_PLUGIN_VERSION
 
 
 MAX_DESCRIPTION_CHARS = 600
@@ -48,6 +50,36 @@ _OPTION_KEYS = {
 
 class FeedAdapter:
     type_key = "feed"
+
+    def capabilities(self) -> SourceCapabilities:
+        """Declared for this class AND both of its configuration aliases.
+
+        ``self.type_key`` is read rather than hard-coded, so ``rss`` and
+        ``atom`` cannot inherit a declaration attributed to ``feed``.
+
+        Non-obvious values, each traceable to a line below:
+        ``supports_full_text`` is false because ``enforce_xml_bounds`` is
+        called with ``enforce_text_limit=False`` precisely because article
+        bodies are present and never consumed; ``_entry_summary`` truncates to
+        ``description_chars``. ``supports_trend_signal`` is false because
+        ``_rss_items`` sets ``native_rank`` from ``enumerate`` and only when
+        ``spec.category == "trending"``, which is an operator's declaration
+        about the route, not a value the publisher sent.
+        """
+
+        return SourceCapabilities(
+            plugin_id=self.type_key,
+            plugin_version=ADAPTER_PLUGIN_VERSION,
+            supports_poll=True,
+            supports_push=False,
+            supports_full_text=False,
+            supports_trend_signal=False,
+            supports_social_signal=False,
+            supports_deletion=False,
+            supports_incremental_checkpoint=False,
+            consumes_search_queries=False,
+            languages=(),
+        )
 
     def validate_options(self, spec: SourceSpec) -> Mapping[str, Any]:
         values = validate_option_keys(spec, _OPTION_KEYS)

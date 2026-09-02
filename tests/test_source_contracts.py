@@ -213,6 +213,10 @@ def test_hackernews_keeps_typed_round_robin_queries_and_request_cap():
     assert all("query=Htmx" not in url for url in topic_urls)
     assert "query_cap%" not in "".join(topic_urls)
     assert "query_cap:2" in result.note
+    # The leading segment is the partial marker the cross-run health fold reads:
+    # it is the only part of a degraded run that survives base.py rewriting the
+    # status and reason_code when the run is also stale.
+    assert result.note.split(";")[0] == "partial"
     front_items = [
         item for item in result.items if item.native_categories == {"trending"}
     ]
@@ -252,7 +256,7 @@ def test_hackernews_keeps_typed_round_robin_queries_and_request_cap():
         (
             "buzzing",
             "buzzing.xml",
-            "rss",
+            "atom",
             "zh",
             "trending",
             "美国国土安全部正利用一条鲜为人知的法律对记者、非营利组织和工会进行监视",
