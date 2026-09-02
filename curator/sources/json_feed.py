@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from ..contracts.source_plugin import SourceCapabilities
 from ..models import Item
 from ..normalize import canonical_url, clean_title, safe_url
 from .base import (
@@ -20,6 +21,7 @@ from .base import (
     success_result,
     validate_option_keys,
 )
+from .capabilities import ADAPTER_PLUGIN_VERSION
 
 
 _JSON_MIME_TYPES = ("application/json", "application/feed+json")
@@ -34,6 +36,31 @@ _OPTION_KEYS = {
 
 class JsonFeedAdapter:
     type_key = "json_feed"
+
+    def capabilities(self) -> SourceCapabilities:
+        """JSON Feed 1.1 over a plain GET.
+
+        Non-obvious values: ``supports_full_text`` is false because
+        ``parse_json_feed`` reads ``summary`` and never ``content_html`` or
+        ``content_text``, and truncates through ``_description``.
+        ``supports_trend_signal`` is false for the same reason as the feed
+        adapter: ``native_rank`` is this adapter's ``enumerate`` index, gated
+        on ``spec.category == "trending"``.
+        """
+
+        return SourceCapabilities(
+            plugin_id=self.type_key,
+            plugin_version=ADAPTER_PLUGIN_VERSION,
+            supports_poll=True,
+            supports_push=False,
+            supports_full_text=False,
+            supports_trend_signal=False,
+            supports_social_signal=False,
+            supports_deletion=False,
+            supports_incremental_checkpoint=False,
+            consumes_search_queries=False,
+            languages=(),
+        )
 
     def validate_options(self, spec: SourceSpec) -> Mapping[str, Any]:
         values = validate_option_keys(spec, _OPTION_KEYS)
