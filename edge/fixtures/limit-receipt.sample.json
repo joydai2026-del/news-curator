@@ -1,0 +1,59 @@
+{
+  "envelope": {
+    "receipt_id": "lrec-fixture-0001",
+    "tenant_id": "tenant-fixture",
+    "kind": "host_limits",
+    "state": "unknown",
+    "created_at": "2025-08-24T01:46:40.000Z",
+    "policy_revision": 7,
+    "actor_id": "actor-fixture",
+    "actor_kind": "system",
+    "user_id": null,
+    "reason_code": "meter_stale:memory_failures",
+    "settled_at": null
+  },
+  "meter_source": "host_analytics_api",
+  "attributed_operation_class": "edge_request",
+  "readings": [
+    {
+      "meter": "requests_per_day",
+      "meter_kind": "cumulative_budget",
+      "value": 71000,
+      "unit": "requests",
+      "freshness_verdict": "fresh",
+      "sampled_at": "2025-08-24T01:45:40.000Z",
+      "warning_threshold": 70000,
+      "hard_stop_threshold": 90000,
+      "breached": false,
+      "warning": true
+    },
+    {
+      "meter": "cpu_per_invocation",
+      "meter_kind": "per_invocation_ceiling",
+      "value": 3,
+      "unit": "ms",
+      "freshness_verdict": "fresh",
+      "sampled_at": "2025-08-24T01:46:39.000Z",
+      "warning_threshold": 8,
+      "hard_stop_threshold": 10,
+      "breached": false,
+      "warning": false
+    },
+    {
+      "meter": "memory_failures",
+      "meter_kind": "per_isolate_ceiling",
+      "value": null,
+      "unit": "events",
+      "freshness_verdict": "unknown",
+      "sampled_at": null,
+      "warning_threshold": 1,
+      "hard_stop_threshold": 1,
+      "breached": false,
+      "warning": false
+    }
+  ],
+  "shed_actions": [
+    "warn:requests_per_day"
+  ],
+  "final_state": "unknown"
+}
