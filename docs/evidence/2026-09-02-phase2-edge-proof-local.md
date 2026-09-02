@@ -509,3 +509,19 @@ missing its `unit` would otherwise publish a row with no `unit` key at all.
    the denial, sign in and confirm the private projection, pull one real
    `workersInvocationsAdaptive` reading, and record actual CPU percentiles
    against the 10 ms ceiling. That is what turns rows in section 4 from C to A.
+
+## 6. Live half, first deploy (2026-09-02, grade A for the denial path only)
+
+The Worker was deployed to a `workers.dev` hostname (account-identifying, so not
+recorded in this public file) through the pinned CLI with telemetry disabled,
+deliberately WITHOUT Access configuration, so the construction-refusal path is
+what runs on the real platform. Signed-out probes against the live hostname:
+every route (`/`, `/app`, `/api/records/1`, `/healthz`, `/receipt/limits`, a
+`.map` path, an unknown path) answered 503 with `cache-control: private,
+no-store`, `vary: Cookie, Cf-Access-Jwt-Assertion`, `x-robots-tag: noindex,
+nofollow`; `HEAD /` answered 405; `/healthz` returned
+`{"status":"degraded","config":"invalid"}`. That is SC-12's signed-out denial
+observed on the real platform (grade A) under invalid configuration. Still
+grade C: Access in front of the hostname, the valid-session path, real meter
+readings, and CPU on real volumes. Those follow once the Access application
+exists and the two Access variables are set.
