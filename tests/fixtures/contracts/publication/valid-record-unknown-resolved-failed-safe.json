@@ -19,6 +19,7 @@
     "settled_receipt_id": "",
     "reason_code": "readback_confirmed_nothing_landed",
     "prior_state": "unknown",
-    "readback_verdict": "negative_conclusive"
+    "readback_verdict": "negative_conclusive",
+    "readback_receipt_ref": "readback-000011"
   }
 }

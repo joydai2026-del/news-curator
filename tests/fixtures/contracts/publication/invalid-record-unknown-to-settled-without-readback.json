@@ -19,7 +19,8 @@
     "settled_receipt_id": "orec-000012",
     "reason_code": "",
     "prior_state": "unknown",
-    "readback_verdict": ""
+    "readback_verdict": "",
+    "readback_receipt_ref": "readback-000012"
   },
-  "violates": "invariant: leaving unknown for settled requires a positive readback_verdict"
+  "violates": "invariant: leaving unknown requires a readback_verdict"
 }

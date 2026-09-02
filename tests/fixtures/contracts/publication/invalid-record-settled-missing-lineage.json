@@ -1,8 +1,8 @@
 {
   "contract": "publication",
   "dataclass": "PublicationRecord",
-  "expect": "valid",
-  "note": "An ambiguous publish resolved by a positive readback: the operator confirmed the content actually landed at the destination, so the record moves from unknown to settled through the frozen readback-resolution edge, never a retry.",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: removing prior_state and readback_verdict from a known-invalid unknown -> settled record made it pass. Lineage is mandatory for every state past draft, not only validated when the fields happen to be present.",
   "payload": {
     "identity": {
       "tenant_id": "tenant-owner-private",
@@ -17,9 +17,7 @@
     "idempotency_key": "pub-tenant-owner-private|signer-publisher-01|relay-set-a|2026-09-01",
     "attempt": 1,
     "settled_receipt_id": "orec-000012",
-    "reason_code": "",
-    "prior_state": "unknown",
-    "readback_verdict": "positive",
-    "readback_receipt_ref": "readback-000012"
-  }
+    "reason_code": ""
+  },
+  "violates": "invariant: every state past draft requires a non-empty prior_state"
 }

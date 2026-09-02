@@ -17,6 +17,7 @@
     "idempotency_key": "pub-tenant-owner-private|signer-publisher-01|relay-set-a|2026-09-01",
     "attempt": 0,
     "settled_receipt_id": "",
-    "reason_code": "digest_changed_authorization_invalidated"
+    "reason_code": "digest_changed_authorization_invalidated",
+    "prior_state": "authorized"
   }
 }

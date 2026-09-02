@@ -1,8 +1,8 @@
 {
   "contract": "receipt",
   "dataclass": "RankingReceipt",
-  "expect": "valid",
-  "note": "A settled receipt carrying an authoritative transparent score set, both lane scores for the overlapping story, the lane priority, and the resulting primary lane. Everything SC-24 needs to replay the assignment without rerunning a generator is here.",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: a settled receipt whose relevance and freshness bands carry floor 0.0 (looser than policy revision 1's 0.55 and 0.50) and whose achieved values still clear that looser floor. The receipt self-certifies bounds the named policy revision never granted.",
   "payload": {
     "envelope": {
       "receipt_id": "rrec-000012",
@@ -90,7 +90,7 @@
       {
         "band": "relevance",
         "active": true,
-        "floor": 0.55,
+        "floor": 0.0,
         "cap": 1.0,
         "achieved": 0.75,
         "verdict": "pass",
@@ -99,7 +99,7 @@
       {
         "band": "freshness",
         "active": true,
-        "floor": 0.5,
+        "floor": 0.0,
         "cap": 1.0,
         "achieved": 0.83,
         "verdict": "pass",
@@ -171,5 +171,6 @@
     ],
     "verifier_verdict": "pass",
     "shadow_scores": []
-  }
+  },
+  "violates": "invariant: band relevance floor must equal the policy revision 1 value"
 }

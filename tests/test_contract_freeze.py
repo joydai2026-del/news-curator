@@ -412,6 +412,35 @@ def _check_bands_are_complete_and_recomputed(bands: list) -> None:
             )
 
 
+def _check_bands_match_policy(bands: list, policy_revision: int) -> None:
+    """A settled receipt's bands must equal the policy revision it names.
+
+    Reproduced: a settled ranking receipt whose bands carried floor 0.0 for
+    relevance and freshness passed even though the frozen policy requires
+    0.55 and 0.50 -- a receipt can silently self-certify looser bounds than
+    the policy it claims to have run under.
+    """
+    policy = _policy()
+    frozen_revision = policy["policy"]["revision"]
+    if policy_revision != frozen_revision:
+        raise ContractViolation(
+            f"invariant: policy_revision must equal the frozen policy revision ({frozen_revision})"
+        )
+    policy_bands = policy["bands"]
+    for band in bands:
+        configured = policy_bands.get(band["band"])
+        if configured is None:
+            continue
+        for key in ("active", "floor", "cap"):
+            expected = configured.get(key)
+            actual = band.get(key)
+            if actual != expected:
+                raise ContractViolation(
+                    f"invariant: band {band['band']} {key} must equal the policy "
+                    f"revision {frozen_revision} value ({expected!r}), got {actual!r}"
+                )
+
+
 def _publication_idempotency_key(identity: dict) -> str:
     """The frozen derivation: identity alone, never the content digest."""
     return (
@@ -593,6 +622,14 @@ def _invariant_mirror_receipt(p: dict) -> None:
                 "invariant: resolving a conflict or unknown attempt into settled or "
                 "writing requires a recorded resolution_ref"
             )
+    # A resolution_ref with no predecessor linkage is a claim of "this
+    # followed a readback" that names no readback: the retry must declare
+    # which prior attempt it resolves.
+    if p.get("resolution_ref") and not p.get("prior_receipt_ids"):
+        raise ContractViolation(
+            "invariant: resolution_ref requires prior_receipt_ids naming the "
+            "attempt it resolves"
+        )
 
 
 def _invariant_mirror_descriptor(p: dict) -> None:
@@ -626,10 +663,24 @@ def _invariant_output_descriptor(p: dict) -> None:
 
 
 def _invariant_publication_record(p: dict) -> None:
-    if p["state"] == "settled" and not p.get("authorization_id"):
+    state = p["state"]
+    if state == "settled" and not p.get("authorization_id"):
         raise ContractViolation("invariant: state settled requires a non-null authorization_id")
-    if p["state"] == "publishing" and not p.get("idempotency_key"):
-        raise ContractViolation("invariant: state publishing requires an idempotency key")
+    # Publication lineage is mandatory. Every state past draft must carry a
+    # prior_state and the typed at-most-once key, checked unconditionally
+    # rather than only when the fields happen to be present (reproduced:
+    # removing prior_state and readback_verdict from an unknown -> settled
+    # payload made it valid, and a settled record passed with an empty
+    # idempotency_key).
+    if state != "draft":
+        if not p.get("prior_state"):
+            raise ContractViolation(
+                "invariant: every state past draft requires a non-empty prior_state"
+            )
+        if not p.get("idempotency_key"):
+            raise ContractViolation(
+                "invariant: every state past draft requires a non-empty idempotency_key"
+            )
     # The at-most-once key is a typed derivation, not a free-form string: it
     # must equal tenant|publisher|destination|issue_date and MUST NOT embed
     # the digest, which is exactly what would double-send an issue whose
@@ -641,22 +692,31 @@ def _invariant_publication_record(p: dict) -> None:
                 "invariant: idempotency_key must be derived from the publication "
                 "identity alone, never the content digest"
             )
-    # Transition legality, wired into validation instead of left as a dead
-    # constant: an illegal edge (in particular unknown -> publishing, which
-    # would be a silent retry of an ambiguous send) is rejected.
+    # Transition legality, checked on every record that names a prior_state,
+    # not only when it happens to be present: an illegal edge (in particular
+    # unknown -> publishing, which would be a silent retry of an ambiguous
+    # send) is rejected.
     prior = p.get("prior_state")
     if prior:
-        if (prior, p["state"]) not in PUBLICATION_TRANSITIONS:
+        if (prior, state) not in PUBLICATION_TRANSITIONS:
             raise ContractViolation(
-                f"invariant: illegal publication transition from {prior} to {p['state']}"
+                f"invariant: illegal publication transition from {prior} to {state}"
             )
         if prior == "unknown":
+            # Any exit from unknown requires a readback receipt reference, not
+            # just a claimed verdict with nothing behind it.
+            if not p.get("readback_receipt_ref"):
+                raise ContractViolation(
+                    "invariant: leaving unknown requires a non-empty readback_receipt_ref"
+                )
             verdict = p.get("readback_verdict")
-            if p["state"] == "settled" and verdict != ReadbackVerdict.POSITIVE.value:
+            if not verdict:
+                raise ContractViolation("invariant: leaving unknown requires a readback_verdict")
+            if state == "settled" and verdict != ReadbackVerdict.POSITIVE.value:
                 raise ContractViolation(
                     "invariant: leaving unknown for settled requires a positive readback_verdict"
                 )
-            if p["state"] == "failed-safe" and verdict != ReadbackVerdict.NEGATIVE_CONCLUSIVE.value:
+            if state == "failed-safe" and verdict != ReadbackVerdict.NEGATIVE_CONCLUSIVE.value:
                 raise ContractViolation(
                     "invariant: leaving unknown for failed-safe requires a "
                     "negative_conclusive readback_verdict"
@@ -727,6 +787,7 @@ def _invariant_ranking_receipt(p: dict) -> None:
             )
     if p["envelope"]["state"] == "settled":
         _check_bands_are_complete_and_recomputed(p["bands"])
+        _check_bands_match_policy(p["bands"], p["envelope"]["policy_revision"])
 
 
 def _invariant_deletion_receipt(p: dict) -> None:

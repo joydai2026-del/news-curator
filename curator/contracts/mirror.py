@@ -17,7 +17,7 @@ checksum matches the intended artifact version, not merely a 2xx response.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from .enums import MirrorState, WriteMode
@@ -73,20 +73,27 @@ class MirrorReceipt:
     attempted_at: datetime
     expected_prior_checksum: str
     attempted_checksum: str
+    # Predecessor linkage. Required on every receipt (empty tuple/string for
+    # a genuine first attempt) rather than defaulted away: an attacker who
+    # simply omits these three fields must fail structural validation rather
+    # than pass as a clean first attempt (reproduced: stripping all three
+    # from a same-idempotency-key retry off a conflicted receipt made an
+    # automatic retry valid).
+    prior_receipt_ids: tuple[str, ...]
+    # The state the immediately preceding attempt (named in prior_receipt_ids)
+    # settled into. Empty string only when prior_receipt_ids is empty (no
+    # prior attempt at all). Lets the validator recompute whether this
+    # attempt is a legal resolution of a conflict or an unknown, without
+    # needing to look another fixture up.
+    prior_attempt_state: str
+    # A recorded human (or otherwise out-of-band) resolution reference.
+    # Required whenever this receipt claims to resolve a prior conflict or
+    # unknown into settled or writing: its absence is exactly the automatic
+    # retry the state machine forbids.
+    resolution_ref: str
     readback_checksum: str = ""
     settled_at: datetime | None = None
     reason_code: str = ""
     # A revision-appending target records the new revision it created rather
     # than claiming it replaced the old one.
     created_revision_id: str = ""
-    prior_receipt_ids: tuple[str, ...] = field(default_factory=tuple)
-    # The state the immediately preceding attempt (named in prior_receipt_ids)
-    # settled into. Present only when there IS a prior attempt. Lets the
-    # validator recompute whether this attempt is a legal resolution of a
-    # conflict or an unknown, without needing to look another fixture up.
-    prior_attempt_state: str = ""
-    # A recorded human (or otherwise out-of-band) resolution reference.
-    # Required whenever this receipt claims to resolve a prior conflict or
-    # unknown into settled or writing: its absence is exactly the automatic
-    # retry the state machine forbids.
-    resolution_ref: str = ""

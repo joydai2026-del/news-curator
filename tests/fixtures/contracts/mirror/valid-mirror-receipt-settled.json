@@ -19,6 +19,8 @@
     "settled_at": "2026-09-01T12:00:00+00:00",
     "reason_code": "",
     "created_revision_id": "",
-    "prior_receipt_ids": []
+    "prior_receipt_ids": [],
+    "prior_attempt_state": "",
+    "resolution_ref": ""
   }
 }

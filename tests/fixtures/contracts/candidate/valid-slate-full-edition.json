@@ -208,7 +208,7 @@
       {
         "band": "relevance",
         "active": true,
-        "floor": 0.6,
+        "floor": 0.55,
         "cap": 1.0,
         "achieved": 0.75,
         "verdict": "pass",
@@ -217,7 +217,7 @@
       {
         "band": "freshness",
         "active": true,
-        "floor": 0.7,
+        "floor": 0.5,
         "cap": 1.0,
         "achieved": 0.83,
         "verdict": "pass",

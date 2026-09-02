@@ -112,6 +112,10 @@ class PublicationRecord:
     # values. Required to leave `unknown`: positive resolves to `settled`,
     # negative_conclusive resolves to `failed-safe`, inconclusive stays.
     readback_verdict: str = ""
+    # Set only when prior_state is "unknown". Names the readback receipt that
+    # resolved the ambiguous send. Required to leave `unknown`: without it, a
+    # record could claim a readback_verdict with nothing backing it.
+    readback_receipt_ref: str = ""
 
 
 @dataclass(frozen=True)

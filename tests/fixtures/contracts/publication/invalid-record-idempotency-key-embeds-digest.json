@@ -17,7 +17,8 @@
     "idempotency_key": "pub-tenant-owner-private|signer-publisher-01|relay-set-a|2026-09-01-digest-9999999",
     "attempt": 2,
     "settled_receipt_id": "",
-    "reason_code": ""
+    "reason_code": "",
+    "prior_state": "authorized"
   },
   "violates": "invariant: idempotency_key must be derived from the publication identity alone, never the content digest"
 }

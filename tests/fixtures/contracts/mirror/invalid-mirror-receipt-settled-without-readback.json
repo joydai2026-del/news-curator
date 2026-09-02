@@ -16,7 +16,10 @@
     "expected_prior_checksum": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "attempted_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "readback_checksum": "",
-    "settled_at": "2026-09-01T12:00:00+00:00"
+    "settled_at": "2026-09-01T12:00:00+00:00",
+    "prior_receipt_ids": [],
+    "prior_attempt_state": "",
+    "resolution_ref": ""
   },
   "violates": "invariant: state settled requires readback_checksum == attempted_checksum"
 }

@@ -21,6 +21,8 @@
     "created_revision_id": "",
     "prior_receipt_ids": [
       "mrec-000021"
-    ]
+    ],
+    "prior_attempt_state": "",
+    "resolution_ref": ""
   }
 }
