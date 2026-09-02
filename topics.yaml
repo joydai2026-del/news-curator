@@ -219,9 +219,9 @@ categories:
       - {id: coindesk,      name: CoinDesk,        url: "https://www.coindesk.com/arc/outboundfeeds/rss/", weight: 1.1}
       - {id: theblock,      name: The Block,       url: "https://www.theblock.co/rss.xml",                 weight: 1.1}
       - {id: decrypt,       name: Decrypt,         url: "https://decrypt.co/feed",                         weight: 1.0}
-      - {id: blockworks,    name: Blockworks,      url: "https://blockworks.co/feed",                      weight: 1.0}
+      - {id: blockworks,    name: Blockworks,      url: "https://blockworks.co/feed",                      weight: 1.0, enabled: false}  # dead-but-200 since ~2026-01 (frozen archive); disabled 2026-09-01 per JJ, Gate 0c D3
       - {id: cointelegraph, name: Cointelegraph,   url: "https://cointelegraph.com/rss",                   weight: 0.95}
-      - {id: dlnews,        name: DL News,         url: "https://www.dlnews.com/arc/outboundfeeds/rss/",   weight: 0.95}
+      - {id: dlnews,        name: DL News,         url: "https://www.dlnews.com/arc/outboundfeeds/rss/",   weight: 0.95, enabled: false}  # dead-but-200, frozen ~117d; disabled 2026-09-01 per JJ, Gate 0c D3
       - {id: thedefiant,    name: The Defiant,     url: "https://thedefiant.io/api/feed",                  weight: 0.95}
       - {id: bitcoinmag,    name: Bitcoin Magazine, url: "https://bitcoinmagazine.com/feed",               weight: 0.9}
 
@@ -356,7 +356,7 @@ categories:
       - {id: utilitydive,  name: Utility Dive,            url: "https://www.utilitydive.com/feeds/news/",          weight: 1.05}
       - {id: canary,       name: Canary Media,            url: "https://www.canarymedia.com/rss.rss",              weight: 1.05, options: {allow_mislabeled_html_mime: true}}
       - {id: ieee-energy,  name: IEEE Spectrum Energy,    url: "https://spectrum.ieee.org/feeds/topic/energy.rss", weight: 1.1}
-      - {id: neimag,       name: Nuclear Engineering Intl, url: "https://www.neimagazine.com/feed/",               weight: 1.0}
+      - {id: neimag,       name: Nuclear Engineering Intl, url: "https://www.neimagazine.com/feed/",               weight: 1.0, enabled: false}  # dead-but-200, frozen ~77d; disabled 2026-09-01 per JJ, Gate 0c D3
       - {id: powermag,     name: POWER Magazine,          url: "https://www.powermag.com/feed/",                   weight: 0.95}
       - {id: pvmag,        name: pv magazine,             url: "https://www.pv-magazine.com/feed/",                weight: 0.9}
       - {id: neutronbytes, name: Neutron Bytes,           url: "https://neutronbytes.com/feed/",                   weight: 0.85}
@@ -539,7 +539,7 @@ categories:
       - {id: guardian-world, name: The Guardian World,    url: "https://www.theguardian.com/world/rss",      language: en, max_age_hours: 6, weight: 1.0}
       - {id: rfi-zh,         name: RFI Chinese,           url: "https://www.rfi.fr/cn/rss",                  language: zh, max_age_hours: 8, weight: 1.0}
       - {id: cna-zh,         name: CNA International,     url: "https://feeds.feedburner.com/rsscna/intworld", language: zh, max_age_hours: 8, weight: 1.0}
-      - {id: udn-zh,         name: UDN World,             url: "https://udn.com/rssfeed/news/2/6638?ch=news", language: zh, max_age_hours: 12, weight: 0.9}
+      - {id: udn-zh,         name: UDN World,             url: "https://udn.com/rssfeed/news/2/6638?ch=news", language: zh, max_age_hours: 12, weight: 0.9, enabled: false}  # empty feed; disabled 2026-09-01 per JJ, Gate 0c D3
       - {id: dw-zh,          name: DW Chinese,            url: "https://rss.dw.com/rdf/rss-chi-all",         language: zh, max_age_hours: 12, weight: 1.0}
       - {id: google-zaobao,  name: Zaobao via Google News, url: "https://news.google.com/rss/search?q=site%3Azaobao.com.sg%20when%3A1d&hl=zh-CN&gl=SG&ceid=SG%3Azh-Hans", language: zh, max_age_hours: 12, weight: 0.9, aggregator: true, platform: google-news, echo_eligible: false}
 
