@@ -30,7 +30,11 @@
 // Two keys this module emits are AHEAD of the frozen Python contract today and
 // need it to land before the merge-time contract test can pass:
 //   ReceiptEnvelope: actor_kind, user_id   (the Ownership change, adjudicated)
-//   MeterReading:    warning: bool = False (the diagnostic warning flag below)
+// A MeterReading carries no diagnostic `warning` flag: the frozen contract has
+// no such field, and a consumer can derive the same condition from `value`
+// sitting between `warning_threshold` and `hard_stop_threshold` with
+// `breached: false`. Fix round 7 dropped the flag from the wire shape rather
+// than widening the contract.
 // The exact emitted shape is pinned by edge/fixtures/limit-receipt.sample.json.
 
 export const FRESH = 'fresh';
@@ -114,7 +118,6 @@ const READING_FIELDS = Object.freeze({
   warning_threshold: (v) => v === null || (typeof v === 'number' && Number.isFinite(v)),
   hard_stop_threshold: (v) => v === null || (typeof v === 'number' && Number.isFinite(v)),
   breached: (v) => typeof v === 'boolean',
-  warning: (v) => typeof v === 'boolean',
 });
 
 /** Every required field present with the right type, checked before serialization. */
@@ -268,7 +271,6 @@ export function buildLimitReceipt(args) {
     }
 
     let breached = false;
-    let warning = false;
     if (freshness === FRESH) {
       const hard = spec.hard_stop_threshold;
       const warn = spec.warning_threshold;
@@ -284,13 +286,13 @@ export function buildLimitReceipt(args) {
           breachedCeilings.push(name);
         }
       } else if (typeof warn === 'number' && value >= warn) {
-        // The warning is DIAGNOSTIC and applies to every meter kind. Publishing
-        // a warning_threshold on a ceiling and then never raising it would
-        // advertise a control that does not exist, and a ceiling is exactly
-        // where an early warning matters most. The shed action stays a budget
-        // thing: shedding cannot rescue a ceiling, so naming an action there
-        // would be a lie about what the operator can do.
-        warning = true;
+        // The between-thresholds state applies to every meter kind, and the
+        // reading carries everything a consumer needs to derive it (`value`,
+        // `warning_threshold`, `breached: false`), so no separate diagnostic
+        // flag is published on the wire: the frozen MeterReading contract has
+        // no such field (fix round 7). The shed action stays a budget thing:
+        // shedding cannot rescue a ceiling, so naming an action there would be
+        // a lie about what the operator can do.
         if (kind === CUMULATIVE) shedActions.push(`warn:${name}`);
       }
     }
@@ -305,7 +307,6 @@ export function buildLimitReceipt(args) {
       warning_threshold: spec.warning_threshold === undefined ? null : spec.warning_threshold,
       hard_stop_threshold: spec.hard_stop_threshold === undefined ? null : spec.hard_stop_threshold,
       breached,
-      warning,
     };
     assertReadingShape(row);
     readings.push(row);

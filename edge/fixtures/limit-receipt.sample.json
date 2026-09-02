@@ -24,8 +24,7 @@
       "sampled_at": "2025-08-24T01:45:40.000Z",
       "warning_threshold": 70000,
       "hard_stop_threshold": 90000,
-      "breached": false,
-      "warning": true
+      "breached": false
     },
     {
       "meter": "cpu_per_invocation",
@@ -36,8 +35,7 @@
       "sampled_at": "2025-08-24T01:46:39.000Z",
       "warning_threshold": 8,
       "hard_stop_threshold": 10,
-      "breached": false,
-      "warning": false
+      "breached": false
     },
     {
       "meter": "memory_failures",
@@ -48,8 +46,7 @@
       "sampled_at": null,
       "warning_threshold": 1,
       "hard_stop_threshold": 1,
-      "breached": false,
-      "warning": false
+      "breached": false
     }
   ],
   "shed_actions": [

@@ -37,6 +37,19 @@ function reading(receipt, name) {
   return receipt.readings.find((r) => r.meter === name);
 }
 
+// The frozen MeterReading contract carries no diagnostic `warning` boolean
+// (fix round 7): a consumer derives the same between-thresholds condition from
+// the fields the reading already has. This is that derivation, used only in
+// tests to state the condition the removed flag used to name.
+function isWarnState(row) {
+  return (
+    row.value !== null &&
+    row.warning_threshold !== null &&
+    row.value >= row.warning_threshold &&
+    row.breached === false
+  );
+}
+
 test('a missing reading is unknown with a null value, never zero', () => {
   const r = build({});
   for (const row of r.readings) {
@@ -233,28 +246,29 @@ test('the same two breaches read in the opposite order settle the same way', () 
   assert.deepEqual(r.shed_actions, ['hard_stop:requests_per_day']);
 });
 
-test('a ceiling between its warning and its hard stop warns without a shed action', () => {
+test('a ceiling between its warning and its hard stop is derivable as a warning with no shed action', () => {
   const r = build({ cpu_per_invocation: { value: 9, sampled_at: NOW - 1000 } });
   const cpu = reading(r, 'cpu_per_invocation');
   assert.equal(cpu.breached, false, '9 ms is under the 10 ms hard stop');
-  assert.equal(cpu.warning, true, 'a published warning_threshold must be able to fire on a ceiling');
+  assert.equal(isWarnState(cpu), true, 'a published warning_threshold must be able to fire on a ceiling');
   assert.equal(cpu.warning_threshold, 8);
+  assert.ok(!('warning' in cpu), 'the frozen contract carries no warning key; a consumer derives it');
   assert.deepEqual(r.shed_actions, [], 'shedding cannot rescue a ceiling, so no action may be named');
   assert.equal(r.final_state, 'unknown', 'the other meter is unread, so the receipt is not green either way');
 });
 
 test('a warning on a budget still emits its shed action, and a breach is not also a warning', () => {
   const warned = build({ requests_per_day: { value: 70000, sampled_at: NOW - 1000 } });
-  assert.equal(reading(warned, 'requests_per_day').warning, true);
+  assert.equal(isWarnState(reading(warned, 'requests_per_day')), true);
   assert.deepEqual(warned.shed_actions, ['warn:requests_per_day']);
   const breached = build({ requests_per_day: { value: 95000, sampled_at: NOW - 1000 } });
   assert.equal(reading(breached, 'requests_per_day').breached, true);
-  assert.equal(reading(breached, 'requests_per_day').warning, false, 'past the hard stop it is a breach, not a warning');
+  assert.equal(isWarnState(reading(breached, 'requests_per_day')), false, 'past the hard stop it is a breach, not a warning');
 });
 
-test('an unread meter is neither breached nor warned', () => {
+test('an unread meter is neither breached nor in the derivable warning state', () => {
   const r = build({});
-  assert.equal(reading(r, 'cpu_per_invocation').warning, false);
+  assert.equal(isWarnState(reading(r, 'cpu_per_invocation')), false);
   assert.equal(reading(r, 'cpu_per_invocation').breached, false);
 });
 
@@ -276,8 +290,11 @@ test('an unread meter is neither breached nor warned', () => {
 // NOTE FOR THE MERGE: the Python-side contract validation of this same sample
 // (feeding it to curator/contracts/receipt.py and asserting it validates) is
 // added in the main checkout at merge time by the lead. It is not here because
-// this worktree carries no Python and the Ownership fields plus the
-// MeterReading.warning flag land in the same branch set.
+// this worktree carries no Python, and the Ownership fields (actor_kind,
+// user_id) are ahead of the frozen contract until that same branch set lands.
+// The MeterReading shape itself carries no such gap as of fix round 7: the
+// diagnostic `warning` flag was removed from the wire rather than added to the
+// contract, so every reading key here already matches curator/contracts/receipt.py.
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from 'node:fs';
@@ -308,7 +325,8 @@ test('the committed sample carries the four ownership keys the envelope contract
   assert.equal(sample.envelope.user_id, null, 'user_id is null precisely because the actor kind is system');
   // The sample is only worth pinning if it exercises the states that matter.
   const byName = Object.fromEntries(sample.readings.map((r) => [r.meter, r]));
-  assert.equal(byName.requests_per_day.warning, true, 'the sample pins a warning');
+  assert.equal(isWarnState(byName.requests_per_day), true, 'the sample pins a reading between its warning and hard-stop thresholds');
+  assert.ok(!('warning' in byName.requests_per_day), 'the frozen contract carries no warning key on the wire');
   assert.equal(byName.memory_failures.value, null, 'the sample pins an unread meter as null, never 0');
   assert.equal(byName.memory_failures.freshness_verdict, 'unknown');
 });
@@ -379,12 +397,47 @@ test('a meter spec that is not an object at all is a refusal, not a TypeError', 
   }
 });
 
-test('a well-formed reading carries all ten required fields, every one the right type', () => {
+test('a well-formed reading carries all nine required fields, every one the right type', () => {
   const r = build({ requests_per_day: { value: 71000, sampled_at: NOW - 1000 } });
   assert.deepEqual(Object.keys(reading(r, 'requests_per_day')).sort(), [
     'breached', 'freshness_verdict', 'hard_stop_threshold', 'meter', 'meter_kind',
-    'sampled_at', 'unit', 'value', 'warning', 'warning_threshold',
+    'sampled_at', 'unit', 'value', 'warning_threshold',
   ]);
+});
+
+// Fix round 7: the frozen curator/contracts/receipt.py MeterReading has these
+// nine fields and no others. This test fails the moment ANY reading, in ANY
+// state (fresh, stale, unknown, breached, warned), publishes a tenth key: the
+// contract test in the main checkout would reject it as `unknown field`, and
+// that failure is cheaper to catch here, in the module that builds the wire
+// shape, than after a merge.
+const FROZEN_READING_KEYS = Object.freeze([
+  'meter', 'meter_kind', 'value', 'unit', 'freshness_verdict',
+  'sampled_at', 'warning_threshold', 'hard_stop_threshold', 'breached',
+].sort());
+
+test('every emitted reading has exactly the nine frozen MeterReading keys and no others', () => {
+  const r = buildLimitReceipt({
+    policy: DEFAULT_METER_POLICY,
+    readings: {
+      requests_per_day: { value: 71000, sampled_at: NOW - 1000 }, // warn state
+      cpu_per_invocation: { value: 11, sampled_at: NOW - 1000 }, // breached ceiling
+      memory_failures: { value: -1, sampled_at: NOW - 1000 }, // impossible -> unread
+      // subrequests_per_request, cron_triggers_used left unread entirely
+    },
+    meterSource: 'host_analytics_api',
+    now: NOW,
+    receiptId: 'lrec-frozen-keys',
+    attributedOperationClass: 'edge_request',
+  });
+  assert.ok(r.readings.length > 0, 'the fixture must actually exercise readings');
+  for (const row of r.readings) {
+    assert.deepEqual(
+      Object.keys(row).sort(),
+      FROZEN_READING_KEYS,
+      `meter "${row.meter}" must carry exactly the frozen MeterReading keys`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -498,7 +551,7 @@ test('a negative reading is an unread meter, never a fresh one that settles gree
     assert.equal(row.value, null, `${row.meter} must not publish a value no meter could produce`);
     assert.equal(row.freshness_verdict, 'unknown', `${row.meter} is unread, not fresh`);
     assert.equal(row.breached, false);
-    assert.equal(row.warning, false);
+    assert.equal(isWarnState(row), false);
   }
   assert.equal(r.final_state, 'unknown', 'an impossible reading can never settle');
   assert.equal(r.envelope.settled_at, null, 'nothing was measured, so there is no settled timestamp');

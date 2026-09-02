@@ -265,11 +265,15 @@ settled timestamp: the strongest verdict this system can issue, from a receipt
 that could not even reach a meter source. SC-28 audits this artifact, so a false
 green here is the one that matters.
 
-A reading is also validated before it is serialized. All ten fields must be
-present with the right type; `JSON.stringify` drops an `undefined` value
-silently, so a spec missing its `unit` used to publish a reading with no `unit`
-key at all. A reading that cannot be built correctly is a refusal (a 503 on the
-route), never a quietly shortened row.
+A reading is also validated before it is serialized. All nine fields of the
+frozen `MeterReading` contract must be present with the right type, and no
+others: `JSON.stringify` drops an `undefined` value silently, so a spec missing
+its `unit` used to publish a reading with no `unit` key at all. A reading that
+cannot be built correctly is a refusal (a 503 on the route), never a quietly
+shortened row. A diagnostic `warning` flag on ceilings between their warning
+and hard-stop thresholds was dropped from the wire shape in fix round 7,
+because the frozen contract has no such field and a consumer can derive the
+same condition from `value`, `warning_threshold` and `breached: false`.
 
 ## Running the tests
 
