@@ -18,8 +18,8 @@ Scope needed: https://www.googleapis.com/auth/gmail.readonly
 
 **Revocation is a status, never an exception.** If JJ revokes access, or the
 token is invalid, Google answers `invalid_grant`. That must darken this lane
-and leave a visible warning, not fail the hourly build of a page whose other
-six tabs are fine. Every entry point here returns a `GmailResult` carrying a
+and leave a visible warning, not fail the hourly build of a page whose category
+tabs are fine. Every entry point here returns a `GmailResult` carrying a
 machine-readable `reason`; nothing escapes as a raised exception.
 
 **LOGGING RULE (module-wide, no exceptions).** This module may log COUNTS,

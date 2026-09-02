@@ -1,0 +1,317 @@
+schema_version: 1
+plan: docs/plans/2026-08-29-news-curator-v3-backend-platform.md
+generated_for: News Curator v3 backend platform
+state_ladder:
+  - implemented
+  - locally_proven
+  - cloud_linked
+  - ai_calibrated
+  - live_proven
+status_legend:
+  GREEN: "Implemented and proven by the named fresh local receipt."
+  PARTIAL: "Implemented with narrower local proof, or a broader local matrix is still pending."
+  RED: "Required local implementation or proof is missing."
+  BLOCKED: "Requires an external account, credential, permission, or JJ decision."
+  UNVERIFIED: "May have prior evidence, but the planned reproducible check has not been rerun."
+acceptance_groups:
+  locally_provable:
+    description: Deterministic local checks, code audits, fixtures, and local Supabase rehearsals.
+  cloud_linked:
+    description: Checks that require a configured Supabase or Google Cloud project.
+  ai_calibrated:
+    description: Translation distributional evaluation, human labels, tripwires, rollback, and weekly sampling.
+  live_proven:
+    description: The real scheduled or user-facing production path on the reviewed build.
+criteria:
+  - id: NCV3-01
+    group: locally_provable
+    description: Named deterministic, newsletter-privacy, workflow-contract, source-platform, personalization, and translation suites are green. Collected-test count is only an anti-deletion tripwire.
+    check_type: test_suite
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q -m 'not allow_socket'"
+    comparison_mode: "suite exit status equals 0; retain collected count only as a non-quality regression signal"
+    side_effects: "Reads local code and fixtures. No network marker."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-02
+    group: locally_provable
+    description: RSS, Atom, news-sitemap, and JSON Feed additions use only a configuration row and fixture. Collector, rank, dedupe, and render remain unchanged. An injected registry has no global-registration leakage.
+    check_type: code_audit_and_contract_test
+    code_audit_target:
+      - "curator/sources/registry.py"
+      - "curator/sources/feed.py"
+      - "curator/sources/news_sitemap.py"
+      - "curator/sources/json_feed.py"
+      - "curator/pipeline.py"
+      - "curator/rank.py"
+      - "curator/dedup.py"
+      - "curator/render.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_source_config_only.py tests/test_source_contracts.py tests/test_backend_integration.py"
+    comparison_mode: "fixture/config-only additions leave collector, rank, dedupe, and render diffs empty; injected registries do not share registrations"
+    side_effects: "Reads local fixtures and configuration only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-03
+    group: locally_provable
+    description: Source contracts isolate a source failure, preserve configured order under concurrency, enforce global source ids and source policy, and preserve Hacker News category/query context.
+    check_type: contract_test
+    code_audit_target:
+      - "curator/sources/base.py"
+      - "curator/sources/registry.py"
+      - "curator/sources/hackernews.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_source_contracts.py tests/test_source_policy.py"
+    comparison_mode: "configured source order equals result order; one source failure leaves unrelated configured sources available"
+    side_effects: "Uses fake transport and clock only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-04
+    group: locally_provable
+    description: Safe transport rejects private or ambiguous targets and hostile responses before data can be sent, while enforcing redirect, byte, parse-depth, MIME, timeout, and per-host limits.
+    check_type: security_threat_test
+    code_audit_target:
+      - "curator/sources/transport.py"
+      - "curator/sources/base.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_safe_transport.py"
+    comparison_mode: "private or peer-mismatched target produces zero transmitted HTTP bytes; each hostile fixture yields its typed rejection code"
+    side_effects: "Local fake DNS, sockets, and test server only. No external network."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-05
+    group: locally_provable
+    description: Credential sentinels attach only to the exact approved origin, strip on cross-origin redirects, and never appear in console output, health, summaries, caches, artifacts, or rendering.
+    check_type: security_sentinel_test
+    code_audit_target:
+      - "curator/sources/transport.py"
+      - "curator/translation/google.py"
+      - "curator/health.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_safe_transport.py tests/test_google_translation_adapter.py tests/test_translation_store.py tests/test_secret_leaks.py"
+    comparison_mode: "unique injected sentinel is absent from every captured output sink; credential present only on exact-origin request"
+    side_effects: "Uses synthetic credentials and local captured outputs only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-06
+    group: locally_provable
+    description: Newsletter privacy remains green. Import-boundary and sentinel tests prove newsletter and preference data cannot create TranslationInput or reach translation cache, budget, provider, or logs.
+    check_type: privacy_boundary_test
+    code_audit_target:
+      - "curator/newsletter/"
+      - "curator/translation/base.py"
+      - "curator/translation/bridge.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_newsletter_privacy.py tests/test_newsletter_wiring.py tests/test_translation_privacy.py"
+    comparison_mode: "synthetic newsletter and preference sentinels do not appear at any translation boundary"
+    side_effects: "Uses local synthetic private data only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-07
+    group: locally_provable
+    description: Local Supabase reset and API integration prove migration validity, owner-only RLS, revoked grants, bounded JSON, least-privilege functions, and denials for anon, expired JWT, cross-user, altered-id, and direct-table-bypass cases.
+    check_type: local_database_integration
+    code_audit_target:
+      - "supabase/migrations/*_user_preferences.sql"
+      - "docs/contracts/personalization.md"
+      - "tests/_personalization_local_harness.py"
+      - "tests/test_personalization_local_db.py"
+    planned_command: "supabase db reset && eval \"$(supabase status -o env)\" && NEWS_CURATOR_LOCAL_SUPABASE_URL=\"$API_URL\" NEWS_CURATOR_LOCAL_SUPABASE_ANON_KEY=\"$ANON_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_SERVICE_ROLE_KEY=\"$SERVICE_ROLE_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_JWT_SECRET=\"$JWT_SECRET\" uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_personalization_local_db.py"
+    comparison_mode: "all authorized owner operations succeed; every listed unauthorized operation is denied by the local API/database"
+    side_effects: "Resets only the linked local Supabase development database. Never run against a cloud project."
+    current_status: PARTIAL
+    blockers:
+      - "The full loopback-only API/RLS matrix is implemented, including expired-JWT denial, saved-search shape and size limits, owner and cross-user isolation, column-grant bypasses, delete isolation, and function grants. Local Supabase plus its local JWT signing secret are unavailable, so none of that database matrix has a fresh execution receipt."
+  - id: NCV3-08
+    group: locally_provable
+    description: Local database tests prove atomic compare-and-swap preferences updates, server-only revision increment, distinct conflicts, and prevention of concurrent lost updates.
+    check_type: local_database_concurrency_test
+    code_audit_target:
+      - "supabase/migrations/*_user_preferences.sql"
+      - "scripts/personalization_cli.py"
+    planned_command: "supabase db reset && uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_personalization_cas.py tests/test_personalization_local_db.py"
+    comparison_mode: "one concurrent update commits, stale expected_revision returns conflict, and clients cannot set or decrease revision"
+    side_effects: "Resets only the local Supabase development database."
+    current_status: PARTIAL
+    blockers:
+      - "The compare-and-swap RPC and deterministic client tests exist, but local database concurrency remains unproved while Supabase is unavailable."
+  - id: NCV3-09
+    group: locally_provable
+    description: PKCE browser callback and CLI tests prove state and nonce validation, replay rejection, exact redirects, history cleanup, token lifecycle safety, safe protected-storage failure, no token output, and two-user isolation.
+    check_type: auth_contract_test
+    code_audit_target:
+      - "static/auth/callback/index.html"
+      - "static/auth/client.js"
+      - "scripts/personalization_cli.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_personalization_auth.py tests/test_personalization_browser_contract.py tests/test_personalization_materializer.py"
+    comparison_mode: "invalid/replayed state and wrong redirects fail; captured stdout/stderr/history contain no token or authorization code"
+    side_effects: "Uses fake OAuth transport and local loopback only."
+    current_status: PARTIAL
+    blockers:
+      - "The callback, CLI, and Node contract exist. A real local browser callback and token-expiry lifecycle has not been proven in this local-only run."
+      - "Google provider activation is a separate cloud-linked gate."
+  - id: NCV3-10
+    group: locally_provable
+    description: Translation pure-contract tests pass using a fake provider and real captured bilingual headline fixtures. Only approved immutable title and optional description fields cross the provider boundary.
+    check_type: contract_test
+    code_audit_target:
+      - "curator/translation/base.py"
+      - "curator/translation/selector.py"
+      - "scripts/run_translation_job.py"
+      - "evals/translation-bridge.yaml"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_translation_contracts.py tests/test_translation_privacy.py"
+    comparison_mode: "provider capture equals allowlisted TranslationInput fields only; newsletter and preference models are rejected before provider invocation"
+    side_effects: "Fake provider and real sanitized local fixtures only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-11
+    group: locally_provable
+    description: The Google adapter makes bounded id-bearing batches, uses an origin-bound bearer credential, validates response cardinality/language/size and timeout behavior, and logs neither credential nor source text.
+    check_type: adapter_test
+    code_audit_target:
+      - "curator/translation/google.py"
+      - "curator/translation/base.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_google_translation_adapter.py tests/test_secret_leaks.py"
+    comparison_mode: "fake transport receives validated request shape only; invalid or partial response never reaches cache"
+    side_effects: "Fake Google API transport only. No credential or cloud call."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-12
+    group: locally_provable
+    description: Local Postgres concurrency tests prove atomic cache acquire/reservation, fixed counter order, idempotent lifecycle operations, failure classifications, quarantine, and no automatic retry after a charge-unknown outcome.
+    check_type: local_database_concurrency_test
+    code_audit_target:
+      - "curator/translation/store.py"
+      - "curator/translation/supabase.py"
+      - "supabase/migrations/*_translation_store.sql"
+    planned_command: "supabase db reset && uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_translation_store_local_db.py"
+    comparison_mode: "exactly one acquire/reservation wins per key; sent commits before fake socket write; ambiguous outcomes remain fully counted and unretried"
+    side_effects: "Resets only local Supabase development database and uses fake provider/socket hooks."
+    current_status: PARTIAL
+    blockers:
+      - "Eight executable PostgreSQL/RPC cases now cover the required matrix, but all eight skip because local Supabase PostgreSQL is unavailable on 127.0.0.1:54322."
+      - "The Python RPC parity case also needs a local-only service-role test identity in NEWS_CURATOR_TEST_SUPABASE_SERVICE_ROLE_KEY."
+  - id: NCV3-13
+    group: locally_provable
+    description: Cache hits make zero provider calls. Every output-affecting identity or version change changes the complete unique key without bypassing a charge-unknown tombstone.
+    check_type: cache_contract_test
+    code_audit_target:
+      - "curator/translation/store.py"
+      - "curator/translation/memory.py"
+      - "scripts/run_translation_job.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_translation_cache_keys.py tests/test_translation_job.py tests/test_translation_store.py"
+    comparison_mode: "cache hit provider-call count equals 0; each listed version input changes the key; tombstone prevents reacquire"
+    side_effects: "In-memory deterministic test store only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-14
+    group: locally_provable
+    description: EN-to-ZH and ZH-to-EN projections preserve original content and pre-translation rank/category evidence. Translation cannot affect identity calculations, and native target-language originals win display precedence. All listed translation failures complete the page pipeline with originals.
+    check_type: integration_and_fault_test
+    code_audit_target:
+      - "curator/models.py"
+      - "curator/dedup.py"
+      - "curator/filter.py"
+      - "curator/rank.py"
+      - "curator/pipeline.py"
+      - "curator/localization.py"
+      - "scripts/run_translation_job.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_localized_pipeline.py tests/test_translation_fail_soft.py tests/test_translation_rollback.py tests/test_translation_job.py"
+    comparison_mode: "original dedupe/category/rank outputs equal outputs with translations enabled; every injected listed fault serves originals and exits successfully"
+    side_effects: "Fake provider, fake durable store, and local fixtures only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-15
+    group: locally_provable
+    description: Parsed workflow tests prove secret jobs are main-only, environment-bound, full-SHA-pinned, credential-persistence-disabled, and isolated from write/deploy permissions. The ordinary build validates a sanitized artifact and fails soft when absent or invalid.
+    check_type: workflow_contract_test
+    code_audit_target:
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/curate.yml"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_workflow_contract.py tests/test_google_workload_identity.py"
+    comparison_mode: "each secret-job condition, environment, permissions, action pin, and artifact dependency matches the planned contract; Google identity branch is mutually exclusive"
+    side_effects: "Parses local workflow YAML only. Does not dispatch Actions."
+    current_status: PARTIAL
+    blockers:
+      - "Callback materialization, single-snapshot workflow wiring, dependency hash locking, expression-safe environment quoting, and one canonical workflow artifact validator are absent from the workflow source. A protected workflow run is also still missing."
+  - id: NCV3-16
+    group: locally_provable
+    description: A rollback rehearsal proves translation.enabled false completes a full build with zero provider calls. Fault injection covers every translation state transition.
+    check_type: rollback_rehearsal
+    code_audit_target:
+      - "curator/config.py"
+      - "scripts/run_translation_job.py"
+      - "curator/translation/store.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_translation_rollback.py tests/test_translation_job.py tests/test_translation_store.py tests/test_translation_fail_soft.py"
+    comparison_mode: "disabled build exit status equals 0 and provider-call count equals 0; each state transition has an injected failure assertion"
+    side_effects: "Local build with fake provider only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-17
+    group: locally_provable
+    description: Backend work changes neither design files nor executable lines in curator/render.py.
+    check_type: diff_guard
+    code_audit_target:
+      - "docs/design/"
+      - "curator/render.py"
+    planned_command: "git diff --exit-code 3adefcae37794e40a4acc053d1e424791711678a -- docs/design/ curator/render.py"
+    comparison_mode: "exit status equals 0"
+    side_effects: "Reads working-tree diff only."
+    current_status: GREEN
+    blockers: []
+  - id: NCV3-18
+    group: locally_provable
+    description: Static compile, deterministic suites, full suite, live source run, source-health report, workflow checks, leak scans, and whitespace checks pass. Reproducible commands and outputs are stored under docs/evidence/.
+    check_type: release_receipt
+    planned_command:
+      - "PYTHONPYCACHEPREFIX=/private/tmp/news-curator-pycache uv run python -m compileall -q curator scripts"
+      - "uv run ruff check --no-cache curator scripts evals tests"
+      - "uv run pytest -p no:cacheprovider -o addopts='' -q -m 'not allow_socket'"
+      - "uv run pytest -p no:cacheprovider -o addopts='' -q"
+      - "uv run python scripts/probe_sources.py --json"
+      - "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_workflow_contract.py tests/test_secret_leaks.py"
+      - "git diff --check"
+    comparison_mode: "all commands exit 0 and dated receipts exist under docs/evidence/; live-source receipt separately records configured, attempted, fresh, stale, empty, and degraded rows"
+    side_effects: "Probe command performs live network requests. All other commands are local."
+    current_status: PARTIAL
+    blockers:
+      - "The fresh merged deterministic receipt is 1110 passed, 8 skipped, 6 deselected in 3.30s. The eight skips are the executable local translation database matrix. The six deselected cases are the loopback-only personalization API matrix; local Supabase remains unavailable."
+      - "The live non-Reddit source probe ran with 75 configured and attempted sources, 58 fresh, 15 stale, 1 empty, and 17 degraded. It exited 1 as expected because stale/empty health rows remain."
+  - id: NCV3-19
+    group: ai_calibrated
+    description: Default code-review panel passes. Translation calibration stays RED until live-provider evaluation, human labels, alert destination, and post-ship sampling are real.
+    check_type: review_and_calibration_gate
+    planned_command: "See docs/ai-done-calibration-translation-bridge.md acceptance gates and evidence ledger."
+    comparison_mode: "all deterministic, 100-case, tripwire, rollback, weekly-sampling, cloud-linked, and live-proven gates must be GREEN before AI-calibrated or live-ready status"
+    side_effects: "Review and calibration may require cloud credentials, controlled provider calls, human labeling, and an approved alert channel."
+    current_status: RED
+    blockers:
+      - "No live provider run or human-labeled evaluation exists."
+      - "No alert destination has been selected by JJ."
+      - "Cloud-linked Supabase and Google activation are not complete."
+cloud_linked_gates:
+  - id: NCV3-CLOUD-01
+    description: Supabase project is linked, Google Auth is enabled, exact authorized origins and redirects are configured, and the real cloud RLS contract passes.
+    check_type: live_cloud_contract
+    planned_command: "supabase link --project-ref <JJ-approved-project-ref> && supabase db push && uv run pytest -q tests/test_personalization_cloud.py"
+    comparison_mode: "real anon and cross-user requests are denied; real owner authorization-code PKCE flow completes with approved redirects only"
+    side_effects: "Mutates only a JJ-approved cloud Supabase project. Requires separate action-time authorization."
+    current_status: BLOCKED
+    blockers:
+      - "No Supabase project/link/environment variables are currently present."
+      - "JJ has not authorized cloud mutation."
+  - id: NCV3-CLOUD-02
+    description: Google Cloud Translation credentials, billing, origin-bound bearer authentication, rotation, revocation, and protected workflow environment are activated and verified.
+    check_type: live_cloud_contract
+    planned_command: "Run the approved translation-job activation checklist, then execute its protected main-only workflow on the reviewed main build."
+    comparison_mode: "credential reaches only the protected translation job; one controlled request and persistence lifecycle receipt complete without secret leakage"
+    side_effects: "May enable billing and make controlled paid provider requests. Requires separate action-time authorization."
+    current_status: BLOCKED
+    blockers:
+      - "No Google Cloud Translation credential, project variable, or billing activation is currently present."
+      - "JJ has not authorized credential, billing, secret, dispatch, or deployment actions."
+live_proven_gates:
+  - id: NCV3-LIVE-01
+    description: The protected scheduled translation path and public static page work on the same reviewed build. Public news remains readable without an account and falls back to originals under translation failure.
+    check_type: production_path_run
+    planned_command: "Run the approved main-only scheduled workflow, then inspect its deployed public page and dated workflow/source-health/translation receipts."
+    comparison_mode: "scheduled build, sanitized artifact validation, static deployment, and public anonymous read succeed; injected or observed translation failure still serves originals"
+    side_effects: "Dispatches workflow and may publish a production update. Requires separate action-time authorization."
+    current_status: BLOCKED
+    blockers:
+      - "Implementation, cloud activation, review, and calibration gates must pass first."
+      - "JJ has not authorized workflow dispatch or deployment."

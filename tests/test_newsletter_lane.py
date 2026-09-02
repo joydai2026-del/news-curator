@@ -410,17 +410,6 @@ class TestNothingIsSkippedAcrossRuns:
         lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
         assert client.budgets == [gmail.DEFAULT_ID_BUDGET]
 
-    def test_the_id_budget_reaches_the_gmail_client_from_config(self):
-        client = FakeGmail(self.mailbox(2))
-        lane.fetch({**CFG, "id_budget": 77}, fresh_state(), NOW, env=ENV, client=client)
-        assert client.budgets == [77]
-
-    def test_the_id_budget_defaults_without_config(self):
-        client = FakeGmail(self.mailbox(2))
-        lane.fetch(CFG, fresh_state(), NOW, env=ENV, client=client)
-        assert client.budgets == [gmail.DEFAULT_ID_BUDGET]
-
-
 # --------------------------------------------------------------------------
 # sender authentication (round 1, S2)
 # --------------------------------------------------------------------------

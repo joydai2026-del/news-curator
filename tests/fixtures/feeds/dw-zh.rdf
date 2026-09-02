@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel rdf:about="https://rss.dw.com/syndication/feeds/rss-chi-all.1127.rdf">
+    <title>Deutsche Welle: DW-WORLD.DE</title>
+    <link>https://www.dw.com/chinese/</link>
+    <dc:date>2026-08-29T20:27:05Z</dc:date>
+    <items><rdf:Seq>
+      <rdf:li rdf:resource="https://www.dw.com/zh/中国军备迅速扩张：仅仅是为了自卫吗？/a-78557144?maca=chi-rss-chi-all-1127-rdf"/>
+      <rdf:li rdf:resource="https://www.dw.com/zh/swatch廣告「瞇瞇眼」惹議下架-中網友怒轟/a-73698105?maca=chi-rss-chi-all-1127-rdf"/>
+    </rdf:Seq></items>
+  </channel>
+  <item rdf:about="https://www.dw.com/zh/中国军备迅速扩张：仅仅是为了自卫吗？/a-78557144?maca=chi-rss-chi-all-1127-rdf">
+    <title>中国军备迅速扩张：仅仅是为了自卫吗？</title>
+    <link>https://www.dw.com/zh/中国军备迅速扩张：仅仅是为了自卫吗？/a-78557144?maca=chi-rss-chi-all-1127-rdf</link>
+    <description>有专家认为，中国军队不仅在人数上成为世界之最，而且在装备上也大步向前。</description>
+    <dc:date>2026-08-29T12:52:00Z</dc:date>
+    <dc:language>zh</dc:language>
+  </item>
+  <item rdf:about="https://www.dw.com/zh/swatch廣告「瞇瞇眼」惹議下架-中網友怒轟/a-73698105?maca=chi-rss-chi-all-1127-rdf">
+    <title>Swatch廣告「瞇瞇眼」惹議下架 中網友怒轟</title>
+    <link>https://www.dw.com/zh/swatch廣告「瞇瞇眼」惹議下架-中網友怒轟/a-73698105?maca=chi-rss-chi-all-1127-rdf</link>
+    <dc:date>2025-08-20T13:21:00Z</dc:date>
+    <dc:language>zh</dc:language>
+  </item>
+</rdf:RDF>

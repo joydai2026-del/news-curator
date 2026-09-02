@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Buzzing</title>
+  <id>https://www.buzzing.cc/feed.xml</id>
+  <updated>2026-08-29T20:20:16.470Z</updated>
+  <entry>
+    <id>https://i.buzzing.cc/hn/posts/2026/35/en_hn_2026_08_29__49492219/</id>
+    <title>美国国土安全部正利用一条鲜为人知的法律对记者、非营利组织和工会进行监视</title>
+    <updated>2026-08-29T20:20:15.532Z</updated>
+    <published>2026-08-29T20:20:15.532Z</published>
+    <link rel="alternate" href="https://www.theguardian.com/us-news/2026/aug/29/trump-dhs-1509-summons-records-journalists-nonprofits"/>
+    <summary>DHS is using obscure law to snoop on journalists, non-profits, unions</summary>
+  </entry>
+</feed>

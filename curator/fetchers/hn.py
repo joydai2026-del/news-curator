@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 import requests
 
 from ..config import Category, Config
-from ..models import Item, TierResult
+from ..models import Item, SourceHealth, TierResult
 from ..normalize import canonical_url, clean_title, safe_url
 
 log = logging.getLogger(__name__)
@@ -50,7 +50,13 @@ MAX_REQUESTS_PER_RUN = 60
 DEFAULT_BUDGET_SECONDS = 120.0
 
 
-def _to_item(hit: dict, weight: float) -> Item | None:
+def _to_item(
+    hit: dict,
+    weight: float,
+    *,
+    native_category: str = "",
+    native_rank: int | None = None,
+) -> Item | None:
     title = clean_title(hit.get("title") or hit.get("story_title") or "")
     if not title:
         return None
@@ -87,6 +93,9 @@ def _to_item(hit: dict, weight: float) -> Item | None:
         source_weight=weight,
         score=int(hit.get("points") or 0),
         is_aggregator=True,
+        language="en",
+        native_rank=native_rank,
+        native_categories={native_category} if native_category else set(),
     )
 
 
@@ -114,7 +123,7 @@ def fetch(cfg: Config, topics: list[Category]) -> TierResult:
     by_date = bool(hn_cfg.get("include_by_date", True))
     cutoff = int(time.time() - cfg.max_age_hours * 3600)
 
-    # Interleave categories rather than draining one at a time. Six categories
+    # Interleave categories rather than draining one at a time. Many categories
     # with twenty keywords each produce far more query plans than the per-run
     # cap allows, and taking them in file order would spend the entire budget on
     # whichever category happens to be written first, leaving the rest with no
@@ -153,6 +162,57 @@ def fetch(cfg: Config, topics: list[Category]) -> TierResult:
     failures = 0
     started = time.monotonic()
     exhausted = False
+    source_health: list[SourceHealth] = []
+
+    # One additive front-page request supplies the first-class Trending lane.
+    # The legacy topic queries below remain intact for topical coverage.
+    front_category = str(hn_cfg.get("front_page_category") or "trending")
+    front_limit = int(hn_cfg.get("front_page_hits_per_page", 30))
+    front_threshold = float(hn_cfg.get("front_page_max_age_hours", 12))
+    front_items: list[Item] = []
+    front_status = "fresh"
+    front_reason = ""
+    try:
+        front_hits = _query("search", {"tags": "front_page", "hitsPerPage": front_limit}, cfg)
+    except Exception as exc:
+        log.warning("HN front_page failed: %s", exc)
+        front_status = "unavailable"
+        front_reason = "request_failed"
+    else:
+        for native_rank, hit in enumerate(front_hits[:front_limit]):
+            item = _to_item(
+                hit,
+                weight,
+                native_category=front_category,
+                native_rank=native_rank,
+            )
+            if item is not None:
+                front_items.append(item)
+        if not front_items:
+            front_status = "empty"
+            front_reason = "no_usable_items"
+    items.extend(front_items)
+
+    checked_at = datetime.now(timezone.utc)
+    newest = max((item.published_at for item in front_items), default=None)
+    age = max(0.0, (checked_at - newest).total_seconds() / 3600.0) if newest else None
+    if front_status == "fresh" and age is not None and age > front_threshold:
+        front_status = "stale"
+        front_reason = "newest_item_too_old"
+    source_health.append(
+        SourceHealth(
+            source_id="hn-front",
+            status=front_status,
+            usable_items=len(front_items),
+            newest_at=newest,
+            age_hours=age,
+            max_age_hours=front_threshold,
+            language="en",
+            source_type="api",
+            echo_eligible=True,
+            reason_code=front_reason,
+        )
+    )
 
     for i, (term, endpoint, numeric) in enumerate(plans):
         if time.monotonic() - started > budget:
@@ -175,7 +235,16 @@ def fetch(cfg: Config, topics: list[Category]) -> TierResult:
                 items.append(item)
 
     if plans and failures == len(plans):
-        return TierResult(tier="hackernews", items=[], ok=False, note="unavailable this run")
+        note = "topic queries unavailable this run"
+        if front_status != "fresh":
+            note = f"front page {front_status}; {note}"
+        return TierResult(
+            tier="hackernews",
+            items=items,
+            ok=False,
+            note=note,
+            source_health=source_health,
+        )
 
     notes = []
     if failures:
@@ -184,4 +253,12 @@ def fetch(cfg: Config, topics: list[Category]) -> TierResult:
         notes.append(f"query cap {max_requests} reached, some keywords not searched")
     if exhausted:
         notes.append("time budget reached, some keywords not searched")
-    return TierResult(tier="hackernews", items=items, ok=not notes, note="; ".join(notes))
+    if front_status != "fresh":
+        notes.insert(0, f"front page {front_status}")
+    return TierResult(
+        tier="hackernews",
+        items=items,
+        ok=not notes,
+        note="; ".join(notes),
+        source_health=source_health,
+    )

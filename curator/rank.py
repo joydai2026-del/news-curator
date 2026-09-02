@@ -6,7 +6,9 @@ Five terms, all weights in config. The function is pure and takes an explicit
 Native popularity (Hacker News points) deliberately does NOT appear as a fifth
 term. It enters earlier, as a floor at fetch time. Feeding it in here would let
 one 900-point story permanently outrank everything from sources that have no
-score at all, which is most of them.
+score at all, which is most of them. The first-class Trending category is the
+narrow exception: it preserves the source's own ordered list through
+`native_rank`, without comparing point totals across sources.
 """
 
 from __future__ import annotations
@@ -57,15 +59,17 @@ def keyword_score(
     order strict, because a headline that says what it is about is still the
     better signal than the feed it arrived on.
     """
-    if not item.matched_keywords:
+    configured_terms = topic.terms_for(item.language)
+    selected_hits = [term for term in item.matched_keywords if term in configured_terms]
+    if not selected_hits:
         return native_score if is_native(item, topic) else 0.0
-    if not topic.all_terms:
+    if not configured_terms:
         return 0.0
 
-    hits = len(set(item.matched_keywords))
+    hits = len(set(selected_hits))
     base = min(1.0, math.log1p(hits) / math.log1p(3))
 
-    position = match_position(item.title, item.matched_keywords)
+    position = match_position(item.title, selected_hits, language=item.language)
     if position is not None and position < lead_chars:
         base += lead_bonus
     return min(1.0, base)
@@ -113,6 +117,19 @@ def score_item(item: Item, topic: Category, now: datetime, cfg: dict) -> float:
 
 def rank_items(items: list[Item], topic: Category, now: datetime, cfg: dict) -> list[Item]:
     """Highest score first. Ties broken by recency, then title, so runs are stable."""
+    if topic.id == "trending":
+        # HN is the English Trending source and buzzing.cc is the Chinese one,
+        # so each language view contains one source-local rank scale. Unranked
+        # rows stay behind the native list and use deterministic fallbacks.
+        return sorted(
+            items,
+            key=lambda i: (
+                not (is_native(i, topic) and i.native_rank is not None),
+                i.native_rank if is_native(i, topic) and i.native_rank is not None else 0,
+                -i.published_at.timestamp(),
+                i.title,
+            ),
+        )
     return sorted(
         items,
         key=lambda i: (-score_item(i, topic, now, cfg), -i.published_at.timestamp(), i.title),

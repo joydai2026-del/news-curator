@@ -52,7 +52,14 @@ bolted onto a lane later.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
+
+
+_STORY_ID = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_VERSION_ID = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_MODEL_RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 
 
 @dataclass
@@ -70,6 +77,15 @@ class Item:
     time_is_estimated: bool = False  # True when only an "updated" time existed
     image_url: str = ""  # publisher-declared preview image, hotlinked, may be empty
     description: str = ""  # the SOURCE's own summary, cleaned. Never generated.
+    # Language is declared by source configuration, not guessed from a title.
+    # Legacy artifacts and source rows are English unless they opt into Chinese.
+    language: str = "en"
+    # Some aggregator links are useful discovery paths but are not independent
+    # corroboration. Google News and buzzing.cc use this boundary.
+    echo_eligible: bool = True
+    # Source-local ordering metadata for Trending. Values are comparable only
+    # inside one source, never across HN points and RSS feed positions.
+    native_rank: int | None = None
 
     # Newsletter-lane identity. Set by the newsletter fetcher, honoured by the
     # renderer (no image, "via <sender>", unlinked headline when no clean URL
@@ -89,11 +105,105 @@ class Item:
     def __post_init__(self) -> None:
         if not self.platform:
             self.platform = self.source_id
-        if not self.echo_platforms:
+        if not self.echo_platforms and self.echo_eligible:
             self.echo_platforms = {self.platform}
 
     def age_hours(self, now: datetime) -> float:
         return max(0.0, (now - self.published_at).total_seconds() / 3600.0)
+
+    def day_bucket(self, now: datetime) -> str:
+        """Return a display-neutral local-day bucket without mutating the item."""
+        zone = now.tzinfo
+        published_day = self.published_at.astimezone(zone).date() if zone else self.published_at.date()
+        delta = now.date() - published_day
+        if delta <= timedelta(0):
+            return "today"
+        if delta == timedelta(days=1):
+            return "yesterday"
+        return "older"
+
+
+@dataclass(frozen=True)
+class TranslationRecord:
+    """A separately stored localized projection, never an authoritative story."""
+
+    story_id: str
+    input_digest: str
+    source_language: str
+    target_language: str
+    title: str
+    description: str
+    provider: str
+    model_version: str
+
+    def __post_init__(self) -> None:
+        if not _STORY_ID.fullmatch(self.story_id):
+            raise ValueError("translation story id is invalid")
+        if not _DIGEST.fullmatch(self.input_digest):
+            raise ValueError("translation input digest is invalid")
+        if (
+            self.source_language not in {"en", "zh"}
+            or self.target_language not in {"en", "zh"}
+            or self.source_language == self.target_language
+        ):
+            raise ValueError("translation language pair is invalid")
+        if not self.title or len(self.title) > 2_000 or len(self.description) > 8_000:
+            raise ValueError("translation text is invalid")
+        if any(ord(ch) < 32 and ch not in "\t\n\r" for ch in self.title + self.description):
+            raise ValueError("translation text contains control characters")
+        if not _VERSION_ID.fullmatch(self.provider) or not _MODEL_RESOURCE_ID.fullmatch(self.model_version):
+            raise ValueError("translation provider metadata is invalid")
+
+
+@dataclass(frozen=True)
+class LocalizedItem:
+    """Display text layered over one original, already ranked Item."""
+
+    story_id: str
+    original: Item
+    display_language: str
+    title: str
+    description: str
+    translated: bool = False
+    translation_provider: str = ""
+    translation_model_version: str = ""
+    translation_available: bool = False
+    translation_source_language: str = ""
+
+    def __post_init__(self) -> None:
+        if not _STORY_ID.fullmatch(self.story_id):
+            raise ValueError("localized story id is invalid")
+        if self.display_language not in {"en", "zh"} or not self.title:
+            raise ValueError("localized display fields are invalid")
+        if not self.translated and self.display_language != self.original.language:
+            raise ValueError("native localized item language must match its original")
+        if self.translation_available:
+            if not self.translation_provider or not self.translation_model_version:
+                raise ValueError("translation provenance is incomplete")
+            if self.translation_source_language not in {"en", "zh"}:
+                raise ValueError("translation source provenance is invalid")
+        elif self.translation_provider or self.translation_model_version or self.translation_source_language:
+            raise ValueError("translation provenance must be explicit")
+
+
+@dataclass(frozen=True)
+class SourceHealth:
+    """Safe structured health for one configured source.
+
+    It intentionally carries no URL and no raw exception text. A fork may put
+    credentials in a source URL, and Actions summaries are user-visible logs.
+    """
+
+    source_id: str
+    status: str
+    usable_items: int
+    newest_at: datetime | None
+    age_hours: float | None
+    max_age_hours: float
+    language: str = "en"
+    source_type: str = "rss"
+    echo_eligible: bool = True
+    reason_code: str = ""
 
 
 @dataclass
@@ -109,6 +219,7 @@ class TierResult:
     items: list[Item] = field(default_factory=list)
     ok: bool = True
     note: str = ""
+    source_health: list[SourceHealth] = field(default_factory=list)
 
     @property
     def degraded(self) -> bool:

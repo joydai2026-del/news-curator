@@ -8,12 +8,13 @@ morning.
 from __future__ import annotations
 
 import json
+import io
 
-import pytest
 from datetime import datetime, timedelta, timezone
 
 from curator.fetchers.rss import entry_image
-from curator.images import ImageCache, enrich, is_public_host, parse_image_meta
+from curator.images import ImageCache, enrich, fetch_image_meta, parse_image_meta
+from curator.sources import ConnectedPeer, SafeHttpResponse, SafeHttpTransport
 from tests.conftest import make_item
 
 NOW = datetime(2026, 8, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -311,92 +312,6 @@ class TestNewsletterItemsAreNeverLookedUp:
         assert ordinary.image_url == "https://cdn.example/c.jpg"
 
 
-class TestPublicHostGuard:
-    """v1 never fetched a destination page, so this is new attack surface.
-
-    A feed we do not control now supplies addresses a CI runner will request.
-    The value of blocking is not the request, it is that an internal page's
-    meta tag can never be parsed onto a public page.
-    """
-
-    @pytest.mark.allow_socket
-    def test_ordinary_public_hosts_pass(self):
-        # The one place a real lookup is the point. Everything else in the suite
-        # is blocked from the network by the autouse fixture in conftest.
-        assert is_public_host("https://techcrunch.com/a")
-
-    def test_a_public_ip_literal_passes_without_resolving(self):
-        assert is_public_host("https://1.1.1.1/a")
-
-    def test_loopback_is_refused(self):
-        assert not is_public_host("http://127.0.0.1:8080/a")
-        assert not is_public_host("http://localhost/a")
-        assert not is_public_host("http://LOCALHOST:9000/a")
-
-    def test_cloud_metadata_endpoint_is_refused(self):
-        # The one that actually matters on a CI runner.
-        assert not is_public_host("http://169.254.169.254/latest/meta-data/")
-
-    def test_private_ranges_are_refused(self):
-        for host in ("10.0.0.1", "192.168.1.1", "172.16.0.5", "0.0.0.0"):
-            assert not is_public_host(f"http://{host}/a"), host
-
-    def test_ipv6_loopback_and_link_local_are_refused(self):
-        assert not is_public_host("http://[::1]/a")
-        assert not is_public_host("http://[fe80::1]/a")
-
-    def test_a_name_that_resolves_to_a_private_address_is_refused(self, monkeypatch):
-        # The whole reason a string check is not enough: `evil.example` pointing
-        # at the metadata endpoint passes any literal-address test.
-        import socket as s
-        from curator import images
-
-        monkeypatch.setattr(
-            images.socket, "getaddrinfo",
-            lambda *a, **k: [(s.AF_INET, s.SOCK_STREAM, 6, "", ("169.254.169.254", 0))],
-        )
-        assert not is_public_host("https://evil.example/a")
-
-    def test_a_name_resolving_to_a_public_address_is_allowed(self, monkeypatch):
-        import socket as s
-        from curator import images
-
-        monkeypatch.setattr(
-            images.socket, "getaddrinfo",
-            lambda *a, **k: [(s.AF_INET, s.SOCK_STREAM, 6, "", ("93.184.216.34", 0))],
-        )
-        assert is_public_host("https://example.com/a")
-
-    def test_a_name_with_one_private_answer_is_refused(self, monkeypatch):
-        # Mixed results must fail closed: one private answer is enough.
-        import socket as s
-        from curator import images
-
-        monkeypatch.setattr(
-            images.socket, "getaddrinfo",
-            lambda *a, **k: [
-                (s.AF_INET, s.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
-                (s.AF_INET, s.SOCK_STREAM, 6, "", ("10.0.0.5", 0)),
-            ],
-        )
-        assert not is_public_host("https://mixed.example/a")
-
-    def test_a_name_that_does_not_resolve_is_refused(self, monkeypatch):
-        # A name we cannot resolve is a name we cannot vouch for.
-        import socket as s
-        from curator import images
-
-        def boom(*a, **k):
-            raise s.gaierror("nope")
-
-        monkeypatch.setattr(images.socket, "getaddrinfo", boom)
-        assert not is_public_host("https://nxdomain.example/a")
-
-    def test_no_host_is_refused(self):
-        assert not is_public_host("")
-        assert not is_public_host("not a url")
-
-
 class TestOfflineStillUsesTheCache:
     def test_a_disabled_run_still_applies_a_cached_image(self):
         # `--offline` means no network, not "pretend we never learned anything".
@@ -507,112 +422,81 @@ class TestNoFetchIsProvenNotInferred:
                          retry_error_after_hours=24)[0] is True
 
 
-class _FakeResponse:
-    """Minimal stand-in for a streamed requests response."""
-
-    def __init__(self, status=200, headers=None, chunks=(), url="https://pub.example/a"):
-        self.status_code = status
-        self.headers = headers or {"Content-Type": "text/html"}
-        self._chunks = list(chunks)
-        self.url = url
-        self.encoding = "utf-8"
-        self.closed = False
-
-    @property
-    def is_redirect(self):
-        return self.status_code in (301, 302, 303, 307, 308) and "Location" in self.headers
-
-    is_permanent_redirect = False
-
-    def iter_content(self, size):
-        yield from self._chunks
-
-    def close(self):
-        self.closed = True
-
-
 class TestFetchImageMetaTransport:
-    """The bounds and the redirect policy, with a fake transport."""
+    """Image parsing runs only behind the shared pinned transport."""
 
-    def _public(self, monkeypatch):
-        from curator import images
+    class RecordingTransport:
+        def __init__(self, response):
+            self.response = response
+            self.calls = []
 
-        monkeypatch.setattr(images, "is_public_host", lambda url: "private" not in url)
+        def get(self, source_id, url, **kwargs):
+            self.calls.append((source_id, url, kwargs))
+            return self.response
 
-    def _run(self, monkeypatch, responses):
-        from curator import images
-
-        seen = []
-
-        class FakeSession:
-            def get(self, url, **kwargs):
-                seen.append(url)
-                assert kwargs.get("allow_redirects") is False, "redirects must be followed manually"
-                return responses.pop(0)
-
-        result = images.fetch_image_meta(
-            "https://pub.example/a", user_agent="t", timeout=5,
-            max_bytes=65536, session=FakeSession(),
+    def _run(self, response, *, max_bytes=65536):
+        transport = self.RecordingTransport(response)
+        result = fetch_image_meta(
+            "https://pub.example/a",
+            user_agent="t",
+            timeout=5,
+            max_bytes=max_bytes,
+            transport=transport,
         )
-        return result, seen
+        return result, transport.calls
 
-    def test_a_redirect_is_followed_manually_and_rechecked(self, monkeypatch):
-        self._public(monkeypatch)
-        html = b'<html><head><meta property="og:image" content="https://cdn.example/z.jpg"></head><body>'
-        (image, outcome), seen = self._run(monkeypatch, [
-            _FakeResponse(302, {"Location": "https://pub.example/final"}),
-            _FakeResponse(200, {"Content-Type": "text/html"}, [html], url="https://pub.example/final"),
-        ])
-        assert outcome == "ok" and image == "https://cdn.example/z.jpg"
-        assert seen == ["https://pub.example/a", "https://pub.example/final"]
+    def test_safe_transport_final_url_is_used_for_relative_image(self):
+        html = b'<html><head><meta property="og:image" content="/z.jpg"></head><body>'
+        (image, outcome), calls = self._run(
+            SafeHttpResponse(
+                200,
+                "https://pub.example/final",
+                {"content-type": "text/html"},
+                html,
+                ("https://pub.example/a",),
+            )
+        )
+        assert outcome == "ok" and image == "https://pub.example/z.jpg"
+        assert calls[0][0:2] == ("image-meta", "https://pub.example/a")
+        assert calls[0][2]["user_agent"] == "t"
 
-    def test_a_redirect_into_a_private_host_is_never_requested(self, monkeypatch):
-        # The point of manual redirects: refuse to REQUEST it, not merely refuse
-        # to parse what came back.
-        self._public(monkeypatch)
-        (image, outcome), seen = self._run(monkeypatch, [
-            _FakeResponse(302, {"Location": "https://private.internal/meta"}),
-        ])
-        assert image is None and outcome == "error"
-        assert seen == ["https://pub.example/a"]  # the second hop never happened
-
-    def test_a_non_200_is_never_parsed(self, monkeypatch):
+    def test_a_non_200_is_never_parsed(self):
         # Measured: real publishers return a styled block page carrying its own
         # og:image. Parsing it attaches "you are blocked" artwork to a story.
-        self._public(monkeypatch)
         blocked = b'<html><head><meta property="og:image" content="https://cdn.example/blocked.jpg"></head>'
-        (image, outcome), _ = self._run(monkeypatch, [
-            _FakeResponse(403, {"Content-Type": "text/html"}, [blocked]),
-        ])
+        (image, outcome), _ = self._run(
+            SafeHttpResponse(403, "https://pub.example/a", {"content-type": "text/html"}, blocked)
+        )
         assert image is None and outcome == "error"
 
-    def test_truncation_before_the_head_ends_is_not_a_definitive_miss(self, monkeypatch):
-        self._public(monkeypatch)
+    def test_truncation_before_the_head_ends_is_not_a_definitive_miss(self):
         filler = b"<html><head>" + b"<!-- pad -->" * 20000  # never reaches </head>
-        (image, outcome), _ = self._run(monkeypatch, [
-            _FakeResponse(200, {"Content-Type": "text/html"}, [filler]),
-        ])
+        (image, outcome), _ = self._run(
+            SafeHttpResponse(200, "https://pub.example/a", {"content-type": "text/html"}, filler)
+        )
         assert image is None
         assert outcome == "error", "a cut-off read must not be cached as 'declares no image'"
 
-    def test_reaching_the_end_of_the_head_with_nothing_is_definitive(self, monkeypatch):
-        self._public(monkeypatch)
-        (image, outcome), _ = self._run(monkeypatch, [
-            _FakeResponse(200, {"Content-Type": "text/html"}, [b"<html><head><title>x</title></head><body>"]),
-        ])
+    def test_reaching_the_end_of_the_head_with_nothing_is_definitive(self):
+        (image, outcome), _ = self._run(
+            SafeHttpResponse(
+                200,
+                "https://pub.example/a",
+                {"content-type": "text/html"},
+                b"<html><head><title>x</title></head><body>",
+            )
+        )
         assert image is None and outcome == "none"
 
-    def test_a_non_html_content_type_is_a_definitive_miss(self, monkeypatch):
-        self._public(monkeypatch)
-        (image, outcome), _ = self._run(monkeypatch, [
-            _FakeResponse(200, {"Content-Type": "application/pdf"}, [b"%PDF-1.4"]),
-        ])
+    def test_a_non_html_content_type_is_a_definitive_miss(self):
+        (image, outcome), _ = self._run(
+            SafeHttpResponse(200, "https://pub.example/a", {"content-type": "application/pdf"}, b"%PDF-1.4")
+        )
         assert image is None and outcome == "none"
 
     def test_the_byte_cap_is_a_ceiling_not_a_ceiling_plus_one_chunk(self, monkeypatch):
         from curator import images
 
-        self._public(monkeypatch)
         captured = {}
 
         def spy(markup, base_url=""):
@@ -621,64 +505,51 @@ class TestFetchImageMetaTransport:
 
         monkeypatch.setattr(images, "parse_image_meta", spy)
 
-        class FakeSession:
-            def get(self, url, **kwargs):
-                return _FakeResponse(200, {"Content-Type": "text/html"}, [b"x" * 16384] * 10)
-
-        images.fetch_image_meta("https://pub.example/a", user_agent="t", timeout=5,
-                                max_bytes=40000, session=FakeSession())
+        transport = self.RecordingTransport(
+            SafeHttpResponse(200, "https://pub.example/a", {"content-type": "text/html"}, b"x" * 40000)
+        )
+        images.fetch_image_meta(
+            "https://pub.example/a",
+            user_agent="t",
+            timeout=5,
+            max_bytes=40000,
+            transport=transport,
+        )
         assert captured["len"] <= 40000, "the cap must not be overshot by a whole chunk"
 
-    def test_a_redirect_loop_terminates(self, monkeypatch):
-        from curator import images
+    def test_peer_mismatch_sends_zero_image_request_bytes(self):
+        class Socket:
+            def __init__(self):
+                self.sent = bytearray()
 
-        self._public(monkeypatch)
+            def sendall(self, data):
+                self.sent.extend(data)
 
-        class LoopSession:
-            def get(self, url, **kwargs):
-                return _FakeResponse(302, {"Location": "https://pub.example/loop"})
+            def makefile(self, _mode, _buffering=None):
+                return io.BytesIO(b"")
 
-        image, outcome = images.fetch_image_meta(
-            "https://pub.example/a", user_agent="t", timeout=5,
-            max_bytes=65536, session=LoopSession(),
+            def getpeername(self):
+                return ("142.250.72.14", 443)
+
+            def settimeout(self, _value):
+                pass
+
+            def close(self):
+                pass
+
+        sock = Socket()
+        transport = SafeHttpTransport(
+            resolver=lambda *_: ("93.184.216.34",),
+            connector=lambda *_: ConnectedPeer(sock, True),
         )
+
+        image, outcome = fetch_image_meta(
+            "https://pub.example/a",
+            user_agent="t",
+            timeout=5,
+            max_bytes=65536,
+            transport=transport,
+        )
+
         assert image is None and outcome == "error"
-
-    def test_a_non_public_initial_host_is_never_requested(self, monkeypatch):
-        from curator import images
-
-        monkeypatch.setattr(images, "is_public_host", lambda url: False)
-
-        class NeverSession:
-            def get(self, url, **kwargs):
-                raise AssertionError("a non-public host must not be requested")
-
-        image, outcome = images.fetch_image_meta(
-            "http://169.254.169.254/latest/meta-data/", user_agent="t", timeout=5,
-            max_bytes=65536, session=NeverSession(),
-        )
-        assert image is None and outcome == "error"
-
-
-class TestNonCanonicalIpFormsAreRefused:
-    """Every one of these is 127.0.0.1 or the metadata endpoint to a C resolver.
-
-    None of them parses as an IP with `ipaddress`, so a literal-only check waves
-    them through. `0177.0.0.1` is the sharp case: getaddrinfo answers
-    177.0.0.1 (global, so it would PASS) while a client applying octal rules
-    connects to 127.0.0.1. Two parsers disagreeing is a bypass, not a residual.
-    """
-
-    def test_decimal_and_octal_and_hex_forms_are_refused(self):
-        for host in ("2130706433", "2852039166", "127.1", "0177.0.0.1", "0x7f.1", "127.0.0.001", "0"):
-            assert not is_public_host(f"http://{host}/a"), host
-
-    def test_a_real_domain_is_still_allowed(self, monkeypatch):
-        import socket as s
-        from curator import images
-
-        monkeypatch.setattr(
-            images.socket, "getaddrinfo",
-            lambda *a, **k: [(s.AF_INET, s.SOCK_STREAM, 6, "", ("93.184.216.34", 0))],
-        )
-        assert is_public_host("https://techcrunch.com/2026/08/28/a-story")
+        assert sock.sent == b""

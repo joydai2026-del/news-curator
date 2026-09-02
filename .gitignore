@@ -20,3 +20,9 @@ receipt.json
 
 # Vault context symlink (house convention)
 .vault
+
+# Local pipeline artifacts (written by --health-report and workflow-local runs)
+source-health.json
+downloaded-state/
+downloaded-translation/
+repository-state/

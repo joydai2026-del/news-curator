@@ -13,6 +13,7 @@ one.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -20,11 +21,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .config import Category, Config, ConfigError, load_config
+from .config import Category, Config, ConfigError, RssSource, load_config
 from .dedup import dedupe
 from .filter import assign_categories
 from .images import ImageCache, enrich
 from .models import Item, TierResult
+from .newsletter.sanitize import sanitize as sanitize_newsletter_url
+from .normalize import canonical_url as normalize_canonical_url
+from .normalize import fold_text
 from .rank import rank_items
 from .render import render_site
 
@@ -40,26 +44,149 @@ NEWSLETTER_CATEGORY_ID = "newsletters"
 NEWSLETTER_CATEGORY_NAME = "Newsletters"
 
 
-def collect(cfg: Config, *, offline: bool = False) -> list[TierResult]:
+def _newsletter_fallback_canonical(title: str) -> str:
+    """Generate a non-link identity without trusting an artifact value."""
+
+    digest = hashlib.sha256(fold_text(title).encode("utf-8")).hexdigest()[:16]
+    return f"newsletter:{digest}"
+
+
+def _feed_source_row(source: RssSource, cfg: Config) -> dict:
+    """Translate the legacy config object into the stable adapter contract."""
+
+    return {
+        "type": source.type,
+        "id": source.id,
+        "name": source.name,
+        "url": source.url,
+        "enabled": source.enabled,
+        "language": source.language,
+        "category": source.category,
+        "max_age_hours": source.max_age_hours or cfg.default_source_max_age_hours,
+        "weight": source.weight,
+        "is_aggregator": source.is_aggregator,
+        "platform": source.platform,
+        "echo_eligible": source.echo_eligible,
+        "request_timeout_seconds": source.request_timeout_seconds or cfg.timeout,
+        "max_response_bytes": source.max_response_bytes or cfg.default_source_max_response_bytes,
+        "per_host_concurrency": source.per_host_concurrency or cfg.default_source_per_host_concurrency,
+        "options": dict(source.options),
+    }
+
+
+def _hackernews_source_row(cfg: Config) -> dict | None:
+    block = dict(cfg.hackernews)
+    if not block.get("enabled", True):
+        return None
+    common = {
+        "type", "id", "name", "url", "enabled", "language", "category",
+        "max_age_hours", "weight", "aggregator", "is_aggregator", "platform",
+        "echo_eligible", "request_timeout_seconds", "max_response_bytes",
+        "per_host_concurrency",
+    }
+    options = {key: value for key, value in block.items() if key not in common}
+    return {
+        "type": "hackernews",
+        "id": str(block.get("id") or "hackernews"),
+        "name": str(block.get("name") or "Hacker News"),
+        "url": str(block.get("url") or "https://hn.algolia.com/api/v1"),
+        "enabled": True,
+        "language": str(block.get("language") or "en"),
+        "category": str(block.get("category") or ""),
+        "max_age_hours": block.get("max_age_hours", cfg.default_source_max_age_hours),
+        "weight": block.get("weight", 0.95),
+        "is_aggregator": block.get("is_aggregator", block.get("aggregator", True)),
+        "platform": str(block.get("platform") or "hackernews"),
+        "echo_eligible": block.get("echo_eligible", True),
+        "request_timeout_seconds": block.get("request_timeout_seconds", cfg.timeout),
+        "max_response_bytes": block.get("max_response_bytes", cfg.default_source_max_response_bytes),
+        "per_host_concurrency": block.get("per_host_concurrency", cfg.default_source_per_host_concurrency),
+        "options": options,
+    }
+
+
+def configured_source_specs(cfg: Config, registry=None):
+    """Return validated source specs in stable config order.
+
+    RSS, Atom, news sitemap, and JSON Feed additions need only one config row.
+    A new protocol needs one small allowlisted adapter and no pipeline rewrite.
+    """
+
+    from .sources import build_builtin_registry
+
+    selected_registry = registry or build_builtin_registry()
+    rows = [_feed_source_row(source, cfg) for source in cfg.all_feeds]
+    hackernews = _hackernews_source_row(cfg)
+    if hackernews is not None:
+        rows.append(hackernews)
+    return selected_registry.parse_specs(rows)
+
+
+def collect(
+    cfg: Config,
+    *,
+    offline: bool = False,
+    registry=None,
+    transport=None,
+    clock=None,
+) -> list[TierResult]:
     if offline:
         return [TierResult(tier="offline", items=[], ok=True, note="offline mode, no network")]
 
-    from .fetchers import hn, reddit, rss
+    from .sources import (
+        SafeHttpPolicy,
+        SafeHttpTransport,
+        SourceContext,
+        SourceQuery,
+        build_builtin_registry,
+        collect_sources,
+    )
 
-    results: list[TierResult] = []
-    for name, call in (
-        ("hackernews", lambda: hn.fetch(cfg, cfg.topics)),
-        ("rss", lambda: rss.fetch(cfg)),
-        ("reddit", lambda: reddit.fetch(cfg)),
-    ):
-        try:
-            results.append(call())
-        except Exception:
-            # A fetcher raising is a bug in the fetcher, not a reason to lose
-            # the other two tiers. Detail to the log, generic note to the page.
-            log.exception("tier %s raised", name)
-            results.append(TierResult(tier=name, ok=False, note="unavailable this run"))
-    return results
+    selected_registry = registry or build_builtin_registry()
+    selected_transport = transport or SafeHttpTransport(
+        policy=SafeHttpPolicy(
+            total_timeout_seconds=cfg.timeout,
+            max_wire_bytes=cfg.default_source_max_response_bytes,
+            max_decoded_bytes=cfg.default_source_max_response_bytes,
+            per_host_concurrency=cfg.default_source_per_host_concurrency,
+        )
+    )
+    selected_clock = clock or (lambda: datetime.now(timezone.utc))
+    context = SourceContext(
+        registry=selected_registry,
+        transport=selected_transport,
+        clock=selected_clock,
+        environment=os.environ.get,
+        user_agent=cfg.user_agent,
+        queries=tuple(
+            SourceQuery(category.id, tuple(category.search_terms))
+            for category in cfg.categories
+            if category.search_terms
+        ),
+        default_max_age_hours=cfg.default_source_max_age_hours,
+    )
+    source_results = collect_sources(
+        configured_source_specs(cfg, selected_registry),
+        context,
+        max_workers=cfg.fetch_workers,
+    )
+    items = [item for result in source_results for item in result.items]
+    health = [result.health for result in source_results]
+    alerts = [record for record in health if record.status not in {"fresh", "disabled"}]
+    unavailable = [record for record in health if record.status in {"unavailable", "malformed"}]
+    active = [record for record in health if record.status != "disabled"]
+    note = f"{len(alerts)} source alert{'s' if len(alerts) != 1 else ''}" if alerts else ""
+    return [
+        TierResult(
+            tier="sources",
+            items=items,
+            # A composition with no active sources is intentionally quiet. It
+            # is not an unexplained outage and must not render as degraded.
+            ok=not active or len(unavailable) < len(active),
+            note=note,
+            source_health=health,
+        )
+    ]
 
 
 def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
@@ -86,11 +213,29 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
             continue
         if published.tzinfo is None:
             published = published.replace(tzinfo=timezone.utc)
+        # Treat the artifact as untrusted at reconstruction time. The display
+        # URL and canonical identity cross separate boundaries: a bad display
+        # URL becomes an unlinked headline, while a bad or missing canonical
+        # value can be safely rebuilt from a valid display URL. If neither is
+        # safe, a recomputed opaque key supports dedup but is never published.
+        title = str(record.get("title") or "")
+        article_url = sanitize_newsletter_url(str(record.get("url") or "")) or ""
+        artifact_canonical_url = sanitize_newsletter_url(
+            str(record.get("canonical_url") or "")
+        )
+        article_canonical_url = (
+            normalize_canonical_url(artifact_canonical_url or "")
+            or normalize_canonical_url(article_url)
+            # An unlinked newsletter story still needs a stable internal key
+            # for dedup. Recompute it from public title text rather than
+            # accepting an artifact-provided non-HTTP scheme.
+            or _newsletter_fallback_canonical(title)
+        )
         items.append(
             Item(
-                title=str(record.get("title") or ""),
-                url=str(record.get("url") or ""),
-                canonical_url=str(record.get("canonical_url") or ""),
+                title=title,
+                url=article_url,
+                canonical_url=article_canonical_url,
                 source_id=str(record.get("source_id") or "newsletter"),
                 source_name=str(record.get("source_name") or "Newsletter"),
                 platform=str(record.get("platform") or "newsletter"),
@@ -155,22 +300,54 @@ def build(
     *,
     newsletter_on: bool = False,
 ) -> dict[str, list[Item]]:
+    return build_ranked_language(
+        cfg,
+        results,
+        now,
+        language="en",
+        newsletter_on=newsletter_on,
+    )
+
+
+def build_ranked_language(
+    cfg: Config,
+    results: list[TierResult],
+    now: datetime,
+    *,
+    language: str,
+    newsletter_on: bool = False,
+) -> dict[str, list[Item]]:
+    """Rank authoritative originals within one language boundary."""
+
+    if language not in {"en", "zh"}:
+        raise ValueError("language must be 'en' or 'zh'")
     raw: list[Item] = [i for r in results for i in r.items]
 
     categories = list(cfg.categories)
-    if newsletter_on:
+    if newsletter_on and language == "en":
         # The tab is present whenever the lane is lit, even on a quiet window.
         # A dark lane adds no tab at all, which is the "no empty tab" rule.
         categories.append(Category(name=NEWSLETTER_CATEGORY_NAME, id=NEWSLETTER_CATEGORY_ID))
 
     cutoff = now - timedelta(hours=cfg.max_age_hours)
-    fresh = [i for i in raw if i.published_at >= cutoff]
-    log.info("collected %d items, %d within %sh", len(raw), len(fresh), cfg.max_age_hours)
+    # Partitioning before dedup is load-bearing: a Chinese variant must never
+    # erase the English original, or vice versa.
+    language_items = [i for i in raw if i.language == language]
+    fresh = [i for i in language_items if i.published_at >= cutoff]
+    log.info(
+        "collected %d items, %d %s items within %sh",
+        len(raw),
+        len(fresh),
+        language,
+        cfg.max_age_hours,
+    )
 
     # Dedupe BEFORE topic assignment so cross-source echo counts are computed
-    # once, globally, rather than recomputed per topic.
-    deduped = dedupe(
-        fresh,
+    # once within the selected language, rather than recomputed per topic.
+    deduped = build_language_view(
+        raw,
+        language,
+        cutoff=cutoff,
         threshold=float(cfg.dedup.get("title_similarity_threshold", 0.85)),
         time_bucket_hours=float(cfg.dedup.get("time_bucket_hours", 36)),
     )
@@ -192,6 +369,27 @@ def build(
     return ranked
 
 
+def build_language_view(
+    items: list[Item],
+    language: str,
+    *,
+    cutoff: datetime | None = None,
+    threshold: float = 0.90,
+    time_bucket_hours: float = 36.0,
+) -> list[Item]:
+    """Pure backend seam: partition and age-filter before language-local dedup."""
+    if language not in {"en", "zh"}:
+        raise ValueError("language must be 'en' or 'zh'")
+    selected = [item for item in items if item.language == language]
+    if cutoff is not None:
+        selected = [item for item in selected if item.published_at >= cutoff]
+    return dedupe(
+        selected,
+        threshold=threshold,
+        time_bucket_hours=time_bucket_hours,
+    )
+
+
 def _default_repo_url(cfg: Config) -> str | None:
     """Config first, then the Actions environment. Never a hardcoded owner.
 
@@ -202,6 +400,49 @@ def _default_repo_url(cfg: Config) -> str | None:
     server = os.environ.get("GITHUB_SERVER_URL")
     slug = os.environ.get("GITHUB_REPOSITORY")
     return f"{server}/{slug}" if server and slug else None
+
+
+def _ranked_originals(*ranked_views: dict[str, list[Item]]) -> list[Item]:
+    """Return each bounded ranked original once, across all language views.
+
+    The ranked views are already capped per category. Identity de-duplication
+    here prevents one story appearing in multiple categories from consuming
+    multiple image lookups, while retaining the actual Item object so every
+    localized projection inherits the same publisher-declared image.
+    """
+
+    originals: list[Item] = []
+    seen: set[int] = set()
+    for ranked in ranked_views:
+        for rows in ranked.values():
+            for item in rows:
+                identity = id(item)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                originals.append(item)
+    return originals
+
+
+def _sanitize_newsletter_projection_urls(*localized_views: dict) -> None:
+    """Apply the newsletter privacy gate before public output is written."""
+
+    seen: set[int] = set()
+    for view in localized_views:
+        for rows in view.values():
+            for localized in rows:
+                original = localized.original
+                identity = id(original)
+                if identity in seen or not original.is_newsletter:
+                    continue
+                seen.add(identity)
+                original.url = sanitize_newsletter_url(original.url) or ""
+                clean_canonical = sanitize_newsletter_url(original.canonical_url)
+                original.canonical_url = (
+                    normalize_canonical_url(clean_canonical or "")
+                    or normalize_canonical_url(original.url)
+                    or ""
+                )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -217,11 +458,29 @@ def main(argv: list[str] | None = None) -> int:
         help=f"preview-image cache file (default: <root>/{IMAGE_CACHE_FILE})",
     )
     parser.add_argument(
+        "--source-snapshot",
+        type=Path,
+        default=None,
+        help="bounded authoritative-original snapshot; when supplied, sources are never fetched again",
+    )
+    parser.add_argument(
         "--newsletter-artifact",
         type=Path,
         default=None,
         help="JSON artifact written by `python -m curator.newsletter` in the "
         "secrets-scoped fetch job; absent means the lane is dark this run",
+    )
+    parser.add_argument(
+        "--translation-artifact",
+        type=Path,
+        default=None,
+        help="validated translation overlay; absent or invalid retains original-language data",
+    )
+    parser.add_argument(
+        "--health-report",
+        type=Path,
+        default=None,
+        help="write safe structured per-source freshness JSON",
     )
     parser.add_argument(
         "--allow-empty",
@@ -243,7 +502,30 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     now = datetime.now(timezone.utc)
-    results = collect(cfg, offline=args.offline)
+    if args.source_snapshot:
+        from .source_snapshot import (
+            SourceSnapshotError,
+            load_source_snapshot,
+            snapshot_config_digest,
+        )
+
+        try:
+            snapshot = load_source_snapshot(
+                args.source_snapshot,
+                expected_configuration_digest=snapshot_config_digest(cfg),
+                current_time=now,
+                max_age_seconds=cfg.source_snapshot_max_age_seconds,
+            )
+        except (OSError, SourceSnapshotError):
+            # An explicit snapshot is a promise that collection already
+            # happened. Never hide artifact loss or tampering with a second
+            # network fetch that could produce a different story set.
+            log.error("source snapshot invalid; refusing an implicit source refetch")
+            return 2
+        results = list(snapshot.results)
+        log.info("source snapshot loaded (%s)", snapshot.content_digest[:12])
+    else:
+        results = collect(cfg, offline=args.offline)
 
     # The newsletter lane arrives pre-fetched as an artifact from its own
     # secrets-scoped job. A missing or unreadable artifact is a dark lane and
@@ -260,31 +542,34 @@ def main(argv: list[str] | None = None) -> int:
     elif args.newsletter_artifact:
         log.warning("newsletter artifact %s missing; lane dark this run", args.newsletter_artifact)
 
-    ranked = build(cfg, results, now, newsletter_on=not newsletter_meta.get("dark", True))
-    visible = sum(len(v) for v in ranked.values())
+    if args.health_report:
+        from .health import write_report
 
-    # The guard is on VISIBLE rows, and it runs after filtering, because that is
-    # the only number that describes what a reader would actually get. It is not
-    # conditioned on topics being configured either: an empty topics list still
-    # produces an empty page, and that page would still overwrite a good one.
-    if visible == 0 and not args.allow_empty:
-        log.error(
-            "no story matched any topic. Refusing to overwrite the published page "
-            "with an empty one. Re-run with --allow-empty to override."
-        )
-        return 1
+        try:
+            write_report(results, args.health_report, now=now)
+        except OSError:
+            log.exception("source health report could not be written")
+            return 2
+
+    ranked = build(cfg, results, now, newsletter_on=not newsletter_meta.get("dark", True))
+    ranked_zh = build_ranked_language(cfg, results, now, language="zh")
+    visible = sum(len(v) for v in ranked.values())
+    visible_zh = sum(len(v) for v in ranked_zh.values())
 
     # Preview images are resolved AFTER ranking and truncation, so the only
     # article heads fetched are the ones a reader will actually see. That is
-    # what keeps an hourly job bounded: the ceiling is the number of visible
-    # rows, not the number of headlines collected.
+    # what keeps an hourly job bounded: the ceiling is the union of capped EN
+    # and ZH backend rows, not the number of headlines collected. Native rows
+    # in either language are enriched before localization, so a translated
+    # projection inherits the image attached to its authoritative original.
     cache_path = args.image_cache or (args.root / IMAGE_CACHE_FILE)
     cache = ImageCache.load(cache_path)
+    originals = _ranked_originals(ranked, ranked_zh)
     # Newsletter items are excluded here AND refused inside enrich(): the
     # privacy rule (no article fetch, no cache entry for newsletter-derived
     # URLs) should survive either guard being refactored away.
     stats = enrich(
-        [i for rows in ranked.values() for i in rows if not i.is_newsletter],
+        [item for item in originals if not item.is_newsletter],
         cache,
         now,
         user_agent=cfg.user_agent,
@@ -292,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
         # images and cache hits still apply, because neither touches the wire.
         config={**cfg.images, "enabled": False} if args.offline else cfg.images,
     )
-    with_image = sum(1 for rows in ranked.values() for i in rows if i.image_url)
+    with_image = sum(1 for item in originals if not item.is_newsletter and item.image_url)
     log.info(
         "images: %d/%d rows have one (%d from feeds, %d cached, %d fetched, "
         "%d declare none, %d unavailable)",
@@ -316,9 +601,73 @@ def main(argv: list[str] | None = None) -> int:
     if cache.save():
         log.info("image cache written to %s (%d entries)", cache_path, len(cache.entries))
 
+    # Language data is a backend artifact. The visual renderer remains
+    # unchanged until the separate design phase.
     out_dir = args.out or (args.root / "site")
+    translations = ()
+    if args.translation_artifact:
+        try:
+            from .localization import load_translation_artifact
+
+            translations = load_translation_artifact(args.translation_artifact)
+        except (OSError, ValueError):
+            log.warning("translation artifact invalid; original-language data retained")
+
+    from .localization import build_localized_view, write_localized_projection
+
+    localized_en = build_localized_view(
+        target_language="en",
+        native_ranked=ranked,
+        source_ranked=ranked_zh,
+        translations=translations,
+    )
+    localized_zh = build_localized_view(
+        target_language="zh",
+        native_ranked=ranked_zh,
+        source_ranked=ranked,
+        translations=translations,
+    )
+    _sanitize_newsletter_projection_urls(localized_en, localized_zh)
+    data_dir = out_dir / "data"
+    en_categories = list(cfg.categories)
+    if not newsletter_meta.get("dark", True):
+        en_categories.append(
+            Category(name=NEWSLETTER_CATEGORY_NAME, id=NEWSLETTER_CATEGORY_ID)
+        )
+    write_localized_projection(
+        language="en",
+        categories=en_categories,
+        ranked=localized_en,
+        path=data_dir / "news-en.json",
+        generated_at=now,
+    )
+    write_localized_projection(
+        language="zh",
+        categories=cfg.categories,
+        ranked=localized_zh,
+        path=data_dir / "news-zh.json",
+        generated_at=now,
+    )
+    log.info("wrote localized backend projections in %s", data_dir)
+
+    # The visual guard is deliberately later than the backend projections. A
+    # Chinese-only run is valid current content, so it renders those originals
+    # instead of returning success without producing the required index.
+    if visible == 0 and not args.allow_empty:
+        if not visible_zh:
+            log.error(
+                "no story matched any topic. Backend projections were written, but the "
+                "empty build was rejected and the published visual page was not overwritten"
+            )
+            return 1
+
+    rendered_ranked = ranked if visible else ranked_zh
+    rendered_visible = visible if visible else visible_zh
+    if not visible and visible_zh:
+        log.info("no English story matched any topic; rendering the current Chinese view")
+
     path = render_site(
-        ranked,
+        rendered_ranked,
         results,
         now,
         out_dir,
@@ -326,7 +675,12 @@ def main(argv: list[str] | None = None) -> int:
         repo_url=_default_repo_url(cfg),
         cname_source=args.root / "CNAME",
     )
-    log.info("wrote %s (%d rows across %d topics)", path, visible, len(ranked))
+    log.info(
+        "wrote %s (%d rows across %d topics)",
+        path,
+        rendered_visible,
+        len(rendered_ranked),
+    )
 
     # The cursor moves ONLY here, after the page is on disk and the publish
     # guard passed. A run that fetched mail and then died re-reads that mail

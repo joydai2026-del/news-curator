@@ -86,6 +86,8 @@ def same_story(a: Item, b: Item, threshold: float) -> bool:
     The cost of being wrong is asymmetric: a missed merge shows one extra row,
     a wrong merge silently deletes a story and misattributes the survivor.
     """
+    if a.language != b.language:
+        return False
     if numbers_in(a.title) != numbers_in(b.title):
         return False
     return title_similarity(a.title, b.title) >= threshold
@@ -183,6 +185,12 @@ def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     # time. Trusting it for the section too is consistent; deleting the row was
     # not.
     keep.native_categories |= drop.native_categories
+    # Both passes keep the best source-local position from rows already judged
+    # to be the same story. Otherwise a different-URL fuzzy merge can preserve
+    # Trending membership while silently discarding or worsening its order.
+    native_ranks = [rank for rank in (keep.native_rank, drop.native_rank) if rank is not None]
+    if native_ranks:
+        keep.native_rank = min(native_ranks)
     if not keep.image_url and drop.image_url:
         keep.image_url = drop.image_url
     if drop.score is not None:
@@ -213,11 +221,11 @@ def dedupe(items: list[Item], *, threshold: float = 0.90, time_bucket_hours: flo
     ordered = sorted(items, key=_preference)
 
     # Pass 1: identical link. Certain, and the only source of echo provenance.
-    by_url: dict[str, Item] = {}
+    by_url: dict[tuple[str, str], Item] = {}
     for item in ordered:
-        key = item.canonical_url
-        if not key:
+        if not item.canonical_url:
             continue
+        key = (item.language, item.canonical_url)
         if key in by_url:
             _merge(by_url[key], item, count_echo=True)
         else:

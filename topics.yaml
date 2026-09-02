@@ -14,6 +14,7 @@
 #
 # Optional per category:
 #   aliases     - extra phrases that also count as a keyword match
+#   keywords_by_language - language-specific headline terms (currently zh)
 #   exclude     - if one of these appears in a headline, drop the item from this
 #                 category even if a keyword matched, and even if the feed is
 #                 native. Your escape hatch for an ambiguous keyword.
@@ -113,6 +114,10 @@ categories:
       - AI regulation
       - AI datacenter
       - AI data center
+    keywords_by_language:
+      zh:
+        - 人工智能
+        - 生成式 AI
     exclude:
       # "agent" senses that are not this one.
       - real estate agent
@@ -349,7 +354,7 @@ categories:
     sources:
       - {id: wnn,          name: World Nuclear News,      url: "https://www.world-nuclear-news.org/rss",           weight: 1.15}
       - {id: utilitydive,  name: Utility Dive,            url: "https://www.utilitydive.com/feeds/news/",          weight: 1.05}
-      - {id: canary,       name: Canary Media,            url: "https://www.canarymedia.com/feed",                 weight: 1.05}
+      - {id: canary,       name: Canary Media,            url: "https://www.canarymedia.com/rss.rss",              weight: 1.05, options: {allow_mislabeled_html_mime: true}}
       - {id: ieee-energy,  name: IEEE Spectrum Energy,    url: "https://spectrum.ieee.org/feeds/topic/energy.rss", weight: 1.1}
       - {id: neimag,       name: Nuclear Engineering Intl, url: "https://www.neimagazine.com/feed/",               weight: 1.0}
       - {id: powermag,     name: POWER Magazine,          url: "https://www.powermag.com/feed/",                   weight: 0.95}
@@ -507,6 +512,89 @@ categories:
       # - {id: fiercebiotech, name: Fierce Biotech, url: "https://www.fiercebiotech.com/rss/xml", weight: 1.15}
       # - {id: fiercepharma,  name: Fierce Pharma,  url: "https://www.fiercepharma.com/rss/xml",  weight: 1.0}
 
+  # ==========================================================================
+  - id: world
+    name: World
+    keywords:
+      - world news
+      - international
+      - foreign policy
+      - diplomacy
+      - geopolitical
+      - United Nations
+      - NATO
+      - European Union
+      - Ukraine
+      - Russia
+      - China
+      - Taiwan
+      - Middle East
+      - Israel
+      - Gaza
+    hn_queries:
+      - world news
+      - geopolitics
+    sources:
+      - {id: bbc-world,      name: BBC World,             url: "https://feeds.bbci.co.uk/news/world/rss.xml", language: en, max_age_hours: 6, weight: 1.05}
+      - {id: guardian-world, name: The Guardian World,    url: "https://www.theguardian.com/world/rss",      language: en, max_age_hours: 6, weight: 1.0}
+      - {id: rfi-zh,         name: RFI Chinese,           url: "https://www.rfi.fr/cn/rss",                  language: zh, max_age_hours: 8, weight: 1.0}
+      - {id: cna-zh,         name: CNA International,     url: "https://feeds.feedburner.com/rsscna/intworld", language: zh, max_age_hours: 8, weight: 1.0}
+      - {id: udn-zh,         name: UDN World,             url: "https://udn.com/rssfeed/news/2/6638?ch=news", language: zh, max_age_hours: 12, weight: 0.9}
+      - {id: dw-zh,          name: DW Chinese,            url: "https://rss.dw.com/rdf/rss-chi-all",         language: zh, max_age_hours: 12, weight: 1.0}
+      - {id: google-zaobao,  name: Zaobao via Google News, url: "https://news.google.com/rss/search?q=site%3Azaobao.com.sg%20when%3A1d&hl=zh-CN&gl=SG&ceid=SG%3Azh-Hans", language: zh, max_age_hours: 12, weight: 0.9, aggregator: true, platform: google-news, echo_eligible: false}
+
+  # ==========================================================================
+  - id: us-news
+    name: US News
+    keywords:
+      - U.S.
+      - United States
+      - American
+      - White House
+      - Congress
+      - Senate
+      - House of Representatives
+      - Supreme Court
+      - federal government
+      - state government
+      - governor
+      - federal judge
+    hn_queries:
+      - United States
+      - US policy
+  # ==========================================================================
+  - id: business
+    name: Business
+    keywords:
+      - business
+      - economy
+      - economic growth
+      - markets
+      - stock market
+      - Wall Street
+      - Federal Reserve
+      - interest rates
+      - inflation
+      - earnings
+      - merger
+      - acquisition
+      - IPO
+      - jobs report
+    keywords_by_language:
+      zh:
+        - 融资
+    hn_queries:
+      - business
+      - markets
+    sources:
+      - {id: cnbc, name: CNBC, url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", language: en, max_age_hours: 6, weight: 1.05}
+
+  # ==========================================================================
+  - id: trending
+    name: Trending
+    sources:
+      - {id: buzzing, name: buzzing.cc, url: "https://www.buzzing.cc/feed.xml", language: zh, max_age_hours: 6, weight: 0.9, aggregator: true, platform: buzzing, echo_eligible: false}
+
 # ============================================================================
 # A NOTE ON `hn_queries`
 #
@@ -514,8 +602,8 @@ categories:
 # News terms are not. Every term costs two API requests, and the run has a hard
 # request cap so a slow API can never eat the whole build.
 #
-# Six categories times thirty keywords would be 360 requests against a cap of
-# 60, so most keywords would silently never be searched. `hn_queries` is the
+# A long category list times thirty keywords would exceed the request cap, so
+# most keywords would silently never be searched. `hn_queries` is the
 # honest fix: two or three broad terms per category, hand-picked. Hacker News is
 # a candidate generator anyway. Whatever it returns is re-checked against the
 # full keyword list locally before it can reach the page.

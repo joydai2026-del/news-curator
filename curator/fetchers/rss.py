@@ -49,12 +49,14 @@ import threading
 import time
 from calendar import timegm
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
+from xml.etree import ElementTree as ET
 
 import feedparser
 import requests
 
 from ..config import Config, RssSource
-from ..models import Item, TierResult
+from ..models import Item, SourceHealth, TierResult
 from ..normalize import canonical_url, clean_title, safe_url
 
 log = logging.getLogger(__name__)
@@ -72,9 +74,17 @@ _IMAGE_ENCLOSURE_TYPE = "image/"
 # feeds put in `description`. It is a storage cap, not an editorial one.
 MAX_DESCRIPTION_CHARS = 600
 
+SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
+NEWS_NS = "http://www.google.com/schemas/sitemap-news/0.9"
+IMAGE_NS = "http://www.google.com/schemas/sitemap-image/1.1"
+
 
 class FeedTruncated(Exception):
     """The feed exceeded the size cap, so what we have is not a whole document."""
+
+
+class MalformedDocument(ValueError):
+    """The response arrived but cannot be safely parsed as its configured type."""
 
 
 def _timestamp(entry) -> tuple[datetime, bool] | None:
@@ -162,6 +172,171 @@ def entry_summary(entry, *, limit: int = MAX_DESCRIPTION_CHARS) -> str:
     return cut.rstrip(".,;:!?-–—") + "…"
 
 
+def _reject_unsafe_xml(payload: bytes) -> None:
+    upper = payload.upper()
+    if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+        raise MalformedDocument("DTD/entity declarations are not allowed")
+
+
+def _iso_datetime(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _rss_items(parsed, source: RssSource, now: datetime) -> list[Item]:
+    items: list[Item] = []
+    for native_rank, entry in enumerate(parsed.entries):
+        title = clean_title(entry.get("title") or "")
+        link = safe_url(entry.get("link") or "")
+        if not title or link is None:
+            continue
+        canonical = canonical_url(link)
+        if canonical is None:
+            continue
+
+        stamped = _timestamp(entry)
+        if stamped is None:
+            continue
+        published, estimated = stamped
+
+        items.append(
+            Item(
+                title=title,
+                url=link,
+                canonical_url=canonical,
+                source_id=source.id,
+                source_name=source.name,
+                platform=source.platform,
+                published_at=min(published, now),
+                source_weight=source.weight,
+                is_aggregator=source.is_aggregator,
+                time_is_estimated=estimated,
+                image_url=entry_image(entry),
+                description=entry_summary(entry),
+                language=source.language,
+                echo_eligible=source.echo_eligible,
+                native_rank=native_rank,
+                native_categories={source.category} if source.category else set(),
+            )
+        )
+    return items
+
+
+def _sitemap_items(payload: bytes, source: RssSource, now: datetime) -> list[Item]:
+    _reject_unsafe_xml(payload)
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise MalformedDocument("malformed news sitemap") from exc
+
+    items: list[Item] = []
+    for native_rank, node in enumerate(root.findall(f"{{{SITEMAP_NS}}}url")):
+        loc = node.findtext(f"{{{SITEMAP_NS}}}loc") or ""
+        news = node.find(f"{{{NEWS_NS}}}news")
+        if news is None:
+            continue
+        title = clean_title(news.findtext(f"{{{NEWS_NS}}}title") or "")
+        published = _iso_datetime(news.findtext(f"{{{NEWS_NS}}}publication_date") or "")
+        link = safe_url(loc)
+        if not title or published is None or link is None:
+            continue
+        canonical = canonical_url(link)
+        if canonical is None:
+            continue
+        image = safe_url(node.findtext(f"{{{IMAGE_NS}}}image/{{{IMAGE_NS}}}loc") or "") or ""
+        items.append(
+            Item(
+                title=title,
+                url=link,
+                canonical_url=canonical,
+                source_id=source.id,
+                source_name=source.name,
+                platform=source.platform,
+                published_at=min(published, now),
+                source_weight=source.weight,
+                is_aggregator=source.is_aggregator,
+                image_url=image,
+                language=source.language,
+                echo_eligible=source.echo_eligible,
+                native_rank=native_rank,
+                native_categories={source.category} if source.category else set(),
+            )
+        )
+    return items
+
+
+def parse_document(payload: bytes, source: RssSource, now: datetime | None = None) -> list[Item]:
+    """Parse a captured source document without network access."""
+    current = now or datetime.now(timezone.utc)
+    _reject_unsafe_xml(payload)
+    if source.type == "news_sitemap":
+        return _sitemap_items(payload, source, current)
+    parsed = feedparser.parse(payload)
+    if getattr(parsed, "bozo", False) and not parsed.entries:
+        raise MalformedDocument("malformed feed document")
+    return _rss_items(parsed, source, current)
+
+
+def source_health(
+    source: RssSource,
+    items: list[Item],
+    now: datetime,
+    *,
+    default_max_age_hours: float = 48,
+    status_hint: str = "",
+    reason_code: str = "",
+) -> SourceHealth:
+    """Evaluate newest usable item time before the global 48-hour filter."""
+    threshold = float(source.max_age_hours or default_max_age_hours)
+    newest = max((item.published_at for item in items), default=None)
+    age = max(0.0, (now - newest).total_seconds() / 3600.0) if newest else None
+
+    if status_hint in {"unavailable", "empty"}:
+        status = status_hint
+        if status == "empty":
+            reason_code = reason_code or "no_usable_items"
+    elif status_hint == "malformed" and newest is None:
+        status = "malformed"
+        reason_code = reason_code or "malformed_document"
+    elif newest is None:
+        status = "empty"
+        reason_code = reason_code or "no_usable_items"
+    elif age is not None and age > threshold:
+        status = "stale"
+        reason_code = "newest_item_too_old"
+    elif status_hint == "malformed":
+        status = "malformed"
+        reason_code = reason_code or "malformed_salvaged"
+    elif not source.echo_eligible and (urlsplit(source.url).hostname or "").casefold() == "news.google.com":
+        status = "link_resolution_degraded"
+        reason_code = "google_news_url_retained_non_corroborating"
+    else:
+        status = "fresh"
+
+    return SourceHealth(
+        source_id=source.id,
+        status=status,
+        usable_items=len(items),
+        newest_at=newest,
+        age_hours=age,
+        max_age_hours=threshold,
+        language=source.language,
+        source_type=source.type,
+        echo_eligible=source.echo_eligible,
+        reason_code=reason_code,
+    )
+
+
 def _fetch_one(source: RssSource, cfg: Config, malformed: set[str], lock: threading.Lock) -> list[Item]:
     resp = requests.get(
         source.url,
@@ -192,53 +367,18 @@ def _fetch_one(source: RssSource, cfg: Config, malformed: set[str], lock: thread
     finally:
         resp.close()
 
-    parsed = feedparser.parse(b"".join(chunks))
+    payload = b"".join(chunks)
+    if source.type == "news_sitemap":
+        return parse_document(payload, source)
+
+    parsed = feedparser.parse(payload)
     if getattr(parsed, "bozo", False):
         if not parsed.entries:
-            raise ValueError("malformed feed document")
-        # Entries parsed despite a malformed document. That is usable but not
-        # clean, and "usable" should not be reported as "healthy".
+            raise MalformedDocument("malformed feed document")
         log.warning("rss %s: malformed document, salvaged %d entries", source.id, len(parsed.entries))
         with lock:
             malformed.add(source.id)
-
-    now = datetime.now(timezone.utc)
-    items: list[Item] = []
-
-    for entry in parsed.entries:
-        title = clean_title(entry.get("title") or "")
-        link = safe_url(entry.get("link") or "")
-        if not title or link is None:
-            continue
-        canonical = canonical_url(link)
-        if canonical is None:
-            continue
-
-        stamped = _timestamp(entry)
-        if stamped is None:
-            # No usable date. Treating it as "now" would let undated feeds
-            # dominate a recency-weighted page forever, so it is dropped.
-            continue
-        published, estimated = stamped
-
-        items.append(
-            Item(
-                title=title,
-                url=link,
-                canonical_url=canonical,
-                source_id=source.id,
-                source_name=source.name,
-                platform=source.platform,
-                published_at=min(published, now),  # a feed whose clock runs ahead
-                source_weight=source.weight,
-                is_aggregator=source.is_aggregator,
-                time_is_estimated=estimated,
-                image_url=entry_image(entry),
-                description=entry_summary(entry),
-                native_categories={source.category} if source.category else set(),
-            )
-        )
-    return items
+    return _rss_items(parsed, source, datetime.now(timezone.utc))
 
 
 def fetch(cfg: Config) -> TierResult:
@@ -250,14 +390,37 @@ def fetch(cfg: Config) -> TierResult:
     failed: list[str] = []
     malformed: set[str] = set()
     empty: list[str] = []
+    health_by_id: dict[str, SourceHealth] = {}
     lock = threading.Lock()
+    checked_at = datetime.now(timezone.utc)
 
     def work(source: RssSource) -> None:
         try:
             got = _fetch_one(source, cfg, malformed, lock)
+        except MalformedDocument as exc:
+            with lock:
+                failed.append(source.id)
+                health_by_id[source.id] = source_health(
+                    source,
+                    [],
+                    checked_at,
+                    default_max_age_hours=cfg.default_source_max_age_hours,
+                    status_hint="malformed",
+                    reason_code="malformed_document",
+                )
+            log.warning("rss %s malformed: %s", source.id, exc)
+            return
         except Exception as exc:
             with lock:
                 failed.append(source.id)
+                health_by_id[source.id] = source_health(
+                    source,
+                    [],
+                    checked_at,
+                    default_max_age_hours=cfg.default_source_max_age_hours,
+                    status_hint="unavailable",
+                    reason_code="request_or_parse_failed",
+                )
             # Detail goes to the log, never to the public page: a forker may
             # have put a credential in a feed URL.
             log.warning("rss %s failed: %s", source.id, exc)
@@ -269,10 +432,25 @@ def fetch(cfg: Config) -> TierResult:
             # <pubDate>. Without this it looks identical to a slow news day.
             with lock:
                 empty.append(source.id)
+                health_by_id[source.id] = source_health(
+                    source,
+                    [],
+                    checked_at,
+                    default_max_age_hours=cfg.default_source_max_age_hours,
+                    status_hint="empty",
+                    reason_code="no_usable_items",
+                )
             log.warning("rss %s returned no usable items", source.id)
             return
         with lock:
             items.extend(got)
+            health_by_id[source.id] = source_health(
+                source,
+                got,
+                checked_at,
+                default_max_age_hours=cfg.default_source_max_age_hours,
+                status_hint="malformed" if source.id in malformed else "",
+            )
         log.info("rss %-16s %3d items", source.id, len(got))
 
     workers = min(cfg.fetch_workers, len(feeds))
@@ -280,7 +458,13 @@ def fetch(cfg: Config) -> TierResult:
         list(pool.map(work, feeds))
 
     if failed and len(failed) == len(feeds):
-        return TierResult(tier="rss", items=[], ok=False, note="all feeds unavailable")
+        return TierResult(
+            tier="rss",
+            items=[],
+            ok=False,
+            note="all feeds unavailable",
+            source_health=[health_by_id[s.id] for s in feeds],
+        )
 
     notes = []
     if failed:
@@ -289,4 +473,17 @@ def fetch(cfg: Config) -> TierResult:
         notes.append(f"{len(empty)} of {len(feeds)} feeds returned nothing usable")
     if malformed:
         notes.append(f"{len(malformed)} feeds malformed but salvaged")
-    return TierResult(tier="rss", items=items, ok=not notes, note="; ".join(notes))
+    statuses = [health_by_id[s.id].status for s in feeds]
+    stale = statuses.count("stale")
+    degraded_links = statuses.count("link_resolution_degraded")
+    if stale:
+        notes.append(f"{stale} of {len(feeds)} feeds stale")
+    if degraded_links:
+        notes.append(f"{degraded_links} Google News feeds retain non-corroborating links")
+    return TierResult(
+        tier="rss",
+        items=items,
+        ok=not notes,
+        note="; ".join(notes),
+        source_health=[health_by_id[s.id] for s in feeds],
+    )

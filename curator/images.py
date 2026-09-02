@@ -8,13 +8,11 @@ Two sources, cheapest first, and the order is the whole design:
      Handled in the RSS fetcher, not here.
 
   2. **`og:image` on the article.** Only for items the feed left without one.
-     We stream the response and stop as soon as the head ends, so the article
-     body is never parsed and nothing is stored. Being precise, because this is
-     the sort of promise that quietly becomes false: the final chunk read can
-     overlap the first bytes of the body, and those bytes are discarded
-     unparsed. Article TEXT is not fetched, not stored and not summarized. This
-     reads the one meta tag the publisher put there specifically so that links
-     to their story render with their picture.
+     The safe transport reads at most a configured prefix and the parser stops
+     at the end of the head. The prefix can overlap the first bytes of the body,
+     but those bytes are discarded unparsed and nothing is stored. Article text
+     is not retained or summarized. This reads the one meta tag the publisher
+     put there specifically so links to their story render with their picture.
 
 The image URL is HOTLINKED. Nothing is downloaded, resized, re-hosted or
 re-encoded, so the publisher keeps their referrer, their CDN and the ability to
@@ -40,21 +38,17 @@ Two failure modes learned by measurement, both encoded below:
 from __future__ import annotations
 
 import concurrent.futures as futures
-import ipaddress
 import json
 import logging
-import socket
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
-
-import requests
+from urllib.parse import urljoin
 
 from .models import Item
 from .normalize import safe_url
+from .sources import SafeHttpPolicy, SafeHttpTransport, SafeTransportError
 
 log = logging.getLogger(__name__)
 
@@ -86,73 +80,6 @@ DEFAULTS = {
 
 
 MAX_REDIRECTS = 4
-
-
-def is_public_host(url: str) -> bool:
-    """Does every address this URL resolves to sit on the public internet?
-
-    v1 never fetched a destination page, so this is new attack surface and it
-    gets a real gate rather than a comment. A feed we do not control now
-    supplies addresses that a CI runner will request, and the request aimed at
-    the runner's own network (`127.0.0.1`, `10.x`) or at the cloud metadata
-    endpoint (`169.254.169.254`) is the thing to refuse.
-
-    The name is RESOLVED, and EVERY address it resolves to must be global. A
-    literal-address check alone is not protection: `evil.example` pointing at
-    `169.254.169.254` passes a string test and fails this one. Resolution
-    failure is treated as "not public", because a name we cannot resolve is a
-    name we cannot vouch for.
-
-    Callers must also follow redirects MANUALLY and re-check each hop, since a
-    public address is free to redirect somewhere private. `fetch_image_meta`
-    does that.
-
-    The residual is a DNS rebind between this check and the connect, which
-    needs pinning the resolved address into the socket to close. That one is
-    recorded rather than half-solved: it is a race an attacker must win against
-    a request made from an ephemeral container on a public repository.
-    """
-    host = (urlsplit(url).hostname or "").strip("[]")
-    if not host:
-        return False
-    if host.lower() in ("localhost", "localhost.localdomain") or host.lower().endswith(".localhost"):
-        return False
-
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    else:
-        return address.is_global
-
-    # Not a canonical address, so it is either a real name or an address written
-    # in a form designed to slip past a check like this one. `2130706433`,
-    # `127.1`, `0x7f.1` and `0177.0.0.1` are all 127.0.0.1 to a C resolver and
-    # none of them parses as an IP above.
-    #
-    # `0177.0.0.1` is the one that proves the point: `getaddrinfo` returns
-    # 177.0.0.1 (global, so it would PASS) while a client applying octal rules
-    # connects to 127.0.0.1. Two parsers disagreeing is not a residual to
-    # document, it is a bypass. A real domain never ends in an all-numeric
-    # label, so requiring that is both cheap and complete.
-    last = host.rsplit(".", 1)[-1]
-    if not last or last.isdigit() or last.lower().startswith("0x"):
-        return False
-
-    try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, UnicodeError, ValueError):
-        return False
-    if not infos:
-        return False
-    for info in infos:
-        try:
-            resolved = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if not resolved.is_global:
-            return False
-    return True
 
 
 class _HeadImageParser(HTMLParser):
@@ -224,7 +151,7 @@ def fetch_image_meta(
     user_agent: str,
     timeout: float,
     max_bytes: int,
-    session: requests.Session | None = None,
+    transport: SafeHttpTransport | None = None,
 ) -> tuple[str | None, str]:
     """Read one article's head. Returns (image_url_or_None, outcome).
 
@@ -240,97 +167,78 @@ def fetch_image_meta(
                     ended. Those are facts about one moment, so they get the
                     short retry TTL rather than becoming permanent.
 
-    Redirects are followed MANUALLY, one hop at a time, re-checking that each
-    destination is public before the next request is made. `allow_redirects`
-    would have requests chase a hostile 302 into a private address before any
-    check could run, which is the difference between refusing to PARSE an
-    internal page and refusing to REQUEST it.
+    The shared safe transport resolves and pins each hop, validates the peer
+    and TLS before sending request bytes, follows redirects only after another
+    complete validation, and never inherits proxy or netrc configuration.
     """
-    get = (session or requests).get
     headers = {
-        "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en",
     }
+    selected = transport or SafeHttpTransport(
+        policy=SafeHttpPolicy(
+            total_timeout_seconds=timeout,
+            max_wire_bytes=max_bytes,
+            max_decoded_bytes=max_bytes,
+            max_redirects=MAX_REDIRECTS,
+            read_chunk_bytes=min(16_384, max_bytes),
+        )
+    )
+    if isinstance(selected, SafeHttpTransport):
+        base = selected.policy
+        bound = min(max_bytes, base.max_wire_bytes, base.max_decoded_bytes)
+        selected = selected.with_policy(
+            SafeHttpPolicy(
+                total_timeout_seconds=min(timeout, base.total_timeout_seconds),
+                max_wire_bytes=bound,
+                max_decoded_bytes=bound,
+                max_request_bytes=base.max_request_bytes,
+                max_header_bytes=base.max_header_bytes,
+                max_redirects=min(MAX_REDIRECTS, base.max_redirects),
+                max_content_encodings=base.max_content_encodings,
+                per_host_concurrency=base.per_host_concurrency,
+                read_chunk_bytes=min(base.read_chunk_bytes, bound),
+            )
+        )
+    try:
+        response = selected.get(
+            "image-meta",
+            url,
+            headers=headers,
+            allow_truncated_response=True,
+            user_agent=user_agent,
+        )
+    except SafeTransportError as exc:
+        log.debug("image fetch failed with %s", exc.reason_code)
+        return None, "error"
+    except Exception:
+        log.debug("image fetch failed")
+        return None, "error"
 
-    current = url
-    for hop in range(MAX_REDIRECTS + 1):
-        if not is_public_host(current):
-            log.warning("image fetch refused, non-public destination (hop %d): %s", hop, url)
-            return None, "error"
-        try:
-            resp = get(current, timeout=timeout, stream=True, allow_redirects=False, headers=headers)
-        except Exception as exc:
-            log.debug("image fetch failed for %s: %s", current, exc)
-            return None, "error"
+    # A block page is not an article. Parsing a 403 attaches the publisher's
+    # generic "you are blocked" artwork to a real story.
+    if response.status_code != 200:
+        log.debug("image fetch got HTTP %s", response.status_code)
+        return None, "error"
 
-        try:
-            if resp.is_redirect or resp.is_permanent_redirect:
-                location = resp.headers.get("Location")
-                if not location:
-                    return None, "error"
-                # Resolve relative redirects against the hop we just made.
-                current = urljoin(current, location)
-                if safe_url(current) is None:
-                    log.debug("image fetch redirect to an unsupported scheme: %s", url)
-                    return None, "error"
-                continue
+    ctype = (response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if ctype and not (
+        ctype.endswith("/html") or ctype.endswith("+xml") or ctype == "text/plain"
+    ):
+        return None, "none"
 
-            # A block page is not an article. Parsing a 403 attaches the
-            # publisher's generic "you are blocked" artwork to a real story.
-            if resp.status_code != 200:
-                log.debug("image fetch got HTTP %s for %s", resp.status_code, current)
-                return None, "error"
-
-            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            if ctype and not (ctype.endswith("/html") or ctype.endswith("+xml") or ctype == "text/plain"):
-                # A PDF or an image will never declare an og:image. Definitive.
-                return None, "none"
-
-            buf = bytearray()
-            head_ended = False
-            truncated = False
-            deadline = time.monotonic() + timeout
-            try:
-                for chunk in resp.iter_content(16384):
-                    # Trim BEFORE appending, so the cap is a real ceiling rather
-                    # than a ceiling plus one chunk.
-                    room = max_bytes - len(buf)
-                    if room <= 0:
-                        truncated = True
-                        break
-                    buf.extend(chunk[:room])
-                    # The window exceeds one chunk, so a sentinel split across a
-                    # chunk boundary is still found.
-                    if b"</head>" in bytes(buf[-24576:]).lower() or b"<body" in bytes(buf[-24576:]).lower():
-                        head_ended = True
-                        break
-                    if len(buf) >= max_bytes:
-                        truncated = True
-                        break
-                    if time.monotonic() > deadline:
-                        # `timeout` is per read, not per transfer, so a server
-                        # dripping bytes below it would hold this worker open
-                        # indefinitely. This is the total-transfer deadline.
-                        log.debug("image stream exceeded its transfer deadline: %s", current)
-                        truncated = True
-                        break
-            except Exception as exc:
-                log.debug("image stream failed for %s: %s", current, exc)
-                return None, "error"
-
-            markup = bytes(buf).decode(resp.encoding or "utf-8", errors="replace")
-            image = parse_image_meta(markup, current)
-            if image:
-                return image, "ok"
-            # Reaching the end of the head and finding nothing is a real answer.
-            # Being cut off before it is not, so it must not be cached as one.
-            return None, "none" if head_ended and not truncated else "error"
-        finally:
-            resp.close()
-
-    log.debug("image fetch exceeded %d redirects: %s", MAX_REDIRECTS, url)
-    return None, "error"
+    payload = response.body[:max_bytes]
+    lowered = payload.lower()
+    head_ended = b"</head>" in lowered or b"<body" in lowered
+    # Exactly hitting the cap without reaching the end of the head is not a
+    # definitive miss. SafeHttpTransport has already enforced the same cap on
+    # both compressed and decoded bytes.
+    truncated = response.body_truncated and not head_ended
+    markup = payload.decode("utf-8", errors="replace")
+    image = parse_image_meta(markup, response.url)
+    if image:
+        return image, "ok"
+    return None, "none" if head_ended and not truncated else "error"
 
 
 class ImageCache:
@@ -465,6 +373,7 @@ def enrich(
     *,
     user_agent: str,
     config: dict | None = None,
+    transport: SafeHttpTransport | None = None,
 ) -> dict[str, int]:
     """Attach a preview image to every item that does not already have one.
 
@@ -546,27 +455,26 @@ def enrich(
 
     started = time.monotonic()
 
-    # One Session PER THREAD, not one shared. `requests.Session` is not
-    # documented as thread-safe, and sharing one across a pool races on the
-    # cookie jar and the redirect state. A thread-local keeps connection reuse
-    # (the reason to want a session at all) without the shared mutable state.
-    local = threading.local()
-    sessions: list[requests.Session] = []
-    sessions_lock = threading.Lock()
+    selected_transport = transport or SafeHttpTransport(
+        policy=SafeHttpPolicy(
+            total_timeout_seconds=timeout,
+            max_wire_bytes=max_bytes,
+            max_decoded_bytes=max_bytes,
+            per_host_concurrency=workers,
+            read_chunk_bytes=min(16_384, max_bytes),
+        )
+    )
 
     def work(key: str) -> tuple[str, str | None, str]:
-        session = getattr(local, "session", None)
-        if session is None:
-            session = local.session = requests.Session()
-            # Kept so the `finally` below can close every one. The thread-local
-            # itself is unreachable from here once the pool threads are gone.
-            with sessions_lock:
-                sessions.append(session)
         # Ask the publisher for the address they actually published, not our
         # normalized comparison key, which has had tracking parameters stripped.
         url = pending[key][0].url
         image, outcome = fetch_image_meta(
-            url, user_agent=user_agent, timeout=timeout, max_bytes=max_bytes, session=session
+            url,
+            user_agent=user_agent,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            transport=selected_transport,
         )
         return key, image, outcome
 
@@ -619,7 +527,4 @@ def enrich(
         # which is what makes the total worst case "budget plus one request"
         # rather than "budget plus however long the slowest server feels like".
         pool.shutdown(wait=False, cancel_futures=True)
-        for session in sessions:
-            session.close()
-
     return stats
