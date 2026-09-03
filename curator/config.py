@@ -2,7 +2,7 @@
 
 Fails loudly, with messages aimed at a human editing a YAML file. A config typo
 that silently produces a wrong page is the worst outcome for a tool that runs
-unattended every hour.
+unattended every day.
 
 The specific trap this guards: `keywords: AI` (a string, not a list) used to be
 iterated character by character into `["A", "I"]`, which quietly turned the page
@@ -602,7 +602,7 @@ def load_sources(path: Path) -> dict[str, Any]:
     # middle of a scheduled run or, worse, a silent coercion nobody notices.
     for section, keys in (
         ("ranking", ("recency_half_life_hours", "weight_recency", "weight_keyword",
-                     "weight_source", "weight_echo", "echo_max_sources",
+                     "weight_source", "weight_echo", "weight_interest", "echo_max_sources",
                      "title_lead_chars", "title_lead_bonus", "native_source_score")),
         ("dedup", ("title_similarity_threshold", "time_bucket_hours")),
         ("hackernews", ("weight", "min_points_ranked", "hits_per_page", "max_requests",

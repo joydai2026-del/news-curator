@@ -5,7 +5,7 @@ Greenfield: nothing in ``curator/sources/`` persists a poll cursor today
 module is the first concrete ``CheckpointStore`` for
 ``SourceCheckpoint`` (``curator/contracts/source_plugin.py``).
 
-The hourly collector runs inside a GitHub Actions job with no database, so the
+The daily collector runs inside a GitHub Actions job with no database, so the
 first durable backend is a JSON artifact file handed between runs, borrowing
 the shape of the newsletter lane's watermark (``curator/newsletter/state.py``):
 advance only after settlement, atomic write via temp file + rename, tolerate a

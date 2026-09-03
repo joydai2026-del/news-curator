@@ -4,7 +4,7 @@ name: Curate
 #
 # Two honest notes about the schedule:
 #   * GitHub runs cron on a best-effort basis and delays or drops runs under
-#     load. The page therefore says "scheduled hourly" and shows the real build
+#     load. The page therefore says "scheduled daily" and shows the real build
 #     time rather than claiming a guarantee.
 #   * GitHub DISABLES scheduled workflows in a public repo after 60 days with no
 #     repository activity, and emails the owner. If the page goes stale, check
@@ -13,7 +13,8 @@ on:
   schedule:
     # Off the hour on purpose. Minute 0 is the busiest slot on the shared cron
     # pool and the most likely to be delayed.
-    - cron: "17 * * * *"
+    - cron: "17 9 * * *"
+      timezone: "America/New_York"
   workflow_dispatch:
   push:
     branches: [main]
@@ -246,9 +247,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment: personalization
     needs: [source-snapshot, newsletter, translation]
-    # The lane must never take the ordinary source tabs down with it: build runs
-    # whatever happened above, and a missing artifact just means a dark lane.
+    # Build still reports failures from upstream jobs. Newsletter and
+    # translation artifacts are optional. Saved-interest ranking is enabled
+    # explicitly and stays inside this job so no private-derived score artifact
+    # is exposed through the public repository's Actions downloads.
     if: ${{ always() }}
     permissions:
       contents: read
@@ -275,11 +279,37 @@ jobs:
           python scripts/source_snapshot.py validate --root .
           --snapshot "$RUNNER_TEMP/source-snapshot.json"
 
+      - name: Materialize saved-interest ranking
+        if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}
+        env:
+          NEWS_CURATOR_OWNER_USER_ID: ${{ secrets.NEWS_CURATOR_OWNER_USER_ID }}
+          NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
+          NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
+        run: >
+          python scripts/build_interest_ranking.py build --root .
+          --source-snapshot "$RUNNER_TEMP/source-snapshot.json"
+          --output "$RUNNER_TEMP/interest-ranking.json"
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         continue-on-error: true
         with:
           name: newsletter-artifact
           path: .
+
+      - name: Validate saved-interest ranking
+        env:
+          REQUIRE_PERSONALIZATION: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/interest-ranking.json" ]; then
+            python scripts/build_interest_ranking.py validate --root . \
+              --source-snapshot "$RUNNER_TEMP/source-snapshot.json" \
+              --input "$RUNNER_TEMP/interest-ranking.json"
+          elif [ "$REQUIRE_PERSONALIZATION" = "true" ]; then
+            echo "saved-interest ranking artifact is required on main" >&2
+            exit 1
+          else
+            echo "saved-interest ranking disabled for this build"
+          fi
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         continue-on-error: true
@@ -356,13 +386,18 @@ jobs:
       - name: Build the page
         run: |
           translation_args=()
+          interest_args=()
           if [ -f "$RUNNER_TEMP/validated-translation.json" ]; then
             translation_args=(--translation-artifact "$RUNNER_TEMP/validated-translation.json")
+          fi
+          if [ -f "$RUNNER_TEMP/interest-ranking.json" ]; then
+            interest_args=(--interest-ranking-artifact "$RUNNER_TEMP/interest-ranking.json")
           fi
           python -m curator.pipeline --root . --out ./site --verbose \
             --source-snapshot "$RUNNER_TEMP/source-snapshot.json" \
             --health-report ./source-health.json \
             --newsletter-artifact ./newsletter_artifact.json \
+            "${interest_args[@]}" \
             "${translation_args[@]}"
 
       - name: Report source freshness

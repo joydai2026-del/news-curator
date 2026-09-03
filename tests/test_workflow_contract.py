@@ -74,6 +74,14 @@ def test_curate_push_paths_cover_every_runtime_surface() -> None:
     assert {"curator/**", "scripts/**", "static/**"}.issubset(paths)
 
 
+def test_schedule_produces_one_daily_digest_in_new_york() -> None:
+    workflow = _workflow(CURATE_PATH)
+    trigger = workflow.get("on") or workflow.get(True)
+    assert isinstance(trigger, dict)
+    schedule = trigger.get("schedule")
+    assert schedule == [{"cron": "17 9 * * *", "timezone": "America/New_York"}]
+
+
 def test_health_reporting_runs_after_a_failed_build_without_masking_it():
     step = _step_named(_jobs()["build"], "Report source freshness")
     assert step["if"] == "${{ always() }}"
@@ -92,15 +100,15 @@ def test_rendered_newsletter_privacy_assertion_remains_intact():
         assert locked in run
 
 
-def test_every_secret_job_is_main_only_environment_bound_and_read_only() -> None:
+def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
     jobs = _jobs()
     secret_jobs = {
         name
         for name, job in jobs.items()
         if "${{ secrets." in yaml.safe_dump(job, sort_keys=True)
     }
-    assert secret_jobs == {"newsletter", "translation"}
-    for name in secret_jobs:
+    assert secret_jobs == {"newsletter", "build", "translation"}
+    for name in ("newsletter", "translation"):
         job = jobs[name]
         condition = str(job.get("if", ""))
         assert "github.ref == 'refs/heads/main'" in condition
@@ -110,6 +118,14 @@ def test_every_secret_job_is_main_only_environment_bound_and_read_only() -> None
         assert permissions.get("contents") == "read"
         assert "pages" not in permissions
         assert all("cache" not in step.get("with", {}) for step in _steps(job))
+    build = jobs["build"]
+    assert build["permissions"] == {"contents": "read"}
+    assert _environment_name(build) == "personalization"
+    materialize = _step_named(build, "Materialize saved-interest ranking")
+    assert materialize["if"] == (
+        "${{ github.ref == 'refs/heads/main' && "
+        "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}"
+    )
 
 
 def test_translation_is_dark_without_exact_enable_variable() -> None:
@@ -122,7 +138,7 @@ def test_translation_is_dark_without_exact_enable_variable() -> None:
 
 def test_secret_job_checkouts_never_persist_credentials() -> None:
     jobs = _jobs()
-    for name in ("newsletter", "translation"):
+    for name in ("newsletter", "build", "translation"):
         checkouts = _action_steps(jobs[name], "actions/checkout")
         assert len(checkouts) == 1
         assert checkouts[0].get("with") == {"persist-credentials": False}
@@ -173,6 +189,12 @@ def test_artifact_dependencies_are_bound_to_exact_jobs() -> None:
         "newsletter-artifact",
         "translation-artifact",
     }
+    all_uploads = [
+        step
+        for job in jobs.values()
+        for step in _action_steps(job, "actions/upload-artifact")
+    ]
+    assert "interest-ranking" not in yaml.safe_dump(all_uploads, sort_keys=True)
     state_uploads = [
         step for step in _action_steps(jobs["build"], "actions/upload-artifact")
         if step["with"]["name"] == "repository-state"
@@ -262,6 +284,41 @@ def test_one_source_snapshot_drives_translation_and_publication() -> None:
     }
     build_command = str(_step_named(jobs["build"], "Build the page")["run"])
     assert '--source-snapshot "$RUNNER_TEMP/source-snapshot.json"' in build_command
+    assert '--interest-ranking-artifact "$RUNNER_TEMP/interest-ranking.json"' in build_command
+
+
+def test_personalization_scores_never_leave_the_build_job() -> None:
+    job = _jobs()["build"]
+    step = _step_named(job, "Materialize saved-interest ranking")
+    assert step["env"] == {
+        "NEWS_CURATOR_OWNER_USER_ID": "${{ secrets.NEWS_CURATOR_OWNER_USER_ID }}",
+        "NEWS_CURATOR_SUPABASE_SECRET_KEY": "${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}",
+        "NEWS_CURATOR_SUPABASE_URL": "${{ vars.NEWS_CURATOR_SUPABASE_URL }}",
+    }
+    command = str(step["run"])
+    assert "python scripts/build_interest_ranking.py build" in command
+    assert '--source-snapshot "$RUNNER_TEMP/source-snapshot.json"' in command
+    assert '--output "$RUNNER_TEMP/interest-ranking.json"' in command
+    assert step["if"] == (
+        "${{ github.ref == 'refs/heads/main' && "
+        "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}"
+    )
+    workflow = CURATE_PATH.read_text(encoding="utf-8")
+    assert "name: interest-ranking-artifact" not in workflow
+
+
+def test_enabled_main_build_requires_the_interest_ranking_file() -> None:
+    step = _step_named(_jobs()["build"], "Validate saved-interest ranking")
+    assert step["env"] == {
+        "REQUIRE_PERSONALIZATION": (
+            "${{ github.ref == 'refs/heads/main' && "
+            "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}"
+        )
+    }
+    command = str(step["run"])
+    assert "python scripts/build_interest_ranking.py validate" in command
+    assert 'if [ "$REQUIRE_PERSONALIZATION" = "true" ]' in command
+    assert "saved-interest ranking artifact is required on main" in command
 
 
 def test_translation_validators_accept_the_domain_google_model_resource() -> None:

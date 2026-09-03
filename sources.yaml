@@ -72,7 +72,7 @@ settings:
   # override it without changing the global 48-hour display window.
   default_source_max_age_hours: 48
   # A collected snapshot may cross job boundaries, but cannot be replayed into
-  # a later hourly cycle. Two hours covers the bounded workflow jobs plus a
+  # a later daily cycle. Two hours covers the bounded workflow jobs plus a
   # practical artifact handoff delay.
   source_snapshot_max_age_seconds: 7200
   # Per-request network timeout, seconds.
@@ -94,6 +94,9 @@ ranking:
   weight_recency: 1.0
   weight_keyword: 0.6
   weight_source: 0.4
+  # Saved interests may reorder matching stories, but recency remains the
+  # dominant signal and Trending keeps its source-native order.
+  weight_interest: 0.8
   # Bonus when 2+ DISTINCT platforms carried the same LINK. Fuzzy title matches
   # never feed this, so the "N sources" badge means what it says.
   weight_echo: 0.5
@@ -134,7 +137,7 @@ dedup:
 #
 # Answers are cached in image_cache.json, committed to the repo, keyed by
 # canonical URL. The answer for a given article does not change, the job runs
-# every hour, and a committed file is both durable and auditable.
+# every day, and a committed file is both durable and auditable.
 #
 # Nothing is downloaded, resized or re-hosted. The publisher keeps their CDN,
 # their referrer, and the ability to change or withdraw the image at any time.
@@ -335,7 +338,7 @@ newsletter:
   adapters: [tldr, therundown, bensbites, theneuron, milkroad]
   max_items: 50        # the lane's own cap; category caps are untouched
   max_age_hours: 48    # same retention window as everything else
-  max_messages: 30     # message BODIES read per hourly run, oldest first
+  max_messages: 30     # message BODIES read per daily run, oldest first
   overlap_hours: 6     # poll window overlaps the committed watermark
   request_timeout: 20
   id_budget: 500       # message ids listed per run (pagination ceiling)

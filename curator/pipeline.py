@@ -20,6 +20,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Mapping
 
 from .config import Category, Config, ConfigError, RssSource, load_config
 from .dedup import dedupe
@@ -299,6 +300,7 @@ def build(
     now: datetime,
     *,
     newsletter_on: bool = False,
+    interest_scores: Mapping[str, float] | None = None,
 ) -> dict[str, list[Item]]:
     return build_ranked_language(
         cfg,
@@ -306,6 +308,7 @@ def build(
         now,
         language="en",
         newsletter_on=newsletter_on,
+        interest_scores=interest_scores,
     )
 
 
@@ -316,6 +319,7 @@ def build_ranked_language(
     *,
     language: str,
     newsletter_on: bool = False,
+    interest_scores: Mapping[str, float] | None = None,
 ) -> dict[str, list[Item]]:
     """Rank authoritative originals within one language boundary."""
 
@@ -357,7 +361,13 @@ def build_ranked_language(
     newsletter_cap = int(cfg.newsletter.get("max_items", 50) or 50)
     ranked: dict[str, list[Item]] = {}
     for category in categories:
-        items = rank_items(buckets[category.name], category, now, cfg.ranking)
+        items = rank_items(
+            buckets[category.name],
+            category,
+            now,
+            cfg.ranking,
+            interest_scores=interest_scores,
+        )
         # The lane has its own cap and no effect on category caps.
         cap = newsletter_cap if category.id == NEWSLETTER_CATEGORY_ID else cfg.max_items_per_topic
         ranked[category.name] = items[:cap]
@@ -471,6 +481,12 @@ def main(argv: list[str] | None = None) -> int:
         "secrets-scoped fetch job; absent means the lane is dark this run",
     )
     parser.add_argument(
+        "--interest-ranking-artifact",
+        type=Path,
+        default=None,
+        help="credential-free saved-interest scores bound to the supplied source snapshot",
+    )
+    parser.add_argument(
         "--translation-artifact",
         type=Path,
         default=None,
@@ -502,6 +518,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     now = datetime.now(timezone.utc)
+    snapshot = None
+    snapshot_configuration_digest = None
     if args.source_snapshot:
         from .source_snapshot import (
             SourceSnapshotError,
@@ -510,9 +528,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         try:
+            snapshot_configuration_digest = snapshot_config_digest(cfg)
             snapshot = load_source_snapshot(
                 args.source_snapshot,
-                expected_configuration_digest=snapshot_config_digest(cfg),
+                expected_configuration_digest=snapshot_configuration_digest,
                 current_time=now,
                 max_age_seconds=cfg.source_snapshot_max_age_seconds,
             )
@@ -526,6 +545,36 @@ def main(argv: list[str] | None = None) -> int:
         log.info("source snapshot loaded (%s)", snapshot.content_digest[:12])
     else:
         results = collect(cfg, offline=args.offline)
+
+    interest_scores: Mapping[str, float] = {}
+    interest_meta = None
+    if args.interest_ranking_artifact:
+        if snapshot is None or snapshot_configuration_digest is None:
+            log.error("saved-interest ranking requires an explicit source snapshot")
+            return 2
+        from .personalization.ranking import (
+            InterestArtifactError,
+            load_interest_artifact,
+            ranking_config_digest,
+            story_key,
+        )
+
+        allowed_story_keys = {
+            story_key(item)
+            for result in snapshot.results
+            for item in result.items
+        }
+        try:
+            interest_meta = load_interest_artifact(
+                args.interest_ranking_artifact,
+                expected_source_snapshot_digest=snapshot.content_digest,
+                expected_configuration_digest=ranking_config_digest(cfg),
+                allowed_story_keys=allowed_story_keys,
+            )
+        except InterestArtifactError:
+            log.error("saved-interest ranking artifact invalid; refusing an unpersonalized build")
+            return 2
+        interest_scores = interest_meta.scores
 
     # The newsletter lane arrives pre-fetched as an artifact from its own
     # secrets-scoped job. A missing or unreadable artifact is a dark lane and
@@ -551,14 +600,40 @@ def main(argv: list[str] | None = None) -> int:
             log.exception("source health report could not be written")
             return 2
 
-    ranked = build(cfg, results, now, newsletter_on=not newsletter_meta.get("dark", True))
-    ranked_zh = build_ranked_language(cfg, results, now, language="zh")
+    newsletter_on = not newsletter_meta.get("dark", True)
+    if interest_meta is not None:
+        from .personalization.ranking import measure_ranking_impact
+
+        ordinary = build(cfg, results, now, newsletter_on=newsletter_on)
+        ordinary_zh = build_ranked_language(cfg, results, now, language="zh")
+    ranked = build(
+        cfg,
+        results,
+        now,
+        newsletter_on=newsletter_on,
+        interest_scores=interest_scores,
+    )
+    ranked_zh = build_ranked_language(
+        cfg,
+        results,
+        now,
+        language="zh",
+        interest_scores=interest_scores,
+    )
+    if interest_meta is not None:
+        impact_en = measure_ranking_impact(ordinary, ranked)
+        impact_zh = measure_ranking_impact(ordinary_zh, ranked_zh)
+        order_changed = bool(impact_en["moved_rows"] + impact_zh["moved_rows"])
+        log.info(
+            "saved-interest ranking applied; published order changed: %s",
+            "yes" if order_changed else "no",
+        )
     visible = sum(len(v) for v in ranked.values())
     visible_zh = sum(len(v) for v in ranked_zh.values())
 
     # Preview images are resolved AFTER ranking and truncation, so the only
     # article heads fetched are the ones a reader will actually see. That is
-    # what keeps an hourly job bounded: the ceiling is the union of capped EN
+    # what keeps a daily job bounded: the ceiling is the union of capped EN
     # and ZH backend rows, not the number of headlines collected. Native rows
     # in either language are enriched before localization, so a translated
     # projection inherits the image attached to its authoritative original.
@@ -684,7 +759,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # The cursor moves ONLY here, after the page is on disk and the publish
     # guard passed. A run that fetched mail and then died re-reads that mail
-    # next hour (the overlap window and the salted hashes make that harmless);
+    # next run (the overlap window and the salted hashes make that harmless);
     # a run that published moves the watermark so mail is never re-shown.
     if newsletter_meta.get("ok") and not newsletter_meta.get("dark") and newsletter_meta.get("watermark"):
         from .newsletter import state as newsletter_state
@@ -700,7 +775,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             log.info("newsletter cursor advanced to %s", watermark.isoformat())
         except (ValueError, OSError) as exc:
-            # A cursor that failed to advance means one hour of re-read mail,
+            # A cursor that failed to advance means one run of re-read mail,
             # not lost mail. Say so and finish the run as a success.
             log.warning("newsletter cursor not advanced (%s)", type(exc).__name__)
     return 0

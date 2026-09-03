@@ -8,9 +8,11 @@ You have topics you care about but don't want to actively track. Write the
 keywords down once. A static page then keeps itself up to date with the latest
 things published about them, most worthwhile first.
 
-No server, no database, no account. A scheduled GitHub Action fetches, filters,
-ranks and renders a single HTML file, and GitHub Pages serves it. Running it
-costs nothing.
+The public page needs no account and no application server. A scheduled GitHub
+Action fetches, filters, ranks and renders static files for GitHub Pages.
+Supabase stores the owner's private saved interests; a secret-scoped build step turns
+them into ranking scores without putting the saved terms or owner identity in
+the published site.
 
 ---
 
@@ -61,7 +63,7 @@ Both halves matter, and they catch different stories:
 
 ## Adding a topic or keyword
 
-You do not need a developer, a checkout, or an account system.
+You do not need a developer, a checkout, or a separate News Curator account.
 
 1. Click **"Add a topic or keyword"** in the page footer. It opens
    [`topics.yaml`](topics.yaml) in GitHub's own editor.
@@ -199,7 +201,7 @@ weaker than direct ingestion and slower by hours. It is not a substitute.
 
 ## How ranking works
 
-Five signals, all tunable in `sources.yaml` under `ranking:`.
+Six signals, all tunable in `sources.yaml` under `ranking:`.
 
 | Signal | What it does |
 |---|---|
@@ -207,7 +209,13 @@ Five signals, all tunable in `sources.yaml` under `ranking:`.
 | **Keyword strength** | How many of a topic's keywords hit, plus a bonus when one appears near the front of the headline. |
 | **Source weight** | Your trust dial, per source. Raise the outlets you rate. |
 | **Cross-source echo** | A bonus when two or more distinct platforms carried the **same link**. |
-| **Curated source** | A story from a category's own feed with no keyword hit scores `native_source_score` (0.5) rather than zero, because the feed being single-subject is real evidence. Below a genuine keyword hit on purpose. |
+| **Curated source** | A story from a category's own feed with no keyword hit scores `native_source_score` (0.4) rather than zero, because the feed being single-subject is real evidence. Below a genuine keyword hit on purpose. |
+| **Saved interest** | An owner-only headline match can lift a story. The build receives URL hashes and scores only, never the saved terms or owner identity. |
+
+When personalization is enabled, the daily workflow binds saved-interest scores
+to the exact source snapshot it publishes. A missing, stale, or malformed score
+artifact then blocks the main build instead of quietly publishing an
+unpersonalized edition.
 
 Deduplication runs in two passes: identical canonical URL (certain), then
 similar titles (a guess). Only the certain pass feeds the "N sources" badge, so
@@ -260,7 +268,7 @@ or summarized by a machine. There is no LLM anywhere in this pipeline.
   by eye, and `exclude` exists for when it is not enough.
 - That the page is exactly an hour old. GitHub delays and drops scheduled runs
   under load, and disables them entirely after 60 days of repository inactivity.
-  The page shows its real build time and says so when that is over three hours.
+  The page shows its real build time and says so when that is over 27 hours.
 
 Rows marked **via** come from an aggregator (Hacker News, Reddit, Lobsters),
 where the headline was written by whoever submitted the link rather than by the
@@ -310,7 +318,7 @@ whichever of two places is cheaper:
 
 Answers are cached in `image_cache.json`, committed to the repo and keyed by
 canonical URL. A found image and a definitive "this page declares none" are
-both kept, so an hourly job does not ask the same question again: a live run
+both kept, so a daily job does not ask the same question again: a live run
 resolved 157 of 180 rows, and the next run fetched nothing. A refusal or a
 timeout is not definitive, so it is retried after 24 hours, and a link that
 stops appearing is pruned after 45 days and would be looked up again if it came
@@ -347,7 +355,7 @@ curator/
   normalize.py       title cleaning, URL safety
   filter.py          keyword matching, and category-native membership
   dedup.py           canonical URL, then title similarity
-  rank.py            the five signals
+  rank.py            the six signals
   images.py          og:image parsing, and the committed cache
   render.py          the static page: cards, tabs, search, unfold
   pipeline.py        CLI entry point
@@ -358,7 +366,7 @@ tests/                     the suite, network blocked in conftest
 ```
 
 Three dependencies, all pinned: `requests`, `feedparser`, `PyYAML`. A tool that
-runs unattended every hour should have a dependency surface small enough to
+runs unattended every day should have a dependency surface small enough to
 audit.
 
 ```bash

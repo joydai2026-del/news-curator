@@ -162,7 +162,7 @@ class TestImageCache:
 
     def test_a_clean_no_image_answer_is_a_hit(self):
         # "This page declares no image" is a real answer and must stop us asking
-        # again every hour for the rest of the article's life.
+        # again every day for the rest of the article's life.
         cache = ImageCache(None)
         cache.put("k", None, "none", NOW)
         hit, image = cache.get("k", NOW, retry_error_after_hours=24)
@@ -184,8 +184,8 @@ class TestImageCache:
         assert ImageCache(None).get("nope", NOW, retry_error_after_hours=24)[0] is False
 
     def test_save_is_a_no_op_when_nothing_changed(self, tmp_path):
-        # An hourly job that rewrites an unchanged file makes an empty commit
-        # every hour forever.
+        # A daily job that rewrites an unchanged file makes an empty commit
+        # every day forever.
         path = tmp_path / "c.json"
         cache = ImageCache(path)
         cache.put("k", None, "none", NOW)

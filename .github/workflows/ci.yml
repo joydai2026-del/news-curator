@@ -61,7 +61,7 @@ jobs:
           from pathlib import Path
 
           html = Path("site/index.html").read_text(encoding="utf-8")
-          for needed in ("<html", "</html>", "News Curator", "scheduled hourly"):
+          for needed in ("<html", "</html>", "News Curator", "scheduled daily"):
               if needed not in html:
                   sys.exit(f"FAIL: rendered page missing {needed!r}")
           print(f"OK: offline render produced {len(html)} bytes of valid page")

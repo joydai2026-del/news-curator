@@ -3,14 +3,154 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from curator.config import load_config
 from curator.localization import story_id_for_item, write_translation_artifact
 from curator.models import Item, TierResult, TranslationRecord
+from curator.personalization.ranking import (
+    InterestProfile,
+    build_interest_artifact,
+    ranking_config_digest,
+)
 from curator.pipeline import main
-from curator.source_snapshot import snapshot_config_digest, write_source_snapshot
+from curator.source_snapshot import (
+    load_source_snapshot,
+    snapshot_config_digest,
+    write_source_snapshot,
+)
 from curator.translation import TranslationInput
+
+
+def test_pipeline_applies_only_snapshot_bound_interest_scores(tmp_path):
+    (tmp_path / "topics.yaml").write_text(
+        "categories:\n  - id: ai\n    name: AI\n    keywords: [AI]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "sources.yaml").write_text(
+        "settings: {max_age_hours: 48}\n"
+        "ranking: {weight_interest: 1.0}\n"
+        "sources: []\n"
+        "hackernews: {enabled: false}\n"
+        "images: {enabled: false}\n",
+        encoding="utf-8",
+    )
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    interested = Item(
+        title="AI agents release",
+        url="https://example.com/interested",
+        canonical_url="https://example.com/interested",
+        source_id="publisher",
+        source_name="Publisher",
+        published_at=now - timedelta(hours=8),
+    )
+    baseline = Item(
+        title="AI market update",
+        url="https://example.com/baseline",
+        canonical_url="https://example.com/baseline",
+        source_id="publisher",
+        source_name="Publisher",
+        published_at=now - timedelta(hours=1),
+    )
+    cfg = load_config(tmp_path)
+    snapshot_path = tmp_path / "source-snapshot.json"
+    write_source_snapshot(
+        (TierResult("sources", [interested, baseline], True),),
+        snapshot_path,
+        generated_at=now,
+        configuration_digest=snapshot_config_digest(cfg),
+    )
+    snapshot = load_source_snapshot(snapshot_path)
+    artifact = build_interest_artifact(
+        InterestProfile(1, ("AI agents",)),
+        [interested, baseline],
+        source_snapshot_digest=snapshot.content_digest,
+        configuration_digest=ranking_config_digest(cfg),
+        generated_at=now,
+    )
+    artifact_path = tmp_path / "interest-ranking.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    assert main(
+        [
+            "--root",
+            str(tmp_path),
+            "--out",
+            str(tmp_path / "site"),
+            "--source-snapshot",
+            str(snapshot_path),
+            "--interest-ranking-artifact",
+            str(artifact_path),
+        ]
+    ) == 0
+    projection = json.loads(
+        (tmp_path / "site/data/news-en.json").read_text(encoding="utf-8")
+    )
+    assert [row["title"] for row in projection["categories"][0]["items"]] == [
+        "AI agents release",
+        "AI market update",
+    ]
+
+
+def test_pipeline_rejects_interest_score_for_a_story_outside_snapshot(tmp_path):
+    (tmp_path / "topics.yaml").write_text(
+        "categories:\n  - id: ai\n    name: AI\n    keywords: [AI]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "sources.yaml").write_text(
+        "settings: {max_age_hours: 48}\n"
+        "sources: []\n"
+        "hackernews: {enabled: false}\n"
+        "images: {enabled: false}\n",
+        encoding="utf-8",
+    )
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    item = Item(
+        title="AI release",
+        url="https://example.com/in-snapshot",
+        canonical_url="https://example.com/in-snapshot",
+        source_id="publisher",
+        source_name="Publisher",
+        published_at=now,
+    )
+    cfg = load_config(tmp_path)
+    snapshot_path = tmp_path / "source-snapshot.json"
+    write_source_snapshot(
+        (TierResult("sources", [item], True),),
+        snapshot_path,
+        generated_at=now,
+        configuration_digest=snapshot_config_digest(cfg),
+    )
+    snapshot = load_source_snapshot(snapshot_path)
+    artifact = build_interest_artifact(
+        InterestProfile(1, ("outside",)),
+        [
+            Item(
+                title="Outside story",
+                url="https://example.com/outside",
+                canonical_url="https://example.com/outside",
+                source_id="publisher",
+                source_name="Publisher",
+                published_at=now,
+            )
+        ],
+        source_snapshot_digest=snapshot.content_digest,
+        configuration_digest=ranking_config_digest(cfg),
+        generated_at=now,
+    )
+    artifact_path = tmp_path / "interest-ranking.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    assert main(
+        [
+            "--root",
+            str(tmp_path),
+            "--source-snapshot",
+            str(snapshot_path),
+            "--interest-ranking-artifact",
+            str(artifact_path),
+        ]
+    ) == 2
 
 
 def test_chinese_only_snapshot_writes_both_backend_views_and_a_current_index(

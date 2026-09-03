@@ -18,7 +18,7 @@ Scope needed: https://www.googleapis.com/auth/gmail.readonly
 
 **Revocation is a status, never an exception.** If JJ revokes access, or the
 token is invalid, Google answers `invalid_grant`. That must darken this lane
-and leave a visible warning, not fail the hourly build of a page whose category
+and leave a visible warning, not fail the daily build of a page whose category
 tabs are fine. Every entry point here returns a `GmailResult` carrying a
 machine-readable `reason`; nothing escapes as a raised exception.
 
@@ -153,7 +153,7 @@ def build_query(senders: list[str], after: datetime) -> str:
 def _request(session: requests.Session, method: str, url: str, *, timeout: float, **kwargs):
     """One HTTP call with exactly one retry, and no leaky logging.
 
-    Retrying more than once against someone else's API on an hourly schedule
+    Retrying more than once against someone else's API on a daily schedule
     buys nothing: the next run is an hour away and will try again anyway.
     """
     last: Exception | None = None
@@ -366,7 +366,7 @@ def fetch(
         log.warning("gmail lane unavailable: %s", exc.reason)
         return GmailResult(ok=False, reason=exc.reason)
     except Exception as exc:
-        # A bug here darkens one lane. It does not take the hourly build down.
+        # A bug here darkens one lane. It does not take the daily build down.
         log.warning("gmail lane raised (%s)", type(exc).__name__)
         return GmailResult(ok=False, reason=API_ERROR)
     finally:

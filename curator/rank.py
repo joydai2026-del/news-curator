@@ -1,6 +1,6 @@
 """Scoring one item, for one topic, at one moment.
 
-Five terms, all weights in config. The function is pure and takes an explicit
+Six terms, all weights in config. The function is pure and takes an explicit
 `now`, so it can be tested without mocking the clock.
 
 Native popularity (Hacker News points) deliberately does NOT appear as a fifth
@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from typing import Mapping
 
 from .config import Category
 from .filter import is_native, match_position
 from .models import Item
+from .personalization.ranking import story_key
 
 
 def recency_score(item: Item, now: datetime, half_life_hours: float) -> float:
@@ -93,7 +95,14 @@ def echo_score(item: Item, *, max_sources: int) -> float:
     return min(1.0, (n - 1) / max(1, max_sources - 1))
 
 
-def score_item(item: Item, topic: Category, now: datetime, cfg: dict) -> float:
+def score_item(
+    item: Item,
+    topic: Category,
+    now: datetime,
+    cfg: dict,
+    *,
+    interest_score: float = 0.0,
+) -> float:
     rec = recency_score(item, now, float(cfg.get("recency_half_life_hours", 12.0)))
     kw = keyword_score(
         item,
@@ -112,10 +121,18 @@ def score_item(item: Item, topic: Category, now: datetime, cfg: dict) -> float:
         + float(cfg.get("weight_keyword", 0.6)) * kw
         + float(cfg.get("weight_source", 0.4)) * src
         + float(cfg.get("weight_echo", 0.5)) * echo
+        + float(cfg.get("weight_interest", 0.8)) * interest_score
     )
 
 
-def rank_items(items: list[Item], topic: Category, now: datetime, cfg: dict) -> list[Item]:
+def rank_items(
+    items: list[Item],
+    topic: Category,
+    now: datetime,
+    cfg: dict,
+    *,
+    interest_scores: Mapping[str, float] | None = None,
+) -> list[Item]:
     """Highest score first. Ties broken by recency, then title, so runs are stable."""
     if topic.id == "trending":
         # HN is the English Trending source and buzzing.cc is the Chinese one,
@@ -130,7 +147,18 @@ def rank_items(items: list[Item], topic: Category, now: datetime, cfg: dict) -> 
                 i.title,
             ),
         )
+    scores = interest_scores or {}
     return sorted(
         items,
-        key=lambda i: (-score_item(i, topic, now, cfg), -i.published_at.timestamp(), i.title),
+        key=lambda i: (
+            -score_item(
+                i,
+                topic,
+                now,
+                cfg,
+                interest_score=float(scores.get(story_key(i), 0.0)),
+            ),
+            -i.published_at.timestamp(),
+            i.title,
+        ),
     )

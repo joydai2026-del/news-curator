@@ -144,6 +144,12 @@ class TestSources:
         assert cfg.max_age_hours == 24
         assert cfg.rss[0].weight == 1.2
 
+    def test_interest_weight_is_validated_as_a_number(self, tmp_path):
+        self._topics(tmp_path)
+        write(tmp_path, "sources.yaml", "ranking:\n  weight_interest: heavy\nrss: []\n")
+        with pytest.raises(ConfigError, match="ranking.weight_interest"):
+            load_config(tmp_path)
+
     @pytest.mark.parametrize(
         "row",
         [

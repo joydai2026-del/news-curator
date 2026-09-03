@@ -26,6 +26,7 @@ source-health.json
 downloaded-state/
 downloaded-translation/
 repository-state/
+supabase/.temp/
 
 # Filled-in Worker config. The example file carries placeholders only; the real
 # copy holds the Access team name, the application audience tag, the private

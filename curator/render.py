@@ -14,10 +14,10 @@ this layout:
   * **Health is count AND state, separately.** A tier that returned ten items
     and then got rate-limited used to render as a reassuring "reddit: 10". It
     now renders as "Reddit: 10 items, degraded (rate-limited after 2/5)".
-  * **"Scheduled hourly", not "refreshes hourly".** GitHub delays and drops
+  * **"Scheduled daily", not "refreshes daily".** GitHub delays and drops
     scheduled runs under load, and disables them entirely after 60 days of
     repository inactivity. The page states the schedule and shows how old the
-    build actually is, and says so out loud when that is more than three hours.
+    build actually is, and says so out loud when that is more than 27 hours.
   * **The accuracy note is narrowed to what the code can actually prove.** We
     can promise the source handed us this headline, this description and this
     address at build time, and that aggregator headlines are labeled as such. We
@@ -352,7 +352,7 @@ JS = """
 })();
 """
 
-STALE_AFTER_HOURS = 3
+STALE_AFTER_HOURS = 27
 
 
 def _e(text: object) -> str:
@@ -400,7 +400,7 @@ def _accent_hues(slugs: list[str]) -> dict[str, int]:
     Position does both. Even spacing guarantees the maximum distance any set of
     categories can have from each other, and the order of `topics.yaml` is as
     stable as its contents. The cost is that adding a seventh category shifts
-    the other six, which on a page rebuilt hourly from a file edited a few times
+    the other six, which on a page rebuilt daily from a file edited a few times
     a year is not a cost anyone will notice.
     """
     count = len(slugs) or 1
@@ -788,7 +788,7 @@ def render_html(
 <div class="wrap">
 <header>
   <h1>{_e(site_name)}</h1>
-  <p class="sub">Built {_e(stamp)}<span class="dot">&middot;</span>scheduled hourly<span class="dot">&middot;</span>{total} stories{stale}</p>
+  <p class="sub">Built {_e(stamp)}<span class="dot">&middot;</span>scheduled daily<span class="dot">&middot;</span>{total} stories{stale}</p>
   <div class="tools">
     <nav aria-label="Categories">{''.join(chips)}</nav>
     <div class="find">

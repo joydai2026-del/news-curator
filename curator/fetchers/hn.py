@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 API = "https://hn.algolia.com/api/v1"
 HN_ITEM = "https://news.ycombinator.com/item?id="
 
-# A fork with fifty keywords should not fire two hundred requests every hour.
+# A fork with fifty keywords should not fire two hundred requests every day.
 # Two independent brakes, because a request cap alone does not bound TIME: 60
 # requests each hitting a 15-second timeout is 15 minutes, which is the whole
 # CI job budget. The wall-clock budget is the one that actually protects the run.
