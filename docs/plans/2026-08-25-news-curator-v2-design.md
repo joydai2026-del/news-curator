@@ -7,7 +7,6 @@
 
 This note preserves technical observations from a design session on
 2026-08-25. It has no scheduling or prioritization authority.
-
 ## Historical product shape
 
 The design explored a Discover-card news site with a responsive card grid,

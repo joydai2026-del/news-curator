@@ -23,5 +23,6 @@ Phase labels in contracts and receipts are historical implementation labels,
 not the milestone roadmap. Notion controls project order and done tests.
 
 Design mockups, research captures, plan reviews, handoffs, and anything
-describing the owner's private usage do not belong in this public repository.
-Files of those classes published before 2026-09-01 remain in public git history.
+describing the owner's private usage do not control planning. Clearly labeled
+historical design evidence may remain in the checked-in tree; private material
+and superseded artifacts remain recoverable through git history.
