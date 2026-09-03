@@ -2,6 +2,8 @@
 
 Keywords in, ranked fresh headlines out.
 
+Current plan: [Fall 2026 AI Sprint in Notion](https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2)
+
 You have topics you care about but don't want to actively track. Write the
 keywords down once. A static page then keeps itself up to date with the latest
 things published about them, most worthwhile first.
@@ -351,7 +353,7 @@ curator/
   pipeline.py        CLI entry point
   fetchers/          hn.py, rss.py, reddit.py
 scripts/probe_sources.py   verify every source yourself
-docs/plans/                the v1 spec, its adversarial review, and the v1.1 notes
+docs/plans/                clearly labeled historical implementation/design notes
 tests/                     the suite, network blocked in conftest
 ```
 

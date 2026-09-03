@@ -1,6 +1,11 @@
-# News Curator v1 — Spec
+# Historical implementation record: News Curator v1
 
-Status: draft for build
+> **Historical record only. This is not the current roadmap or definition of
+> done.** Its scope, success criteria, verification counts, and review notes
+> describe the v1 implementation at the recorded dates. The current plan lives
+> in [Notion](https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2).
+
+Status: historical v1 implementation record
 Date: 2026-08-25
 Repo: public from first commit
 
@@ -253,8 +258,8 @@ true.
    sanctioned route is a registered app with OAuth2 client-credentials, which
    raises the rate ceiling substantially. That requires each fork's owner to
    register their own app and add two repository secrets. v1 ships the
-   documentation for this in the README and a config hook for it; wiring the
-   OAuth flow is the first v2 item.
+   documentation for this in the README and a config hook for it. OAuth wiring
+   was not part of the recorded v1 implementation.
 
 **Bluntly: v1's Reddit coverage may be zero on GitHub Actions, and is good on a
 laptop.** The page is designed to be good without it either way. Anyone who
@@ -279,13 +284,13 @@ Hacker News or in the tech feeds within hours, and our cross-source echo signal
 direct ingestion and slower by hours. It is not a substitute and will not be
 described as one.
 
-**v2-if-a-source-exists.** Direct ingestion goes on the roadmap conditional on a
-source appearing that is affordable and permitted. Candidates worth re-checking
-later: a Nitter-style instance that is stable and permitted (none currently
-are), an official lower-tier API, or a user-supplied bearer token that a fork's
-owner provides for their own account. Not committed, not scheduled.
+**Historical v1 boundary.** Direct ingestion was not implemented. The record
+identified possible technical conditions that could change feasibility: a
+stable and permitted Nitter-style source, an affordable official API, or a
+user-supplied bearer token for a fork owner's own account. This observation does
+not schedule or prioritize that work.
 
-### 3.5 Tier summary as it will appear to a user
+### 3.5 Tier summary recorded for v1
 
 | Tier | Status | Auth | Reliability |
 |---|---|---|---|
@@ -718,12 +723,12 @@ The link is built from the repo URL and only rendered for `github.com` hosts,
 because `/edit/<branch>/<file>` is GitHub's route and would be a broken link
 anywhere else. A fork on another host gets instructions instead of a wrong link.
 
-**A v2 exists and was deliberately not built.** An issue template ("Add a
-keyword") plus an Action that parses the issue body, edits the YAML, opens a PR
-and closes the issue would let someone with no write access propose a keyword,
-and would give every change a conversation thread. It is worth building when
-there is a second person asking for keywords. Today there is one manager who has
-push access, and for her the editor link is strictly fewer steps.
+**Historical alternative not implemented in v1.** An issue template ("Add a
+keyword") plus an Action that parses the issue body, edits the YAML, opens a PR,
+and closes the issue could let someone without write access propose a keyword
+and give each change a conversation thread. The v1 record chose the GitHub
+editor link for its single manager. This is preserved as technical context, not
+as a recommendation or future work order.
 
 ## Sources: what shipped, and what did not
 
