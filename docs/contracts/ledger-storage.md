@@ -177,18 +177,20 @@ reason it is open, not blocking today.
   RLS is not needed while every caller is `authenticated`; revisit if a
   service-role caller is ever added that must check membership without its
   own row visibility.
-- **Only 9 of 22 owned contract classes have tables.** The rest land with
-  their own stores as later phase-4 slices ship (profile snapshots, search
-  indexes, public projections, mirrors' write path).
+- **Only 9 of 22 owned contract classes have tables.** The remaining classes
+  would need their own stores if implemented (profile snapshots, search
+  indexes, public projections, mirrors' write path). This gap records no
+  implementation order.
 - **No foreign key binds a row's `(actor_id, user_id)` to an `Actor` row.**
   There is no `actors` table yet; adding one and the FK is the identity
   adapter's job (SC-32), tracked separately from this ledger slice.
 - **`*_update_own` policies could re-attribute a row.** Any tenant member may
   `update ... set actor_id / actor_kind / user_id` after insert on the tables
   that allow `UPDATE` at all, rewriting the attribution these columns exist
-  to hold. Attribution-column immutability is a later trigger
-  (`check (actor_id = old.actor_id ...)` or an `on update` guard), scheduled
-  not blocked: today's schema has no live rows to re-attribute.
+  to hold. Attribution-column immutability would require a trigger
+  (`check (actor_id = old.actor_id ...)` or an `on update` guard). This is a
+  recorded technical gap, not scheduled work; today's schema has no live rows
+  to re-attribute.
 - **`Actor` remains constructible with `actor_kind: agent, user_id: null`.**
   Grade C: there is no persistence path for `Actor` yet (see the two items
   above), so this has no live blast radius to reproduce against.

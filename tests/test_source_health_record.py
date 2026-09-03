@@ -1106,7 +1106,7 @@ def test_multiple_partial_segments_mark_the_reason_once_not_twice():
 
 
 def test_the_fold_is_not_wired_into_the_production_collection_path_yet():
-    """The contract for the NEXT slice to flip. BOTH wiring routes are pinned.
+    """The current unwired boundary. BOTH possible wiring routes are pinned.
 
     ``fold_source_health`` sees the partial marker only when a caller passes
     ``note=``, and no production caller does. There are exactly two documented
@@ -1118,7 +1118,7 @@ def test_the_fold_is_not_wired_into_the_production_collection_path_yet():
       route B  call the fold inside ``curator.pipeline.collect``, while the
                ``SourceResult`` is still in hand
 
-    WHAT THE NEXT SLICE DELETES. Taking route A deletes the two ``row``
+    WHAT A ROUTE-A CHANGE DELETES. Taking route A deletes the two ``row``
     assertions below (``"note" not in row`` and the exact ten-key set). Taking
     route B deletes the two ``collect`` assertions below (no
     ``fold_source_health`` name and no ``.note`` read in the source of

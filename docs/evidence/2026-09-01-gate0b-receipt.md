@@ -38,7 +38,7 @@ Both legs confirm: no secret or credential value anywhere in the committed set, 
 
 Note: an earlier quoted result of "1150 passed, 14 skipped" used `-m "not network"`, which matches no registered marker and therefore ran the full suite. The CI-gate command above is the authoritative receipt.
 
-## Should-fix-later ledger (tracked, none block the commit)
+## Recorded non-blocking findings
 
 | ID | Where | Issue |
 |---|---|---|
@@ -53,4 +53,9 @@ Note: an earlier quoted result of "1150 passed, 14 skipped" used `-m "not networ
 
 ## Gate state
 
-GATE 0B SETTLED at the commit this receipt ships in. Next gates per the plan: 0a (private-workspace restore and source inventory) and 0c (collector compatibility matrix) in parallel, then contract freeze. Merging to `main` remains blocked until the public-projection guard decision is settled, because a `main` push on these paths triggers the public hourly deploy.
+GATE 0B SETTLED at the commit this receipt ships in. The receipt historically
+identified private-workspace restore, source inventory, a collector
+compatibility matrix, and contract freeze as unresolved work. It does not set
+their current priority or order. Merging the recorded change to `main` remained
+blocked until the public-projection guard decision was settled because a `main`
+push on those paths triggered the public hourly deploy.

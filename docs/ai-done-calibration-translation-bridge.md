@@ -1,12 +1,26 @@
-# Translation Bridge: AI-Done Calibration and Activation Gate
+# Dormant translation design and evidence: AI-Done calibration
 
-Status: **RED. Backend design is planned, not AI-calibrated or live-ready.**
+> **Dormant design and evidence only. This is not an active work plan or
+> activation schedule.** Translation is not part of M1 and must not be
+> scheduled unless the
+> [current Notion plan](https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2)
+> adds it.
 
-This document prevents deterministic implementation proof from being described as translation quality proof. Evidence is graded as follows: A is production evidence, B is source evidence, and C is unverified. Nothing below may be promoted without a matching receipt.
+Status: **DORMANT. No implementation or activation is authorized by this file.**
 
-## Required state sequence
+This document preserves technical design and evaluation evidence so deterministic
+implementation proof is not mistaken for translation quality proof. Evidence is
+graded as follows: A is production evidence, B is source evidence, and C is
+unverified. The gates below become relevant only if Notion schedules translation;
+this document does not set project order.
 
-| State | Meaning | Current state |
+All states, blockers, limits, and proposed actions below are a historical
+snapshot recorded on **2026-09-01**. They are not claims about the current code
+or cloud state.
+
+## Historical proposed state sequence
+
+| State | Meaning | State recorded 2026-09-01 |
 |---|---|---|
 | Implemented | Code and migration exist. | RED |
 | Locally proven | Deterministic suites and local rehearsals have dated receipts. | RED |
@@ -14,11 +28,12 @@ This document prevents deterministic implementation proof from being described a
 | AI-calibrated | Labeled evaluation, tripwires, rollback rehearsal, and weekly sampling pass. | RED |
 | Live-proven | Reviewed scheduled production path and public page succeed. | RED |
 
-## Deterministic floor
+## Historical deterministic floor proposal
 
-All must be green before any provider evaluation. These are local-proof requirements, not a quality percentage.
+The historical design required these checks before provider evaluation. They
+are preserved as technical evidence, not current done tests.
 
-| Gate | Planned evidence | Pass condition | Grade until receipt |
+| Gate | Evidence proposed at the time | Historical pass condition | Grade recorded at the time |
 |---|---|---|---|
 | Input boundary | `uv run pytest -q tests/test_translation_contracts.py tests/test_translation_privacy.py` | Only immutable title and optional description cross the provider boundary. Newsletter and preference data are rejected before cache, budget, provider, and logs. | C |
 | Adapter boundary | `uv run pytest -q tests/test_google_translation_adapter.py tests/test_secret_leaks.py` | Bounded id-bearing batch, validated response, origin-bound bearer token, and no secret/source-text leakage. | C |
@@ -27,11 +42,16 @@ All must be green before any provider evaluation. These are local-proof requirem
 | Kill switch | `uv run pytest -q tests/test_translation_rollback.py tests/test_translation_state_machine.py` | `translation.enabled: false` completes the build with zero provider calls. | C |
 | Workflow isolation | `uv run pytest -q tests/test_workflow_contract.py` | Translation secret job is protected-main-only, environment-bound, SHA-pinned, has no deploy/write permissions, and emits only a sanitized artifact. | C |
 
-Current deterministic blockers: the translation package, migrations, fake-provider tests, local Supabase harness, and protected workflow are not yet implemented or freshly receipted.
+At the snapshot date, the document recorded the translation package, migrations,
+fake-provider tests, local Supabase harness, and protected workflow as absent or
+without fresh receipts. This statement is historical and may no longer match the
+repository.
 
-## 20-case coverage smoke
+## Historical 20-case coverage-smoke proposal
 
-Use 20 real current-news title and optional-description pairs captured into the versioned local evaluation fixture. They must be sanitized of any credential or user data, include both directions, and be human-labeled before use as a quality signal.
+The design proposed 20 real current-news title and optional-description pairs in
+a versioned local evaluation fixture, sanitized of credential and user data,
+covering both directions, and human-labeled before use as a quality signal.
 
 | Requirement | Minimum |
 |---|---:|
@@ -43,13 +63,19 @@ Use 20 real current-news title and optional-description pairs captured into the 
 | Remaining cases | 2 from any of the three sections, preserving direction balance |
 | Hard terminology/name violations | 0 |
 
-The smoke is diagnostic only. It may expose a bad direction or regression. It must not be used to report a quality percentage, activate translation, or call the system AI-done.
+The smoke was intended as diagnostic evidence only, not as sufficient evidence
+for a quality percentage, translation activation, or an AI-done claim.
 
-## 100-case labeled activation gate
+## Historical 100-case labeled-gate proposal
 
-Before reporting a percentage or enabling translation for routine production use, evaluate at least 100 real current-news cases with human labels.
+The design proposed at least 100 human-labeled real-news cases before reporting
+a percentage or enabling routine production use.
 
-Each record must retain: capture date, source locale, target locale, topic slice, title/description field selection, approved input digest, provider/model version, glossary-policy version, candidate-policy version, output, labeler id or pseudonym, and adjudication result. Do not store account preferences, newsletter content, credentials, or article bodies.
+Each proposed record would retain: capture date, source locale, target locale,
+topic slice, title/description field selection, approved input digest,
+provider/model version, glossary-policy version, candidate-policy version,
+output, labeler id or pseudonym, and adjudication result. The design excluded
+account preferences, newsletter content, credentials, and article bodies.
 
 ### Labels
 
@@ -82,11 +108,12 @@ p = x/n
 interval = [center - margin, center + margin]
 ```
 
-No 100-case result exists today. Current evaluation result: **RED, C unverified.**
+At the 2026-09-01 snapshot, no 100-case result was recorded. Historical result:
+**RED, C unverified.**
 
-## Privacy and cost tripwires
+## Historical privacy and cost tripwire proposal
 
-| Tripwire | Required action | Current state |
+| Tripwire | Proposed action | State recorded 2026-09-01 |
 |---|---|---|
 | Any newsletter, preference, credential, or unauthorized text reaches a translation boundary | Disable translation immediately. Preserve originals. Open an incident, add a regression case, and do not re-enable until deterministic privacy tests pass. | RED, no implementation receipt |
 | Credential sentinel appears in stdout, stderr, health, Actions summary, cache, artifact, or render | Revoke or rotate affected credential, disable translation, remove exposure, and rerun leak tests before re-enable. | RED, no implementation receipt |
@@ -95,9 +122,11 @@ No 100-case result exists today. Current evaluation result: **RED, C unverified.
 | Provider, database, artifact, or validation failure | Fail soft to originals. Surface a safe warning without raw source text or secrets. | RED, no implementation receipt |
 | Any critical quality violation | Disable the affected language direction, add case to regression set, and require a clean evaluation before re-enable. | RED, no implementation receipt |
 
-Configured initial limits from the approved plan are 2,000 characters per run, 15,000 per day, and 450,000 per month. They are policy defaults, not current usage, and must be runtime configuration rather than source constants.
+The historical design proposed limits of 2,000 characters per run, 15,000 per
+day, and 450,000 per month as runtime policy rather than source constants. These
+values have no current planning authority.
 
-## Named rollback actions
+## Historical rollback-action proposal
 
 | Trigger | Owner/action | Evidence needed to re-enable |
 |---|---|---|
@@ -107,17 +136,20 @@ Configured initial limits from the approved plan are 2,000 characters per run, 1
 | Privacy or secret leak | Operator disables translation and rotates/revokes the affected credential. | Sentinel tests, leak scan, and protected workflow review. |
 | Cloud service outage | Bridge fails soft to originals; operator records safe failure category. | Controlled recovery run with originals preserved. |
 
-The exact alert destination is **BLOCKED** until JJ selects an existing channel. The implementation may expose a generic webhook setting, but must not assume a channel or claim an alarm is live.
+No alert destination was recorded at the snapshot date. The design contemplated
+a generic webhook setting and did not claim a live alarm.
 
-## Weekly post-activation sampling
+## Historical post-activation sampling proposal
 
-After activation, sample 20 newly translated items each week plus every user- or operator-flagged output. Maintain direction and topic coverage when the week contains sufficient eligible items. Human-label with the five criteria above, record provider and policy versions, and add every failed sample to the permanent regression fixture before any related re-enable.
+The design proposed sampling 20 newly translated items per week after activation,
+plus every user- or operator-flagged output, while retaining direction/topic
+coverage, human labels, provider/policy versions, and failed regression cases.
 
 Track: provider error rate, cache-hit rate, characters per run/day/month, translation coverage, critical violations, disable events, and sampled acceptability by required slice. Weekly sampling is not a substitute for the 100-case activation gate.
 
-## Current RED blockers and evidence ledger
+## Blockers and evidence state recorded 2026-09-01
 
-| Requirement | Required evidence | Current grade/state |
+| Requirement | Evidence proposed at the time | Grade/state recorded 2026-09-01 |
 |---|---|---|
 | Deterministic floor | Dated local command receipts under `docs/evidence/` | C, RED |
 | 20-case smoke | Sanitized real-current-news fixture and labels | C, RED |

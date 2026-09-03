@@ -371,8 +371,8 @@ def test_load_derives_the_ownership_rule_instead_of_restating_it(tmp_path, monke
 
     `load` used to re-implement the blank checks and the null rule inline. It
     read none of the classification tuples, so the day `SourceCheckpoint`
-    becomes subject-bound (a per-user checkpoint is on the roadmap, and the
-    change is one line in a tuple) `load` would have kept accepting a
+    becomes subject-bound (a possible per-user checkpoint would change one line
+    in a tuple) `load` would have kept accepting a
     null-user file that `advance`, the fixture corpus, and the `not null`
     column all reject. Reclassifying it here proves `load` follows the tuple.
     """

@@ -245,4 +245,5 @@ optional guard skips its own check when omitted.
 - Grade: B that the repository has no tenant column today (the shipped
   `user_preferences` table keys on a user id only; see
   `personalization-reconciliation.md`). C that this shape is sufficient at
-  multi-user scale, which is a Later-horizon claim.
+  multi-user scale, which remains an unverified technical claim. This contract
+  does not schedule that work.

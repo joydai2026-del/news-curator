@@ -31,4 +31,7 @@ Deferred by design (recorded, not silent): the account-deletion semantics for th
 | Shipped Supabase personalization schema inspected and explicitly adopted or superseded with a recorded decision | Yes: adopt with additive migration; two conflicts adjudicated and recorded |
 | Context-free review of the frozen set until clean | Two legs plus two fix rounds; final direct verification on this tree; the cross-vendor re-review runs as a follow-up check and any finding lands as a follow-up commit |
 
-CONTRACT FREEZE SETTLED. Next per the plan: phase 2 (host and privacy proof) and phase 3 (source adaptation) in parallel with phase 4 (ledger and artifact store).
+Historical receipt statement: contract freeze was settled for the recorded
+implementation phase. This receipt does not establish current sequence or
+priority. The [current plan in Notion](https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2)
+controls milestones, order, and done tests.

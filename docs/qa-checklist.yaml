@@ -1,6 +1,11 @@
 schema_version: 1
-plan: docs/plans/2026-08-29-news-curator-v3-backend-platform.md
-generated_for: News Curator v3 backend platform
+status: dormant_historical_evidence
+snapshot_date: 2026-09-01
+planning_authority: none
+current_plan: https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2
+note: "Recorded code-adjacent QA evidence only. These checks and statuses do not define current milestones, order, or done tests."
+historical_source: docs/plans/2026-08-29-news-curator-v3-backend-platform.md
+generated_for_historical_snapshot: News Curator v3 backend platform
 state_ladder:
   - implemented
   - locally_proven

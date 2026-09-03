@@ -118,9 +118,9 @@ in the tree; the sources tier is built by ``collect``.) The snapshot cannot
 carry it either (``_health_dict`` in ``source_snapshot.py`` has ten keys and
 none of them is a note). Wiring the fold therefore means either calling it
 inside ``curator.pipeline.collect`` while the result is still in hand, or
-adding a per-source note to the snapshot health row. That is the NEXT phase 3
-slice (checkpoint and health-record persistence); this slice deliberately stops
-at the pure fold.
+adding a per-source note to the snapshot health row. Either route is possible
+future implementation work; this module records no project order and stops at
+the pure fold.
 
 THE REASON CODE IS BOUNDED AT 120 CHARACTERS FOR STORAGE ONLY, the codebase's
 own precedent for a health reason (``snapshot_health_reason`` in

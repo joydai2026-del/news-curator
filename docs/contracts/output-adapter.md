@@ -62,14 +62,17 @@ must name what it evaluated, not just return a verdict.
 
 ## The adapter roster and its boundaries
 
-| Adapter | Horizon | Boundary |
+The labels in this table record contract coverage only. They do not establish
+implementation order or product priority.
+
+| Adapter | Contract state | Boundary |
 |---|---|---|
-| Private web | Now | Reads private tenant projections after edge authentication. |
-| Vault Wiki | Now | Mirrors saved artifacts with git-based compare-and-set receipts, commit parent as the enforced precondition. |
-| Document workspace | Next, optional | Output-only unless separately configured as an import plugin. **Append-only revisions**, because its update endpoint exposes no atomic conditional write. |
-| Long-form relay | Later | Isolated publisher identity, stable article identifier across revisions, distinct event id per revision, acknowledgement threshold, idempotency receipt. |
-| Newsletter basket | Next or later | Saved basket, item-count readiness signal, separate programmable approval and publish policy, at-most-once receipt. |
-| Public web / API / feeds | Later | Explicit public projections only. Never private tenant records. |
+| Private web | Boundary defined | Reads private tenant projections after edge authentication. |
+| Vault Wiki | Boundary defined | Mirrors saved artifacts with git-based compare-and-set receipts, commit parent as the enforced precondition. |
+| Document workspace | Optional boundary defined | Output-only unless separately configured as an import plugin. **Append-only revisions**, because its update endpoint exposes no atomic conditional write. |
+| Long-form relay | Unscheduled boundary defined | Isolated publisher identity, stable article identifier across revisions, distinct event id per revision, acknowledgement threshold, idempotency receipt. |
+| Newsletter basket | Unscheduled boundary defined | Saved basket, item-count readiness signal, separate programmable approval and publish policy, at-most-once receipt. |
+| Public web / API / feeds | Unscheduled boundary defined | Explicit public projections only. Never private tenant records. |
 
 ## Invariants
 
