@@ -23,9 +23,9 @@ strength of a fuzzy title guess is exactly the kind of confident wrongness this
 codebase avoids.
 
 `image_url` — the preview image the PUBLISHER declared, either in the feed
-itself or as `og:image` on the article. It is hotlinked, never rehosted, and
-never invented: an item with no declared image keeps this empty and the renderer
-decides what to do about that.
+itself or as `og:image` on the article. It is retained as metadata, never
+rehosted or invented: an item with no declared image keeps this empty and the
+renderer decides what to do about that.
 
 v2 adds four fields, and every one of them is a place a machine could have been
 tempted to write prose. None of them is:
@@ -75,7 +75,7 @@ class Item:
     score: int | None = None  # native popularity, if the source has one
     is_aggregator: bool = False
     time_is_estimated: bool = False  # True when only an "updated" time existed
-    image_url: str = ""  # publisher-declared preview image, hotlinked, may be empty
+    image_url: str = ""  # publisher-declared preview image metadata, may be empty
     description: str = ""  # the SOURCE's own summary, cleaned. Never generated.
     # Language is declared by source configuration, not guessed from a title.
     # Legacy artifacts and source rows are English unless they opt into Chinese.

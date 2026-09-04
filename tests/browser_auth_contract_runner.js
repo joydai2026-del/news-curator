@@ -262,16 +262,23 @@ async function main() {
     if (refreshGetCalls.length === 1) return response(200, refreshedSession(), url);
     return response(200, [preference()], url);
   };
+  const refreshStartedAt = Math.floor(Date.now() / 1000);
   const refreshedGet = await client.getPreferences(authConfig, expired, refreshGet);
+  const refreshFinishedAt = Math.floor(Date.now() / 1000);
   assert.equal(refreshedGet.user_id, "user-a");
   assert.equal(refreshGetCalls[0].url, "https://example.supabase.co/auth/v1/token?grant_type=refresh_token");
   assert.deepEqual(JSON.parse(refreshGetCalls[0].options.body), { refresh_token: "refresh-token" });
   assert.equal(refreshGetCalls[0].options.headers.apikey, "sb_publishable_test");
   assert.equal(refreshGetCalls[1].options.headers.authorization, `Bearer ${refreshedProjection.access_token}`);
   refreshGetCalls.forEach(assertFailClosedFetch);
-  assert.deepEqual(
-    JSON.parse(browser.storage.get("news-curator.auth.session")),
-    refreshedProjection
+  const storedRefreshedSession = JSON.parse(browser.storage.get("news-curator.auth.session"));
+  assert.deepEqual(Object.keys(storedRefreshedSession).sort(), ["access_token", "expires_at", "refresh_token", "user_id"]);
+  assert.equal(storedRefreshedSession.access_token, refreshedProjection.access_token);
+  assert.equal(storedRefreshedSession.refresh_token, refreshedProjection.refresh_token);
+  assert.equal(storedRefreshedSession.user_id, refreshedProjection.user_id);
+  assert.ok(
+    storedRefreshedSession.expires_at >= refreshStartedAt + 3600 &&
+      storedRefreshedSession.expires_at <= refreshFinishedAt + 3600
   );
 
   browser.storage.set("news-curator.auth.session", JSON.stringify(expired));

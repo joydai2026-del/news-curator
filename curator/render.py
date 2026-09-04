@@ -1,12 +1,11 @@
-"""One static page. No framework, no build step, no runtime requests except the
-pictures, which are the publishers' own and are named honestly in the footer.
+"""One static page. No framework, no build step, and no runtime media requests.
 
-Design intent (v2): Discover cards. A responsive grid of picture-on-top cards,
-each with a headline, two lines of the source's own description, and a foot of
-provenance. Click one and it unfolds in place across the full width of the row,
-showing everything we actually know about that story. Click again and the grid
-closes back up. Apple-minimal: generous whitespace, one accent, almost no
-ornament, and a phone gets the same thing as one column.
+Design intent (M1 Reading Companion): headline-only accordion rows. A headline
+is the entire collapsed surface. Opening it reveals the source-provided summary,
+provenance, a deterministic explanation of why it appeared, and the original
+link. The page uses the approved warm-paper visual direction, remains useful on
+a phone, and does not pretend that future Ask, Save, feedback, or lane controls
+already work.
 
 Four corrections from review are load-bearing here, and three of them predate
 this layout:
@@ -41,21 +40,10 @@ and keyboard order matches what the eye sees. Inside a category tab, `order`
 moves cards visually without moving them in the tab sequence. That is the known
 cost of the grid-order approach and it is written down rather than hidden.
 
-**The image is now really an image.** v1.1 carried the publisher's preview
-address as a `data-image` attribute and drew nothing, so the page genuinely made
-no third-party requests. v2 draws it, which changes a promise the footer used to
-make, so the footer changed with it: the picture is hotlinked from the
-publisher, the reader's browser fetches it, and `no-referrer` means the
-publisher is not told which page it was fetched from. `data-image` stays on the
-article as well, because the deploy workflow counts image coverage with it and a
-cheap check that already works is not worth breaking.
-
-**The typographic fallback is not an error state.** Hacker News, Show HN and
-arXiv-shaped items almost never carry a picture, and a grid with holes in it
-looks broken rather than minimal. A card with no image gets a designed panel in
-a per-category accent instead, and an image that fails to load in the reader's
-browser reveals the same panel underneath. Both paths land in the same place,
-which is the only way the fallback stays maintained.
+**Source image metadata is not page media.** The source-provided preview address
+stays as a `data-image` attribute because the deploy workflow measures coverage
+with it. The Reading Companion does not render an image element or ask the
+reader's browser to fetch that address.
 """
 
 from __future__ import annotations
@@ -237,6 +225,104 @@ footer a:hover{color:var(--fg)}
   .card, .chip{transition:none}
   .card:hover{transform:none}
 }
+
+/* M1 Reading Companion. These rules deliberately follow the approved
+   accordion mockup while keeping the existing one-story/one-node filter and
+   ranking contract. */
+:root{
+  --bg:#f5f4ef; --card:#fffefa; --fg:#1d211f; --muted:#59615d;
+  --faint:#78817c; --line:#d9ddd8; --card-line:#d9ddd8;
+  --card-line-on:#aebbb3; --accent:#245d48; --accent-soft:#e5f0e9;
+  --accent-fg:#fff; --warm:#f2e9d8; --blue:#e5edf4; --shadow:0 18px 55px rgba(38,46,41,.1);
+  --serif:ui-serif,"New York",Georgia,"Noto Serif SC",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Noto Sans SC",sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0d100e; --card:#151916; --fg:#f4f6f3; --muted:#b9c0bb;
+    --faint:#8d9790; --line:#303731; --card-line:#303731;
+    --card-line-on:#526158; --accent:#8fc9ae; --accent-soft:#1b2d23;
+    --accent-fg:#0d100e; --warm:#2b2419; --blue:#1b262d; --shadow:0 18px 55px rgba(0,0,0,.36);
+  }
+}
+html{overflow-x:hidden;background:var(--bg)}
+body{overflow-x:hidden;background:
+  radial-gradient(circle at 12% 0%,var(--warm),transparent 30rem),
+  radial-gradient(circle at 92% 18%,var(--blue),transparent 34rem),var(--bg);
+  font-family:var(--sans)}
+.wrap{max-width:88rem;padding:1.4rem 1.5rem 5rem}
+.shell{display:grid;grid-template-columns:15rem minmax(0,1fr);gap:1.5rem;align-items:start}
+.rail{position:sticky;top:1.4rem;max-height:calc(100vh - 2.8rem);overflow-y:auto;border:1px solid var(--line);background:color-mix(in srgb,var(--card) 88%,transparent);
+  box-shadow:var(--shadow);border-radius:1.35rem;padding:1.35rem 1rem;backdrop-filter:blur(18px)}
+.brand{font:600 1.55rem/1.1 var(--serif);letter-spacing:-.025em;padding:0 .5rem}
+.brand small{display:block;margin-top:.5rem;font:650 .625rem/1.4 var(--sans);letter-spacing:.11em;text-transform:uppercase;color:var(--faint)}
+.rail h2{margin:1.35rem .55rem .5rem;font-size:.625rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+.railnav{display:grid;gap:.2rem}
+.railnav .chip{width:100%;min-height:44px;display:flex;align-items:center;justify-content:flex-start;border-radius:.7rem;padding:.5rem .65rem;background:transparent;color:var(--muted);text-align:left}
+.railnav .chip[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);font-weight:700}
+.railnote{margin:1.25rem .5rem 0;padding-top:.9rem;border-top:1px solid var(--line);font-size:.7rem;line-height:1.55;color:var(--faint)}
+.maincol{min-width:0}
+.topbar{display:flex;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1rem}
+.crumb{font-size:.75rem;color:var(--faint)}
+.profile-slot{min-height:44px;display:flex;align-items:center}
+.profile-link{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);border-radius:999px;padding:.5rem .9rem;color:var(--accent);font-size:.78rem;font-weight:650;text-decoration:none;background:var(--card)}
+.profile-link:hover{background:var(--accent-soft)}
+.profile-link:focus-visible,.accordion-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.intro{border:1px solid var(--line);background:color-mix(in srgb,var(--card) 92%,transparent);border-radius:1.5rem;padding:1.75rem 1.9rem;box-shadow:var(--shadow)}
+.intro .eyebrow{font-size:.625rem;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.intro h1{margin:.5rem 0 .45rem;font:600 clamp(2rem,4vw,3rem)/1.04 var(--serif);letter-spacing:-.04em;max-width:16ch}
+.intro p{margin:0;color:var(--muted);max-width:68ch;font-size:.9rem}
+.edition-meta{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:1.05rem}
+.edition-meta span{border:1px solid var(--line);border-radius:999px;background:var(--card);padding:.3rem .65rem;font-size:.7rem;color:var(--muted)}
+.tools{position:sticky;top:0;z-index:30;display:flex;gap:.75rem;align-items:center;margin:1rem 0;padding:.7rem;border:1px solid var(--line);border-radius:1rem;background:color-mix(in srgb,var(--bg) 91%,transparent);backdrop-filter:blur(16px)}
+.mobiletopics{display:none;flex-wrap:nowrap;gap:.45rem;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}
+.mobiletopics::-webkit-scrollbar{display:none}
+.mobiletopics .chip{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;border:1px solid var(--line);background:var(--card);padding:.5rem .8rem}
+.mobiletopics .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.find{min-width:min(20rem,42vw)}
+input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
+.countline{min-height:1.5rem;margin:.2rem .15rem .8rem;color:var(--faint);font-size:.72rem}
+.count{display:inline}
+.grid{display:flex;flex-direction:column;gap:0;align-items:stretch;margin:0;border:1px solid var(--line);border-radius:1.1rem;background:var(--card);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05)}
+.card{display:block;width:100%;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible;cursor:default;transition:none}
+.card+.card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
+.card:hover,.card.open{border-color:transparent;transform:none;box-shadow:none}
+.card[hidden]{display:none}
+.story-heading{margin:0;font:inherit}
+.accordion-toggle{width:100%;min-height:58px;border:0;background:transparent;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:.65rem;align-items:center;padding:1.05rem 1.15rem;cursor:pointer}
+.accordion-toggle:hover{background:color-mix(in srgb,var(--accent-soft) 38%,transparent)}
+.headline{font:600 1.06rem/1.34 var(--serif);letter-spacing:-.012em}
+.chev{display:grid;place-items:center;width:30px;height:30px;margin:0;border:1px solid var(--line);border-radius:50%;padding:0;color:var(--faint);background:transparent;transition:transform .2s ease}
+.accordion-toggle[aria-expanded="true"] .chev{transform:rotate(180deg);color:var(--accent);border-color:var(--accent)}
+.panel{padding:0 1.15rem 1.15rem;background:linear-gradient(180deg,color-mix(in srgb,var(--accent-soft) 55%,transparent),transparent)}
+.panelin{border-top:1px solid var(--line);padding-top:1rem;display:grid;grid-template-columns:minmax(0,1fr) 15rem;gap:1.5rem}
+.summary{font-family:var(--serif);color:var(--muted);font-size:.96rem;line-height:1.62}
+.summary p{margin:0}
+.provenance{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.8rem;font:700 .625rem/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.provenance-chip{border:1px solid var(--line);border-radius:999px;background:var(--card);padding:.25rem .5rem;color:var(--accent);letter-spacing:0;text-transform:none}
+.details{margin-top:.8rem;display:grid;gap:.38rem;font:400 .78rem/1.5 var(--sans);color:var(--muted)}
+.detail .row{display:grid;grid-template-columns:6.5rem minmax(0,1fr);gap:.65rem;margin:0;align-items:baseline}
+.detail .row b{font-size:.72rem;color:var(--fg);font-weight:650}
+.signal{border:1px solid var(--line);background:var(--card);border-radius:.8rem;padding:.75rem}
+.signal b{display:block;font-size:.625rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.25rem}
+.signal span{display:block;font-size:.72rem;line-height:1.45;color:var(--muted)}
+.acts{margin-top:1rem}
+.acts a,.acts button{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:.5rem .9rem;color:var(--accent);background:var(--card);font-size:.78rem;font-weight:650}
+.empty{margin:1.5rem 0}
+footer{margin-top:2rem;padding:1.25rem .25rem 0}
+.shot,.pad>.eyebrow,.hl,.desc,.meta{display:none!important}
+@media (max-width:980px){
+  .shell{grid-template-columns:1fr}.rail{display:none}.wrap{padding:1rem 1rem 4rem}
+  .tools{top:0}.mobiletopics{display:flex}.panelin{grid-template-columns:1fr;gap:1rem}.topbar{align-items:flex-start}
+}
+@media (max-width:620px){
+  .wrap{padding:.75rem .75rem 3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
+  .intro h1{font-size:2.15rem}.topbar{gap:.5rem}.crumb{padding-top:.5rem}
+  .tools{margin-left:-.1rem;margin-right:-.1rem;flex-direction:column;align-items:stretch}
+  .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
+  .panel{padding:0 .85rem 1rem}.detail .row{grid-template-columns:1fr;gap:.05rem}
+}
+@media (prefers-reduced-motion:reduce){.chev{transition:none}}
 """
 
 JS = """
@@ -252,7 +338,7 @@ JS = """
   // a duplicate copy in an attribute. The text is right there in the DOM;
   // shipping it twice would grow every card for nothing.
   var index=[].slice.call(document.querySelectorAll('.card')).map(function(card){
-    var h=card.querySelector('.hl'), d=card.querySelector('.desc');
+    var h=card.querySelector('.headline'), d=card.querySelector('.full');
     return {
       el:card,
       topics:' '+(card.getAttribute('data-topics')||'')+' ',
@@ -263,14 +349,14 @@ JS = """
   function collapse(card){
     card.classList.remove('open');
     var d=card.querySelector('.detail'); if(d){d.hidden=true;}
-    var b=card.querySelector('.chev');
-    if(b){b.setAttribute('aria-expanded','false'); b.textContent=b.getAttribute('data-shut');}
+    var b=card.querySelector('.accordion-toggle');
+    if(b){b.setAttribute('aria-expanded','false');}
   }
   function expand(card){
     card.classList.add('open');
     var d=card.querySelector('.detail'); if(d){d.hidden=false;}
-    var b=card.querySelector('.chev');
-    if(b){b.setAttribute('aria-expanded','true'); b.textContent=b.getAttribute('data-open');}
+    var b=card.querySelector('.accordion-toggle');
+    if(b){b.setAttribute('aria-expanded','true');}
   }
   function toggle(card){
     if(card.classList.contains('open')){collapse(card); return;}
@@ -533,8 +619,39 @@ def _cluster_links(card: _Card) -> str:
     return f'<div class="row"><b>Also covered by</b><span>{", ".join(links)}</span></div>'
 
 
+def _why_this_appeared(card: _Card, now: datetime) -> str:
+    """Explain the deterministic signals visible to this renderer.
+
+    The renderer does not receive private preference values or raw scores, so
+    it names only evidence it can prove from the ranked item. The published
+    order still reflects saved-interest ranking when the build supplies it.
+    """
+    rank, _slug_key = card.best
+    signals: list[str] = []
+    if card.keywords:
+        signals.append("topic fit")
+    if card.item.age_hours(now) <= 24:
+        signals.append("freshness")
+    source_count = len(card.item.echo_platforms)
+    if source_count > 1:
+        signals.append(f"coverage from {source_count} sources")
+    if card.item.is_newsletter:
+        signals.append("newsletter coverage")
+    elif card.item.is_aggregator:
+        signals.append(f"a discovery signal from {card.item.source_name}")
+    elif card.item.native_categories:
+        signals.append("coverage from a configured topic source")
+    if not signals:
+        signals.append("topic ranking")
+    if len(signals) == 1:
+        reason = signals[0]
+    else:
+        reason = ", ".join(signals[:-1]) + f", and {signals[-1]}"
+    return f"Best rank #{rank + 1} in {card.label}. Visible signals include {reason}."
+
+
 def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, all_rank: int) -> str | None:
-    """One story as one card. Returns None if it must not be shown at all.
+    """One story as one headline-first accordion row.
 
     Two rules decide whether a card can carry a link, and they are not the same
     rule:
@@ -555,56 +672,26 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
     if href is None and not item.is_newsletter:
         return None
 
-    hue = hues.get(card.best[1], ACCENT_BASE_HUE)
-    eyebrow = card.label
-
-    # Newsletter items never load a picture. Their URLs can carry a subscriber
-    # identifier and an <img> would hand it to whoever is on the other end, so
-    # the typographic panel is not a fallback for them, it is the only option.
-    image = safe_url(card.image) if (card.image and not item.is_newsletter) else None
-
-    fallback = (
-        f'<div class="fb" style="--h:{hue}" aria-hidden="true">'
-        f"<b></b><span>{_e(eyebrow)}</span></div>"
-    )
-    if image:
-        shot = (
-            f'<div class="shot">{fallback}'
-            f'<img src="{_e(image)}" alt="" loading="lazy" decoding="async" '
-            f"referrerpolicy=\"no-referrer\" "
-            f"onerror=\"this.style.display='none';this.closest('.card').classList.add('noimg')\">"
-            f"</div>"
-        )
-    else:
-        shot = f'<div class="shot">{fallback}</div>'
-
-    title = (
-        f'<a class="head" href="{_e(href)}" rel="noopener noreferrer nofollow">{_e(item.title)}</a>'
-        if href
-        else f'<span class="head">{_e(item.title)}</span>'
-    )
-
-    bits = []
+    _ = hues  # Category hues remain part of the stable renderer API.
     echo = len(item.echo_platforms)
-    if echo > 1:
-        bits.append(f'<span class="echo">{echo} sources</span>')
-    # Aggregator headlines are submitter-written, and a newsletter's copy of a
-    # story is the newsletter's. Say whose words these are rather than letting
-    # the reader assume the publisher wrote them.
     if item.is_newsletter and item.newsletter_sender:
-        label, cls = f"via {item.newsletter_sender}", ' class="via"'
+        source_label = f"via {item.newsletter_sender}"
     elif item.is_aggregator:
-        label, cls = f"via {item.source_name}", ' class="via"'
+        source_label = f"via {item.source_name}"
     else:
-        label, cls = item.source_name, ""
-    bits.append(f"<span{cls}>{_e(label)}</span>")
-    bits.append(f"<span>{_e(human_age(item, now))}</span>")
-    meta = '<span class="sep">&middot;</span>'.join(bits)
+        source_label = item.source_name
 
     detail_id = f"d{index}"
+    toggle_id = f"t{index}"
     rows = []
     if card.description:
-        rows.append(f'<p class="full">{_e(card.description)}</p>')
+        summary = card.description
+    elif href:
+        summary = "This source did not provide a summary. Open the original story for the full context."
+    else:
+        summary = "This source did not provide a summary or a safe public link."
+    summary_class = "full" if card.description else "summary-notice"
+    summary_label = "Source summary" if card.description else "Summary unavailable"
     if item.is_newsletter and item.newsletter_sender:
         rows.append(f'<div class="row"><b>Newsletter</b><span>{_e(item.newsletter_sender)}</span></div>')
     else:
@@ -620,7 +707,7 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
     acts = []
     if href:
         acts.append(
-            f'<a href="{_e(href)}" rel="noopener noreferrer nofollow">Read at source</a>'
+            f'<a href="{_e(href)}" rel="noopener noreferrer nofollow">Read original</a>'
         )
     else:
         rows.append(
@@ -628,16 +715,30 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
             "not clean of subscriber identifiers, so it is shown without one.</span></div>"
         )
     acts.append('<button type="button" class="shut">Close</button>')
-    detail = f'<div class="detail" id="{detail_id}" hidden>{"".join(rows)}' \
-             f'<div class="acts">{"".join(acts)}</div></div>'
+    provenance = [
+        f'<span class="provenance-chip">{_e(card.label)}</span>',
+        f'<span class="provenance-chip">{_e(source_label)}</span>',
+        f'<span class="provenance-chip">{_e(human_age(item, now))}</span>',
+    ]
+    if echo > 1:
+        provenance.append(f'<span class="provenance-chip">{echo} sources</span>')
+    detail = (
+        f'<div class="panel detail" id="{detail_id}" role="region" '
+        f'aria-labelledby="{toggle_id}" hidden><div class="panelin">'
+        f'<div class="summary"><div class="provenance" aria-label="Story provenance">'
+        f'{summary_label}{"".join(provenance)}</div><p class="{summary_class}">{_e(summary)}</p>'
+        f'<div class="details">{"".join(rows)}</div><div class="acts">{"".join(acts)}</div></div>'
+        f'<aside class="signal"><b>Why this appeared</b><span>{_e(_why_this_appeared(card, now))}'
+        f'</span></aside></div></div>'
+    )
 
     topics = " ".join(sorted(card.ranks, key=lambda s: card.ranks[s]))
     rank_attrs = "".join(f' data-rank-{slug}="{rank}"' for slug, rank in sorted(card.ranks.items()))
-    # `data-image` stays on the article even though there is now a real <img>:
-    # the deploy workflow counts image coverage with one cheap regex over it,
-    # and it still says exactly what it always said, which is what the publisher
-    # declared. Newsletter items never carry it, for the same reason they never
-    # carry an <img>.
+    # `data-image` stays on the article even though M1 no longer renders an
+    # <img>: the deploy workflow counts source image coverage with one cheap
+    # regex over this metadata. It still says exactly what it always said, which
+    # is what the publisher declared. Newsletter items never carry it.
+    image = safe_url(card.image) if (card.image and not item.is_newsletter) else None
     image_attr = f' data-image="{_e(image)}"' if image else ""
     # A machine-readable marker for newsletter-derived cards. The deploy
     # workflow's privacy check keys off it (a newsletter card carrying
@@ -645,21 +746,14 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
     # grep. Without it that check could never fire, which is worse than not
     # having it.
     newsletter_attr = ' data-newsletter=""' if item.is_newsletter else ""
-    description = f'<p class="desc">{_e(card.description)}</p>' if card.description else ""
-
     return (
         f'<article class="card" data-topics="{_e(topics)}" data-rank-all="{all_rank}"'
         f"{rank_attrs}{image_attr}{newsletter_attr}>"
-        f"{shot}"
-        f'<div class="pad">'
-        f'<p class="eyebrow">{_e(eyebrow)}</p>'
-        f'<h3 class="hl">{title}</h3>'
-        f"{description}"
-        f'<div class="meta">{meta}'
-        f'<button type="button" class="chev" aria-expanded="false" aria-controls="{detail_id}" '
-        f'data-shut="Open" data-open="Close">Open</button></div>'
+        f'<h2 class="story-heading"><button type="button" class="accordion-toggle" aria-expanded="false" '
+        f'aria-controls="{detail_id}" id="{toggle_id}"><span class="headline">{_e(item.title)}</span>'
+        f'<span class="chev" aria-hidden="true">⌄</span></button></h2>'
         f"{detail}"
-        f"</div></article>"
+        f"</article>"
     )
 
 
@@ -733,7 +827,9 @@ def render_html(
 
     chips = ['<button class="chip" data-filter="__all__" aria-pressed="true">All</button>']
     for slug, name in names.items():
-        chips.append(f'<button class="chip" data-filter="{_e(slug)}">{_e(name)}</button>')
+        chips.append(
+            f'<button class="chip" data-filter="{_e(slug)}" aria-pressed="false">{_e(name)}</button>'
+        )
 
     rendered = []
     for position, card in enumerate(cards):
@@ -778,7 +874,7 @@ def render_html(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_e(site_name)}</title>
-<meta name="description" content="A self-updating page of the latest headlines matching a set of keywords.">
+<meta name="description" content="A daily reading companion with sourced news summaries.">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
@@ -786,42 +882,55 @@ def render_html(
 </head>
 <body>
 <div class="wrap">
-<header>
-  <h1>{_e(site_name)}</h1>
-  <p class="sub">Built {_e(stamp)}<span class="dot">&middot;</span>scheduled daily<span class="dot">&middot;</span>{total} stories{stale}</p>
-  <div class="tools">
-    <nav aria-label="Categories">{''.join(chips)}</nav>
-    <div class="find">
-      <input class="q" id="q" type="search" placeholder="Search these stories"
-             aria-label="Search these stories" autocomplete="off" spellcheck="false">
-      <p class="count" id="count" role="status" aria-live="polite"></p>
+<div class="shell">
+  <aside class="rail" aria-label="News Curator navigation">
+    <div class="brand">{_e(site_name)}<small>Daily Reading Companion</small></div>
+    <h2>Topics</h2>
+    <nav class="railnav" aria-label="Topic categories">{''.join(chips)}</nav>
+    <p class="railnote">One current edition. Open any headline for the source summary and ranking context.</p>
+  </aside>
+  <div class="maincol">
+    <div class="topbar">
+      <div class="crumb">{_e(site_name)} / Today's edition</div>
+      <div class="profile-slot"><!-- personalization-link --></div>
     </div>
+    <header class="intro">
+      <div class="eyebrow">Today's edition</div>
+      <h1>Your daily reading companion</h1>
+      <p>Open a headline for the source summary, provenance, and a plain explanation of why it appeared.</p>
+      <div class="edition-meta">
+        <span>Built {_e(stamp)}</span><span>scheduled daily</span><span>{total} stories</span>{stale}
+      </div>
+    </header>
+    <div class="tools">
+      <nav class="mobiletopics" aria-label="Categories">{''.join(chips)}</nav>
+      <div class="find">
+        <input class="q" id="q" type="search" placeholder="Search this edition"
+               aria-label="Search these stories" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <p class="countline"><span class="count" id="count" role="status" aria-live="polite"></span></p>
+    <main>
+      <div class="grid" id="grid">{''.join(rendered)}</div>
+      <p class="empty" id="empty"{empty_hidden}>Nothing matched in this window.</p>
+    </main>
+    <footer>
+      <p>This edition combines Hacker News, RSS feeds, news sitemaps, and eligible newsletter items,
+         then builds one deduplicated story list. When a configured saved-interest profile is
+         present, the build uses it as an additional ranking input. Rebuilt on a schedule.</p>
+      <p>Every headline and summary is text the named source supplied at build time. Rows marked
+         <span class="via">via</span> came through an aggregator or newsletter. Nothing here is
+         written, rewritten, or summarized by a machine, and no linked claim has been checked.</p>
+      <p>The Reading Companion loads no publisher images, third-party scripts, web fonts, or
+         analytics. Original links use <code>no-referrer</code>. The build may read a publisher's
+         image metadata for coverage reporting, but the page does not request or display that image.
+         No destination article body is stored or summarized.</p>
+      <p class="health">Sources this run &mdash; {_health_line(results)}</p>
+      {add_line}
+      {repo_line}
+    </footer>
   </div>
-</header>
-<main>
-  <div class="grid" id="grid">{''.join(rendered)}</div>
-  <p class="empty" id="empty"{empty_hidden}>Nothing matched in this window.</p>
-</main>
-<footer>
-  <p>Headlines matching a keyword list, pulled from Hacker News and a set of RSS feeds,
-     ranked by how recent and how well-matched they are. Rebuilt on a schedule.</p>
-  <p>Every headline here is the text its source handed us at build time, linked to the
-     address that source gave, and every description is the summary that source wrote for
-     its own story. Rows marked <span class="via">via</span> come from an aggregator,
-     where the headline is written by whoever submitted the link rather than by the
-     publisher. Nothing on this page is written, rewritten or summarized by a machine.</p>
-  <p>The pictures are hotlinked from the publishers and never re-hosted: your browser
-     requests each one from their server, with <code>no-referrer</code> set, so they are
-     not told which page you were looking at. A story whose publisher declared no image
-     gets a typographic card instead, and newsletter items never load an image at all.
-     Building the page reads the head of an article to find the image tag the publisher
-     put there; no article text is stored or summarized, no claim in any linked article
-     has been checked, and a link may have moved, changed or died since the build.</p>
-  <p class="health">Sources this run &mdash; {_health_line(results)}</p>
-  <!-- personalization-link -->
-  {add_line}
-  {repo_line}
-</footer>
+</div>
 </div>
 <script>{JS}</script>
 </body>

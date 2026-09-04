@@ -51,11 +51,13 @@ def test_cli_can_materialize_acceptance_page_without_activating_site_link(tmp_pa
 
 def test_activate_personalization_link_uses_a_repository_path_safe_relative_url(tmp_path: Path) -> None:
     index = tmp_path / "index.html"
-    index.write_text("<footer><!-- personalization-link --></footer>")
+    index.write_text("<header><!-- personalization-link --></header>")
 
     activate_personalization_link(index)
 
-    assert index.read_text() == '<footer><p><a href="auth/callback/">Personalize your feed</a>.</p></footer>'
+    assert index.read_text() == (
+        '<header><a class="profile-link" href="auth/callback/">Tune my interests</a></header>'
+    )
 
 
 def test_activate_personalization_link_requires_one_marker(tmp_path: Path) -> None:
