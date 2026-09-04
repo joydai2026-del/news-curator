@@ -339,7 +339,7 @@ class ImageCache:
             "version": CACHE_VERSION,
             "note": (
                 "Preview images the publisher declared, keyed by canonical URL. "
-                "Written by curator/images.py. Images are hotlinked, never rehosted."
+                "Written by curator/images.py. Publisher image URLs are metadata, never rehosted."
             ),
             "entries": dict(sorted(self.entries.items())),
         }

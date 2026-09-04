@@ -18,27 +18,23 @@ the published site.
 
 ## What the page looks like
 
-A responsive grid of Discover cards. Each card is a picture at a 3:2 crop, the
-headline under it, two lines of the source's own description, and a foot with
-the source, the age, and a "2 sources" marker when more than one platform
-carried the same link.
+A responsive Reading Companion with headline-only accordion rows. The collapsed
+view stays fast to scan. Opening a headline reveals the source-provided summary,
+provenance, exact publication time, matched keywords, other outlets that covered
+the same story, a plain explanation of visible ranking signals, and the original
+link.
 
-- **Click a card and it unfolds in place**, spanning the row, showing the full
-  description, the exact publication time, the keywords that matched, any other
-  outlets that covered the same story, and the outbound link. Click again, or
-  press Escape, and the grid closes back up. The toggle is a real button, so
-  the keyboard works.
-- **Category tabs** filter the grid, and each tab keeps its own exact ranking. A
-  story belonging to three categories is **one card cross-tagged with three
-  slugs**, never three copies, which is why the story count on the page is a
-  count of stories.
-- **A search box** filters the visible cards by title and description as you
-  type. It is pure front end: there is no backend to search, and none is wanted.
-- **A story with no picture gets a typographic card** in its category's accent
-  colour rather than a hole in the grid. Hacker News and Show HN items almost
-  never carry an image, and an image that fails to load in your browser lands on
-  the same panel.
-- One column on a phone, light and dark, no web fonts, no framework.
+- **One story opens at a time.** Click the headline again, use Close, or press
+  Escape to collapse it. Every headline is a real button, so keyboard use works.
+- **Category controls** keep each topic's exact ranking. A story belonging to
+  three categories is **one row cross-tagged with three slugs**, never three
+  copies, so the story count remains honest.
+- **Search** filters visible rows by source headline and source summary as you
+  type. The notice shown when a source supplied no summary is not search data.
+- **No publisher images load in the reader's browser.** The page is text-first
+  on purpose, with no web fonts, framework, analytics, or third-party scripts.
+- The desktop has a topic rail. Phones use a compact horizontal topic strip.
+  Both layouts support light and dark mode.
 
 ## What it covers
 
@@ -243,18 +239,12 @@ shows one extra row, a wrong merge silently deletes a story.
 ## What this promises, and what it does not
 
 **It promises:** every headline is the text its source handed us at build time,
-linked to the address that source gave, and every description is the summary
-that source wrote for its own story. Each card also shows the preview image its
-publisher declared, hotlinked from the publisher. Nothing is written, rewritten
-or summarized by a machine. There is no LLM anywhere in this pipeline.
+linked to the address that source gave, and every displayed summary is the
+summary that source wrote for its own story. Nothing is written, rewritten, or
+summarized by a machine. There is no LLM anywhere in this pipeline.
 
 **It does not promise:**
 
-- That your browser makes no third-party requests. It used to: v1.1 carried the
-  image address and drew nothing. The page now draws the picture, so your
-  browser fetches it from the publisher's server. It is sent with
-  `referrer: no-referrer`, at the document level and per image, so the publisher
-  is not told which page it was fetched from.
 - That a link is still live or still carries that title. Building the page reads
   a linked page only as far as the end of its head, to find the image tag the
   publisher put there for exactly this purpose. No article text is stored or
@@ -301,9 +291,9 @@ worth knowing, because they are not about terms at all:
 
 ---
 
-## Pictures
+## Publisher image metadata
 
-Each story carries the preview image its publisher declared for it, found in
+The build records the preview image address a publisher declared, found in
 whichever of two places is cheaper:
 
 1. **The feed**, via `media:content`, `media:thumbnail` or an image enclosure.
@@ -324,18 +314,11 @@ timeout is not definitive, so it is retried after 24 hours, and a link that
 stops appearing is pruned after 45 days and would be looked up again if it came
 back.
 
-Images are **hotlinked, never re-hosted**. Nothing is downloaded, resized or
-re-encoded, so the publisher keeps their CDN and can change or withdraw the image
-at any time.
-
-The card draws it as a real `<img>`, lazily, with `referrerpolicy="no-referrer"`
-and a document-level `<meta name="referrer" content="no-referrer">`. The address
-also stays on the article as a `data-image` attribute, which is how the deploy
-workflow counts image coverage. A card whose publisher declared no image carries
-no attribute at all, so "none declared" is still distinguishable from "declared
-as nothing", and that card renders the typographic panel instead. So does one
-whose image fails to load in your browser: the panel is the layer underneath
-every image, not a second code path that could rot.
+The page does not draw those addresses as images. A validated address stays on
+the story as a `data-image` attribute only so the deploy workflow can count
+source coverage. A story whose publisher declared no image carries no attribute,
+so "none declared" remains distinguishable from "declared as nothing" without
+making a third-party browser request.
 
 Newsletter items never load an image and never enter the cache, because a
 newsletter URL can carry a subscriber identifier. That rule is enforced in the
@@ -357,7 +340,7 @@ curator/
   dedup.py           canonical URL, then title similarity
   rank.py            the six signals
   images.py          og:image parsing, and the committed cache
-  render.py          the static page: cards, tabs, search, unfold
+  render.py          the static page: accordion rows, topics, search, expand
   pipeline.py        CLI entry point
   fetchers/          hn.py, rss.py, reddit.py
 scripts/probe_sources.py   verify every source yourself

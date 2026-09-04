@@ -87,8 +87,7 @@ class TestContent:
         assert "2 sources" in render({"T": [echoed]}, now=now)
 
     def test_the_page_loads_no_third_party_code(self, now):
-        # v2 shows the publishers' pictures, so "<img" is no longer a red flag.
-        # Third-party CODE still is: no external script, no web font, no CDN.
+        # The accordion edition loads no third-party code or media.
         html = render({"T": [make_item("a")]}, now=now)
         for marker in ("<script src", "fonts.googleapis", "<link rel=\"stylesheet\""):
             assert marker not in html
@@ -230,12 +229,11 @@ class TestCname:
         assert not (out / "CNAME").exists()
 
 
-class TestPreviewImageData:
-    """v2 draws the image. `data-image` stays on the article beside it.
+class TestAccordionMediaBoundary:
+    """The latest Reading Companion is intentionally text-first.
 
-    The deploy workflow counts image coverage with one cheap regex over that
-    attribute, and the attribute still says exactly what it always said: the
-    address the publisher declared.
+    Publisher preview addresses remain machine-readable for deployment
+    coverage, but the page itself must not fetch them.
     """
 
     def test_an_image_is_carried_as_a_data_attribute_on_the_article(self, now):
@@ -243,7 +241,7 @@ class TestPreviewImageData:
         item.image_url = "https://cdn.example/a.jpg"
         card = card_with(render({"T": [item]}, now=now), "A story")
         assert 'data-image="https://cdn.example/a.jpg"' in card
-        assert card.index('data-image') < card.index("<img"), "the attribute belongs on the article"
+        assert "<img" not in card
 
     def test_a_row_without_an_image_carries_no_attribute(self, now):
         # An empty attribute would look like an answer. Absent means absent, so
@@ -252,33 +250,22 @@ class TestPreviewImageData:
         card = card_with(render({"T": [make_item("A story")]}, now=now), "A story")
         assert "data-image" not in card
 
-    def test_the_image_is_now_a_real_img_with_the_privacy_attributes(self, now):
+    def test_the_page_never_renders_a_publisher_image(self, now):
         item = make_item("A story")
         item.image_url = "https://cdn.example/a.jpg"
         card = card_with(render({"T": [item]}, now=now), "A story")
-        assert '<img src="https://cdn.example/a.jpg"' in card
-        for attribute in ('loading="lazy"', 'decoding="async"', 'referrerpolicy="no-referrer"'):
-            assert attribute in card
+        assert "<img" not in card
 
     def test_the_document_asks_for_no_referrer_too(self, now):
         # Per-image `referrerpolicy` and the document-level meta are not the
         # same defence: the meta covers anything a later change adds.
         assert '<meta name="referrer" content="no-referrer">' in render({"T": []}, now=now)
 
-    def test_a_failed_image_reveals_the_typographic_card(self, now):
-        # The fallback is not a separate code path that could rot. It is the
-        # layer underneath every image card, so the browser-side failure and
-        # the no-image-at-all case land in exactly the same place.
-        item = make_item("A story")
-        item.image_url = "https://cdn.example/a.jpg"
-        card = card_with(render({"T": [item]}, now=now), "A story")
-        assert 'class="fb"' in card and "onerror=" in card
-
-    def test_a_story_with_no_image_gets_a_designed_panel_not_a_hole(self, now):
+    def test_a_story_with_no_image_is_still_a_complete_accordion_row(self, now):
         card = card_with(render({"AI": [make_item("A story")]}, now=now), "A story")
         assert "<img" not in card
-        assert 'class="fb" style="--h:' in card, "the panel carries its category accent"
-        assert ">AI</span>" in card, "and names the category on it"
+        assert 'class="accordion-toggle"' in card
+        assert '<span class="provenance-chip">AI</span>' in card
 
     def test_an_unsafe_image_url_never_reaches_the_page(self, now):
         # Last gate before a publisher-supplied string becomes an attribute on
@@ -302,21 +289,16 @@ class TestPreviewImageData:
         # feature rather than quietly outlive it.
         html = flat(render({"T": [make_item("a")]}, now=now))
         assert "never fetched" not in html
-        assert "reads the head of an article" in html
-        assert "no article text is stored or summarized" in html
+        assert "may read a publisher's image metadata" in html
+        assert "No destination article body is stored or summarized" in html
 
-    def test_the_footer_stopped_promising_no_third_party_requests(self, now):
-        # v1.1 could honestly say the browser never requested the picture,
-        # because the page did not draw it. v2 draws it. The promise had to go
-        # with the behaviour rather than quietly outlive it.
+    def test_the_footer_matches_the_text_only_request_boundary(self, now):
         item = make_item("A story")
         item.image_url = "https://cdn.example/a.jpg"
         html = flat(render({"T": [item]}, now=now))
-        assert "no third-party requests" not in html
-        assert "never requests it" not in html
-        assert "hotlinked from the publishers" in html
+        assert "loads no publisher images" in html
         assert "no-referrer" in html
-        assert "newsletter items never load an image at all" in html
+        assert "hotlinked from the publishers" not in html
 
 
 class TestAddTopicLink:
@@ -380,7 +362,7 @@ class TestOneStoryOneCard:
 
     def test_a_cross_tagged_story_renders_exactly_once(self, now):
         html = render(self.cross_tagged(), now=now)
-        assert len(re.findall(r">Shared story</a>", html)) == 1
+        assert html.count('<span class="headline">Shared story</span>') == 1
         assert len(cards(html)) == 3
 
     def test_the_card_is_tagged_with_every_category_it_belongs_to(self, now):
@@ -401,9 +383,9 @@ class TestOneStoryOneCard:
         # Three unique stories across two categories, one of them in both.
         assert "3 stories" in render(self.cross_tagged(), now=now)
 
-    def test_the_eyebrow_names_the_category_it_ranked_best_in(self, now):
+    def test_the_provenance_names_the_category_it_ranked_best_in(self, now):
         card = card_with(render(self.cross_tagged(), now=now), "Shared story")
-        assert '<p class="eyebrow">Crypto</p>' in card
+        assert '<span class="provenance-chip">Crypto</span>' in card
 
     def test_two_categories_that_slugify_alike_do_not_merge(self, now):
         html = render({"AI!": [make_item("a", "https://e.com/1")],
@@ -447,11 +429,12 @@ class TestCardAnatomy:
     def test_the_description_is_the_sources_own_summary(self, now):
         item = make_item("A story", description="The publisher's own sentence.")
         card = card_with(render({"T": [item]}, now=now), "A story")
-        assert '<p class="desc">The publisher&#x27;s own sentence.</p>' in card
+        assert '<p class="full">The publisher&#x27;s own sentence.</p>' in card
 
     def test_a_story_without_a_summary_renders_without_one(self, now):
         card = card_with(render({"T": [make_item("A story")]}, now=now), "A story")
-        assert 'class="desc"' not in card
+        assert "Summary unavailable" in card
+        assert '<p class="summary-notice">This source did not provide a summary.' in card
 
     def test_a_hostile_description_is_escaped(self, now):
         item = make_item("A story", description="<script>alert(1)</script>")
@@ -475,13 +458,13 @@ class TestUnfold:
 
     def test_the_detail_starts_closed(self, now):
         card = card_with(render({"T": [make_item("A story")]}, now=now), "A story")
-        assert re.search(r'<div class="detail" id="d0" hidden>', card)
+        assert re.search(r'<div class="panel detail" id="d0" role="region" aria-labelledby="t0" hidden>', card)
 
     def test_the_toggle_is_a_real_button_wired_to_the_detail(self, now):
         # A div with a click handler is not keyboard-reachable. A button is,
         # and it gets Enter and Space for free.
         card = card_with(render({"T": [make_item("A story")]}, now=now), "A story")
-        assert '<button type="button" class="chev" aria-expanded="false" aria-controls="d0"' in card
+        assert '<button type="button" class="accordion-toggle" aria-expanded="false" aria-controls="d0" id="t0">' in card
 
     def test_the_unfolded_detail_carries_what_we_actually_know(self, now):
         item = make_item("A story", source_name="The Verge", hours_ago=3,
@@ -492,7 +475,8 @@ class TestUnfold:
         assert "<b>Source</b><span>The Verge</span>" in card
         assert "<b>Published</b>" in card and "2026" in card
         assert "<b>Matched on</b><span>chips, AI</span>" in card
-        assert "Read at source" in card
+        assert "Why this appeared" in card
+        assert "Read original" in card
 
     def test_an_estimated_time_is_labelled_in_the_detail_too(self, now):
         item = make_item("A story", hours_ago=3)
@@ -512,9 +496,126 @@ class TestUnfold:
         html = render({"T": [make_item("a")]}, now=now)
         assert "index.forEach(function(e){if(e.el!==card){collapse(e.el);}});" in html
 
-    def test_a_click_on_the_outbound_link_does_not_unfold(self, now):
+    def test_clicking_inside_the_open_panel_does_not_toggle_it(self, now):
         html = render({"T": [make_item("a")]}, now=now)
-        assert "if(t.closest('a')) return;" in html
+        assert "if(t.closest('.detail')&&!t.closest('.shut')) return;" in html
+
+
+class TestAccordionReadingCompanion:
+    def test_every_story_starts_as_a_headline_only_row(self, now):
+        card = card_with(
+            render({"AI": [make_item("A story", description="Publisher summary.")]}, now=now),
+            "A story",
+        )
+        toggle_end = card.index("</button>")
+        collapsed_face = card[:toggle_end]
+        assert '<span class="headline">A story</span>' in collapsed_face
+        assert "Publisher summary." not in collapsed_face
+        assert 'aria-expanded="false"' in collapsed_face
+
+    def test_expansion_has_summary_provenance_and_reason(self, now):
+        item = make_item("A story", source_name="The Verge", description="Publisher summary.")
+        item.matched_keywords = ["AI"]
+        card = card_with(render({"AI": [item]}, now=now), "A story")
+        assert '<div class="provenance" aria-label="Story provenance">' in card
+        assert '<span class="provenance-chip">AI</span>' in card
+        assert '<p class="full">Publisher summary.</p>' in card
+        assert '<aside class="signal"><b>Why this appeared</b>' in card
+        assert "freshness" in card.casefold() and "topic" in card.casefold()
+
+    def test_touch_targets_and_mobile_overflow_are_guarded(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert ".accordion-toggle{width:100%;min-height:58px" in page
+        assert "min-width:44px;min-height:44px" in page
+        assert "overflow-x:hidden" in page
+
+    def test_story_container_preserves_per_topic_css_ordering(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert ".grid{display:flex;flex-direction:column;gap:0;align-items:stretch" in page
+        assert ".card{display:block;width:100%" in page
+
+    def test_mobile_topic_strip_is_hidden_while_desktop_rail_is_visible(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert ".mobiletopics{display:none" in page
+        assert "flex-wrap:nowrap" in page
+        assert "@media (max-width:980px)" in page
+        assert ".mobiletopics{display:flex}" in page
+
+    def test_desktop_topic_rail_scrolls_when_the_viewport_is_short(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "max-height:calc(100vh - 2.8rem);overflow-y:auto" in page
+
+    def test_each_accordion_toggle_is_inside_a_story_heading(self, now):
+        card = card_with(render({"AI": [make_item("A story")]}, now=now), "A story")
+        assert '<h2 class="story-heading"><button type="button" class="accordion-toggle"' in card
+        assert "</button></h2>" in card
+
+    def test_ranking_explanation_names_signals_without_overclaiming_causation(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "Visible signals include" in page
+        assert "Ranked #1 in AI from" not in page
+
+    def test_shared_story_labels_its_best_rank_instead_of_the_active_topic(self, now):
+        shared = make_item("Shared story", "https://example.com/shared")
+        filler = make_item("AI leader", "https://example.com/leader")
+        card = card_with(
+            render({"AI": [filler, shared], "Crypto": [shared]}, now=now),
+            "Shared story",
+        )
+        assert "Best rank #1 in Crypto" in card
+
+    def test_older_native_source_story_does_not_claim_freshness(self, now):
+        item = make_item("Native story", hours_ago=30)
+        item.native_categories = {"energy"}
+        card = card_with(render({"Energy": [item]}, now=now), "Native story")
+        reason = card[card.index("Why this appeared"):]
+        assert "coverage from a configured topic source" in reason
+        assert "freshness" not in reason.casefold()
+
+    def test_missing_summary_notice_is_not_searchable_story_content(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert 'class="summary-notice"' in page
+        assert "card.querySelector('.full')" in page
+
+    def test_mobile_header_uses_the_configured_site_name(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now, site_name="Forked Curator")
+        assert '<div class="crumb">Forked Curator / Today\'s edition</div>' in page
+
+    def test_selected_topic_uses_theme_specific_contrast_color(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "--accent-fg:#fff" in page
+        assert "--accent-fg:#0d100e" in page
+        assert "color:var(--accent-fg)" in page
+
+    def test_primary_controls_have_a_visible_keyboard_focus_style(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert ".profile-link:focus-visible,.accordion-toggle:focus-visible" in page
+
+    def test_footer_only_claims_personalization_when_a_profile_is_present(self, now):
+        page = flat(render({"AI": [make_item("A story")]}, now=now))
+        assert "When a configured saved-interest profile is present" in page
+
+    def test_page_metadata_does_not_claim_every_fork_is_personalized(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert '<meta name="description" content="A daily reading companion with sourced news summaries.">' in page
+        assert '<meta name="description" content="A personalized' not in page
+
+    def test_future_milestone_controls_are_not_shown(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        for label in (
+            "Ask AI",
+            "Save insight",
+            "More like this",
+            "Less like this",
+            "Already knew this",
+            "Surprise me",
+        ):
+            assert label not in page
+
+    def test_page_identifies_the_daily_reading_companion(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "Your daily reading companion" in page
+        assert "Open a headline for the source summary" in page
 
 
 class TestClusterLinks:
@@ -564,7 +665,7 @@ class TestSearch:
 
     def test_the_filter_reads_title_and_description(self, now):
         html = render({"T": [make_item("a")]}, now=now)
-        assert "card.querySelector('.hl')" in html and "card.querySelector('.desc')" in html
+        assert "card.querySelector('.headline')" in html and "card.querySelector('.full')" in html
         assert "e.text.indexOf(q)>=0" in html
 
 
@@ -573,8 +674,8 @@ class TestCategoryTabs:
         html = render({"AI": [make_item("a", "https://e.com/1")],
                        "Crypto": [make_item("b", "https://e.com/2")]}, now=now)
         assert '<button class="chip" data-filter="__all__"' in html
-        assert 'data-filter="ai">AI</button>' in html
-        assert 'data-filter="crypto">Crypto</button>' in html
+        assert 'data-filter="ai" aria-pressed="false">AI</button>' in html
+        assert 'data-filter="crypto" aria-pressed="false">Crypto</button>' in html
 
     def test_switching_a_tab_reorders_by_that_tabs_rank(self, now):
         html = render({"AI": [make_item("a")]}, now=now)
@@ -598,7 +699,7 @@ class TestNewsletterCards:
         card = card_with(render({"T": [item]}, now=now), "A newsletter story")
         assert "<img" not in card
         assert "data-image" not in card
-        assert 'class="fb"' in card
+        assert 'class="accordion-toggle"' in card
 
     def test_it_is_credited_to_the_sender(self, now):
         item = make_newsletter_item("A newsletter story", "https://example.com/story",
@@ -614,14 +715,16 @@ class TestNewsletterCards:
         item = make_newsletter_item("Unlinkable story", "")
         card = card_with(render({"T": [item]}, now=now), "Unlinkable story")
         assert "href" not in card
-        assert '<span class="head">Unlinkable story</span>' in card
-        assert "Read at source" not in card
+        assert '<span class="headline">Unlinkable story</span>' in card
+        assert "Read original" not in card
         assert "<b>No link</b>" in card
+        assert "did not provide a summary or a safe public link" in card
+        assert "Open the original story" not in card
 
     def test_a_linkable_newsletter_story_still_links(self, now):
         item = make_newsletter_item("Linkable story", "https://publisher.com/story")
         card = card_with(render({"T": [item]}, now=now), "Linkable story")
-        assert '<a class="head" href="https://publisher.com/story"' in card
+        assert '<a href="https://publisher.com/story" rel="noopener noreferrer nofollow">Read original</a>' in card
 
     def test_a_newsletter_canonical_key_does_not_break_uniqueness(self, now):
         one = make_newsletter_item("Same story", "")

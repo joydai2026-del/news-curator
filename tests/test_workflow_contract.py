@@ -100,6 +100,17 @@ def test_rendered_newsletter_privacy_assertion_remains_intact():
         assert locked in run
 
 
+def test_rendered_reading_companion_contract_is_enforced():
+    run = str(_step_named(_jobs()["build"], "Verify the rendered page has real content")["run"])
+    for locked in (
+        'class="accordion-toggle"',
+        'aria-expanded="false"',
+        'if "<img" in html',
+        '>Read original</a>',
+    ):
+        assert locked in run
+
+
 def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
     jobs = _jobs()
     secret_jobs = {

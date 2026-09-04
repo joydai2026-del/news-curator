@@ -464,22 +464,28 @@ jobs:
               sys.exit("FAIL: site/index.html was not written")
 
           html = page.read_text(encoding="utf-8")
-          links = re.findall(r'<a class="head" href="(https?://[^"]+)"', html)
+          links = re.findall(r'<a href="(https?://[^"]+)"[^>]*>Read original</a>', html)
           cards = re.findall(r'<article class="card"[^>]*?data-topics="([^"]*)"', html)
           images = len(re.findall(r'<article class="card"[^>]*\sdata-image="https?://', html))
           chips = re.findall(r'<button class="chip" data-filter="([^"]+)"', html)
-          tabs = [c for c in chips if c != "__all__"]
+          tabs = list(dict.fromkeys(c for c in chips if c != "__all__"))
           # Cards are UNIQUE stories, not rows: a story in two categories is
           # one card cross-tagged, so this count reads lower than the ranked
           # row count and that is correct.
-          print(f"rendered {len(cards)} story cards ({len(links)} linked) across "
-                f"{len(tabs)} tabs, {images}/{len(cards)} with a preview image, "
+          print(f"rendered {len(cards)} accordion stories ({len(links)} linked) across "
+                f"{len(tabs)} tabs, {images}/{len(cards)} with source image metadata, "
                 f"{len(html)} bytes")
 
           if len(html) < 2000:
               sys.exit(f"FAIL: page is suspiciously small ({len(html)} bytes)")
           if not links:
               sys.exit("FAIL: page rendered zero story links")
+          if html.count('class="accordion-toggle"') != len(cards):
+              sys.exit("FAIL: every story must render exactly one accordion toggle")
+          if html.count('aria-expanded="false"') < len(cards):
+              sys.exit("FAIL: every story must start collapsed")
+          if "<img" in html:
+              sys.exit("FAIL: the Reading Companion must not load publisher images")
           if "javascript:" in html.lower():
               sys.exit("FAIL: unsafe scheme present in rendered output")
 
@@ -530,7 +536,7 @@ jobs:
                   empty.append(slug)
           if empty:
               print(f"WARNING: these tabs rendered no stories: {', '.join(empty)}")
-          print(f"OK: page contains real, linked stories across {len(tabs)} tabs")
+          print(f"OK: page contains real, linked accordion stories across {len(tabs)} tabs")
           PY
 
       - name: Stage repository state for the write-only job
