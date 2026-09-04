@@ -171,9 +171,12 @@ def test_artifact_dependencies_are_bound_to_exact_jobs() -> None:
     }
     assert jobs["persist-state"]["needs"] == "build"
     assert jobs["deploy"]["needs"] == "build"
-    assert jobs["deploy"]["if"] == (
-        "${{ github.ref == 'refs/heads/main' && needs.build.result == 'success' }}"
+    downstream_condition = (
+        "${{ !cancelled() && github.ref == 'refs/heads/main' && "
+        "needs.build.result == 'success' }}"
     )
+    assert jobs["persist-state"]["if"] == downstream_condition
+    assert jobs["deploy"]["if"] == downstream_condition
 
     translation_uploads = _action_steps(jobs["translation"], "actions/upload-artifact")
     assert len(translation_uploads) == 1
