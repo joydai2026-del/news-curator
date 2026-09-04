@@ -261,6 +261,15 @@ def _hints(cls: type) -> dict[str, object]:
     return typing.get_type_hints(cls)
 
 
+def _parse_iso8601(value: str) -> datetime:
+    """Parse the frozen wire format consistently on Python 3.10 and later."""
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp must include a timezone offset")
+    return parsed
+
+
 def _check_value(value: object, hint: object, path: str) -> None:
     origin = typing.get_origin(hint)
 
@@ -304,7 +313,7 @@ def _check_value(value: object, hint: object, path: str) -> None:
             if not isinstance(value, str):
                 raise ContractViolation(f"{path}: expected an ISO-8601 string")
             try:
-                datetime.fromisoformat(value)
+                _parse_iso8601(value)
             except ValueError as exc:
                 raise ContractViolation(f"{path}: not an ISO-8601 timestamp") from exc
             return
@@ -367,6 +376,18 @@ def validate_payload(cls: type, payload: object, path: str = "") -> None:
     if issubclass(cls, Ownership):
         _invariant_ownership(payload, cls)
     _invariant_receipt_wrapper_kind(payload, cls)
+
+
+def test_datetime_validation_accepts_the_utc_z_wire_format():
+    _check_value("2025-08-24T01:46:40.000Z", datetime, "created_at")
+    _invariant_principal_claims(
+        {
+            "issued_at": "2025-08-24T01:46:40.000Z",
+            "expires_at": "2025-08-24T02:46:40.000Z",
+        }
+    )
+    with pytest.raises(ContractViolation, match="not an ISO-8601 timestamp"):
+        _check_value("2025-08-24T01:46:40.000", datetime, "created_at")
 
 
 # ---------------------------------------------------------------------------
@@ -1159,7 +1180,7 @@ def _invariant_deletion_receipt(p: dict) -> None:
             raise ContractViolation(
                 "invariant: a settled deletion receipt requires envelope.settled_at"
             )
-        if datetime.fromisoformat(settled_at) < datetime.fromisoformat(p["correction_watermark"]):
+        if _parse_iso8601(settled_at) < _parse_iso8601(p["correction_watermark"]):
             raise ContractViolation(
                 "invariant: settled_at must not precede correction_watermark"
             )
@@ -1171,7 +1192,7 @@ def _invariant_deletion_receipt(p: dict) -> None:
 
 
 def _invariant_principal_claims(p: dict) -> None:
-    if datetime.fromisoformat(p["expires_at"]) <= datetime.fromisoformat(p["issued_at"]):
+    if _parse_iso8601(p["expires_at"]) <= _parse_iso8601(p["issued_at"]):
         raise ContractViolation("invariant: expires_at must be after issued_at")
 
 
