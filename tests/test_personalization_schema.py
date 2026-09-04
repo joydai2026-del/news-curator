@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "supabase/migrations/202608290001_user_preferences.sql"
+VALIDATOR_GRANTS = ROOT / "supabase/migrations/202609040002_user_preferences_validator_grants.sql"
 
 
 def migration_text() -> str:
@@ -89,6 +90,20 @@ def test_all_functions_pin_search_path_and_limit_execute() -> None:
     ):
         assert f"revoke execute on function {signature}" in sql
     assert sql.count("security definer") == 1
+
+
+def test_authenticated_insert_can_execute_check_constraint_validators() -> None:
+    sql = VALIDATOR_GRANTS.read_text().lower()
+    assert "create schema if not exists personalization_private" in sql
+    assert "alter function public.valid_interests(text[]) set schema personalization_private" in sql
+    assert "alter function public.valid_saved_searches(jsonb) set schema personalization_private" in sql
+    assert "grant usage on schema personalization_private to authenticated" in sql
+    assert "grant execute on function personalization_private.valid_interests(text[]) to authenticated" in sql
+    assert "grant execute on function personalization_private.valid_saved_searches(jsonb) to authenticated" in sql
+    assert "grant execute on function public.valid_interests" not in sql
+    assert "grant execute on function public.valid_saved_searches" not in sql
+    assert "personalization_private.valid_interests(new_interests)" in sql
+    assert "personalization_private.valid_saved_searches(new_saved_searches)" in sql
 
 
 def test_local_config_has_only_local_redirects_and_rotation() -> None:
