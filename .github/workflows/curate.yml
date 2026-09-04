@@ -555,7 +555,11 @@ jobs:
   # translation secrets, Pages permission, or an OIDC grant.
   persist-state:
     needs: build
-    if: ${{ github.ref == 'refs/heads/main' && needs.build.result == 'success' }}
+    # `translation` is an optional ancestor of `build`. Include a status
+    # function so its intentional skip cannot suppress this successful
+    # downstream job through GitHub Actions' implicit `success()` check, while
+    # still honoring a human cancellation.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -594,7 +598,9 @@ jobs:
 
   deploy:
     needs: build
-    if: ${{ github.ref == 'refs/heads/main' && needs.build.result == 'success' }}
+    # See persist-state above: a skipped optional ancestor must not prevent a
+    # successfully built Pages artifact from deploying.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     # `id-token: write` is never a default and deploy-pages mints an OIDC
     # token, so this job needs its own grant. Review round 1 caught the diff
