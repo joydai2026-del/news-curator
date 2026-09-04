@@ -249,7 +249,8 @@ RECEIPT_WRAPPER_KINDS: tuple[tuple[type, str, str], ...] = (
 #: RANGES so the Python predicate and the SQL check are two renderings of one
 #: list rather than two hand-kept lists.
 #:
-#: The set is every code point Python's ``unicodedata`` classifies ``Zs``
+#: The set is a conservative superset of every code point the supported Python
+#: runtimes classify ``Zs``
 #: (space separators, including U+00A0 and U+3000), ``Zl`` (U+2028 LINE
 #: SEPARATOR), ``Zp`` (U+2029 PARAGRAPH SEPARATOR), ``Cc`` (control characters,
 #: including tab and newline) or ``Cf`` (format characters, including U+200B,
@@ -263,7 +264,9 @@ RECEIPT_WRAPPER_KINDS: tuple[tuple[type, str, str], ...] = (
 #: is frozen text: if the running Python's Unicode tables grew and the constant
 #: grew with them, the database would silently accept what Python rejects.
 #: ``test_the_frozen_invisible_set_still_covers_every_unicode_invisible``
-#: fails when the two diverge, so a Unicode upgrade is a deliberate edit here.
+#: fails when a runtime knows an invisible point outside this frozen superset,
+#: so a Unicode upgrade is a deliberate edit here. Older runtimes may still
+#: classify a newly assigned point in the frozen set as unassigned.
 #:
 #: Why these block an id at all: two ids that render identically are two
 #: encodings of one subject. A per-person delete keyed on the visible spelling
@@ -290,7 +293,7 @@ INVISIBLE_ID_CODE_POINT_RANGES: tuple[tuple[int, int], ...] = (
     (0xFFF9, 0xFFFB),
     (0x110BD, 0x110BD),
     (0x110CD, 0x110CD),
-    (0x13430, 0x13438),
+    (0x13430, 0x1343F),
     (0x1BCA0, 0x1BCA3),
     (0x1D173, 0x1D17A),
     (0xE0001, 0xE0001),

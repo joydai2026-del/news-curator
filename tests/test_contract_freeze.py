@@ -2842,8 +2842,8 @@ def test_the_frozen_invisible_set_still_covers_every_unicode_invisible():
         for code in range(0x110000)
         if unicodedata.category(chr(code)) in {"Zs", "Zl", "Zp", "Cc", "Cf"}
     }
-    assert live == set(INVISIBLE_ID_CODE_POINTS), (
-        "unicodedata and INVISIBLE_ID_CODE_POINT_RANGES disagree; update the "
+    assert live <= set(INVISIBLE_ID_CODE_POINTS), (
+        "unicodedata contains an invisible point outside INVISIBLE_ID_CODE_POINT_RANGES; update the "
         "frozen ranges AND regenerate the migration's check text"
     )
     # The ones the reviews named by hand, pinned so a range edit cannot drop one.
@@ -2859,6 +2859,9 @@ def test_the_frozen_invisible_set_still_covers_every_unicode_invisible():
 
 
 _MIGRATION = REPO_ROOT / "supabase" / "migrations" / "202609020001_learning_ledger.sql"
+_UNICODE15_MIGRATION = (
+    REPO_ROOT / "supabase" / "migrations" / "202609040001_unicode15_invisible_ids.sql"
+)
 _SQL_OWNERSHIP_CHECK = re.compile(r"^\s*(check \((\w+) = btrim\(.*\))(,?)$", re.M)
 _SQL_CODE_POINT = re.compile(r"\\u([0-9A-F]{4})|\\U([0-9A-F]{8})")
 
@@ -2950,6 +2953,43 @@ def test_the_migration_ownership_checks_are_derived_from_the_frozen_set():
     assert {first for first, _ in INVISIBLE_ID_CODE_POINT_RANGES} <= set(
         INVISIBLE_ID_CODE_POINTS
     )
+
+
+def test_the_unicode15_additive_migration_covers_every_ownership_column():
+    """Already-deployed databases receive the same Unicode 15 guard."""
+    sql = _UNICODE15_MIGRATION.read_text(encoding="utf-8")
+    guard = "set standard_conforming_strings = on;"
+    assert guard in sql
+    assert sql.index(guard) < sql.index("add constraint")
+    owned_tables = (
+        "learning_events",
+        "correction_events",
+        "raw_imports",
+        "evidence_items",
+        "knowledge_artifacts",
+        "artifact_versions",
+        "artifact_relations",
+        "deletion_receipts",
+        "mirror_receipts",
+    )
+    expected = {("tenant_members", "tenant_id")}
+    expected.update(
+        (table, column)
+        for table in owned_tables
+        for column in ("tenant_id", "actor_id", "user_id")
+    )
+    observed = set(
+        re.findall(
+            r"alter table public\.(\w+) add constraint \w+ check "
+            r"\((\w+) !~ '\[\\U00013439-\\U0001343F\]'\);",
+            sql,
+        )
+    )
+    assert observed == expected, (
+        "Unicode 15 compatibility checks moved to the wrong table or column: "
+        f"missing={expected - observed}, extra={observed - expected}"
+    )
+    assert sql.count("add constraint") == 28
 
 
 #: The SQL bracket class, translated into a Python regex so the two layers can

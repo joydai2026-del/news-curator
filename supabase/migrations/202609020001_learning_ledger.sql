@@ -83,9 +83,9 @@ set standard_conforming_strings = on;
 -- the widened invisible range, both of which are plain regex literals with no
 -- such dependency.
 --
--- Edited in place rather than superseded by a second migration: this file has
--- not been applied to any environment (grade B, the phase-4 slice records no
--- cloud mutation).
+-- This migration is applied in production. The expanded Unicode range remains
+-- here for clean installs; 202609040001_unicode15_invisible_ids.sql applies the
+-- same delta to databases that already ran this file.
 --
 -- KNOWN OPEN, deferred with a corrected reason (2026-09-02): the four
 -- `*_update_own` policies gate on tenant membership only, so any member may
@@ -95,7 +95,8 @@ set standard_conforming_strings = on;
 -- scratch Postgres cluster, and the migration is presumed unapplied at grade C
 -- because no live `schema_migrations` query has ever been run. A scratch
 -- execution receipt is not an applied-state proof, so an in-place edit is
--- available. The item is SCHEDULED, not blocked.
+-- available. This is a technical gap for a future implementation; these
+-- comments do not set project order. Notion owns project priorities and gates.
 
 -- ---------------------------------------------------------------------
 -- Tenant membership: the predicate every RLS policy below is keyed on.
@@ -126,7 +127,7 @@ create table public.tenant_members (
   -- by the same curator.ownership.ownership_id_sql_check('tenant_id') as the
   -- rest; test_the_migration_ownership_checks_are_derived_from_the_frozen_set
   -- now asserts 28.
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized)
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized)
 );
 
 alter table public.tenant_members enable row level security;
@@ -226,9 +227,9 @@ create table public.learning_events (
   -- docs/contracts/event.md and curator/ledger/memory.py, which key the
   -- in-memory index the same way so the two surfaces cannot drift).
   unique (tenant_id, user_id, idempotency_key),
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized)
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized)
 );
 
 alter table public.learning_events enable row level security;
@@ -268,9 +269,9 @@ create table public.correction_events (
   reason_code text not null,
   occurred_at timestamptz not null,
   invalidated_snapshot_ids text[] not null default '{}'::text[],
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized)
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized)
 );
 
 alter table public.correction_events enable row level security;
@@ -314,9 +315,9 @@ create table public.raw_imports (
   exported_at timestamptz,
   byte_size integer not null default 0,
   unique (tenant_id, source_kind, checksum),
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
   -- Redundant with the primary key on its own, and required as the TARGET of
   -- evidence_items' composite tenant foreign key below.
   unique (raw_import_id, tenant_id)
@@ -370,9 +371,9 @@ create table public.evidence_items (
   corroborated boolean not null default false,
   corroborating_evidence_ids text[] not null default '{}'::text[],
   retracted_by_event_id text,
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
   -- Composite, so an evidence item cannot name an import that belongs to a
   -- different tenant. Referential integrity is checked with row security OFF,
   -- so RLS does not stop a tenant-A member inserting a child whose parent is
@@ -426,9 +427,9 @@ create table public.knowledge_artifacts (
   title text not null default '',
   conversation_id text,
   story_id text,
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
   -- artifact_id is already the primary key; this redundant unique key is what
   -- lets artifact_versions carry a COMPOSITE foreign key on
   -- (artifact_id, tenant_id), so a version can never claim a tenant its
@@ -480,9 +481,9 @@ create table public.artifact_versions (
   citations text[] not null default '{}'::text[],
   redacted_by_event_id text,
   primary key (artifact_id, version),
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
   foreign key (artifact_id, tenant_id)
     references public.knowledge_artifacts (artifact_id, tenant_id)
 );
@@ -540,9 +541,9 @@ create table public.artifact_relations (
   relation_type text not null,
   requested_type text not null default '',
   depth integer not null default 0,
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
   -- Composite, so a child cannot name a parent artifact in a different
   -- tenant. Referential integrity is checked with row security OFF, so RLS
   -- does not stop a tenant-A member inserting a child whose parent is in
@@ -611,9 +612,9 @@ create table public.deletion_receipts (
   mirrored_targets text[] not null default '{}'::text[],
   audit_chain_queryable boolean not null default true,
   check (public.deletion_receipt_may_settle(state, projections)),
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized)
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized)
 );
 
 alter table public.deletion_receipts enable row level security;
@@ -668,9 +669,9 @@ create table public.mirror_receipts (
   -- the same user's key is the duplicate this receipt identity refuses.
   constraint mirror_receipts_tenant_user_idempotency_key_key
     unique (tenant_id, user_id, idempotency_key),
-  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
-  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
-  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U00013438\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
+  check (tenant_id = btrim(tenant_id) and tenant_id ~ '[^[:space:]]' and tenant_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and tenant_id is nfc normalized),
+  check (actor_id = btrim(actor_id) and actor_id ~ '[^[:space:]]' and actor_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and actor_id is nfc normalized),
+  check (user_id = btrim(user_id) and user_id ~ '[^[:space:]]' and user_id !~ '[\u0000-\u0020\u007F-\u00A0\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]' and user_id is nfc normalized),
   -- Composite, so a child cannot name a parent artifact in a different
   -- tenant. Referential integrity is checked with row security OFF, so RLS
   -- does not stop a tenant-A member inserting a child whose parent is in
