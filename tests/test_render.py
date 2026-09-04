@@ -352,6 +352,13 @@ class TestAddTopicLink:
         assert "javascript:" not in html
 
 
+class TestPersonalizationLink:
+    def test_footer_leaves_fail_closed_personalization_marker(self, now):
+        html = render({"T": [make_item("a")]}, now=now)
+        assert "<!-- personalization-link -->" in html
+        assert "Personalize your feed" not in html
+
+
 class TestOneStoryOneCard:
     """A story in three categories is one card cross-tagged, never three rows.
 

@@ -30,11 +30,11 @@ Invalid data and unauthenticated calls are errors. A conflict does not change th
 
 ## Browser path
 
-`static/auth/callback/index.html` and `static/auth/client.js` use Supabase Authorization Code with PKCE without a third-party JavaScript dependency. The verifier, state, and minimal session remain in `sessionStorage`. The single-use `client_state` is carried inside the exact `redirect_to` URL and verified after redirect. It does not rely on Supabase forwarding an application-supplied provider OAuth `state`. Callback parameters are copied into memory and immediately removed from browser history. A successful exchange must include a bounded, decodable access token whose `sub` exactly matches the returned `user.id`. The browser persists only `access_token`, `refresh_token`, `expires_at`, and `user_id`. It never persists provider tokens, an optional provider ID token, the authorization code, or the raw response. Errors never display tokens or authorization codes.
+`static/auth/callback/index.html` and `static/auth/client.js` provide the human interface without a third-party JavaScript dependency. An existing owner requests an email one-time code from `/auth/v1/otp` with `create_user: false`, then verifies it at `/auth/v1/verify`. Production must configure the Supabase email template to show `{{ .Token }}` and must pre-provision the owner before disabling public signup. A successful verification must include a bounded, decodable access token whose `sub` exactly matches the returned `user.id`. The browser persists only `access_token`, `refresh_token`, `expires_at`, and `user_id` in `sessionStorage`. It never persists the email address, entered code, provider tokens, or the raw response. Errors never display credentials.
 
-The browser exposes `window.NewsCuratorPersonalization.get()` and `.set(input)` as the human preference API seam. They use the same owner-only table and compare-and-swap RPC as the agent client, apply the same input and response bounds, and require the validated session stored by the callback. When the saved access token has expired, both operations refresh through the exact configured Supabase origin at `/auth/v1/token?grant_type=refresh_token` before any preference request. The refresh request uses only the publishable key and current refresh token, rejects redirects and response URL mismatches before reading a body, requires the same user id, requires a newly rotated refresh token, and persists only the four-field minimal session projection. Any refresh failure erases the saved session. The initial callback is bound by the single-use `client_state`, its exact `redirect_to`, and the PKCE verifier. Refresh is instead bound to the rotating refresh token and existing user id. No visual preference interface is part of this backend contract.
+The browser exposes `window.NewsCuratorPersonalization.get()` and `.set(input)` as the preference API seam used by the page. They use the same owner-only table and compare-and-swap RPC as the agent client, apply the same input and response bounds, and require the validated session created by email-code verification. When the saved access token has expired, both operations refresh through the exact configured Supabase origin at `/auth/v1/token?grant_type=refresh_token` before any preference request. The refresh request uses only the publishable key and current refresh token, rejects redirects and response URL mismatches before reading a body, requires the same user id, requires a newly rotated refresh token, and persists only the four-field minimal session projection. Any refresh failure erases the saved session.
 
-Every callback consumes state and verifier before branching on its result. This includes provider errors, callbacks without a code, invalid state, and token-exchange failures. Callback query parameters are removed from browser history on all of those paths.
+The same JavaScript still contains the PKCE callback primitives used by the agent login path and their regression tests. The human page does not start that flow.
 
 The checked-in callback is a fail-closed template. Do not edit its placeholders for activation. Materialize a separate build artifact using the exact project origin and public key:
 
@@ -42,10 +42,11 @@ The checked-in callback is a fail-closed template. Do not edit its placeholders 
 python scripts/build_auth_callback.py \
   --supabase-url https://PROJECT_REF.supabase.co \
   --publishable-key "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" \
-  --output BUILD_ROOT/auth/callback/index.html
+  --output BUILD_ROOT/auth/callback/index.html \
+  --site-index BUILD_ROOT/index.html
 ```
 
-The materializer validates one exact HTTPS origin, rejects wildcard origins and service-role keys, refuses to overwrite the template, and emits an exact `connect-src` origin. `static/auth/client.js` must be copied to `BUILD_ROOT/auth/client.js` by the ordinary static build. Configure the host to send the generated CSP as an HTTP header plus `Cache-Control: no-store` on the callback.
+The materializer validates one exact HTTPS origin, rejects wildcard origins and service-role keys, refuses to overwrite the template, and emits an exact `connect-src` origin. The callback may be deployed directly for owner acceptance testing while ranking remains disabled. The workflow replaces the rendered site's dormant marker with a relative settings link only when `NEWS_CURATOR_PERSONALIZATION_ENABLED` is `true`, so the public digest does not advertise personalization before saved interests affect ranking. Unconfigured forks therefore do not advertise a dead settings page. `static/auth/client.js` and `static/auth/styles.css` must be copied to `BUILD_ROOT/auth/` by the ordinary static build. GitHub Pages cannot set a route-specific HTTP CSP or cache policy, so the checked-in meta CSP is the deployable control on this static host.
 
 ## Agent path
 
@@ -93,10 +94,9 @@ Cloud-linked status requires all of the following. None is implied by local test
 
 1. Create or select the intended Supabase project outside this repository.
 2. Apply the checked-in migration and independently inspect grants, RLS policies, and function security.
-3. Enable Google Auth in Supabase with credentials stored only in the Supabase project settings.
-4. In Google Cloud, allow the exact Supabase provider callback shown by Supabase. Do not guess it.
-5. In Supabase, set the exact deployed site origin, exact static callback, and the single loopback pattern documented above.
-6. Run the callback materializer into the static build output using only the project URL and publishable key. Put the same two public values in the agent environment. Confirm no service-role credential appears in either surface, build output, or logs.
-7. Run the two-user, anon, expired-token, altered-user-id, direct-update, oversized-data, replay, refresh-rotation, and logout tests against the linked project.
-8. Verify callback history cleanup and the deployed HTTP CSP and no-store headers in a real browser.
-9. Record the linked test receipt separately. Do not relabel local contract tests as cloud proof.
+3. Pre-provision the intended owner account, configure the email template to show `{{ .Token }}`, and disable public signup.
+4. In Supabase, set the exact deployed site origin and exact static page URL. If the agent login path is activated, also enable the Google provider, configure its Supabase provider callback, and add the native loopback pattern.
+5. Run the callback materializer into the static build output using only the project URL and publishable key. Put the same two public values in the agent environment. Confirm no service-role credential appears in either surface, build output, or logs.
+6. Run the two-user, anon, expired-token, altered-user-id, direct-update, oversized-data, replay, refresh-rotation, and logout tests against the linked project.
+7. Verify email-code sign-in, the deployed meta CSP, session cleanup, interest save/reload, sign-out, and the absence of credentials in the rendered assets in a real browser.
+8. Record the linked test receipt separately. Do not relabel local contract tests as cloud proof.

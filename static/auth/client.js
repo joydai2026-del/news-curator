@@ -304,6 +304,62 @@
     if (response.redirected !== false || response.url !== requestedUrl) fail(message);
   }
 
+  function validateEmail(value) {
+    if (!boundedString(value, 254) || value !== value.trim() || /\s/.test(value)) {
+      fail("Enter a valid email address.");
+    }
+    const parts = value.split("@");
+    if (parts.length !== 2 || !parts[0] || !parts[1] || !parts[1].includes(".")) {
+      fail("Enter a valid email address.");
+    }
+    return value;
+  }
+
+  function validateEmailCode(value) {
+    if (!boundedString(value, 128) || value !== value.trim() || /\s/.test(value)) {
+      fail("Enter the code from your email.");
+    }
+    return value;
+  }
+
+  async function requestEmailCode(email, fetchImpl = fetch) {
+    const { url, key } = config();
+    const otpUrl = `${url}/auth/v1/otp`;
+    const response = await fetchImpl(otpUrl, {
+      method: "POST",
+      headers: { apikey: key, "content-type": "application/json" },
+      body: JSON.stringify({ email: validateEmail(email), create_user: false, data: {} }),
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      redirect: "error",
+    });
+    requireExactResponse(response, otpUrl, "The authentication endpoint redirected unexpectedly.");
+    const payload = await boundedJson(response, "The authentication response was invalid.");
+    if (!response.ok) fail("Email code could not be sent.");
+    const empty = exactFields(payload, []);
+    const confirmation = exactFields(payload, ["message"]) && boundedString(payload.message, 256);
+    if (!empty && !confirmation) fail("The authentication response was invalid.");
+  }
+
+  async function verifyEmailCode(email, token, fetchImpl = fetch) {
+    const { url, key } = config();
+    const verifyUrl = `${url}/auth/v1/verify`;
+    const response = await fetchImpl(verifyUrl, {
+      method: "POST",
+      headers: { apikey: key, "content-type": "application/json" },
+      body: JSON.stringify({ email: validateEmail(email), token: validateEmailCode(token), type: "email" }),
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      redirect: "error",
+    });
+    requireExactResponse(response, verifyUrl, "The authentication endpoint redirected unexpectedly.");
+    if (!response.ok) fail("Sign in failed.");
+    const rawSession = await boundedJson(response, "The authentication response was invalid.");
+    const safeSession = projectSession(rawSession);
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+    return safeSession;
+  }
+
   async function refreshSession(authConfig, currentSession, fetchImpl = fetch, nowSeconds = Date.now() / 1000) {
     try {
       const checkedConfig = validateAuthConfig(authConfig);
@@ -398,7 +454,22 @@
       fail("Preferences could not be updated.");
     }
     if (outcome.status === "updated") {
-      return { status: "updated", preference: await getPreferences(checkedConfig, session, fetchImpl) };
+      if (!Number.isInteger(outcome.revision) || outcome.revision < 1 ||
+          !boundedString(outcome.updated_at, 128)) {
+        fail("The preference response was invalid.");
+      }
+      return {
+        status: "updated",
+        preference: {
+          user_id: session.user_id,
+          revision: outcome.revision,
+          locale: update.locale,
+          interests: update.interests,
+          saved_searches: update.saved_searches,
+          created_at: null,
+          updated_at: outcome.updated_at,
+        },
+      };
     }
     if (outcome.status === "conflict") {
       if (!Number.isInteger(outcome.revision) || outcome.revision < 0) fail("The preference response was invalid.");
@@ -492,11 +563,14 @@
     projectSession,
     projectRefreshedSession,
     refreshSession,
+    requestEmailCode,
     setPreferences,
     signOut,
+    validateEmail,
     validatePreferenceInput,
     validatePreferenceRecord,
     validateStoredSession,
+    verifyEmailCode,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -511,17 +585,151 @@
 
   async function run() {
     const status = document.getElementById("status");
-    document.getElementById("sign-in").addEventListener("click", () => {
-      beginSignIn().catch(() => { status.textContent = "Sign in could not start."; });
+    const loginPanel = document.getElementById("login-panel");
+    const codePanel = document.getElementById("code-panel");
+    const preferencesPanel = document.getElementById("preferences-panel");
+    const email = document.getElementById("email");
+    const code = document.getElementById("code");
+    const interests = document.getElementById("interests");
+    const interestCount = document.getElementById("interest-count");
+    const buttons = [...document.querySelectorAll("button")];
+    let currentSession = null;
+    let currentPreference = null;
+
+    function announce(message) {
+      status.textContent = message;
+    }
+
+    function setBusy(busy) {
+      buttons.forEach((button) => { button.disabled = busy; });
+    }
+
+    function parseInterests() {
+      const values = interests.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+      if (values.length > 20) fail("Keep the list to 20 interests or fewer.");
+      return values;
+    }
+
+    function updateCount() {
+      const count = interests.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).length;
+      interestCount.textContent = `${count} of 20 interests`;
+    }
+
+    function showSignedOut() {
+      currentSession = null;
+      currentPreference = null;
+      loginPanel.hidden = false;
+      codePanel.hidden = true;
+      preferencesPanel.hidden = true;
+      code.value = "";
+    }
+
+    function showPreferences(preference) {
+      currentPreference = preference || { revision: 0, locale: "en", interests: [], saved_searches: [] };
+      interests.value = currentPreference.interests.join("\n");
+      updateCount();
+      loginPanel.hidden = true;
+      codePanel.hidden = true;
+      preferencesPanel.hidden = false;
+    }
+
+    async function loadPreferences() {
+      const preference = await getPreferences(config(), currentSession);
+      currentSession = loadSessionCandidate();
+      showPreferences(preference);
+    }
+
+    interests.addEventListener("input", updateCount);
+    document.getElementById("send-code").addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        const address = email.value.trim();
+        await requestEmailCode(address);
+        email.value = address;
+        codePanel.hidden = false;
+        code.focus();
+        announce("Check your email for the sign-in code.");
+      } catch (_) {
+        announce("We could not send a code. Check the email address and try again.");
+      } finally {
+        setBusy(false);
+      }
     });
-    document.getElementById("sign-out").addEventListener("click", () => {
-      signOut().then(() => { status.textContent = "Signed out."; }).catch(() => { status.textContent = "Signed out locally."; });
+    document.getElementById("verify-code").addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        currentSession = await verifyEmailCode(email.value.trim(), code.value.trim());
+      } catch (_) {
+        announce("That code did not work. Request a new code and try again.");
+        setBusy(false);
+        return;
+      }
+      try {
+        await loadPreferences();
+        announce("Signed in. Your interests are ready.");
+      } catch (_) {
+        announce("Signed in, but your interests could not be loaded. Refresh the page to try again.");
+      } finally {
+        setBusy(false);
+      }
     });
+    document.getElementById("reload-interests").addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        await loadPreferences();
+        announce("Your latest interests are loaded.");
+      } catch (_) {
+        announce("Your interests could not be loaded. Try again.");
+      } finally {
+        setBusy(false);
+      }
+    });
+    document.getElementById("save-interests").addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        const outcome = await setPreferences(config(), currentSession, {
+          expected_revision: currentPreference.revision,
+          locale: currentPreference.locale,
+          interests: parseInterests(),
+          saved_searches: currentPreference.saved_searches,
+        });
+        currentSession = loadSessionCandidate();
+        if (outcome.status === "conflict") {
+          announce("Your interests changed in another session. Reload them before saving again.");
+        } else if (outcome.status === "not_found") {
+          announce("Your saved interests changed. Reload them before saving again.");
+        } else {
+          showPreferences(outcome.preference);
+          announce("Your interests were saved.");
+        }
+      } catch (error) {
+        announce(error && /20 interests/.test(error.message)
+          ? error.message
+          : "Your interests could not be saved. Try again.");
+      } finally {
+        setBusy(false);
+      }
+    });
+    document.getElementById("sign-out").addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        await signOut();
+        announce("Signed out.");
+      } catch (_) {
+        announce("Signed out on this device.");
+      } finally {
+        showSignedOut();
+        setBusy(false);
+      }
+    });
+
     try {
-      if (await finishCallback(new URL(window.location.href))) status.textContent = "Signed in.";
+      currentSession = loadSessionCandidate();
+      await loadPreferences();
+      announce("Your interests are ready.");
     } catch (_) {
-      sessionStorage.removeItem(SESSION_KEY);
-      status.textContent = "Sign in failed verification.";
+      showSignedOut();
+      announce("Sign in to personalize your feed.");
     }
   }
 

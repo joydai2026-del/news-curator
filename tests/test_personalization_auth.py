@@ -615,19 +615,41 @@ def test_malformed_auth_http_json_has_no_token_in_exception_graph() -> None:
     assert_exception_graph_omits(caught.value, "HTTP_ACCESS_SENTINEL", "HTTP_REFRESH_SENTINEL")
 
 
-def test_static_callback_cleans_history_and_has_restrictive_csp() -> None:
+def test_static_interest_settings_page_has_restrictive_csp_and_accessible_controls() -> None:
     html = (ROOT / "static/auth/callback/index.html").read_text()
     js = (ROOT / "static/auth/client.js").read_text()
     assert "default-src 'none'" in html
     assert "script-src 'self'" in html
+    assert "style-src 'self'" in html
     assert "connect-src 'self';" in html
     assert "*.supabase.co" not in html
     assert "http:" not in html
     assert "history.replaceState(null, \"\", CALLBACK_PATH)" in js
     callback_source = js[js.index("async function finishCallback"):js.index("async function signOut")]
     assert callback_source.index("history.replaceState") < callback_source.index("await fetch")
+    assert 'type="email"' in html
+    assert 'autocomplete="one-time-code"' in html
+    assert 'id="interests"' in html
+    assert 'id="save-interests"' in html
+    assert 'role="status"' in html
+    assert '<a class="back-link" href="../../">Back to the digest</a>' in html
+    assert ".back-link:focus-visible" in (ROOT / "static/auth/styles.css").read_text()
+    assert "Sign in with Google" not in html
     assert "sessionStorage" in js
     assert "code_verifier" in js
+    assert '`${url}/auth/v1/otp`' in js
+    assert '`${url}/auth/v1/verify`' in js
+    assert "create_user: false" in js
+    assert "create_user: true" not in js
+    assert "Keep the list to 20 interests or fewer." in js
+    assert "Your interests were saved." in js
+    assert "Your interests changed in another session." in js
+    assert "Your interests could not be saved." in js
+    assert "Signed in, but your interests could not be loaded. Refresh the page to try again." in js
+    verify_handler = js[js.index('document.getElementById("verify-code")'):js.index('document.getElementById("reload-interests")')]
+    assert "showPreferences(null)" not in verify_handler
+    assert verify_handler.index("await loadPreferences()") < verify_handler.index("Signed in. Your interests are ready.")
+    assert "saved_searches: currentPreference.saved_searches" in js
     assert "const safeSession = projectSession(rawSession)" in js
     assert "sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession))" in js
     assert "JSON.stringify(rawSession)" not in js

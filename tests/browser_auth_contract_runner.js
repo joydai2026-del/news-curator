@@ -189,6 +189,61 @@ async function main() {
   assert.equal(browser.storage.has("news-curator.auth.verifier"), false);
 
   const authConfig = { url: "https://example.supabase.co", key: "sb_publishable_test" };
+  const otpCalls = [];
+  await client.requestEmailCode("jj@example.com", async (url, options) => {
+    otpCalls.push({ url, options });
+    return response(200, {}, url);
+  });
+  assert.equal(otpCalls[0].url, "https://example.supabase.co/auth/v1/otp");
+  assert.deepEqual(JSON.parse(otpCalls[0].options.body), {
+    email: "jj@example.com",
+    create_user: false,
+    data: {},
+  });
+  assert.equal(otpCalls[0].options.headers.apikey, "sb_publishable_test");
+  assertFailClosedFetch(otpCalls[0]);
+  await client.requestEmailCode("jj@example.com", async (url) =>
+    response(200, { message: "Confirmation email sent" }, url)
+  );
+  await assert.rejects(
+    client.requestEmailCode("jj@example.com", async (url) => response(200, { user: "unexpected" }, url)),
+    /authentication response/
+  );
+  assert.throws(() => client.validateEmail(" jj@example.com"), /email address/);
+  assert.throws(() => client.validateEmail("not-an-email"), /email address/);
+
+  let parsedOtpRedirectBody = false;
+  await assert.rejects(
+    client.requestEmailCode("jj@example.com", async (url) => response(200, {}, `${url}/moved`, {
+      redirected: true,
+      text: async () => { parsedOtpRedirectBody = true; return "{}"; },
+    })),
+    /redirected unexpectedly/
+  );
+  assert.equal(parsedOtpRedirectBody, false);
+
+  const verifyCalls = [];
+  const verified = await client.verifyEmailCode("jj@example.com", "123456", async (url, options) => {
+    verifyCalls.push({ url, options });
+    return response(200, rawSession(), url);
+  });
+  assert.equal(verified.access_token, projected.access_token);
+  assert.equal(verified.refresh_token, projected.refresh_token);
+  assert.equal(verified.user_id, projected.user_id);
+  assert.ok(verified.expires_at >= now + 3599 && verified.expires_at <= now + 3601);
+  assert.deepEqual(JSON.parse(verifyCalls[0].options.body), {
+    email: "jj@example.com",
+    token: "123456",
+    type: "email",
+  });
+  assert.equal(verifyCalls[0].url, "https://example.supabase.co/auth/v1/verify");
+  assertFailClosedFetch(verifyCalls[0]);
+  assert.deepEqual(JSON.parse(browser.storage.get("news-curator.auth.session")), verified);
+  await assert.rejects(
+    client.verifyEmailCode("jj@example.com", "123456", async (url) => response(401, { error: "bad token" }, url)),
+    /^Error: Sign in failed\.$/
+  );
+
   const calls = [];
   const getFetch = async (url, options) => {
     calls.push({ url, options });
@@ -269,12 +324,13 @@ async function main() {
   const setCalls = [];
   const setFetch = async (url, options) => {
     setCalls.push({ url, options });
-    const payload = setCalls.length === 1 ? { status: "updated", revision: 1 } : [preference(1)];
+    const payload = { status: "updated", revision: 1, updated_at: "2026-08-29T12:00:00Z" };
     return response(200, payload, url);
   };
   const setResult = await client.setPreferences(authConfig, projected, update, setFetch);
   assert.equal(setResult.status, "updated");
   assert.equal(setResult.preference.revision, 1);
+  assert.equal(setCalls.length, 1);
   assert.equal(setCalls[0].url.endsWith("/rest/v1/rpc/compare_and_swap_user_preferences"), true);
   assert.deepEqual(JSON.parse(setCalls[0].options.body), {
     expected_revision: 0,
@@ -289,14 +345,13 @@ async function main() {
   const refreshSetFetch = async (url, options) => {
     refreshSetCalls.push({ url, options });
     if (refreshSetCalls.length === 1) return response(200, refreshedSession(), url);
-    if (refreshSetCalls.length === 2) return response(200, { status: "updated", revision: 1 }, url);
-    return response(200, [preference(1)], url);
+    return response(200, { status: "updated", revision: 1, updated_at: "2026-08-29T12:00:00Z" }, url);
   };
   const refreshedSet = await client.setPreferences(authConfig, expired, update, refreshSetFetch);
   assert.equal(refreshedSet.status, "updated");
   assert.equal(refreshedSet.preference.revision, 1);
   assert.equal(refreshSetCalls[1].options.headers.authorization, `Bearer ${refreshedProjection.access_token}`);
-  assert.equal(refreshSetCalls[2].options.headers.authorization, `Bearer ${refreshedProjection.access_token}`);
+  assert.equal(refreshSetCalls.length, 2);
   refreshSetCalls.forEach(assertFailClosedFetch);
 
   const createCalls = [];

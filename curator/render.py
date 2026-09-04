@@ -818,6 +818,7 @@ def render_html(
      put there; no article text is stored or summarized, no claim in any linked article
      has been checked, and a link may have moved, changed or died since the build.</p>
   <p class="health">Sources this run &mdash; {_health_line(results)}</p>
+  <!-- personalization-link -->
   {add_line}
   {repo_line}
 </footer>

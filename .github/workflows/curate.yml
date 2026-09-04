@@ -24,6 +24,7 @@ on:
       - "curator/**"
       - "scripts/**"
       - "static/**"
+      - "CNAME"
       - ".github/workflows/curate.yml"
 
 # Never let a manual run and a scheduled run publish over each other.
@@ -418,6 +419,7 @@ jobs:
 
       - name: Materialize auth callback
         env:
+          NEWS_CURATOR_PERSONALIZATION_ENABLED: ${{ vars.NEWS_CURATOR_PERSONALIZATION_ENABLED }}
           NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
           NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY: ${{ vars.NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY }}
         run: |
@@ -427,10 +429,15 @@ jobs:
             echo "personalization configuration is incomplete" >&2
             exit 1
           else
+            personalization_link_args=()
+            if [ "$NEWS_CURATOR_PERSONALIZATION_ENABLED" = "true" ]; then
+              personalization_link_args=(--site-index ./site/index.html)
+            fi
             python scripts/build_auth_callback.py \
               --supabase-url "$NEWS_CURATOR_SUPABASE_URL" \
               --publishable-key "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" \
-              --output ./site/auth/callback/index.html
+              --output ./site/auth/callback/index.html \
+              "${personalization_link_args[@]}"
           fi
 
       - name: Copy static pages
@@ -438,7 +445,9 @@ jobs:
         # from the fail-closed template and must never be overwritten by it.
         run: |
           mkdir -p site/auth
+          if [ -f CNAME ]; then cp CNAME site/CNAME; fi
           cp static/auth/client.js site/auth/client.js
+          cp static/auth/styles.css site/auth/styles.css
           cp static/privacy.html site/privacy.html
 
       - name: Verify the rendered page has real content

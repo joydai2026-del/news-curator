@@ -254,11 +254,15 @@ def test_build_materializes_auth_callback_without_overwriting_it() -> None:
     copy = _step_named(build, "Copy static pages")
     assert steps.index(materialize) < steps.index(copy)
     assert materialize["env"] == {
+        "NEWS_CURATOR_PERSONALIZATION_ENABLED": "${{ vars.NEWS_CURATOR_PERSONALIZATION_ENABLED }}",
         "NEWS_CURATOR_SUPABASE_URL": "${{ vars.NEWS_CURATOR_SUPABASE_URL }}",
         "NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY": "${{ vars.NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY }}",
     }
     command = str(materialize["run"])
     assert "python scripts/build_auth_callback.py" in command
+    assert 'if [ "$NEWS_CURATOR_PERSONALIZATION_ENABLED" = "true" ]' in command
+    assert "personalization_link_args=(--site-index ./site/index.html)" in command
+    assert '"${personalization_link_args[@]}"' in command
     assert '--output ./site/auth/callback/index.html' in command
     assert 'if [ -z "$NEWS_CURATOR_SUPABASE_URL" ] && [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]' in command
     assert 'elif [ -z "$NEWS_CURATOR_SUPABASE_URL" ] || [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]' in command
@@ -266,8 +270,16 @@ def test_build_materializes_auth_callback_without_overwriting_it() -> None:
     assert 'test -n "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY"' not in command
     copy_command = str(copy["run"])
     assert "static/auth/client.js" in copy_command
+    assert "static/auth/styles.css" in copy_command
     assert "static/privacy.html" in copy_command
     assert "cp -R static/. site/" not in copy_command
+
+
+def test_custom_domain_change_triggers_the_deploy_workflow() -> None:
+    workflow_text = (ROOT / ".github/workflows/curate.yml").read_text()
+    workflow = yaml.safe_load(workflow_text)
+    assert "CNAME" in workflow[True]["push"]["paths"]
+    assert "if [ -f CNAME ]; then cp CNAME site/CNAME; fi" in workflow_text
 
 
 def test_one_source_snapshot_drives_translation_and_publication() -> None:
