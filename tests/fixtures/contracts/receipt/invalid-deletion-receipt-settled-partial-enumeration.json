@@ -1,0 +1,43 @@
+{
+  "contract": "receipt",
+  "dataclass": "DeletionReceipt",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: only profile_and_ranking is enumerated as resolved; search index, caches, exports, public projections, and mirrors are never listed at all, yet the receipt settles green.",
+  "payload": {
+    "envelope": {
+      "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "drec-000007",
+      "kind": "deletion",
+      "state": "settled",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "reason_code": "",
+      "settled_at": "2026-09-01T12:05:00+00:00"
+    },
+    "target_kind": "evidence_item",
+    "target_ids": [
+      "ev-000101"
+    ],
+    "correction_watermark": "2026-09-01T12:00:00+00:00",
+    "invalidated_snapshot_ids": [
+      "snap-000007"
+    ],
+    "rebuild_id": "rebuild-000010",
+    "zero_contribution_verdict": true,
+    "projections": [
+      {
+        "projection": "profile_and_ranking",
+        "resolved": true,
+        "resolution_kind": "rebuild_zero_contribution",
+        "target_ref": "rebuild-000010",
+        "user_visible_disclosure": ""
+      }
+    ],
+    "mirrored_targets": [],
+    "audit_chain_queryable": true
+  },
+  "violates": "invariant: a settled deletion receipt must enumerate all seven projections"
+}

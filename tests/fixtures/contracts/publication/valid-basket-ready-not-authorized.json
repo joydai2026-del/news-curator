@@ -1,0 +1,29 @@
+{
+  "contract": "publication",
+  "dataclass": "PublishingBasket",
+  "expect": "valid",
+  "note": "Five eligible items make the basket READY. Readiness is a signal and authorizes nothing: the state is ready, not authorized.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "basket_id": "basket-2026-09-01",
+    "destination": "relay-set-a",
+    "issue_date": "2026-09-01",
+    "item_story_ids": [
+      "story-1000",
+      "story-1001",
+      "story-1002",
+      "story-1003",
+      "story-1004"
+    ],
+    "required_item_count": 5,
+    "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "state": "ready",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "readiness_signal": true,
+    "revision": 3,
+    "item_artifact_ids": []
+  }
+}

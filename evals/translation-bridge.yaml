@@ -1,0 +1,44 @@
+schema_version: 1
+dataset_name: translation-bridge-sanitized-source-smoke
+minimum_reportable_cases: 100
+calibration_claim: prohibited
+notes: >-
+  These are real source strings from sanitized repository fixtures. No provider
+  output or human adequacy label exists yet, so this file must not produce a
+  quality percentage or calibration claim.
+cases:
+  - id: zh-dw-defense
+    source_fixture: tests/fixtures/feeds/dw-zh.rdf
+    category: politics
+    source_language: zh
+    target_language: en
+    source_text: "中国军备迅速扩张：仅仅是为了自卫吗？"
+    labels: null
+  - id: zh-dw-swatch
+    source_fixture: tests/fixtures/feeds/dw-zh.rdf
+    category: business
+    source_language: zh
+    target_language: en
+    source_text: "Swatch廣告「瞇瞇眼」惹議下架 中網友怒轟"
+    labels: null
+  - id: zh-cnbeta-gta
+    source_fixture: tests/fixtures/feeds/cnbeta.xml
+    category: technology
+    source_language: zh
+    target_language: en
+    source_text: "GTA 6确认不使用生成式人工智能 也不会加入微交易"
+    labels: null
+  - id: zh-solidot-debian
+    source_fixture: tests/fixtures/feeds/solidot.xml
+    category: technology
+    source_language: zh
+    target_language: en
+    source_text: "Debian 项目将允许以负责任的方式使用生成式 AI"
+    labels: null
+  - id: en-buzzing-dhs
+    source_fixture: tests/fixtures/feeds/buzzing.xml
+    category: politics
+    source_language: en
+    target_language: zh
+    source_text: "DHS is using obscure law to snoop on journalists, non-profits, unions"
+    labels: null

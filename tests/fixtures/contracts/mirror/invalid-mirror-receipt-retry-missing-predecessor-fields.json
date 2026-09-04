@@ -1,0 +1,27 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorReceipt",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: removing prior_receipt_ids, prior_attempt_state, and resolution_ref from the conflict-retry fixture entirely (rather than leaving them empty) made the automatic retry valid, because the fields were optional. They are now required on every MirrorReceipt, so omitting them fails structurally.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000025",
+    "artifact_id": "art-000031",
+    "artifact_version": 3,
+    "adapter_id": "vault-wiki",
+    "target_id": "wiki/example/post-quantum-migration.md",
+    "state": "settled",
+    "idempotency_key": "mirror-art-000031-v3-vault-wiki",
+    "attempted_at": "2026-09-01T13:00:00+00:00",
+    "expected_prior_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "attempted_checksum": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "readback_checksum": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "settled_at": "2026-09-01T13:00:00+00:00",
+    "reason_code": "",
+    "created_revision_id": ""
+  },
+  "violates": "required field prior_receipt_ids is absent"
+}

@@ -1,0 +1,177 @@
+{
+  "contract": "receipt",
+  "dataclass": "RankingReceipt",
+  "expect": "valid",
+  "note": "A settled receipt carrying an authoritative transparent score set, both lane scores for the overlapping story, the lane priority, and the resulting primary lane. Everything SC-24 needs to replay the assignment without rerunning a generator is here.",
+  "payload": {
+    "envelope": {
+      "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-system",
+      "actor_kind": "system",
+      "user_id": "user-owner",
+      "receipt_id": "rrec-000012",
+      "kind": "ranking",
+      "state": "settled",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "reason_code": "",
+      "settled_at": "2026-09-01T12:00:00+00:00"
+    },
+    "run_id": "run-2026-09-01-12",
+    "edition_date": "2026-09-01",
+    "profile_snapshot_id": "snap-000007",
+    "profile_version": 7,
+    "pre_rank_candidate_ids": [
+      "story-000042",
+      "story-000043",
+      "story-000044"
+    ],
+    "lane_scores": [
+      [
+        "story-000042",
+        "updates",
+        0.74
+      ],
+      [
+        "story-000042",
+        "hot",
+        0.81
+      ]
+    ],
+    "lane_priority": [
+      "updates",
+      "hot",
+      "interested",
+      "surprise"
+    ],
+    "primary_lane_by_story": [
+      [
+        "story-000042",
+        "updates"
+      ]
+    ],
+    "secondary_lane_reasons": [
+      [
+        "story-000042",
+        "hot",
+        "covered by 4 independent sources within 24h"
+      ]
+    ],
+    "transparent_scores": [
+      {
+        "run_id": "run-2026-09-01-12",
+        "story_id": "story-000042",
+        "scorer_kind": "transparent",
+        "scorer_version": "transparent-1",
+        "authoritative": true,
+        "components": {
+          "relevance": 0.28,
+          "freshness": 0.2,
+          "trend": 0.13,
+          "editor_consensus": 0.07,
+          "deliberate_surprise": 0.0,
+          "diversity": 0.06,
+          "repetition_penalty": 0.0,
+          "source_fatigue_penalty": 0.02,
+          "final_score": 0.72
+        },
+        "plain_reason": "developing story you follow, 4 independent sources in the last 24h"
+      }
+    ],
+    "final_order": [
+      {
+        "position": 1,
+        "story_id": "story-000042",
+        "primary_lane": "updates",
+        "final_score": 0.72,
+        "plain_reason": "developing story you follow, 4 independent sources in the last 24h",
+        "backfilled": false
+      }
+    ],
+    "bands": [
+      {
+        "band": "relevance",
+        "active": true,
+        "floor": 0.55,
+        "cap": 1.0,
+        "achieved": 0.75,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "freshness",
+        "active": true,
+        "floor": 0.5,
+        "cap": 1.0,
+        "achieved": 0.83,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "trend",
+        "active": true,
+        "floor": 0.15,
+        "cap": 0.6,
+        "achieved": 0.29,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "deliberate_surprise",
+        "active": true,
+        "floor": 0.1,
+        "cap": 0.25,
+        "achieved": 0.1667,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "source_diversity",
+        "active": true,
+        "floor": null,
+        "cap": 0.125,
+        "achieved": 0.0833,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "topic_diversity",
+        "active": true,
+        "floor": null,
+        "cap": 0.375,
+        "achieved": 0.25,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "repetition",
+        "active": true,
+        "floor": 0.0,
+        "cap": 0.1,
+        "achieved": 0.0417,
+        "verdict": "pass",
+        "exception_reason": ""
+      }
+    ],
+    "lane_quotas": [
+      [
+        "updates",
+        8
+      ],
+      [
+        "hot",
+        6
+      ],
+      [
+        "interested",
+        6
+      ],
+      [
+        "surprise",
+        4
+      ]
+    ],
+    "verifier_verdict": "pass",
+    "shadow_scores": []
+  }
+}

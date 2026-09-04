@@ -20,3 +20,21 @@ receipt.json
 
 # Vault context symlink (house convention)
 .vault
+
+# Local pipeline artifacts (written by --health-report and workflow-local runs)
+source-health.json
+downloaded-state/
+downloaded-translation/
+repository-state/
+supabase/.temp/
+
+# Filled-in Worker config. The example file carries placeholders only; the real
+# copy holds the Access team name, the application audience tag, the private
+# hostname and the zone name, none of which belong in a public repository.
+/edge/wrangler.toml
+/edge/.dev.vars
+
+# Fixture generator scratch. regenerate-fixtures.mjs writes <fixture>.tmp-<pid>
+# and renames it into place; the unlink cleanup is best-effort inside a catch,
+# so a crash mid-generation can leave one behind. It is scratch, never an input.
+/edge/fixtures/*.tmp-*

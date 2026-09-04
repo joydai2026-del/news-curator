@@ -1,7 +1,7 @@
 """The fetch job's CLI: it always exits 0, and it always says why.
 
 The whole point of this entry point is that a broken newsletter lane must not
-fail an hourly build that has six healthy tabs. The risk that creates is
+fail a daily build that has six healthy tabs. The risk that creates is
 silence: an exit code of 0 with nothing in the run summary looks exactly like a
 good run. So every degraded state has to leave a `::warning::` annotation, and
 these tests are what stop one of them slipping back into quiet mode.

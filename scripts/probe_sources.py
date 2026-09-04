@@ -1,121 +1,151 @@
 #!/usr/bin/env python3
-"""Check every configured source and print a receipt.
-
-This exists so nobody has to take the feed list on faith. Run it and you get the
-same table the docs claim, generated from your machine, right now:
-
-    python3 scripts/probe_sources.py
-    python3 scripts/probe_sources.py --json > receipt.json
-
-It reports what it actually observed. Reachability is not permission to
-republish, and this script cannot tell you anything about the latter.
-"""
+"""Probe configured sources through the production parsers and health rules."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import feedparser  # noqa: E402
-import requests  # noqa: E402
-
 from curator.config import load_config  # noqa: E402
+from curator.pipeline import configured_source_specs  # noqa: E402
+from curator.sources import (  # noqa: E402
+    SafeHttpPolicy,
+    SafeHttpTransport,
+    SourceContext,
+    SourceQuery,
+    build_builtin_registry,
+    collect_sources,
+)
 
 
-def probe_feed(url: str, ua: str, timeout: float) -> dict:
-    started = time.time()
-    row: dict = {"url": url}
-    try:
-        resp = requests.get(url, timeout=timeout, headers={"User-Agent": ua}, allow_redirects=True)
-        row["status"] = resp.status_code
-        row["final_url"] = resp.url
-        row["bytes"] = len(resp.content)
-        row["content_type"] = resp.headers.get("Content-Type", "")
-        if resp.ok:
-            parsed = feedparser.parse(resp.content)
-            row["entries"] = len(parsed.entries)
-            row["bozo"] = bool(getattr(parsed, "bozo", False))
-            # A malformed document that happens to yield entries is not "ok".
-            # Reporting it as clean is how a slowly rotting feed stays invisible.
-            row["ok"] = len(parsed.entries) > 0 and not row["bozo"]
-        else:
-            row["entries"] = 0
-            row["ok"] = False
-    except Exception as exc:
-        row.update({"status": None, "entries": 0, "ok": False, "error": type(exc).__name__})
-    row["elapsed_s"] = round(time.time() - started, 2)
-    return row
+ACCEPTED_STATUSES = frozenset({"fresh", "link_resolution_degraded", "disabled"})
+DEGRADED_STATUSES = frozenset(
+    {
+        "stale",
+        "empty",
+        "unavailable",
+        "malformed",
+        "degraded",
+        "link_resolution_degraded",
+    }
+)
 
 
-def probe_hn(ua: str, timeout: float) -> dict:
-    url = "https://hn.algolia.com/api/v1/search?query=test&tags=story&hitsPerPage=1"
-    started = time.time()
-    try:
-        resp = requests.get(url, timeout=timeout, headers={"User-Agent": ua})
-        hits = resp.json().get("hits", []) if resp.ok else []
-        return {
-            "url": url, "status": resp.status_code, "entries": len(hits),
-            "ok": resp.ok and bool(hits), "elapsed_s": round(time.time() - started, 2),
-        }
-    except Exception as exc:
-        return {"url": url, "status": None, "entries": 0, "ok": False, "error": type(exc).__name__}
+def _accepted(status: str) -> bool:
+    return status in ACCEPTED_STATUSES
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
-    ap.add_argument("--json", action="store_true", help="emit a machine-readable receipt")
-    args = ap.parse_args()
+def _health_row(health) -> dict:
+    return {
+        "id": health.source_id,
+        "type": health.source_type,
+        "language": health.language,
+        "entries": health.usable_items,
+        "newest_at": health.newest_at.isoformat() if health.newest_at else None,
+        "age_hours": round(health.age_hours, 2) if health.age_hours is not None else None,
+        "max_age_hours": health.max_age_hours,
+        "status": health.status,
+        "echo_eligible": health.echo_eligible,
+        "reason_code": health.reason_code,
+        "fresh": health.status == "fresh",
+        "ok": _accepted(health.status),
+    }
 
-    cfg = load_config(args.root)
-    ua, timeout = cfg.user_agent, cfg.timeout
 
-    rows = [{"id": "hackernews", "name": "Hacker News (Algolia)", "category": "-", **probe_hn(ua, timeout)}]
-    # Both files: the shared pool in sources.yaml AND every category's curated
-    # feeds in topics.yaml. A probe that only checked one of them would report a
-    # healthy feed list while half of it was broken.
-    for source in cfg.all_feeds:
-        rows.append(
-            {
-                "id": source.id,
-                "name": source.name,
-                "category": source.category or "shared",
-                **probe_feed(source.url, ua, timeout),
-            }
+def probe_specs(cfg, specs, *, registry=None, transport=None) -> list[dict]:
+    """Exercise the exact registry, transport, and adapters used by collect()."""
+
+    selected_registry = registry or build_builtin_registry()
+    selected_transport = transport or SafeHttpTransport(
+        policy=SafeHttpPolicy(
+            total_timeout_seconds=cfg.timeout,
+            max_wire_bytes=cfg.default_source_max_response_bytes,
+            max_decoded_bytes=cfg.default_source_max_response_bytes,
+            per_host_concurrency=cfg.default_source_per_host_concurrency,
         )
+    )
+    context = SourceContext(
+        registry=selected_registry,
+        transport=selected_transport,
+        clock=lambda: datetime.now(timezone.utc),
+        environment=os.environ.get,
+        user_agent=cfg.user_agent,
+        queries=tuple(
+            SourceQuery(category.id, tuple(category.search_terms))
+            for category in cfg.categories
+            if category.search_terms
+        ),
+        default_max_age_hours=cfg.default_source_max_age_hours,
+    )
+    results = collect_sources(specs, context, max_workers=cfg.fetch_workers)
+    return [_health_row(result.health) for result in results]
 
-    ok = sum(1 for r in rows if r["ok"])
-    receipt = {
-        "probed_at": datetime.now(timezone.utc).isoformat(),
-        "user_agent": ua,
-        "total": len(rows),
-        "reachable": ok,
+
+def build_receipt(rows: list[dict], *, probed_at: datetime | None = None) -> dict:
+    """Build the stable machine-readable coverage summary."""
+
+    checked = probed_at or datetime.now(timezone.utc)
+    configured = len(rows)
+    return {
+        "probed_at": checked.isoformat(),
+        "configured": configured,
+        "attempted": sum(1 for row in rows if row["status"] != "disabled"),
+        "total": configured,  # compatibility alias for older receipts
+        "fresh": sum(1 for row in rows if row["status"] == "fresh"),
+        "stale": sum(1 for row in rows if row["status"] == "stale"),
+        "empty": sum(1 for row in rows if row["status"] == "empty"),
+        "degraded": sum(1 for row in rows if row["status"] in DEGRADED_STATUSES),
         "sources": rows,
     }
 
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument("--json", action="store_true", help="emit a machine-readable receipt")
+    ap.add_argument("--ids", help="comma-separated configured source ids")
+    args = ap.parse_args(argv)
+
+    cfg = load_config(args.root)
+    wanted = {entry.strip() for entry in (args.ids or "").split(",") if entry.strip()}
+    registry = build_builtin_registry()
+    specs = configured_source_specs(cfg, registry)
+    known = {spec.id for spec in specs}
+    unknown = sorted(wanted - known)
+    if unknown:
+        ap.error(f"unknown source ids: {', '.join(unknown)}")
+
+    selected = tuple(spec for spec in specs if not wanted or spec.id in wanted)
+    rows = probe_specs(cfg, selected, registry=registry)
+
+    receipt = build_receipt(rows)
+    configured = receipt["configured"]
+
     if args.json:
         print(json.dumps(receipt, indent=2))
-        return 0 if ok == len(rows) else 1
+        return 0 if all(row["ok"] for row in rows) else 1
 
     print(f"Probed {len(rows)} sources at {receipt['probed_at']}\n")
-    print(f"{'id':<16}{'category':<14}{'status':>7}{'entries':>9}{'bytes':>10}  result")
+    print(f"{'id':<18}{'type':<15}{'lang':<7}{'items':>7}{'age':>10}  status")
     print("-" * 76)
-    for r in rows:
-        mark = "ok" if r["ok"] else (r.get("error") or "FAILED")
+    for row in rows:
+        age = "-" if row.get("age_hours") is None else f"{row['age_hours']:.1f}h"
         print(
-            f"{r['id']:<16}{r.get('category', '-'):<14}{str(r.get('status') or '-'):>7}"
-            f"{r.get('entries', 0):>9}{r.get('bytes', 0):>10}  {mark}"
+            f"{row['id']:<18}{row.get('type', '-'):<15}{row.get('language', '-'):<7}"
+            f"{row.get('entries', 0):>7}{age:>10}  {row.get('status', 'unknown')}"
         )
     print("-" * 76)
-    print(f"{ok}/{len(rows)} reachable")
-    print("\nReachable is not the same as licensed to republish. See sources.yaml.")
-    return 0 if ok == len(rows) else 1
+    print(
+        f"{receipt['fresh']}/{configured} fresh, {receipt['stale']} stale, "
+        f"{receipt['empty']} empty, {receipt['degraded']} degraded"
+    )
+    return 0 if all(row["ok"] for row in rows) else 1
 
 
 if __name__ == "__main__":

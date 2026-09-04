@@ -1,0 +1,26 @@
+{
+  "contract": "publication",
+  "dataclass": "PublicationRecord",
+  "expect": "invalid",
+  "note": "A settled publication with no authorization behind it is exactly the unapproved send the state machine is built to make impossible.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "identity": {
+      "tenant_id": "tenant-owner-private",
+      "publisher_identity_ref": "signer-publisher-01",
+      "destination": "relay-set-a",
+      "issue_date": "2026-09-01"
+    },
+    "state": "settled",
+    "updated_at": "2026-09-01T12:00:00+00:00",
+    "authorization_id": null,
+    "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "idempotency_key": "pub-tenant-owner-private|signer-publisher-01|relay-set-a|2026-09-01",
+    "attempt": 1,
+    "settled_receipt_id": "orec-000012"
+  },
+  "violates": "invariant: state settled requires a non-null authorization_id"
+}

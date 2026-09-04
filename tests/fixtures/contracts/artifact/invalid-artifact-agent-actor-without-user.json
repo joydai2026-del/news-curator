@@ -1,0 +1,22 @@
+{
+  "contract": "artifact",
+  "dataclass": "KnowledgeArtifact",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent. A subject-bound record (a row a per-person delete must be able to find) whose user_id is null. Under the two-tier rule this is rejected whatever wrote it, so a system writer cannot erase the human subject.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-cli-01",
+    "actor_kind": "agent",
+    "user_id": null,
+    "artifact_id": "art-000031",
+    "artifact_type": "report",
+    "status": "settled",
+    "publication_class": "private",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "current_version": 2,
+    "title": "Post-quantum migration: what changed this week",
+    "conversation_id": "conv-000009",
+    "story_id": "story-000042"
+  },
+  "violates": "this record is about a person, so user_id is required non-blank whatever wrote it"
+}

@@ -1,0 +1,25 @@
+{
+  "contract": "event",
+  "dataclass": "LearningEvent",
+  "expect": "valid",
+  "note": "The reference strong-positive event. The same idempotency key submitted from the agent path must produce one row, not two.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "event_id": "evt-000501",
+    "event_type": "more_like_this",
+    "occurred_at": "2026-09-01T12:00:00+00:00",
+    "recorded_at": "2026-09-01T12:00:00+00:00",
+    "surface": "web_accordion",
+    "idempotency_key": "fb-story-000042-more-01",
+    "evidence_class": "explicit",
+    "origin": "live",
+    "confidence": "strong",
+    "policy_revision": 1,
+    "story_id": "story-000042",
+    "story_cluster_id": "cluster-000012",
+    "session_id": "sess-0091"
+  }
+}

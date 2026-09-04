@@ -1,0 +1,30 @@
+{
+  "contract": "publication",
+  "dataclass": "PublicationRecord",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent. A PublicationRecord whose identity names a DIFFERENT tenant than the record's inherited tenant_id. The identity is the at-most-once key, so if the two could disagree a member of tenant A could own the state of a publication keyed to tenant B. The authorization class carries the same attack.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "identity": {
+      "tenant_id": "tenant-other-private",
+      "publisher_identity_ref": "signer-publisher-01",
+      "destination": "relay-set-a",
+      "issue_date": "2026-09-01"
+    },
+    "state": "settled",
+    "updated_at": "2026-09-01T13:00:00+00:00",
+    "authorization_id": "auth-000005",
+    "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "idempotency_key": "pub-tenant-owner-private|signer-publisher-01|relay-set-a|2026-09-01",
+    "attempt": 1,
+    "settled_receipt_id": "orec-000012",
+    "reason_code": "",
+    "prior_state": "unknown",
+    "readback_verdict": "positive",
+    "readback_receipt_ref": "readback-000012"
+  },
+  "violates": "identity.tenant_id must equal the record's tenant_id"
+}

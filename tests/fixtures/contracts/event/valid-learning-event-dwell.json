@@ -1,0 +1,26 @@
+{
+  "contract": "event",
+  "dataclass": "LearningEvent",
+  "expect": "valid",
+  "note": "41 seconds of dwell. Passive, weak, and carrying a duration. It supports other evidence and can never on its own mark the story read.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "event_id": "evt-000502",
+    "event_type": "dwell",
+    "occurred_at": "2026-09-01T12:00:00+00:00",
+    "recorded_at": "2026-09-01T12:00:00+00:00",
+    "surface": "web_story_page",
+    "idempotency_key": "dwell-story-000042-sess-0091",
+    "evidence_class": "passive",
+    "origin": "live",
+    "confidence": "weak",
+    "policy_revision": 1,
+    "story_id": "story-000042",
+    "story_cluster_id": "cluster-000012",
+    "session_id": "sess-0091",
+    "duration_ms": 41000
+  }
+}

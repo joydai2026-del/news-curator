@@ -1,0 +1,22 @@
+{
+  "contract": "evidence",
+  "dataclass": "RawImport",
+  "expect": "valid",
+  "note": "A raw import writes bytes and changes no profile state. source_kind is a kind, not a provider brand.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "raw_import_id": "raw-000001",
+    "source_kind": "newsletter_archive",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "schema_version": "archive-export-1",
+    "storage_reference": "restricted://raw/000001",
+    "imported_at": "2026-09-01T12:00:00+00:00",
+    "consent_version": "consent-2026-09-01",
+    "retention_state": "active",
+    "exported_at": "2026-08-30T00:00:00+00:00",
+    "byte_size": 4718592
+  }
+}

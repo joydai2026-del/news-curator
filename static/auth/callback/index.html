@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="supabase-url" content="">
+  <meta name="supabase-publishable-key" content="">
+  <title>Personalize your News Curator feed</title>
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <main>
+    <h1>Personalize your feed</h1>
+    <p>Choose the topics you want News Curator to prioritize.</p>
+    <p><a class="back-link" href="../../">Back to the digest</a></p>
+
+    <section id="login-panel" aria-labelledby="login-heading">
+      <h2 id="login-heading">Sign in by email</h2>
+      <label for="email">Email address</label>
+      <input id="email" type="email" inputmode="email" autocomplete="email" maxlength="254" required>
+      <button id="send-code" type="button">Email me a code</button>
+    </section>
+
+    <section id="code-panel" aria-labelledby="code-heading" hidden>
+      <h2 id="code-heading">Enter your code</h2>
+      <label for="code">One-time code</label>
+      <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="128" required>
+      <button id="verify-code" type="button">Sign in</button>
+    </section>
+
+    <section id="preferences-panel" aria-labelledby="preferences-heading" hidden>
+      <h2 id="preferences-heading">Your interests</h2>
+      <label for="interests">Topics to prioritize</label>
+      <textarea id="interests" aria-describedby="interest-help interest-count" maxlength="3220"></textarea>
+      <p class="help" id="interest-help">Put one interest on each line. You can save up to 20.</p>
+      <p class="help" id="interest-count">0 of 20 interests</p>
+      <div class="actions">
+        <button id="save-interests" type="button">Save interests</button>
+        <button class="secondary" id="reload-interests" type="button">Reload interests</button>
+        <button class="secondary" id="sign-out" type="button">Sign out</button>
+      </div>
+    </section>
+
+    <p id="status" role="status" aria-live="polite">Checking sign-in status.</p>
+  </main>
+  <script src="../client.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "news-curator-edge",
+  "private": true,
+  "type": "module",
+  "description": "Edge access layer. No runtime dependencies: WebCrypto and the Node built-in test runner only.",
+  "scripts": {
+    "test": "node --test \"*.test.js\""
+  }
+}

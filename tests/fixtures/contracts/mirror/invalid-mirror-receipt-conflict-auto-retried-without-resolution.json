@@ -1,0 +1,32 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorReceipt",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: a second receipt with the same idempotency_key, state settled, readback_checksum matching attempted_checksum, and prior_receipt_ids pointing at the conflicted receipt, but with NO resolution_ref. That is an automatic retry that silently overwrote a target after a compare-and-set conflict, which SC-26 and the plan both forbid.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000025",
+    "artifact_id": "art-000031",
+    "artifact_version": 3,
+    "adapter_id": "vault-wiki",
+    "target_id": "wiki/example/post-quantum-migration.md",
+    "state": "settled",
+    "idempotency_key": "mirror-art-000031-v3-vault-wiki",
+    "attempted_at": "2026-09-01T13:00:00+00:00",
+    "expected_prior_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "attempted_checksum": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "readback_checksum": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "settled_at": "2026-09-01T13:00:00+00:00",
+    "reason_code": "",
+    "created_revision_id": "",
+    "prior_receipt_ids": [
+      "mrec-000022"
+    ],
+    "prior_attempt_state": "conflict",
+    "resolution_ref": ""
+  },
+  "violates": "invariant: resolving a conflict or unknown attempt into settled or writing requires a recorded resolution_ref"
+}

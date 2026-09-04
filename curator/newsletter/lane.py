@@ -13,7 +13,7 @@ Three properties the rest of the codebase depends on:
     Gmail before that check.
   * **Never raises.** Every failure comes back as `LaneResult(dark=True,
     reason=<slug>)`. A revoked refresh token darkens one lane and leaves a
-    visible warning; it does not fail the hourly build of six healthy tabs.
+    visible warning; it does not fail the daily build of six healthy tabs.
   * **The caller advances the cursor, and only as far as the run actually got.**
     `fetch()` returns the hashes and the watermark it WOULD commit; the
     orchestrator calls `state.advance()` only after the page is written, so a

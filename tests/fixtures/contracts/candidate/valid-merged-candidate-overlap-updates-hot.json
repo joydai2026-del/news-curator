@@ -1,0 +1,40 @@
+{
+  "contract": "candidate",
+  "dataclass": "MergedCandidate",
+  "expect": "valid",
+  "note": "SC-24's overlapping-lane fixture. One story qualifies for Updates AND Hot. Hot scores HIGHER (0.81 vs 0.74) yet Updates is primary, because lane priority is the first tie-break. Only Updates consumes quota; the Hot reason survives in the receipt. This is the case where a score-first rule would have silently disagreed with the configured priority.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "run_id": "run-2026-09-01-12",
+    "story_id": "story-000042",
+    "story_cluster_id": "cluster-000012",
+    "primary_lane": "updates",
+    "lane_scores": [
+      [
+        "updates",
+        0.74
+      ],
+      [
+        "hot",
+        0.81
+      ]
+    ],
+    "lane_reasons": [
+      [
+        "updates",
+        "developing cluster: two new source documents since the last edition"
+      ],
+      [
+        "hot",
+        "covered by 4 independent sources within 24h"
+      ]
+    ],
+    "tie_break_applied": "lane_priority",
+    "secondary_lanes": [
+      "hot"
+    ]
+  }
+}

@@ -1,0 +1,123 @@
+# Example only. Copy to edge/wrangler.toml and fill in the placeholders.
+# That path is listed in .gitignore, so the filled-in copy stays out of git.
+# Every value below is a placeholder. No account id, zone id, team name, or
+# application tag belongs in this repository: it is public.
+
+name = "news-curator-edge"
+main = "worker.js"
+
+# Pin the runtime date so a platform change cannot silently alter behavior.
+compatibility_date = "2026-09-02"
+
+# account_id is NOT set here on purpose. Supply it from the environment
+# (CLOUDFLARE_ACCOUNT_ID) at deploy time so it never lands in version control.
+
+[vars]
+# The Access team name. The issuer and the key set URL are derived from it:
+#   issuer   https://<ACCESS_TEAM_NAME>.cloudflareaccess.com
+#   key set  https://<ACCESS_TEAM_NAME>.cloudflareaccess.com/cdn-cgi/access/certs
+# Because both are built by interpolating this value, it is the TRUST ROOT of
+# the whole layer, and it must be exactly one DNS label: lowercase letters,
+# digits and hyphens, no leading or trailing hyphen, at most 63 characters. A
+# value like "attacker.example/path" would point the key set at another host
+# entirely, so it is refused at construction (503 on every route) rather than
+# used. Leaving the placeholder below in place is refused for the same reason.
+ACCESS_TEAM_NAME = "REPLACE_WITH_TEAM_NAME"
+
+# The Access application audience tag, copied from the application's settings.
+# It is an identifier, not a secret, but it is account-identifying, so it stays
+# out of the repository. Blank values and this shipped placeholder are refused
+# at construction: an unfilled config should read as "you did not fill in the
+# file", not as "every token is denied".
+ACCESS_AUD = "REPLACE_WITH_APPLICATION_AUDIENCE_TAG"
+
+# Meter thresholds are policy, not code. Override them here rather than editing
+# meter.js. Omit the block to use DEFAULT_METER_POLICY.
+#
+# The example below is COMPLETE: it names a meter, and every spec carries a
+# meter_kind and a unit. Both are required. A policy that parses but cannot
+# describe its meters is a configuration error and the Worker refuses to start.
+# METER_POLICY_JSON = '{"policy_revision":1,"staleness_ms":900000,"meters":{"requests_per_day":{"meter_kind":"cumulative_budget","unit":"requests","warning_threshold":70000,"hard_stop_threshold":90000}}}'
+#
+# An EMPTY meters map ("meters":{}) is legal but measures nothing, so the
+# receipt it produces is final_state "unknown" with reason_code
+# "no_meters_configured" and no settled timestamp. It never reads as a pass.
+
+# Tuning values. Every one is optional: omit it and the documented default
+# applies. A value that is not a finite number >= 0 is a CONFIGURATION ERROR,
+# not something to coerce, and the Worker refuses to start (503 on every route,
+# `{"status":"degraded","config":"invalid"}` on /healthz) rather than running
+# with a control that silently compares false against everything.
+#
+# A value is PARSED, never coerced: a real number, or a non-blank plain decimal
+# string ("60000", "1.5"). Whitespace (" "), booleans, arrays, hexadecimal
+# ("0x10"), exponent notation ("1e3"), a leading sign and "Infinity" are all
+# refused. Number(" ") is 0, and a refetch floor silently set to zero is the
+# control disabled rather than tuned.
+#
+# METER_POLICY_JSON staleness_ms carries its own upper bound: <= 86400000
+# (24 hours). Three extra zeros on 15 minutes is 10.4 days, wide enough for a
+# reading sampled at the UNIX epoch to verdict "fresh".
+
+# EVERY tuning value below has a documented MAXIMUM as well as the >= 0 floor,
+# refused at construction. A floor alone is half a bound: three extra zeros on a
+# default is a typo, not a tuning choice, and each of these windows DISABLES the
+# control it names once it is wide enough. The freshness window above fails
+# GREEN when it is too wide; these fail OPEN.
+#
+#   ACCESS_CLOCK_SKEW_SEC   <= 300        (5 minutes)
+#   JWKS_CACHE_TTL_MS       <= 86400000   (24 hours)
+#   JWKS_MIN_REFETCH_MS     <= 86400000   (24 hours)
+#   JWKS_STALE_GRACE_MS     <= 86400000   (24 hours)
+#   JWKS_FETCH_TIMEOUT_MS   <= 30000      (30 seconds)
+
+# Clock skew allowed on `exp` and `nbf`, in seconds. Default 30, maximum 300.
+# This is the window a token is accepted for PAST its own expiry, so "30000"
+# (three extra zeros on the default) is 8.33 hours of expired-token acceptance.
+# ACCESS_CLOCK_SKEW_SEC = "30"
+
+# CONSTRAINT ON THE NEXT TWO VALUES: JWKS_CACHE_TTL_MS must be >=
+# JWKS_MIN_REFETCH_MS. They are not independent knobs. The refetch floor applies
+# to attempts even when no cache is left to serve, so a TTL shorter than the
+# floor throws the key set away and then forbids fetching a replacement: a
+# HEALTHY key set answering 200 every time still produces a permanent duty cycle
+# of denials (50% of authenticated requests at a 30s TTL against the default 60s
+# floor). The Worker refuses to start on that combination. If you shorten the
+# TTL to pick up a key rotation faster, lower the floor with it.
+
+# How long a fetched key set is reused before it is refetched, in milliseconds.
+# Default 600000 (10 minutes). Must be >= JWKS_MIN_REFETCH_MS, maximum
+# 86400000 (24 hours): past that, a key retired upstream keeps verifying
+# sessions in this isolate for longer than a day.
+# JWKS_CACHE_TTL_MS = "600000"
+
+# Floor between forced refetches, in milliseconds. This is what stops an
+# unauthenticated caller presenting an unknown kid from turning every inbound
+# request into an outbound one. Default 60000 (1 minute).
+# Must be <= JWKS_CACHE_TTL_MS, maximum 86400000 (24 hours).
+# JWKS_MIN_REFETCH_MS = "60000"
+
+# Upper bound on ONE key set fetch, in milliseconds. Default 5000. An upstream
+# that accepts the connection and never answers is a different failure from one
+# that refuses: a refusal denies immediately, a hang holds the in-flight attempt
+# open and every request that joins it waits with no ceiling. This bound turns
+# a hang into a denial. Must be > 0, maximum 30000 (30 seconds).
+# JWKS_FETCH_TIMEOUT_MS = "5000"
+
+# Serve-stale grace on a key set OUTAGE, in milliseconds, measured past the TTL.
+# Default 0, which FAILS CLOSED: if the key set cannot be confirmed and the
+# cached copy has aged out, every session is denied. A positive value trades
+# that for availability on purpose; set it only if you mean it. Maximum
+# 86400000 (24 hours): an unbounded grace defeats the fail-closed default
+# permanently rather than for a window you chose.
+# JWKS_STALE_GRACE_MS = "0"
+
+# No secrets in this file. Anything secret is set with `wrangler secret put` or
+# the equivalent API call, and never committed.
+
+# Routing: bind a custom hostname here, then protect it (or the Worker itself)
+# with a Cloudflare Access application. The Worker still verifies the JWT on
+# every request: Access in front is the gate, the verification here is the lock.
+# [[routes]]
+# pattern = "REPLACE_WITH_HOSTNAME/*"
+# zone_name = "REPLACE_WITH_ZONE_NAME"

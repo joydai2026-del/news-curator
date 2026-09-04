@@ -1,0 +1,18 @@
+{
+  "contract": "tenant",
+  "dataclass": "TenantMembership",
+  "expect": "valid",
+  "note": "Owner membership carrying both the tenant role and the publisher role.",
+  "payload": {
+    "membership_id": "member-owner-01",
+    "tenant_id": "tenant-owner-private",
+    "principal_id": "principal-owner",
+    "actor_id": "actor-human-owner",
+    "roles": [
+      "owner",
+      "publisher"
+    ],
+    "active": true,
+    "revoked_at": null
+  }
+}

@@ -4,7 +4,7 @@ name: Curate
 #
 # Two honest notes about the schedule:
 #   * GitHub runs cron on a best-effort basis and delays or drops runs under
-#     load. The page therefore says "scheduled hourly" and shows the real build
+#     load. The page therefore says "scheduled daily" and shows the real build
 #     time rather than claiming a guarantee.
 #   * GitHub DISABLES scheduled workflows in a public repo after 60 days with no
 #     repository activity, and emails the owner. If the page goes stale, check
@@ -13,7 +13,8 @@ on:
   schedule:
     # Off the hour on purpose. Minute 0 is the busiest slot on the shared cron
     # pool and the most likely to be delayed.
-    - cron: "17 * * * *"
+    - cron: "17 9 * * *"
+      timezone: "America/New_York"
   workflow_dispatch:
   push:
     branches: [main]
@@ -21,6 +22,9 @@ on:
       - "topics.yaml"
       - "sources.yaml"
       - "curator/**"
+      - "scripts/**"
+      - "static/**"
+      - "CNAME"
       - ".github/workflows/curate.yml"
 
 # Never let a manual run and a scheduled run publish over each other.
@@ -36,6 +40,7 @@ jobs:
   # The job never fails the build: the CLI exits 0 and writes a "dark"
   # artifact on any problem, which the page then reports honestly.
   newsletter:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: newsletter
@@ -43,11 +48,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -65,25 +71,196 @@ jobs:
           path: ./newsletter_artifact.json
           retention-days: 2
 
-  build:
+  # One no-secret collection is the authority for both translation and the
+  # page build. This prevents paid work from targeting a different feed moment
+  # than the stories ultimately published.
+  source-snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: newsletter
-    # The lane must never take the six healthy tabs down with it: build runs
-    # whatever happened above, and a missing artifact just means a dark lane.
-    if: ${{ always() }}
+    timeout-minutes: 15
     permissions:
-      # `write` only so the build can commit image_cache.json and the
-      # newsletter cursor back. The cache is what stops an hourly job asking
-      # every publisher the same question forever; the cursor is what stops it
-      # re-reading the same mail. That commit is the only write this job
-      # makes, it happens only on main (see the `if:` on the step), and it
-      # touches only those two files.
-      contents: write
-      pages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Collect source snapshot
+        run: >
+          python scripts/source_snapshot.py collect --root .
+          --snapshot "$RUNNER_TEMP/source-snapshot.json"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-snapshot
+          path: ${{ runner.temp }}/source-snapshot.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # This job is dark until the repository variable is exactly "true" and the
+  # protected translation Environment admits the main branch.  Workload
+  # identity is the only supported Google credential path: no long-lived
+  # Google key is accepted by this workflow.
+  translation:
+    needs: source-snapshot
+    if: ${{ github.ref == 'refs/heads/main' && vars.TRANSLATION_WORKFLOW_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: translation
+    permissions:
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-snapshot
+          path: ${{ runner.temp }}
+
+      - name: Validate source snapshot
+        run: >
+          python scripts/source_snapshot.py validate --root .
+          --snapshot "$RUNNER_TEMP/source-snapshot.json"
+
+      - name: Acquire short-lived Google access
+        env:
+          GOOGLE_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
+          GOOGLE_TRANSLATION_SERVICE_ACCOUNT: ${{ vars.GOOGLE_TRANSLATION_SERVICE_ACCOUNT }}
+        run: |
+          python scripts/google_workload_identity.py \
+            --provider "$GOOGLE_WORKLOAD_IDENTITY_PROVIDER" \
+            --service-account "$GOOGLE_TRANSLATION_SERVICE_ACCOUNT" \
+            --output "$RUNNER_TEMP/google-access-token"
+
+      # Workstream I owns this integration entry point. Keeping the exact path
+      # here makes the dependency executable instead of hiding it in prose.
+      - name: Produce translation candidate
+        env:
+          NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
+          NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY }}
+          GOOGLE_CLOUD_PROJECT_ID: ${{ vars.GOOGLE_CLOUD_PROJECT_ID }}
+        run: |
+          test -f scripts/run_translation_job.py
+          python scripts/run_translation_job.py \
+            --root . \
+            --output "$RUNNER_TEMP/translation-candidate.json" \
+            --google-access-token-file "$RUNNER_TEMP/google-access-token" \
+            --source-snapshot "$RUNNER_TEMP/source-snapshot.json"
+
+      - name: Validate and sanitize translation artifact
+        env:
+          NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          candidate = Path(os.environ["RUNNER_TEMP"]) / "translation-candidate.json"
+          output = Path(os.environ["RUNNER_TEMP"]) / "translation_artifact.json"
+          token_path = Path(os.environ["RUNNER_TEMP"]) / "google-access-token"
+          raw = candidate.read_bytes()
+          if len(raw) > 2_000_000:
+              raise SystemExit("translation artifact exceeds 2 MB")
+          data = json.loads(raw.decode("utf-8"))
+          if not isinstance(data, dict) or set(data) != {"schema_version", "generated_at", "translations"}:
+              raise SystemExit("translation artifact top-level schema is invalid")
+          if data["schema_version"] != 1:
+              raise SystemExit("translation artifact schema version is invalid")
+          if not isinstance(data["generated_at"], str) or not re.fullmatch(
+              r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", data["generated_at"]
+          ):
+              raise SystemExit("translation artifact timestamp is invalid")
+          records = data["translations"]
+          if not isinstance(records, list) or len(records) > 500:
+              raise SystemExit("translation artifact record count is invalid")
+          expected = {
+              "story_id", "input_digest", "source_language", "target_language",
+              "title", "description", "provider", "model_version",
+          }
+          seen = set()
+          for record in records:
+              if not isinstance(record, dict) or set(record) != expected:
+                  raise SystemExit("translation artifact record schema is invalid")
+              if not isinstance(record["story_id"], str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", record["story_id"]):
+                  raise SystemExit("translation story id is invalid")
+              if record["story_id"] in seen:
+                  raise SystemExit("translation story ids must be unique")
+              seen.add(record["story_id"])
+              if not isinstance(record["input_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["input_digest"]):
+                  raise SystemExit("translation input digest is invalid")
+              source = record["source_language"]
+              target = record["target_language"]
+              if source not in {"en", "zh"} or target not in {"en", "zh"} or source == target:
+                  raise SystemExit("translation locale pair is invalid")
+              for key, limit in (("title", 2_000), ("description", 8_000)):
+                  value = record[key]
+                  if not isinstance(value, str) or (key == "title" and not value) or len(value) > limit:
+                      raise SystemExit(f"translation {key} is invalid")
+                  if any(ord(char) < 32 and char not in "\t\n\r" for char in value):
+                      raise SystemExit(f"translation {key} has control characters")
+              provider = record["provider"]
+              model_version = record["model_version"]
+              if not isinstance(provider, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", provider):
+                  raise SystemExit("translation provider is invalid")
+              if not isinstance(model_version, str) or not re.fullmatch(
+                  r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model_version
+              ):
+                  raise SystemExit("translation model version is invalid")
+
+          sanitized = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+          sentinels = [os.environ.get("NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY", "")]
+          sentinels.append(os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", ""))
+          if token_path.is_file():
+              sentinels.append(token_path.read_text(encoding="ascii"))
+          if any(len(secret) >= 8 and secret.encode("utf-8") in sanitized for secret in sentinels):
+              raise SystemExit("translation artifact contains credential material")
+          output.write_bytes(sanitized)
+          PY
+
+      # This is the only upload from the translation job. Raw responses,
+      # traces, caches, candidate files, and debug bundles are never uploaded.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: translation-artifact
+          path: ${{ runner.temp }}/translation_artifact.json
+          if-no-files-found: error
+          retention-days: 2
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: personalization
+    needs: [source-snapshot, newsletter, translation]
+    # Build still reports failures from upstream jobs. Newsletter and
+    # translation artifacts are optional. Saved-interest ranking is enabled
+    # explicitly and stays inside this job so no private-derived score artifact
+    # is exposed through the public repository's Actions downloads.
+    if: ${{ always() }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -94,21 +271,184 @@ jobs:
         run: pip install -r requirements.txt
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-snapshot
+          path: ${{ runner.temp }}
+
+      - name: Validate source snapshot
+        run: >
+          python scripts/source_snapshot.py validate --root .
+          --snapshot "$RUNNER_TEMP/source-snapshot.json"
+
+      - name: Materialize saved-interest ranking
+        if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}
+        env:
+          NEWS_CURATOR_OWNER_USER_ID: ${{ secrets.NEWS_CURATOR_OWNER_USER_ID }}
+          NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
+          NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
+        run: >
+          python scripts/build_interest_ranking.py build --root .
+          --source-snapshot "$RUNNER_TEMP/source-snapshot.json"
+          --output "$RUNNER_TEMP/interest-ranking.json"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         continue-on-error: true
         with:
           name: newsletter-artifact
           path: .
 
+      - name: Validate saved-interest ranking
+        env:
+          REQUIRE_PERSONALIZATION: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/interest-ranking.json" ]; then
+            python scripts/build_interest_ranking.py validate --root . \
+              --source-snapshot "$RUNNER_TEMP/source-snapshot.json" \
+              --input "$RUNNER_TEMP/interest-ranking.json"
+          elif [ "$REQUIRE_PERSONALIZATION" = "true" ]; then
+            echo "saved-interest ranking artifact is required on main" >&2
+            exit 1
+          else
+            echo "saved-interest ranking disabled for this build"
+          fi
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: translation-artifact
+          path: ./downloaded-translation
+
+      - name: Validate downloaded translation artifact
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          candidate = Path("downloaded-translation/translation_artifact.json")
+          output = Path(os.environ["RUNNER_TEMP"]) / "validated-translation.json"
+          if not candidate.is_file():
+              print("translation artifact unavailable; building originals")
+              raise SystemExit(0)
+          try:
+              raw = candidate.read_bytes()
+              if len(raw) > 2_000_000:
+                  raise ValueError("oversized")
+              data = json.loads(raw.decode("utf-8"))
+              if not isinstance(data, dict) or set(data) != {"schema_version", "generated_at", "translations"}:
+                  raise ValueError("top-level schema")
+              if data["schema_version"] != 1 or not re.fullmatch(
+                  r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", data["generated_at"]
+              ):
+                  raise ValueError("metadata")
+              records = data["translations"]
+              expected = {
+                  "story_id", "input_digest", "source_language", "target_language",
+                  "title", "description", "provider", "model_version",
+              }
+              if not isinstance(records, list) or len(records) > 500:
+                  raise ValueError("record count")
+              seen = set()
+              for record in records:
+                  if not isinstance(record, dict) or set(record) != expected:
+                      raise ValueError("record schema")
+                  story_id = record["story_id"]
+                  if not isinstance(story_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", story_id) or story_id in seen:
+                      raise ValueError("story id")
+                  seen.add(story_id)
+                  if not isinstance(record["input_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["input_digest"]):
+                      raise ValueError("digest")
+                  source, target = record["source_language"], record["target_language"]
+                  if source not in {"en", "zh"} or target not in {"en", "zh"} or source == target:
+                      raise ValueError("locale")
+                  for key, limit in (("title", 2_000), ("description", 8_000)):
+                      value = record[key]
+                      if not isinstance(value, str) or (key == "title" and not value) or len(value) > limit:
+                          raise ValueError(key)
+                      if any(ord(char) < 32 and char not in "\t\n\r" for char in value):
+                          raise ValueError(key)
+                  provider = record["provider"]
+                  model_version = record["model_version"]
+                  if not isinstance(provider, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", provider):
+                      raise ValueError("provider")
+                  if not isinstance(model_version, str) or not re.fullmatch(
+                      r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model_version
+                  ):
+                      raise ValueError("model version")
+          except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+              print("translation artifact invalid; building originals")
+              raise SystemExit(0)
+          output.write_bytes(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+          print(f"validated {len(records)} translated projections")
+          PY
+
       - name: Build the page
-        run: >
-          python -m curator.pipeline --root . --out ./site --verbose
-          --newsletter-artifact ./newsletter_artifact.json
+        run: |
+          translation_args=()
+          interest_args=()
+          if [ -f "$RUNNER_TEMP/validated-translation.json" ]; then
+            translation_args=(--translation-artifact "$RUNNER_TEMP/validated-translation.json")
+          fi
+          if [ -f "$RUNNER_TEMP/interest-ranking.json" ]; then
+            interest_args=(--interest-ranking-artifact "$RUNNER_TEMP/interest-ranking.json")
+          fi
+          python -m curator.pipeline --root . --out ./site --verbose \
+            --source-snapshot "$RUNNER_TEMP/source-snapshot.json" \
+            --health-report ./source-health.json \
+            --newsletter-artifact ./newsletter_artifact.json \
+            "${interest_args[@]}" \
+            "${translation_args[@]}"
+
+      - name: Report source freshness
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          if [ -f ./source-health.json ]; then
+            python -m curator.health --report ./source-health.json \
+              --summary "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=Source freshness::health report unavailable"
+            {
+              echo "## Source freshness"
+              echo
+              echo "Health report unavailable because the build stopped before source collection completed."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Materialize auth callback
+        env:
+          NEWS_CURATOR_PERSONALIZATION_ENABLED: ${{ vars.NEWS_CURATOR_PERSONALIZATION_ENABLED }}
+          NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
+          NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY: ${{ vars.NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$NEWS_CURATOR_SUPABASE_URL" ] && [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "personalization unconfigured; auth callback omitted"
+          elif [ -z "$NEWS_CURATOR_SUPABASE_URL" ] || [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "personalization configuration is incomplete" >&2
+            exit 1
+          else
+            personalization_link_args=()
+            if [ "$NEWS_CURATOR_PERSONALIZATION_ENABLED" = "true" ]; then
+              personalization_link_args=(--site-index ./site/index.html)
+            fi
+            python scripts/build_auth_callback.py \
+              --supabase-url "$NEWS_CURATOR_SUPABASE_URL" \
+              --publishable-key "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" \
+              --output ./site/auth/callback/index.html \
+              "${personalization_link_args[@]}"
+          fi
 
       - name: Copy static pages
-        # Hand-authored pages that ship alongside the generated index
-        # (currently the privacy page the OAuth consent screen links to).
+        # Copy only hand-authored public assets. The callback above is generated
+        # from the fail-closed template and must never be overwritten by it.
         run: |
-          if [ -d static ]; then cp -R static/. site/; fi
+          mkdir -p site/auth
+          if [ -f CNAME ]; then cp CNAME site/CNAME; fi
+          cp static/auth/client.js site/auth/client.js
+          cp static/auth/styles.css site/auth/styles.css
+          cp static/privacy.html site/privacy.html
 
       - name: Verify the rendered page has real content
         # A green exit code and an existing file do not prove a page is any
@@ -193,48 +533,68 @@ jobs:
           print(f"OK: page contains real, linked stories across {len(tabs)} tabs")
           PY
 
-      - name: Persist the preview-image cache and the newsletter cursor
-        # ONLY on main. `workflow_dispatch` lets a human pick any branch, and
-        # `git push origin HEAD:main` from a feature branch would promote that
-        # branch's ENTIRE history to main as an unreviewed merge. Both files
-        # are main-branch artifacts, so a run on any other ref simply skips
-        # this.
-        if: github.ref == 'refs/heads/main'
-        # Only when something actually changed, so a quiet hour makes no
-        # commit at all. `[skip ci]` keeps the test workflow from re-running
-        # on a data-only commit, neither file is in this workflow's `paths:`
-        # filter, and a push made with GITHUB_TOKEN does not start another
-        # workflow run anyway, so there is no trigger loop.
+      - name: Stage repository state for the write-only job
         run: |
+          mkdir -p repository-state
+          for state_file in image_cache.json newsletter_state.json; do
+            if [ -f "$state_file" ]; then cp "$state_file" repository-state/; fi
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: repository-state
+          path: ./repository-state
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: ./site
+
+  # Repository writes are isolated from the build. This job cannot see Gmail,
+  # translation secrets, Pages permission, or an OIDC grant.
+  persist-state:
+    needs: build
+    if: ${{ github.ref == 'refs/heads/main' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: repository-state
+          path: ./downloaded-state
+
+      - name: Persist the preview-image cache and newsletter cursor
+        run: |
+          for state_file in image_cache.json newsletter_state.json; do
+            if [ -f "downloaded-state/$state_file" ]; then
+              cp "downloaded-state/$state_file" "$state_file"
+            fi
+          done
           if [ -z "$(git status --porcelain image_cache.json newsletter_state.json)" ]; then
             echo "cache and cursor unchanged, nothing to commit"
             exit 0
           fi
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add image_cache.json newsletter_state.json
           git commit -m "chore: refresh image cache / newsletter cursor [skip ci]"
-          # `HEAD:main` rather than a bare `git push`, because actions/checkout
-          # leaves a detached HEAD on scheduled runs and a bare push there fails
-          # with "You are not currently on a branch."
-          #
-          # A scheduled run can also race a real push, so rebase and retry once.
-          # Never fail the build over a data file: the page is the product, and
-          # a missed write just means the next run re-does that hour's work.
           git push origin HEAD:main || {
             git fetch origin main
             git rebase origin/main
             git push origin HEAD:main
           } || echo "data push skipped this run; the next run will retry"
 
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
-
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
-        with:
-          path: ./site
-
   deploy:
     needs: build
+    if: ${{ github.ref == 'refs/heads/main' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     # `id-token: write` is never a default and deploy-pages mints an OIDC
     # token, so this job needs its own grant. Review round 1 caught the diff

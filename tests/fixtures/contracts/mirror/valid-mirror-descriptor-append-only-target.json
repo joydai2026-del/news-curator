@@ -1,0 +1,14 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorAdapterDescriptor",
+  "expect": "valid",
+  "note": "A target whose update endpoint exposes no atomic conditional write. It gets append-only revisions, because a client-side read-compare-write can lose a human edit and then read back its own content.",
+  "payload": {
+    "adapter_id": "document-workspace",
+    "adapter_version": "1.0.0",
+    "write_mode": "append_only_revision",
+    "proves_atomic_conditional_write": false,
+    "precondition_kind": "none",
+    "supports_readback": true
+  }
+}

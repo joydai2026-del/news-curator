@@ -1,0 +1,21 @@
+{
+  "contract": "search",
+  "dataclass": "SearchQuery",
+  "expect": "valid",
+  "note": "Index version and policy revision are part of the REQUEST, not ambient, which is what makes web and CLI parity checkable rather than coincidental.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "principal_id": "principal-owner",
+    "text": "post-quantum migration",
+    "index_version": "idx-2026-09-01-a",
+    "policy_revision": 1,
+    "limit": 20,
+    "offset": 0,
+    "classes": [
+      "story",
+      "artifact"
+    ],
+    "topic_tags": [],
+    "source_ids": []
+  }
+}

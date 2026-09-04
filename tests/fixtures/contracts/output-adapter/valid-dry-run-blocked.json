@@ -1,0 +1,19 @@
+{
+  "contract": "output-adapter",
+  "dataclass": "DryRunResult",
+  "expect": "valid",
+  "note": "A dry run that names what would block the real publish. Verbatim quoted commentary is not public-eligible without separate licensing, and a dry run that always passes is worthless.",
+  "payload": {
+    "adapter_id": "longform-relay",
+    "artifact_id": "art-000031",
+    "artifact_version": 2,
+    "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "destination": "relay-set-a",
+    "eligible": false,
+    "reason_code": "contains_unlicensed_verbatim_quote",
+    "blocking_checks": [
+      "verbatim_quote_eligibility",
+      "publication_authorization"
+    ]
+  }
+}

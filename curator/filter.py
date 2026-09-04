@@ -39,7 +39,7 @@ from .normalize import fold_text
 
 
 @lru_cache(maxsize=4096)
-def _term_pattern(term: str) -> re.Pattern[str]:
+def _term_pattern(term: str, language: str = "en") -> re.Pattern[str]:
     """Whole-word, case-insensitive, whitespace-flexible phrase match.
 
     The boundaries are the entire point: `AI` must not match `malaria`, `said`,
@@ -52,24 +52,33 @@ def _term_pattern(term: str) -> re.Pattern[str]:
     but `AI` still does not match `malaria`.
     """
     body = r"\s+".join(re.escape(part) for part in term.split())
+    if language == "zh":
+        # CJK characters are Unicode word characters, so English word
+        # boundaries make a phrase such as 人工智能 fail inside 生成式人工智能.
+        # A literal Unicode substring is the intended Chinese contract.
+        return re.compile(body, re.IGNORECASE)
     return re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE)
 
 
-def find_match(title: str, term: str) -> re.Match[str] | None:
+def find_match(title: str, term: str, *, language: str = "en") -> re.Match[str] | None:
     """Where a term appears in a title, or None. Position drives the lead bonus."""
     if not title or not term:
         return None
-    return _term_pattern(term).search(fold_text(title))
+    return _term_pattern(term, language).search(fold_text(title))
 
 
-def matched_terms(title: str, terms: list[str]) -> list[str]:
+def matched_terms(title: str, terms: list[str], *, language: str = "en") -> list[str]:
     """Every term that genuinely appears in the title, in config order."""
-    return [t for t in terms if find_match(title, t)]
+    return [t for t in terms if find_match(title, t, language=language)]
 
 
-def match_position(title: str, terms: list[str]) -> int | None:
+def match_position(title: str, terms: list[str], *, language: str = "en") -> int | None:
     """Earliest character offset at which any of these terms really matches."""
-    positions = [m.start() for t in terms if (m := find_match(title, t))]
+    positions = [
+        m.start()
+        for t in terms
+        if (m := find_match(title, t, language=language))
+    ]
     return min(positions) if positions else None
 
 
@@ -86,9 +95,13 @@ def topic_match(item: Item, category: Category) -> list[str] | None:
     caller must not conflate them, which is why this returns a list-or-None
     rather than a bool.
     """
-    if matched_terms(item.title, category.exclude):
+    if matched_terms(item.title, category.exclude, language=item.language):
         return None
-    hits = matched_terms(item.title, category.all_terms)
+    hits = matched_terms(
+        item.title,
+        category.terms_for(item.language),
+        language=item.language,
+    )
     if hits:
         return hits
     return [] if is_native(item, category) else None

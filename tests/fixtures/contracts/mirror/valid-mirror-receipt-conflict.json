@@ -1,0 +1,31 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorReceipt",
+  "expect": "valid",
+  "note": "Someone edited the target between versions. Conflict is terminal for this attempt: no overwrite, no automatic retry.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000022",
+    "artifact_id": "art-000031",
+    "artifact_version": 3,
+    "adapter_id": "vault-wiki",
+    "target_id": "wiki/example/post-quantum-migration.md",
+    "state": "conflict",
+    "idempotency_key": "mirror-art-000031-v3-vault-wiki",
+    "attempted_at": "2026-09-01T12:00:00+00:00",
+    "expected_prior_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "attempted_checksum": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "readback_checksum": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "settled_at": null,
+    "reason_code": "precondition_checksum_mismatch",
+    "created_revision_id": "",
+    "prior_receipt_ids": [
+      "mrec-000021"
+    ],
+    "prior_attempt_state": "",
+    "resolution_ref": ""
+  }
+}

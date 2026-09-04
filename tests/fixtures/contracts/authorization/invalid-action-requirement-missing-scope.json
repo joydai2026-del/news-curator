@@ -1,0 +1,12 @@
+{
+  "contract": "authorization",
+  "dataclass": "ActionRequirement",
+  "expect": "invalid",
+  "note": "An action row without a scope would fall back to any authenticated member, which SC-34 forbids.",
+  "payload": {
+    "action": "publish_execute",
+    "human_requirement": "authorized publisher role acting on an existing approval",
+    "agent_requirement": "separate execution credential"
+  },
+  "violates": "required field required_scope is absent"
+}

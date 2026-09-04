@@ -1,0 +1,29 @@
+{
+  "contract": "mirror",
+  "dataclass": "MirrorReceipt",
+  "expect": "valid",
+  "note": "Settled only because the readback checksum equals the attempted one. A 2xx response alone would not have settled this.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "receipt_id": "mrec-000021",
+    "artifact_id": "art-000031",
+    "artifact_version": 2,
+    "adapter_id": "vault-wiki",
+    "target_id": "wiki/example/post-quantum-migration.md",
+    "state": "settled",
+    "idempotency_key": "mirror-art-000031-v2-vault-wiki",
+    "attempted_at": "2026-09-01T12:00:00+00:00",
+    "expected_prior_checksum": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "attempted_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "readback_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "settled_at": "2026-09-01T12:00:00+00:00",
+    "reason_code": "",
+    "created_revision_id": "",
+    "prior_receipt_ids": [],
+    "prior_attempt_state": "",
+    "resolution_ref": ""
+  }
+}

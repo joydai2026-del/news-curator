@@ -1,0 +1,30 @@
+{
+  "contract": "publication",
+  "dataclass": "PublicationRecord",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: a settled record with an empty idempotency_key. The at-most-once key is exactly what stops a double send, so a settled record cannot carry none at all.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "identity": {
+      "tenant_id": "tenant-owner-private",
+      "publisher_identity_ref": "signer-publisher-01",
+      "destination": "relay-set-a",
+      "issue_date": "2026-09-01"
+    },
+    "state": "settled",
+    "updated_at": "2026-09-01T13:00:00+00:00",
+    "authorization_id": "auth-000005",
+    "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "idempotency_key": "",
+    "attempt": 1,
+    "settled_receipt_id": "orec-000012",
+    "reason_code": "",
+    "prior_state": "publishing",
+    "readback_verdict": "",
+    "readback_receipt_ref": ""
+  },
+  "violates": "invariant: every state past draft requires a non-empty idempotency_key"
+}

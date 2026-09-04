@@ -1,0 +1,21 @@
+{
+  "contract": "artifact",
+  "dataclass": "KnowledgeArtifact",
+  "expect": "valid",
+  "note": "A report artifact created from a conversation and linked back to the story evidence, both directions retained.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "artifact_id": "art-000031",
+    "artifact_type": "report",
+    "status": "settled",
+    "publication_class": "private",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "current_version": 2,
+    "title": "Post-quantum migration: what changed this week",
+    "conversation_id": "conv-000009",
+    "story_id": "story-000042"
+  }
+}

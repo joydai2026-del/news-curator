@@ -1,0 +1,26 @@
+{
+  "contract": "candidate",
+  "dataclass": "ScoredCandidate",
+  "expect": "invalid",
+  "note": "The SC-08 violation stated as data: a shadow reranker claiming authority over the live slate.",
+  "payload": {
+    "run_id": "run-2026-09-01-12",
+    "story_id": "story-000042",
+    "scorer_kind": "shadow_learned",
+    "scorer_version": "shadow-0.1",
+    "authoritative": true,
+    "components": {
+      "relevance": 0.3,
+      "freshness": 0.19,
+      "trend": 0.14,
+      "editor_consensus": 0.06,
+      "deliberate_surprise": 0.0,
+      "diversity": 0.05,
+      "repetition_penalty": 0.0,
+      "source_fatigue_penalty": 0.03,
+      "final_score": 0.71
+    },
+    "plain_reason": "learned order"
+  },
+  "violates": "invariant: only ScorerKind.TRANSPARENT may be authoritative"
+}

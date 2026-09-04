@@ -1,0 +1,18 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "NormalizedSourceDocument",
+  "expect": "invalid",
+  "note": "A normalized document with no provenance cannot be attributed, corrected, or deleted.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "document_id": "doc-orphan-000001",
+    "title": "Headline with no traceable origin",
+    "url": "https://example.com/a",
+    "canonical_url": "https://example.com/a",
+    "language": "en"
+  },
+  "violates": "required field provenance is absent"
+}

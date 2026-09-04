@@ -1,0 +1,14 @@
+{
+  "captured_at": "2026-08-29",
+  "items": [
+    {"source_id": "cbs-news", "language": "en", "published_at": "2026-08-29T17:07:03-04:00", "title": "Trump cannot deport students for criticizing Israel, federal judge rules", "url": "https://www.cbsnews.com/news/trump-cannot-deport-students-for-criticizing-israel-federal-judge-rules/", "expected": ["us-news"]},
+    {"source_id": "cbs-news", "language": "en", "published_at": "2026-08-29T13:23:00-04:00", "title": "Nepal flash flood deaths surpass 600, with around 3,000 still missing", "url": "https://www.cbsnews.com/news/nepal-flash-flood-death-missing-americans-rescue/", "excluded": ["us-news"]},
+    {"source_id": "cbs-news", "language": "en", "published_at": "2026-08-29T12:59:04-04:00", "title": "Californios brings a Michelin-starred Mexican menu to San Francisco", "url": "https://www.cbsnews.com/video/californios-brings-a-michelin-starred-mexican-menu-to-san-francisco/", "excluded": ["us-news"]},
+    {"source_id": "yahoo-news", "language": "en", "published_at": "2026-08-28T18:57:05Z", "title": "Federal judge says Trump discussing payoff to Stormy Daniels isn’t an official presidential action", "url": "https://www.yahoo.com/news/politics/articles/judge-rejects-trump-newest-bid-171815336.html", "expected": ["us-news"]},
+    {"source_id": "yahoo-news", "language": "en", "published_at": "2026-08-29T06:10:12Z", "title": "Risk of lake burst near China-Nepal border disaster site wanes", "url": "https://www.yahoo.com/news/articles/risk-lake-burst-near-china-061012571.html", "excluded": ["us-news"]},
+    {"source_id": "yahoo-news", "language": "en", "published_at": "2026-08-28T09:05:01Z", "title": "I started making $10,000 a month from user-generated content in 5 months. I didn't need to pitch or do any outreach.", "url": "https://www.yahoo.com/lifestyle/articles/started-making-10-000-month-090501894.html", "excluded": ["us-news"]},
+    {"source_id": "cnbeta", "language": "zh", "published_at": "2026-08-29T18:53:04Z", "title": "GTA 6确认不使用生成式人工智能 也不会加入微交易", "url": "https://www.cnbeta.com.tw/articles/game/1575520.htm", "expected": ["ai"]},
+    {"source_id": "solidot", "language": "zh", "published_at": "2026-08-29T21:37:00+08:00", "title": "Debian 项目将允许以负责任的方式使用生成式 AI", "url": "https://www.solidot.org/story?sid=85229", "expected": ["ai"]},
+    {"source_id": "google-36kr", "language": "zh", "published_at": "2026-08-28T23:10:21Z", "title": "三部门：支持房地产项目开发公司通过股权、债券等多种方式开展融资 - 36Kr", "url": "https://news.google.com/rss/articles/CBMiW0FVX3lxTE52bGVENkdGamJkQ2p1NERpQkdCR3pEOC1GRVpnbW5ZbUhoTVNTSWhLNmpWUm8zWUJ2UHNEZ2N1b0VDV3RmTGVkdU52eG5jRDFlTVhYZDcwSTFMVTQ?oc=5", "expected": ["business"]}
+  ]
+}

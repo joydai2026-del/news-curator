@@ -1,0 +1,49 @@
+{
+  "contract": "receipt",
+  "dataclass": "LimitReceipt",
+  "expect": "valid",
+  "note": "A stale meter reads as unknown, never zero. Note the two meter kinds are not interchangeable: a cumulative budget can be shed, a per-invocation ceiling is enforced by the runtime and shedding cannot rescue it.",
+  "payload": {
+    "envelope": {
+      "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-system",
+      "actor_kind": "system",
+      "user_id": null,
+      "receipt_id": "lrec-000009",
+      "kind": "host_limits",
+      "state": "unknown",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "reason_code": "meter_stale",
+      "settled_at": null
+    },
+    "meter_source": "host_analytics_api",
+    "attributed_operation_class": "slate_build",
+    "readings": [
+      {
+        "meter": "requests_per_day",
+        "meter_kind": "cumulative_budget",
+        "value": 4120.0,
+        "unit": "requests",
+        "freshness_verdict": "fresh",
+        "sampled_at": "2026-09-01T12:00:00+00:00",
+        "warning_threshold": 70000.0,
+        "hard_stop_threshold": 90000.0,
+        "breached": false
+      },
+      {
+        "meter": "cpu_per_invocation",
+        "meter_kind": "per_invocation_ceiling",
+        "value": null,
+        "unit": "ms",
+        "freshness_verdict": "stale",
+        "sampled_at": null,
+        "warning_threshold": 8.0,
+        "hard_stop_threshold": 10.0,
+        "breached": false
+      }
+    ],
+    "shed_actions": [],
+    "final_state": "unknown"
+  }
+}

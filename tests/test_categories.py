@@ -107,6 +107,17 @@ class TestCategoryParsing:
         with pytest.raises(ConfigError, match="absolute http"):
             load_config(tmp_path)
 
+    def test_category_feed_rejects_an_unsupported_type_at_load_time(self, tmp_path):
+        write(
+            tmp_path,
+            "topics.yaml",
+            "categories:\n  - name: X\n    keywords: [a]\n"
+            "    sources:\n      - {type: rrs, id: typo, url: 'https://example.com/feed'}\n",
+        )
+
+        with pytest.raises(ConfigError, match="type must be one of"):
+            load_topics(tmp_path / "topics.yaml")
+
     def test_duplicate_category_ids_are_rejected(self, tmp_path):
         path = write(
             tmp_path,
@@ -231,17 +242,67 @@ class TestNativeRanking:
 
 
 class TestTheShippedConfig:
-    """The six categories JJ asked for, loaded from the real files."""
+    """The original six plus P1 general and Trending categories."""
 
     def _cfg(self):
         return load_config(Path(__file__).resolve().parent.parent)
 
-    def test_six_categories_each_with_keywords_and_feeds(self):
+    def test_original_six_ids_are_unchanged(self):
         cfg = self._cfg()
-        assert len(cfg.categories) == 6
+        original = {"ai", "crypto", "quantum", "energy", "biotech", "space"}
+        assert original.issubset({category.id for category in cfg.categories})
         for category in cfg.categories:
+            if category.id not in original:
+                continue
             assert category.keywords, f"{category.name} has no keywords"
             assert category.sources, f"{category.name} has no curated feeds"
+
+    def test_p1_categories_are_first_class_topics_entries(self):
+        cfg = self._cfg()
+        assert {"world", "us-news", "business", "trending"}.issubset(
+            {category.id for category in cfg.categories}
+        )
+
+    def test_required_p1_sources_and_google_limit_are_configured(self):
+        cfg = self._cfg()
+        by_id = {source.id: source for source in cfg.all_feeds}
+        required = {
+            "cnn-news", "fox-news", "bbc-world", "guardian-world", "cnbc",
+            "cbs-news", "yahoo-news", "cnbeta", "solidot", "rfi-zh", "cna-zh",
+            "udn-zh", "dw-zh", "buzzing", "google-36kr", "google-zaobao",
+        }
+        assert required.issubset(by_id)
+        assert by_id["cnn-news"].type == "news_sitemap"
+        assert by_id["fox-news"].type == "news_sitemap"
+        assert by_id["buzzing"].category == "trending"
+        assert by_id["google-36kr"].echo_eligible is False
+        assert by_id["google-zaobao"].echo_eligible is False
+
+    def test_general_source_native_mapping_matches_the_category_contract(self):
+        cfg = self._cfg()
+        by_id = {source.id: source for source in cfg.all_feeds}
+        assert by_id["bbc-world"].category == "world"
+        assert by_id["guardian-world"].category == "world"
+        assert by_id["cnbc"].category == "business"
+        assert by_id["cbs-news"].category == ""
+        assert by_id["yahoo-news"].category == ""
+        shared_ids = {source.id for source in cfg.rss}
+        assert {"cnn-news", "fox-news", "cbs-news", "yahoo-news"}.issubset(shared_ids)
+
+    def test_zaobao_google_query_uses_the_live_working_site_and_locale(self):
+        from urllib.parse import parse_qs, urlsplit
+
+        cfg = self._cfg()
+        source = next(source for source in cfg.all_feeds if source.id == "google-zaobao")
+        query = parse_qs(urlsplit(source.url).query)
+        assert query["q"] == ["site:zaobao.com.sg when:1d"]
+        assert query["gl"] == ["SG"]
+        assert query["ceid"] == ["SG:zh-Hans"]
+
+    def test_legacy_cnn_rss_is_absent(self):
+        root = Path(__file__).resolve().parent.parent
+        text = (root / "sources.yaml").read_text() + (root / "topics.yaml").read_text()
+        assert "rss.cnn.com" not in text
 
     def test_techcrunch_is_present_for_ai(self):
         # An explicit product requirement, so it gets an explicit test rather
@@ -254,11 +315,13 @@ class TestTheShippedConfig:
         for source in self._cfg().all_feeds:
             assert source.url.startswith("https://"), source.url
 
-    def test_every_category_declares_hn_queries(self):
-        # Without them a category falls back to all its keywords, and six
-        # categories of keywords blow the Hacker News request cap.
+    def test_every_keyword_category_declares_hn_queries(self):
+        # Without them a keyword category falls back to all its terms, and many
+        # categories of terms blow the Hacker News request cap. Native-only
+        # Trending intentionally has no search query beyond HN front_page.
         for category in self._cfg().categories:
-            assert category.hn_queries, f"{category.name} has no hn_queries"
+            if category.keywords or category.aliases:
+                assert category.hn_queries, f"{category.name} has no hn_queries"
 
 
 class TestDegradedFeedReporting:
@@ -281,6 +344,8 @@ class TestDegradedFeedReporting:
         assert "nothing usable" in result.note
 
     def test_a_healthy_feed_is_not_reported_as_degraded(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
         from curator import config as cfg_mod
         from curator.fetchers import rss
         from tests.conftest import make_item
@@ -289,7 +354,9 @@ class TestDegradedFeedReporting:
             categories=[], rss=[cfg_mod.RssSource(id="live", name="Live", url="https://l.example/rss")],
             settings={}, ranking={}, dedup={}, hackernews={}, reddit={},
         )
-        monkeypatch.setattr(rss, "_fetch_one", lambda *a, **k: [make_item("A story")])
+        item = make_item("A story")
+        item.published_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        monkeypatch.setattr(rss, "_fetch_one", lambda *a, **k: [item])
         result = rss.fetch(cfg)
         assert result.ok is True and result.note == ""
 

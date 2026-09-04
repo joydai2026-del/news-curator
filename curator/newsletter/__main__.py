@@ -18,7 +18,7 @@ content.
 
 Failure model matches the lane's: this process exits 0 no matter what. A dark
 lane is a fact the page reports, never a reason the six healthy tabs miss an
-hourly build. The one thing a human must act on (a revoked refresh token) is
+daily build. The one thing a human must act on (a revoked refresh token) is
 surfaced as a GitHub Actions warning annotation.
 """
 

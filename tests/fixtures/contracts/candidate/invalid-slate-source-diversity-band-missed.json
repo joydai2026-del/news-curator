@@ -1,0 +1,296 @@
+{
+  "contract": "candidate",
+  "dataclass": "Slate",
+  "expect": "invalid",
+  "note": "The source_diversity band reports 20.8% achieved against a 12.5% cap, roughly the share the highest-volume route takes of the raw in-window pool, and correctly carries verdict fail. The slate nevertheless claims a passing verifier verdict. That combination is the failure the invariant catches: an active band missed must fail the slate, so it cannot publish or be described as balanced. The entry list is the same 24 rows as the valid fixture, because the rule under test is verdict consistency, not the recomputation of the band value.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "run_id": "run-2026-09-01-13",
+    "edition_date": "2026-09-01",
+    "built_at": "2026-09-01T12:00:00+00:00",
+    "policy_revision": 1,
+    "profile_snapshot_id": "snap-000007",
+    "entries": [
+      {
+        "position": 1,
+        "story_id": "story-1000",
+        "primary_lane": "updates",
+        "final_score": 0.9,
+        "plain_reason": "updates lane: cnn-news coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 2,
+        "story_id": "story-1001",
+        "primary_lane": "updates",
+        "final_score": 0.88,
+        "plain_reason": "updates lane: fox-news coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 3,
+        "story_id": "story-1002",
+        "primary_lane": "updates",
+        "final_score": 0.86,
+        "plain_reason": "updates lane: hackernews coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 4,
+        "story_id": "story-1003",
+        "primary_lane": "updates",
+        "final_score": 0.84,
+        "plain_reason": "updates lane: buzzing coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 5,
+        "story_id": "story-1004",
+        "primary_lane": "updates",
+        "final_score": 0.82,
+        "plain_reason": "updates lane: cbs-news coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 6,
+        "story_id": "story-1005",
+        "primary_lane": "updates",
+        "final_score": 0.8,
+        "plain_reason": "updates lane: techcrunch coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 7,
+        "story_id": "story-1006",
+        "primary_lane": "updates",
+        "final_score": 0.78,
+        "plain_reason": "updates lane: coindesk coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 8,
+        "story_id": "story-1007",
+        "primary_lane": "updates",
+        "final_score": 0.76,
+        "plain_reason": "updates lane: bbc-world coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 9,
+        "story_id": "story-1008",
+        "primary_lane": "hot",
+        "final_score": 0.74,
+        "plain_reason": "hot lane: guardian-world coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 10,
+        "story_id": "story-1009",
+        "primary_lane": "hot",
+        "final_score": 0.72,
+        "plain_reason": "hot lane: cnbeta coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 11,
+        "story_id": "story-1010",
+        "primary_lane": "hot",
+        "final_score": 0.7,
+        "plain_reason": "hot lane: qzeitgeist coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 12,
+        "story_id": "story-1011",
+        "primary_lane": "hot",
+        "final_score": 0.68,
+        "plain_reason": "hot lane: wired coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 13,
+        "story_id": "story-1012",
+        "primary_lane": "hot",
+        "final_score": 0.66,
+        "plain_reason": "hot lane: cnn-news coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 14,
+        "story_id": "story-1013",
+        "primary_lane": "hot",
+        "final_score": 0.64,
+        "plain_reason": "hot lane: fox-news coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 15,
+        "story_id": "story-1014",
+        "primary_lane": "interested",
+        "final_score": 0.62,
+        "plain_reason": "interested lane: hackernews coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 16,
+        "story_id": "story-1015",
+        "primary_lane": "interested",
+        "final_score": 0.6,
+        "plain_reason": "interested lane: buzzing coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 17,
+        "story_id": "story-1016",
+        "primary_lane": "interested",
+        "final_score": 0.58,
+        "plain_reason": "interested lane: cbs-news coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 18,
+        "story_id": "story-1017",
+        "primary_lane": "interested",
+        "final_score": 0.56,
+        "plain_reason": "interested lane: techcrunch coverage inside the freshness window",
+        "backfilled": true
+      },
+      {
+        "position": 19,
+        "story_id": "story-1018",
+        "primary_lane": "interested",
+        "final_score": 0.54,
+        "plain_reason": "interested lane: coindesk coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 20,
+        "story_id": "story-1019",
+        "primary_lane": "interested",
+        "final_score": 0.52,
+        "plain_reason": "interested lane: bbc-world coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 21,
+        "story_id": "story-1020",
+        "primary_lane": "surprise",
+        "final_score": 0.5,
+        "plain_reason": "surprise lane: guardian-world coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 22,
+        "story_id": "story-1021",
+        "primary_lane": "surprise",
+        "final_score": 0.48,
+        "plain_reason": "surprise lane: cnbeta coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 23,
+        "story_id": "story-1022",
+        "primary_lane": "surprise",
+        "final_score": 0.46,
+        "plain_reason": "surprise lane: qzeitgeist coverage inside the freshness window",
+        "backfilled": false
+      },
+      {
+        "position": 24,
+        "story_id": "story-1023",
+        "primary_lane": "surprise",
+        "final_score": 0.44,
+        "plain_reason": "surprise lane: wired coverage inside the freshness window",
+        "backfilled": false
+      }
+    ],
+    "bands": [
+      {
+        "band": "relevance",
+        "active": true,
+        "floor": 0.6,
+        "cap": 1.0,
+        "achieved": 0.75,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "freshness",
+        "active": true,
+        "floor": 0.7,
+        "cap": 1.0,
+        "achieved": 0.83,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "trend",
+        "active": true,
+        "floor": 0.15,
+        "cap": 0.6,
+        "achieved": 0.29,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "deliberate_surprise",
+        "active": true,
+        "floor": 0.1,
+        "cap": 0.25,
+        "achieved": 0.1667,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "source_diversity",
+        "active": true,
+        "floor": null,
+        "cap": 0.125,
+        "achieved": 0.2083,
+        "verdict": "fail",
+        "exception_reason": ""
+      },
+      {
+        "band": "topic_diversity",
+        "active": true,
+        "floor": null,
+        "cap": 0.375,
+        "achieved": 0.25,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "repetition",
+        "active": true,
+        "floor": 0.0,
+        "cap": 0.1,
+        "achieved": 0.0417,
+        "verdict": "pass",
+        "exception_reason": ""
+      }
+    ],
+    "verifier_verdict": "pass",
+    "lane_quotas": [
+      [
+        "updates",
+        8
+      ],
+      [
+        "hot",
+        6
+      ],
+      [
+        "interested",
+        6
+      ],
+      [
+        "surprise",
+        4
+      ]
+    ]
+  },
+  "violates": "invariant: a slate with any failing active band cannot carry a passing verifier verdict"
+}

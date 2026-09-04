@@ -1,0 +1,26 @@
+{
+  "contract": "candidate",
+  "dataclass": "ScoredCandidate",
+  "expect": "invalid",
+  "note": "The should-fix stated as data: a transparent, authoritative score set whose eight components are all 0.0 under a final_score of 0.99. Nothing in the record earned that number, and final_score is what the ranking receipt replays the edition from.",
+  "payload": {
+    "run_id": "run-2026-09-01-12",
+    "story_id": "story-000042",
+    "scorer_kind": "transparent",
+    "scorer_version": "transparent-1.0.0",
+    "authoritative": true,
+    "components": {
+      "relevance": 0.0,
+      "freshness": 0.0,
+      "trend": 0.0,
+      "editor_consensus": 0.0,
+      "deliberate_surprise": 0.0,
+      "diversity": 0.0,
+      "repetition_penalty": 0.0,
+      "source_fatigue_penalty": 0.0,
+      "final_score": 0.99
+    },
+    "plain_reason": "top story today"
+  },
+  "violates": "invariant: final_score must equal the weighted composition of its components"
+}

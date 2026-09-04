@@ -1,0 +1,17 @@
+{
+  "contract": "search",
+  "dataclass": "SearchResult",
+  "expect": "valid",
+  "note": "The ordering key embeds the score and the id, so ties break identically on every surface.",
+  "payload": {
+    "result_class": "story",
+    "canonical_id": "story-000042",
+    "tenant_id": "tenant-owner-private",
+    "publication_class": "private",
+    "title": "Example headline as the publisher wrote it",
+    "match_reason": "title and summary term match",
+    "ordering_key": "0.8140|story-000042",
+    "provenance_ref": "doc-cnn-000001",
+    "score": 0.814
+  }
+}

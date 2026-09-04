@@ -1,0 +1,42 @@
+{
+  "contract": "evidence",
+  "dataclass": "ProfileSnapshot",
+  "expect": "valid",
+  "note": "A settled snapshot. An unsettled build is not a snapshot row at all, which is how a partial rebuild cannot replace the last good one.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "snapshot_id": "snap-000007",
+    "version": 7,
+    "evidence_watermark": "2026-09-01T11:00:00+00:00",
+    "build_version": "profile-builder-1",
+    "policy_revision": 1,
+    "settled_at": "2026-09-01T12:00:00+00:00",
+    "topic_affinities": [
+      [
+        "ai",
+        0.82,
+        "ev-000101,ev-000105"
+      ],
+      [
+        "crypto",
+        0.65,
+        "ev-000102"
+      ]
+    ],
+    "entity_affinities": [],
+    "source_affinities": [
+      [
+        "hackernews",
+        0.71,
+        "ev-000101"
+      ]
+    ],
+    "knowledge_gaps": [
+      "post-quantum migration"
+    ],
+    "novelty_tolerance": 0.4
+  }
+}

@@ -7,7 +7,7 @@
 #     whose every story belongs in that section. Those live next to the keywords
 #     they belong with, because they answer the same question.
 #   * this file, under `rss:` — the SHARED pool. Multi-subject publications
-#     whose front page covers all six categories and none of them exclusively.
+#     whose front page covers several configured categories and none exclusively.
 #     Keywords decide where each of their stories lands, or whether it lands.
 #
 # The distinction is a claim about the PUBLICATION, not about its quality.
@@ -30,16 +30,13 @@
 # permission to republish it. Those are different questions and only the first
 # one is testable by a script.
 #
-# This list therefore sticks to feeds that publishers promote for reading and
-# syndication, and deliberately leaves out outlets whose published terms govern
-# RSS reuse specifically (the BBC requires unmodified presentation with a
-# prominent credited link; the FT licenses RSS per client; several majors have
-# their own republishing terms). Those feeds are reachable and are still not in
-# the defaults.
+# This list sticks to feeds publishers expose for reading and syndication.
+# Publisher-specific terms still govern presentation and attribution. The BBC
+# World feed is now included as a native World source; FT and NYT remain absent.
 #
 # DELIBERATELY ABSENT, and why (checked 2026-08-28):
 #
-#   BBC, FT, NYT     Published terms govern RSS reuse specifically.
+#   FT, NYT          Published terms govern RSS reuse specifically.
 #   Endpoints News   Feed returns HTTP 403 to an ordinary client. Not reachable,
 #                    so the terms question never arose.
 #   STAT News        Reachable, and its own terms of service could not be
@@ -71,8 +68,18 @@ settings:
 
   # How far back an item can be published and still be considered.
   max_age_hours: 48
+  # Source freshness is a separate warning threshold. Individual rows can
+  # override it without changing the global 48-hour display window.
+  default_source_max_age_hours: 48
+  # A collected snapshot may cross job boundaries, but cannot be replayed into
+  # a later daily cycle. Two hours covers the bounded workflow jobs plus a
+  # practical artifact handoff delay.
+  source_snapshot_max_age_seconds: 7200
   # Per-request network timeout, seconds.
   request_timeout: 15
+  # Global ceilings. A source row can choose smaller values, never larger.
+  max_response_bytes: 8388608
+  per_host_concurrency: 4
   # Max items shown per category on the rendered page.
   max_items_per_topic: 30
   # Feeds are fetched in parallel. The list is long enough that doing them one
@@ -87,6 +94,9 @@ ranking:
   weight_recency: 1.0
   weight_keyword: 0.6
   weight_source: 0.4
+  # Saved interests may reorder matching stories, but recency remains the
+  # dominant signal and Trending keeps its source-native order.
+  weight_interest: 0.8
   # Bonus when 2+ DISTINCT platforms carried the same LINK. Fuzzy title matches
   # never feed this, so the "N sources" badge means what it says.
   weight_echo: 0.5
@@ -127,7 +137,7 @@ dedup:
 #
 # Answers are cached in image_cache.json, committed to the repo, keyed by
 # canonical URL. The answer for a given article does not change, the job runs
-# every hour, and a committed file is both durable and auditable.
+# every day, and a committed file is both durable and auditable.
 #
 # Nothing is downloaded, resized or re-hosted. The publisher keeps their CDN,
 # their referrer, and the ability to change or withdraw the image at any time.
@@ -167,6 +177,10 @@ images:
 # separate from the keyword list.
 # ---------------------------------------------------------------------------
 hackernews:
+  type: hackernews
+  id: hackernews
+  name: Hacker News
+  url: "https://hn.algolia.com/api/v1"
   enabled: true
   weight: 0.95
   # The ranked endpoint gives quality; this floor keeps out 1-point noise.
@@ -174,6 +188,10 @@ hackernews:
   # The by-date endpoint gives freshness and runs with no floor.
   include_by_date: true
   hits_per_page: 40
+  # One additive request supplies the first-class Trending lane.
+  front_page_hits_per_page: 30
+  front_page_max_age_hours: 12
+  front_page_category: trending
   # Two brakes. The request cap bounds volume; the time budget bounds the run,
   # which is what actually protects the CI job when the API is slow. Query plans
   # are interleaved across categories, so hitting the cap thins every section a
@@ -188,6 +206,20 @@ hackernews:
 # Mark a source `aggregator: true` if its titles are submitter-written.
 # ---------------------------------------------------------------------------
 rss:
+  # Broad general-news sources. News sitemaps use the same bounded feed tier
+  # and carry item-level publication dates, never sitemap lastmod values.
+  - {id: cnn-news,   name: CNN,       url: "https://www.cnn.com/sitemap/news.xml",              type: news_sitemap, language: en, max_age_hours: 6, weight: 1.0}
+  - {id: fox-news,   name: Fox News,  url: "https://www.foxnews.com/sitemap.xml?type=news",      type: news_sitemap, language: en, max_age_hours: 6, weight: 1.0}
+  - {id: cbs-news,   name: CBS News,  url: "https://www.cbsnews.com/latest/rss/main",            language: en, max_age_hours: 6, weight: 1.0}
+  - {id: yahoo-news, name: Yahoo News, url: "https://news.yahoo.com/rss/",                       language: en, max_age_hours: 6, weight: 0.95}
+
+  # Chinese technology sources. Google News links stay on news.google.com;
+  # without a documented decoder they are useful outbound paths but are never
+  # counted as independent corroboration.
+  - {id: cnbeta,      name: cnBeta,      url: "https://www.cnbeta.com.tw/backend.php", language: zh, max_age_hours: 6, weight: 0.95}
+  - {id: solidot,     name: Solidot,     url: "https://www.solidot.org/index.rss",      language: zh, max_age_hours: 6, weight: 1.0}
+  - {id: google-36kr, name: 36kr via Google News, url: "https://news.google.com/rss/search?q=site%3A36kr.com%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans", language: zh, max_age_hours: 12, weight: 0.9, aggregator: true, platform: google-news, echo_eligible: false}
+
   # General technology and business. Broad enough to feed every category.
   - {id: techcrunch,   name: TechCrunch,       url: "https://techcrunch.com/feed/",                weight: 1.0}
   - {id: verge,        name: The Verge,        url: "https://www.theverge.com/rss/index.xml",      weight: 1.0}
@@ -201,7 +233,7 @@ rss:
   - {id: stratechery,  name: Stratechery,      url: "https://stratechery.com/feed/",               weight: 1.0}
   - {id: simonw,       name: Simon Willison,   url: "https://simonwillison.net/atom/everything/",  weight: 1.05}
 
-  # Engineering and science desks. Each covers several of the six categories,
+  # Engineering and science desks. Each covers several configured categories,
   # which is exactly why they are shared rather than native to one.
   - {id: ieee,         name: IEEE Spectrum,    url: "https://spectrum.ieee.org/feeds/feed.rss",    weight: 1.1}
   - {id: ieee-comp,    name: IEEE Spectrum Computing, url: "https://spectrum.ieee.org/feeds/topic/computing.rss", weight: 1.05}
@@ -256,6 +288,38 @@ reddit:
     - LocalLLaMA
 
 # ---------------------------------------------------------------------------
+# Translation bridge. Backend contracts and budget controls are present, but
+# the paid provider lane is dark until both this switch and the protected
+# workflow switch are enabled after explicit approval.
+# ---------------------------------------------------------------------------
+translation:
+  enabled: false
+  provider: google
+  targets: [en, zh]
+  max_items_per_language: 25
+  max_characters_per_language: 2000
+  run_character_limit: 2000
+  day_character_limit: 15000
+  month_character_limit: 450000
+  max_output_title_characters: 2000
+  max_output_description_characters: 8000
+  lease_timeout_seconds: 900
+  sent_timeout_seconds: 900
+  request_timeout_seconds: 20
+  max_response_bytes: 524288
+  per_host_concurrency: 2
+  normalization_version: normalized-item-v1
+  glossary_policy_version: none-v1
+  candidate_policy_version: ranked-non-newsletter-v1
+  # Resolved against project_id_env and location before use. The resulting
+  # full resource is sent to Google and is the cache/provenance identity.
+  model_version: projects/{project_id}/locations/{location}/models/general/nmt
+  location: global
+  project_id_env: GOOGLE_CLOUD_PROJECT_ID
+  supabase_url_env: NEWS_CURATOR_SUPABASE_URL
+  supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY
+
+# ---------------------------------------------------------------------------
 # The newsletter lane. Reads a dedicated newsletter-only Gmail account through
 # a separate, secrets-scoped Actions job and renders the stories as their own
 # tab. Everything about the account (its address included) lives OUTSIDE this
@@ -274,7 +338,7 @@ newsletter:
   adapters: [tldr, therundown, bensbites, theneuron, milkroad]
   max_items: 50        # the lane's own cap; category caps are untouched
   max_age_hours: 48    # same retention window as everything else
-  max_messages: 30     # message BODIES read per hourly run, oldest first
+  max_messages: 30     # message BODIES read per daily run, oldest first
   overlap_hours: 6     # poll window overlaps the committed watermark
   request_timeout: 20
   id_budget: 500       # message ids listed per run (pagination ceiling)

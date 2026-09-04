@@ -1,0 +1,41 @@
+{
+  "contract": "candidate",
+  "dataclass": "MergedCandidate",
+  "expect": "invalid",
+  "note": "primary_lane IS a member of lane_scores (hot, scoring 0.81), so the membership check alone lets this through. But the frozen tie-break rule says lane priority decides first, and updates outranks hot in config/ranking-policy-r1.yaml's edition.lane_priority regardless of score. The validator must recompute the winner, not just check membership.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "run_id": "run-2026-09-01-12",
+    "story_id": "story-000042",
+    "story_cluster_id": "cluster-000012",
+    "primary_lane": "hot",
+    "lane_scores": [
+      [
+        "updates",
+        0.74
+      ],
+      [
+        "hot",
+        0.81
+      ]
+    ],
+    "lane_reasons": [
+      [
+        "updates",
+        "developing cluster: two new source documents since the last edition"
+      ],
+      [
+        "hot",
+        "covered by 4 independent sources within 24h"
+      ]
+    ],
+    "tie_break_applied": "lane_priority",
+    "secondary_lanes": [
+      "updates"
+    ]
+  },
+  "violates": "invariant: primary_lane must be the recomputed tie-break winner from lane_priority then lane_score"
+}

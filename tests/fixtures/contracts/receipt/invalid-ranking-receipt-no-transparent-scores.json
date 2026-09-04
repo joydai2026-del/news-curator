@@ -1,0 +1,101 @@
+{
+  "contract": "receipt",
+  "dataclass": "RankingReceipt",
+  "expect": "invalid",
+  "note": "A settled run with a shadow score set and no transparent one. The order can only have come from the shadow reranker, which SC-08 forbids outright.",
+  "payload": {
+    "envelope": {
+      "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-system",
+      "actor_kind": "system",
+      "user_id": "user-owner",
+      "receipt_id": "rrec-000013",
+      "kind": "ranking",
+      "state": "settled",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "reason_code": "",
+      "settled_at": "2026-09-01T12:00:00+00:00"
+    },
+    "run_id": "run-2026-09-01-13",
+    "edition_date": "2026-09-01",
+    "profile_snapshot_id": "snap-000007",
+    "profile_version": 7,
+    "pre_rank_candidate_ids": [
+      "story-000042"
+    ],
+    "lane_scores": [
+      [
+        "story-000042",
+        "updates",
+        0.74
+      ]
+    ],
+    "lane_priority": [
+      "updates",
+      "hot",
+      "interested",
+      "surprise"
+    ],
+    "primary_lane_by_story": [
+      [
+        "story-000042",
+        "updates"
+      ]
+    ],
+    "secondary_lane_reasons": [],
+    "transparent_scores": [],
+    "final_order": [
+      {
+        "position": 1,
+        "story_id": "story-000042",
+        "primary_lane": "updates",
+        "final_score": 0.71,
+        "plain_reason": "learned order",
+        "backfilled": false
+      }
+    ],
+    "bands": [],
+    "lane_quotas": [
+      [
+        "updates",
+        8
+      ],
+      [
+        "hot",
+        6
+      ],
+      [
+        "interested",
+        6
+      ],
+      [
+        "surprise",
+        4
+      ]
+    ],
+    "verifier_verdict": "pass",
+    "shadow_scores": [
+      {
+        "run_id": "run-2026-09-01-13",
+        "story_id": "story-000042",
+        "scorer_kind": "shadow_learned",
+        "scorer_version": "shadow-0.1",
+        "authoritative": false,
+        "components": {
+          "relevance": 0.3,
+          "freshness": 0.19,
+          "trend": 0.14,
+          "editor_consensus": 0.06,
+          "deliberate_surprise": 0.0,
+          "diversity": 0.05,
+          "repetition_penalty": 0.0,
+          "source_fatigue_penalty": 0.03,
+          "final_score": 0.71
+        },
+        "plain_reason": "learned order"
+      }
+    ]
+  },
+  "violates": "invariant: a settled ranking receipt requires at least one authoritative transparent score"
+}

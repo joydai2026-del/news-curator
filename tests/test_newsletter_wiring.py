@@ -76,6 +76,7 @@ class TestArtifactLoading:
         assert "newsletters" in item.native_categories
         assert tier.tier == "newsletters"
         assert meta["dark"] is False and meta["watermark"] == NOW.isoformat()
+        assert item.language == "en"
 
     def test_an_image_url_in_the_artifact_is_refused(self, tmp_path):
         path = artifact(tmp_path)
@@ -84,6 +85,29 @@ class TestArtifactLoading:
         path.write_text(json.dumps(raw))
         items, _, _ = load_newsletter_artifact(path)
         assert items[0].image_url == ""
+
+    @pytest.mark.parametrize(
+        "unsafe_url",
+        [
+            "https://publisher.example/story?email=reader%40example.invalid",
+            "https://link.mail.beehiiv.com/ss/c/AbCdEf0123456789XyZq",
+        ],
+    )
+    def test_artifact_urls_cross_the_newsletter_privacy_gate_before_item_creation(
+        self, tmp_path, unsafe_url
+    ):
+        path = artifact(tmp_path)
+        raw = json.loads(path.read_text())
+        raw["items"][0]["url"] = unsafe_url
+        raw["items"][0]["canonical_url"] = unsafe_url
+        path.write_text(json.dumps(raw))
+
+        items, _, _ = load_newsletter_artifact(path)
+
+        assert items[0].url == ""
+        assert items[0].canonical_url.startswith("newsletter:")
+        assert "reader" not in items[0].canonical_url
+        assert "beehiiv" not in items[0].canonical_url
 
     def test_problems_reach_the_health_note_but_clean_hit_rates_do_not(self, tmp_path):
         # A clean run must not read as degraded, so its note is empty.

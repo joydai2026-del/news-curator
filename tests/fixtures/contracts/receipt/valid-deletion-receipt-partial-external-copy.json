@@ -1,0 +1,86 @@
+{
+  "contract": "receipt",
+  "dataclass": "DeletionReceipt",
+  "expect": "valid",
+  "note": "The rebuild proves zero contribution and six of seven projections resolve, but one external mirror copy cannot be retracted. The receipt settles PARTIAL and names it to the user. A green receipt here would be a false deletion.",
+  "payload": {
+    "envelope": {
+      "tenant_id": "tenant-owner-private",
+      "actor_id": "actor-human-owner",
+      "actor_kind": "human",
+      "user_id": "user-owner",
+      "receipt_id": "drec-000003",
+      "kind": "deletion",
+      "state": "partial",
+      "created_at": "2026-09-01T12:00:00+00:00",
+      "policy_revision": 1,
+      "reason_code": "external_copy_retained",
+      "settled_at": null
+    },
+    "target_kind": "evidence_item",
+    "target_ids": [
+      "ev-000101"
+    ],
+    "correction_watermark": "2026-09-01T12:00:00+00:00",
+    "invalidated_snapshot_ids": [
+      "snap-000007"
+    ],
+    "rebuild_id": "rebuild-000008",
+    "zero_contribution_verdict": true,
+    "projections": [
+      {
+        "projection": "profile_and_ranking",
+        "resolved": true,
+        "resolution_kind": "rebuild_zero_contribution",
+        "target_ref": "rebuild-000008",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "search_index",
+        "resolved": true,
+        "resolution_kind": "index_invalidation",
+        "target_ref": "idx-2026-09-01-a",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "knowledge_artifacts",
+        "resolved": true,
+        "resolution_kind": "version_redaction",
+        "target_ref": "art-000031-v2",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "caches",
+        "resolved": true,
+        "resolution_kind": "cache_invalidation",
+        "target_ref": "edge",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "exports",
+        "resolved": true,
+        "resolution_kind": "retraction_record",
+        "target_ref": "export-000002",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "public_projections",
+        "resolved": true,
+        "resolution_kind": "removal_receipt",
+        "target_ref": "public-build-441",
+        "user_visible_disclosure": ""
+      },
+      {
+        "projection": "mirrors",
+        "resolved": false,
+        "resolution_kind": "external_copy_retained",
+        "target_ref": "document-workspace/page-77",
+        "user_visible_disclosure": "external copy retained at document-workspace/page-77"
+      }
+    ],
+    "mirrored_targets": [
+      "document-workspace/page-77"
+    ],
+    "audit_chain_queryable": true
+  }
+}

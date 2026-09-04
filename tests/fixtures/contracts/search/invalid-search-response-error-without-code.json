@@ -1,0 +1,15 @@
+{
+  "contract": "search",
+  "dataclass": "SearchResponse",
+  "expect": "invalid",
+  "note": "An error with no code is indistinguishable from an empty success once it reaches a UI.",
+  "payload": {
+    "outcome": "error",
+    "index_version": "idx-2026-09-01-a",
+    "policy_revision": 1,
+    "total_matched": 0,
+    "results": [],
+    "error_code": ""
+  },
+  "violates": "invariant: outcome error requires a non-empty error_code"
+}

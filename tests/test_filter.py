@@ -45,6 +45,13 @@ class TestWordBoundaries:
     def test_smart_quotes_do_not_break_matching(self):
         assert matched_terms("Anthropic’s Claude ships", ["Claude"]) == ["Claude"]
 
+    def test_chinese_uses_unicode_substring_matching(self):
+        assert matched_terms(
+            "GTA 6确认不使用生成式人工智能",
+            ["人工智能"],
+            language="zh",
+        ) == ["人工智能"]
+
 
 class TestTopicMatch:
     def test_exclude_vetoes_a_keyword_hit(self):
@@ -64,6 +71,30 @@ class TestTopicMatch:
         assert topic_match(make_item("Model Context Protocol explained"), topic) == [
             "Model Context Protocol"
         ]
+
+    def test_language_selects_only_that_languages_terms(self):
+        topic = Category(
+            name="AI",
+            keywords=["AI"],
+            keywords_by_language={"zh": ["人工智能"]},
+        )
+        zh = make_item("生成式人工智能服务开放")
+        zh.language = "zh"
+        assert topic_match(zh, topic) == ["人工智能"]
+
+        en = make_item("生成式人工智能服务开放")
+        assert topic_match(en, topic) is None
+
+    def test_chinese_item_uses_substring_rules_for_exclusions_too(self):
+        topic = Category(
+            name="AI",
+            keywords_by_language={"zh": ["人工智能"]},
+            exclude=["Claude Monet"],
+        )
+        item = make_item("Claude Monet画作与人工智能")
+        item.language = "zh"
+
+        assert topic_match(item, topic) is None
 
 
 class TestMatchPosition:

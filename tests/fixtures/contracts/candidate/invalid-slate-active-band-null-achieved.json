@@ -1,0 +1,95 @@
+{
+  "contract": "candidate",
+  "dataclass": "Slate",
+  "expect": "invalid",
+  "note": "Reproduced adversarial payload: an active relevance band with achieved: null and verdict: pass. A null achieved value cannot honestly support any verdict.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": "user-owner",
+    "run_id": "run-2026-09-01-21",
+    "edition_date": "2026-09-01",
+    "built_at": "2026-09-01T12:00:00+00:00",
+    "policy_revision": 1,
+    "profile_snapshot_id": "snap-000007",
+    "entries": [
+      {
+        "position": 1,
+        "story_id": "story-1000",
+        "primary_lane": "updates",
+        "final_score": 0.9,
+        "plain_reason": "updates lane: cnn-news coverage inside the freshness window",
+        "backfilled": false
+      }
+    ],
+    "bands": [
+      {
+        "band": "relevance",
+        "active": true,
+        "floor": 0.6,
+        "cap": 1.0,
+        "achieved": null,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "freshness",
+        "active": true,
+        "floor": 0.5,
+        "cap": 1.0,
+        "achieved": 0.83,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "trend",
+        "active": true,
+        "floor": 0.15,
+        "cap": 0.6,
+        "achieved": 0.29,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "deliberate_surprise",
+        "active": true,
+        "floor": 0.1,
+        "cap": 0.25,
+        "achieved": 0.1667,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "source_diversity",
+        "active": true,
+        "floor": null,
+        "cap": 0.125,
+        "achieved": 0.0833,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "topic_diversity",
+        "active": true,
+        "floor": null,
+        "cap": 0.375,
+        "achieved": 0.25,
+        "verdict": "pass",
+        "exception_reason": ""
+      },
+      {
+        "band": "repetition",
+        "active": true,
+        "floor": 0.0,
+        "cap": 0.1,
+        "achieved": 0.0417,
+        "verdict": "pass",
+        "exception_reason": ""
+      }
+    ],
+    "verifier_verdict": "pass",
+    "lane_quotas": []
+  },
+  "violates": "invariant: active band relevance must carry a non-null achieved value"
+}

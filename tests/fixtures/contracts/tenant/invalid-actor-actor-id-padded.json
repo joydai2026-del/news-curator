@@ -1,0 +1,15 @@
+{
+  "contract": "tenant",
+  "dataclass": "Actor",
+  "expect": "invalid",
+  "note": "SEEDED ATTACK, permanent (round 6). Actor is the identity record an owned row's actor_id POINTS AT, and before round 6 it was exempt from the canonical-id rule entirely: a padded actor_id like this one was accepted structurally and by every ownership guard, so a per-person sweep keyed on the canonical spelling 'actor-cli-01' would miss the identity row naming the same actor.",
+  "payload": {
+    "actor_id": " actor-cli-01 ",
+    "tenant_id": "tenant-owner-private",
+    "actor_kind": "agent",
+    "created_at": "2026-09-01T12:00:00+00:00",
+    "user_id": "user-owner",
+    "label": "authenticated CLI"
+  },
+  "violates": "actor_id must not carry leading or trailing whitespace"
+}

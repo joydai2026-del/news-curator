@@ -1,0 +1,23 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Daring Fireball",
+  "home_page_url": "https://daringfireball.net/",
+  "feed_url": "https://daringfireball.net/feeds/json",
+  "items": [
+    {
+      "title": "★ Thoughts and Observations on Apple’s First Immersive MLB Broadcast, a Yankees 1-0 Win Over the Red Sox",
+      "date_published": "2026-08-29T17:53:34Z",
+      "date_modified": "2026-08-29T17:53:42Z",
+      "id": "https://daringfireball.net/2026/08/thoughts_and_observations_apple_immersive_mlb_broadcast",
+      "url": "https://daringfireball.net/2026/08/thoughts_and_observations_apple_immersive_mlb_broadcast"
+    },
+    {
+      "title": "Apple Announces Price Increase for Apple TV and Apple One Subscriptions",
+      "date_published": "2026-08-28T21:52:37Z",
+      "date_modified": "2026-08-28T21:52:45Z",
+      "id": "https://daringfireball.net/linked/2026/08/28/apple-tv-price-hike",
+      "url": "https://daringfireball.net/linked/2026/08/28/apple-tv-price-hike",
+      "external_url": "https://9to5mac.com/2026/08/28/apple-announces-price-increase-for-apple-tv-and-apple-one-subscriptions/"
+    }
+  ]
+}

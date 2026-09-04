@@ -94,9 +94,9 @@ class TestContent:
             assert marker not in html
 
     def test_schedule_wording_is_not_a_promise(self, now):
-        # "refreshes hourly" claims something GitHub cron cannot guarantee.
+        # "refreshes daily" claims something GitHub cron cannot guarantee.
         html = render({"T": [make_item("a")]}, now=now)
-        assert "scheduled hourly" in html and "refreshes hourly" not in html
+        assert "scheduled daily" in html and "refreshes daily" not in html
 
 
 class TestHealthLine:
@@ -128,7 +128,7 @@ class TestStaleness:
         assert f'data-built="{(now - timedelta(hours=9)).isoformat()}"' in html
 
     def test_threshold_is_embedded(self, now):
-        assert 'data-after="3"' in render({"T": []}, now=now, built_at=now)
+        assert 'data-after="27"' in render({"T": []}, now=now, built_at=now)
 
     def test_indicator_starts_hidden(self, now):
         # It must not flash on a fresh page before the script runs.
@@ -350,6 +350,13 @@ class TestAddTopicLink:
     def test_an_unsafe_repo_url_produces_no_link(self, now):
         html = render({"T": [make_item("a")]}, now=now, repo_url="javascript:alert(1)")
         assert "javascript:" not in html
+
+
+class TestPersonalizationLink:
+    def test_footer_leaves_fail_closed_personalization_marker(self, now):
+        html = render({"T": [make_item("a")]}, now=now)
+        assert "<!-- personalization-link -->" in html
+        assert "Personalize your feed" not in html
 
 
 class TestOneStoryOneCard:

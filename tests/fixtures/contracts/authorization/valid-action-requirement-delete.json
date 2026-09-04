@@ -1,0 +1,22 @@
+{
+  "contract": "authorization",
+  "dataclass": "ActionRequirement",
+  "expect": "valid",
+  "note": "The delete row. Credential separation is a field, not prose, so a test can assert it.",
+  "payload": {
+    "action": "delete_data",
+    "required_scope": "data:delete",
+    "human_requirement": "authorized tenant role plus a separate delete credential",
+    "agent_requirement": "separate delete credential, never the ingestion, export, or read credential",
+    "requires_separate_credential": true,
+    "requires_idempotency_key": true,
+    "requires_revision_check": false,
+    "requires_dry_run_first": true,
+    "forbidden_on_paths": [
+      "ingestion",
+      "import",
+      "export",
+      "read"
+    ]
+  }
+}

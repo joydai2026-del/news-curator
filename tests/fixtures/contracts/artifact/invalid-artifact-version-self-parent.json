@@ -1,0 +1,19 @@
+{
+  "contract": "artifact",
+  "dataclass": "ArtifactVersion",
+  "expect": "invalid",
+  "note": "A version that is its own parent breaks the immutable chain a mirror and a deletion both walk.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-human-owner",
+    "actor_kind": "human",
+    "user_id": "user-owner",
+    "artifact_id": "art-000031",
+    "version": 2,
+    "parent_version": 2,
+    "checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_reference": "restricted://artifacts/000031/2",
+    "settled_at": "2026-09-01T12:00:00+00:00"
+  },
+  "violates": "invariant: parent_version must be strictly less than version"
+}

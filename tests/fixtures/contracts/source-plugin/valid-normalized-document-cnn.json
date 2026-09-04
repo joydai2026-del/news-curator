@@ -1,0 +1,38 @@
+{
+  "contract": "source-plugin",
+  "dataclass": "NormalizedSourceDocument",
+  "expect": "valid",
+  "note": "A news-sitemap route's normalized output. fetched_at and adapter_version are the additions over the live Item, which records only when a story was published, not when we saw it.",
+  "payload": {
+    "tenant_id": "tenant-owner-private",
+    "actor_id": "actor-system",
+    "actor_kind": "system",
+    "user_id": null,
+    "document_id": "doc-cnn-000001",
+    "title": "Example headline as the publisher wrote it",
+    "url": "https://example.com/2026/09/01/example",
+    "canonical_url": "https://example.com/2026/09/01/example",
+    "language": "en",
+    "provenance": {
+      "source_id": "cnn-news",
+      "plugin_id": "news_sitemap",
+      "adapter_version": "1.0.0",
+      "original_item_id": "example-2026-09-01",
+      "url": "https://example.com/2026/09/01/example",
+      "canonical_url": "https://example.com/2026/09/01/example",
+      "fetched_at": "2026-09-01T12:00:00+00:00",
+      "published_at": "2026-09-01T11:30:00+00:00",
+      "transform_version": "normalize-1",
+      "published_at_is_estimated": false,
+      "echo_eligible": true,
+      "raw_response_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "summary": "The source's own summary, cleaned and bounded. Never generated.",
+    "image_url": "",
+    "native_rank": null,
+    "native_score": null,
+    "topic_tags": [
+      "world"
+    ]
+  }
+}
