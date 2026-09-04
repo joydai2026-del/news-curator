@@ -44,6 +44,12 @@
    "checked_at": "2026-08-30T23:21:02+00:00",
    "seen_at": "2026-08-31T07:34:25+00:00"
   },
+  "https://africa.businessinsider.com/local/markets/the-worlds-second-largest-economy-just-decided-with-one-of-its-top-african-partners/kcfvnsc": {
+   "image": "https://ocdn.eu/pulscms-transforms/1/cPuktkpTURBXy9kNDE2YzI3ZmE4YWRjY2M4MTEzNWZkYTc4NDI5Zjk3YS5qcGeSlQMAH80Cis0BbZMFzQSwzQJ2",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://agent-memory-wiki.vercel.app/": {
    "image": null,
    "outcome": "none",
@@ -73,6 +79,12 @@
    "outcome": "error",
    "checked_at": "2026-08-31T08:36:16+00:00",
    "seen_at": "2026-08-31T13:27:33+00:00"
+  },
+  "https://aginggamer.net/game-industry/sony-makes-bold-claim-about-game-ownership": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://ai.google.dev/gemini-api/docs/video-understanding": {
    "image": "https://ai.google.dev/static/site-assets/images/vision.png",
@@ -134,6 +146,12 @@
    "checked_at": "2026-09-02T14:26:57+00:00",
    "seen_at": "2026-09-02T20:26:24+00:00"
   },
+  "https://anildash.com/2026/09/02/cancer-capital": {
+   "image": "https://www.anildash.com/images/cancer-capital-1.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://anthropic.com/claude-fable-and-mythos-5-1": {
    "image": "https://cdn.sanity.io/images/4zrzovbb/website/932ca7d6f414ca22fd5a26dcc131410575b9b3e5-1200x630.jpg",
    "outcome": "ok",
@@ -146,23 +164,29 @@
    "checked_at": "2026-09-02T23:22:12+00:00",
    "seen_at": "2026-09-03T03:23:59+00:00"
   },
+  "https://anyhumanever.com/": {
+   "image": "https://anyhumanever.com/static/og-card.png?v=100b",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://apnews.com/article/mercury-bepicolombo-spacecraft-8840475f5f873b9bcc7245f45ffdc50c": {
    "image": null,
    "outcome": "error",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://arcprize.org/blog/astra": {
    "image": "https://arcprize.org/media/images/blog/astra-action-efficiency.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T20:24:34+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://armature.tech/blog/which-tools-coding-agents-install": {
    "image": "https://armature.tech/assets/blog/coding-agents-tool-choice-3.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T22:23:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://arstechnica.com/ai/2026/08/metas-scrapped-plans-to-go-ai-native-included-slashing-teams-by-60-percent": {
    "image": "https://cdn.arstechnica.net/wp-content/uploads/2026/08/GettyImages-2171717886-1152x648.jpg",
@@ -170,11 +194,23 @@
    "checked_at": "2026-09-01T17:22:56+00:00",
    "seen_at": "2026-09-01T22:22:54+00:00"
   },
+  "https://arstechnica.com/ai/2026/09/four-major-ai-models-suffer-rare-overlapping-downtime": {
+   "image": "https://cdn.arstechnica.net/wp-content/uploads/2026/09/GettyImages-2197730159-1152x648.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://arstechnica.com/tech-policy/2026/09/trump-may-be-forced-to-reveal-secret-rules-feds-use-for-ai-safety-testing": {
+   "image": "https://cdn.arstechnica.net/wp-content/uploads/2026/09/GettyImages-2250714805-1024x648.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://artificialanalysis.ai/articles/benchmarking-gpt-6-astra": {
    "image": "https://cdn.sanity.io/images/6vfeftx9/articles/3d308ecf6306e8dfebe66f63adcf5209496dcce8-1024x1024.jpg?w=1200&auto=format",
    "outcome": "ok",
    "checked_at": "2026-09-03T20:24:34+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://arxiv.org/abs/2506.09501": {
    "image": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png",
@@ -314,6 +350,30 @@
    "checked_at": "2026-08-29T14:21:52+00:00",
    "seen_at": "2026-08-29T19:18:55+00:00"
   },
+  "https://axios.com/2026/09/03/altman-government-scrutiny-ai-g20": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://axios.com/2026/09/03/chatgpt-claude-grok-outages": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://axios.com/2026/09/03/openai-critical-infrastructure-cyber-ai-models": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://babyloniantwins.com/blog/porting-a-1993-amiga-game-to-godot": {
+   "image": "https://www.babyloniantwins.com/img/og.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://bartholomew.info/": {
    "image": null,
    "outcome": "none",
@@ -325,6 +385,12 @@
    "outcome": "ok",
    "checked_at": "2026-09-02T00:59:27+00:00",
    "seen_at": "2026-09-02T04:31:47+00:00"
+  },
+  "https://bbc.co.uk/news/articles/cgl3we7wdr3o": {
+   "image": "https://ichef.bbci.co.uk/ace/branded_news/1200/cpsprodpb/9176/live/0e5ba530-a5a5-11f1-b109-879e35c24276.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://bbc.com/news/articles/cd68vpjv21do": {
    "image": "https://ichef.bbci.co.uk/news/1024/branded_news/787d/live/19ed92c0-a305-11f1-a291-b542ee92de7c.png",
@@ -354,7 +420,7 @@
    "image": "https://imgproxy.divecdn.com/LqkBoVpjujdha9JwQoAColLj2-70jmr__kjsZ_BOToQ/g:nowe:0:180/c:2000:1129/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNDA3MzIxMTg5LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://biopharmadive.com/news/alumis-lupus-tyk2-inhibitor-lumus-study-failure/829286": {
    "image": "https://imgproxy.divecdn.com/J_FHiGHRAzUUThmebETeG47vOb3RUnkRZtwaa4gIptI/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNDgyMTM0MDgzLmpwZw==.webp",
@@ -378,7 +444,7 @@
    "image": "https://imgproxy.divecdn.com/dhFq4Vy6r-6obDui95n_pg_umaJtOqrDixc1idaxaQU/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNzM0NjQ0MTMyLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-09-02T17:23:40+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://biopharmadive.com/news/biotech-charts-biopharma-xbi-deals-mergers-ipos/828794": {
    "image": "https://imgproxy.divecdn.com/y_Ojn4iqdSLCDGgXs4TNOd7pUhCJfU4S_UsDW9E4lMg/g:nowe:0:217/c:4928:2784/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMjgxODMyMjUyLmpwZw==.webp",
@@ -414,7 +480,7 @@
    "image": "https://imgproxy.divecdn.com/RGg-8A6UpHp5MmSZJJyiPgl6TB1MJg5IyDSCC-vTvJM/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0yMTc3MzEzMjc4LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://biopharmadive.com/news/lilly-merida-acquire-deal-immune-drugs-graves-disease/829152": {
    "image": "https://imgproxy.divecdn.com/RW4OQBVmGwnbE-4aU-t6goDsHAyScpmABjahuatd8jg/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0yMjYxMjA1MzY0LmpwZw==.webp",
@@ -462,7 +528,7 @@
    "image": "https://imgproxy.divecdn.com/FcWj2m1w-87R1Dg-vE0wOsRsy-x1Z3EdVR2APlVrlcI/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMzA2NTMwOTMyLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://biopharmadive.com/news/teva-celiac-biomarin-ascendis-gsk-flu-biontech-mifepristone/828937": {
    "image": "https://imgproxy.divecdn.com/EK5xKj0ydykvmwFmBqsauREtdhrHAUsAiyI6JgDkO1s/g:nowe:0:0/c:1207:682/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNDgzOTIxNzkzLmpwZw==.webp",
@@ -474,19 +540,19 @@
    "image": "https://imgproxy.divecdn.com/0z9Xj7MwhKpUfApIyEHFTTtQ9IyHRQRe2EoTsYBWSLw/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9waGFybWEtbWFudWZhY3R1cmluZy10ZWNobmljaWFuLWdldHR5LTE0MjE0MDE4ODQuanBn.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://biopharmadive.com/news/ultragenyx-angelman-syndrome-drug-results-cost-cuts/829528": {
    "image": "https://imgproxy.divecdn.com/SGkcjwWisaslrH3dS_0BEX6viwWmBYAIZG5XVJ9P_fA/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS91bHRyYWdlbnh5LmpwZWc=.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T15:28:52+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://biopharmadive.com/news/uniqure-submit-fda-approval-huntingtons-gene-therapy/829400": {
    "image": "https://imgproxy.divecdn.com/xBI1Tv0GTXys6wpRV0QS8JGGmJztWfwwzzGhEKntsIc/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMjI3NzEwNTU1X2FzUm5RNnkuanBn.webp",
    "outcome": "ok",
    "checked_at": "2026-09-02T16:29:01+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://biopharmadive.com/spons/the-next-frontier-advancing-foundation-models-with-multimodal-data/828675": {
    "image": "https://imgproxy.divecdn.com/fc9iyl_Qq0agjlxrx4kVgrzpgMhENFu_4IDBdrD93ts/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9JbmR1c3RyeV9kaXZlX2hlYWRlcl9WZXJpbHlfTlZJRElBX05FVy5wbmc=.webp",
@@ -499,6 +565,12 @@
    "outcome": "ok",
    "checked_at": "2026-08-29T21:21:01+00:00",
    "seen_at": "2026-08-31T20:25:30+00:00"
+  },
+  "https://bit.ly/3UVGtG5": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://bitcoinmagazine.com/bitcoin-for-corporations/blackrock-re-underwrites-bitcoin-and-the-portfolio-math-still-holds": {
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/09/BlackRock-Re-Underwrites-Bitcoin-and-the-Portfolio-Math-Still-Holds.jpg",
@@ -516,7 +588,7 @@
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/09/Pics-3.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://bitcoinmagazine.com/markets/bitcoin-shrugs-off-fed-chair-comments": {
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/08/Pics-4.jpg",
@@ -540,7 +612,7 @@
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/09/Pics-6.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T22:23:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://bitcoinmagazine.com/news/bitcoin-cools-following-etf-investment": {
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/08/Pics-6.jpg",
@@ -552,7 +624,7 @@
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/09/Pics-5.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T22:23:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://bitcoinmagazine.com/news/bitcoin-has-its-third-best-august-ever": {
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/09/Bitcoin-Defies-Seasonal-Slump-With-Third-Best-August-Ever.jpg",
@@ -606,7 +678,7 @@
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/09/sofi.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T19:20:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://bitcoinmagazine.com/news/russia-sberbank-expects-big-crypto-trading": {
    "image": "https://bitcoinmagazine.com/wp-content/uploads/2026/08/Pics-7.jpg",
@@ -698,6 +770,18 @@
    "checked_at": "2026-09-03T13:26:54+00:00",
    "seen_at": "2026-09-03T14:28:09+00:00"
   },
+  "https://bloomberg.com/news/articles/2026-09-03/anthropic-nears-finalizing-15-billion-pre-ipo-credit-facility": {
+   "image": "https://assets.bwbx.io/images/users/iqjWHBFdfxIU/iMp42KK59nOs/v1/1200x778.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://bloomberg.com/news/articles/2026-09-03/crusoe-raises-over-3-billion-in-funding-at-30-billion-valuation": {
+   "image": "https://assets.bwbx.io/images/users/iqjWHBFdfxIU/i40B.NK46L9M/v0/1200x800.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://brekken.com/posts/a-truly-random-seed-phrase": {
    "image": "https://brekken.com/assets/img/posts/2026-08-28-truly-random-seed-phrase/og-image.jpg",
    "outcome": "ok",
@@ -714,7 +798,25 @@
    "image": "https://i.insider.com/6a97a85f1f60b9f4b1633bf1?width=1200&format=jpeg",
    "outcome": "ok",
    "checked_at": "2026-09-02T15:29:44+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://businessinsider.com/high-paying-growing-jobs-low-exposure-to-ai-2026-9": {
+   "image": "https://i.insider.com/6a980f9a3c906e69480d53bc?width=1200&format=jpeg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://businessinsider.com/lori-cashman-visible-ventures-gen-z-kids-ai-2026-9": {
+   "image": "https://i.insider.com/6a982625b56943d508c4a96d?width=800&format=jpeg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://businessinsider.com/zuckerberg-told-trump-a-national-ai-regulator-is-a-flawed-idea-2026-9": {
+   "image": "https://i.insider.com/6a99a1f5b56943d508c4b252?width=1200&format=jpeg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://bytemine.ai/blog/temporal-company-intelligence-gtm-agents": {
    "image": "https://www.bytemine.ai/og-image.jpg",
@@ -774,7 +876,7 @@
    "image": "https://img.canarymedia.com/content/uploads/Hyundai-Steel-sign_GettyImages-2199207709.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=a280591b5af2f3b2bcba39d994071905",
    "outcome": "ok",
    "checked_at": "2026-09-03T08:33:47+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://canarymedia.com/articles/nuclear/heat-waves-nuclear-plants": {
    "image": "https://img.canarymedia.com/content/uploads/Paks-Nuclear-Power-Plant-in-Hungary_GettyImages-2289900877.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=ac0981e6161bbe610ef1778f3f7ac87c",
@@ -786,7 +888,7 @@
    "image": "https://img.canarymedia.com/content/uploads/Kathy-Hochul-July-2022_GettyImages-1241755017.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=f6c6608395b7b446e46a5a2b8dbe7d5e",
    "outcome": "ok",
    "checked_at": "2026-09-03T08:33:47+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://canarymedia.com/articles/offshore-wind/states-sue-trump-buyouts-leases-offshore-wind": {
    "image": "https://img.canarymedia.com/content/uploads/Portsmouth-Marine-wind-turbine-parts_AP26012662836755.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=7672a3e169cea6224093f9e882186b34",
@@ -828,7 +930,7 @@
    "image": "https://img.canarymedia.com/content/uploads/High-voltage-transmission-tower-Ontario_GettyImages-2290195049.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=84b92e1c0eafe3714aca56d4451f6a0d",
    "outcome": "ok",
    "checked_at": "2026-09-03T08:33:47+00:00",
-   "seen_at": "2026-09-04T00:57:19+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://canarymedia.com/articles/virtual-power-plants/california-guts-biggest-virtual-power-plant": {
    "image": "https://img.canarymedia.com/content/uploads/GettyImages-2218482421.jpg?auto=compress%2Cformat&crop=focalpoint&fit=crop&fp-x=0.5&fp-y=0.5&h=630&q=82&w=1200&s=167cf91393c113f9765e36f844f6cf08",
@@ -848,6 +950,36 @@
    "checked_at": "2026-08-30T14:22:12+00:00",
    "seen_at": "2026-08-30T23:21:02+00:00"
   },
+  "https://cbsnews.com/live-updates/us-iran-war-trump-dismisses-diplomacy-tehran-says-wedding-hit-in-strike": {
+   "image": "https://assets3.cbsnewsstatic.com/hub/i/r/2026/09/03/00bb9820-467d-44f1-ba2c-0c5077596afa/thumbnail/1200x630g2/4d3c01021d0a9390a335609461c104a2/2026-09-02t124926z-2108658053-rc20bnadm8ps-rtrmadp-3-iran-crisis-hospital.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cbsnews.com/news/fbi-ai-identify-threats-faster-christopher-raia": {
+   "image": "https://assets1.cbsnewsstatic.com/hub/i/r/2026/09/03/3ea80b42-4138-47f0-82e5-47d1f7249884/thumbnail/1200x630g2/6f16c92d25a9e43dff69df1b7fd555e0/gettyimages-2242446046.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cbsnews.com/news/trump-administration-supreme-court-postal-service-mail-ballot-rules": {
+   "image": "https://assets1.cbsnewsstatic.com/hub/i/r/2026/09/03/6c00a567-5d41-4f20-a728-a034f15b9f52/thumbnail/1200x630/37efb1c990e1d0e4f39658d83c8f8565/gettyimages-2290038701.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cbsnews.com/video/trump-administration-asks-supreme-court-to-help-push-new-mail-in-ballot-rules": {
+   "image": "https://assets2.cbsnewsstatic.com/hub/i/r/2026/09/03/da1d20af-f047-4b85-9e03-53b2f2a321ee/thumbnail/1200x630/9a7e330be3590c0548d7e1b035d24535/cbsn-fusion-trump-administration-asks-supreme-court-to-help-push-new-mail-in-ballot-rules-thumbnail.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cbsnews.com/video/trump-warns-larger-attacks-iran-vance-downplays-us-not-war": {
+   "image": "https://assets3.cbsnewsstatic.com/hub/i/r/2026/09/03/4a662a76-0f6b-4a6f-953a-b2db63763f62/thumbnail/1200x630/aa358c0766560f6dd743f28d380040cb/cbsn-fusion-trump-warns-larger-attacks-iran-vance-downplays-us-not-war-thumbnail.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://celeris.ai/celeris-1-magnus": {
    "image": "https://celeris.ai/assets/og-celeris-1-magnus.png",
    "outcome": "ok",
@@ -858,7 +990,7 @@
    "image": "https://cdn.openai.com/chatgpt/share-og.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T15:28:52+00:00",
-   "seen_at": "2026-09-03T15:28:52+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://checklyhq.com/blog/agentic-rewrite-nodejs-to-go": {
    "image": "https://images.prismic.io/checklyhq/DkQueTTRxgYbz44l_OG.png?auto=format,compress",
@@ -902,17 +1034,239 @@
    "checked_at": "2026-08-31T21:22:55+00:00",
    "seen_at": "2026-09-01T11:24:29+00:00"
   },
+  "https://cna.com.tw/news/acul/202609040014.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/WebPhotos/1024/20260904/683x1024_wmkn_0_C20260904000001.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/acul/202609040016.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/WebPhotos/1024/20260904/1024x768_wmky_0_C20260904000004.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040005.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/webphotos/WebCover/800/20260904/909x681_613142613007.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040009.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/images/pic_fb.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040011.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/webphotos/WebCover/800/20260904/1706x1280_684765953470.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040012.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/webphotos/WebOg/600/20260904/800x419_634619129791.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040013.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/webphotos/WebOg/600/20260904/1080x566_244766572878.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040015.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/images/pic_fb.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040017.aspx": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040020.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/webphotos/WebOg/600/20260904/1144x600_16892692833.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cna.com.tw/news/aopl/202609040024.aspx": {
+   "image": "https://imgcdn.cna.com.tw/www/webphotos/WebCover/800/20260904/915x685_740138318569.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/adobe-anil-chakravarthy-ceo.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108355107-1787834424220-gettyimages-2291687986-schneider-adobeoff260826_nppiC.jpeg?v=1787834460&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/august-2026-jobs-report-payrolls.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108264378-1770816437743-108264378-1770816236827-gettyimages-2260443049-US_JOBS.jpg?v=1770816446&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/carney-lutnick-trump-trade-canada.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108291197-1776182891819-gettyimages-2270831111-AFP_A7RQ38R.jpeg?v=1776182906&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/chargepoint-ceo-50percent-stock-surge-is-the-beginning-of-the-momentum.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108358418-1788446023097-gettyimages-2169557788-CHARGEPOINT_EARNS.jpeg?v=1788446099&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/chinese-vehicles-congress.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108333834-1783918441707-gettyimages-2283163436-_DSC4514JPG.jpeg?v=1788468375&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/elon-musk-america-pac-election-senate-races.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108049418-1729201722436-AP24291780639776.jpg?v=1729201817&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/freedom-fuel-trump-lawsuit-detroit.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108332402-1783543805506-gettyimages-2284668777-jl_freedom_fuel_7826_008.jpeg?v=1788476319&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/heres-why-jim-cramer-is-putting-costco-stock-is-in-the-penalty-box-.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108339488-1784837341781-gettyimages-2264093226-dsc_1828.jpeg?v=1788453598&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/lululemon-lulu-q2-2026-earnings.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108356939-1788264108092-Shoppers_Walk_Past_a_Lululemon_Store_in_Hong_Kong-2282715103-Getty.jpg?v=1788264143&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/microsoft-xbox-game-pass-cloud-limits.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108358445-1788447829721-gettyimages-2291589796-GERMANY_GAMESCOM.jpeg?v=1788447870&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/nvidia-agrees-to-buy-hugging-face-for-almost-13-billion-ai-expansion.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108358351-1788440424844-108358351-1788440038288-gettyimages-2151605984-BLOOMBERG_TECHNOLOGY_SUMMIT.jpg?v=1788452709&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/oil-price-today-iran-war-strait-hormuz.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108354962-1787810582819-gettyimages-2291320726-koutsokostas-notitle260824_npYkV.jpeg?v=1787810594&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://cnbc.com/2026/09/03/open-ai-astra-gpt-6-cyber.html": {
    "image": "https://image.cnbcfm.com/api/v1/image/108357917-1788370763021-gettyimages-2292626781-AFP_C77688U.jpeg?v=1788370796&w=1920&h=1080",
    "outcome": "ok",
    "checked_at": "2026-09-03T19:20:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/options-volume-erupts-in-retail-trading-favorites-as-robinhood-tesla-surge.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108225750-1763069160018-gettyimages-2245970413-CBOE_MARKETS.jpeg?v=1763069191&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/piper-sandler-expects-robinhood-to-start-football-season-with-a-win.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108274187-1772718965553-gettyimages-2264254562-ROBINHOOD_JFK.jpeg?v=1780674067&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/tesla-teases-no-steering-wheel-no-pedals-ahead-of-cybercab-update.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108217500-17615992202025-10-27t210414z_749579595_rc2gkhaoovvj_rtrmadp_0_tesla-usa.jpeg?v=1761599290&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/treasury-irs-proposal-tax-exempt-schools-charitable-donations.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108228682-17635880692025-11-19t213000z_63551236_rc2vzhakmg3c_rtrmadp_0_usa-trump-epstein-summers.jpeg?v=1763588180&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/vance-fed-interest-rates-trump-bond-yields.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108358544-1788458325945-gettyimages-2292759373-AFP_C7AP3JA.jpeg?v=1788458357&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/03/zscaler-zs-q4-earnings-2026.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108356949-1788264251122-gettyimages-2232147647-img_4823.jpeg?v=1788264292&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/04/ai-bubble-valuations-venture-capital.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108357448-1788308321826-gettyimages-2255929331-dsc01357.jpeg?v=1788482629&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbc.com/2026/09/04/south-korea-ai-rally-society-impact.html": {
+   "image": "https://image.cnbcfm.com/api/v1/image/108355614-1787901044331-gettyimages-1682205798-jv12665954.jpeg?v=1787901097&w=1920&h=1080",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnbeta.com.tw/articles/tech/1576236.htm": {
+   "image": "https://static.cnbetacdn.com/article/2026/0823/274f14e99241546.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://cnet.com/tech/services-and-software/anthropic-sued-alleged-false-advertising-claude-max-subscription-usage-limits": {
    "image": "https://www.cnet.com/wp-content/uploads/sites/2/gettyimages-2216579136_a1fb87.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-31T15:26:17+00:00",
    "seen_at": "2026-09-03T15:28:52+00:00"
+  },
+  "https://cnn.com/2026/09/03/politics/video/epstein-congress-walkinshaw-leon-black-subpoena-lead-tapper": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnn.com/2026/09/03/politics/video/nc-senate-race-ip": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnn.com/2026/09/03/tv/video/amanpour-manley-canada-trump-tariffs": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnn.com/2026/09/03/us/video/us-immigration-alvarez-live-ctw-0903-10a-seg2-cnni-us-fast": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://cnn.com/2026/09/03/world/video/lead-tapper-wine-canada-trade-war-tariffs": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://codeandlife.com/2026/08/31/thinking-wattage-ai-agents-vs-human-brain": {
    "image": null,
@@ -1088,6 +1442,12 @@
    "checked_at": "2026-09-02T01:34:09+00:00",
    "seen_at": "2026-09-02T07:29:21+00:00"
   },
+  "https://discoverwildlife.com/animal-facts/artificial-beaver-dams-california": {
+   "image": "https://d2rj6cu2ik1biv.cloudfront.net/193c804a-a673-47bd-b09b-11baf4822a17/9ac494a4-627d-4fea-a827-dcf588dd6f96/fd5ffa75-92b9-459b-9465-2f2d37321e0d/thumbnails/5fdb6aa7-15a3-4f1c-8980-ce664981a95c.jpeg?appId=f347d34d-c1a6-4a00-b570-b78c2dcb3211&w=1200",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://docs.isurlog.isurki.com/blog/2026/08/31/ntn-on-the-nrf9151-low-cost-satellite-iot-without-a-separate-satellite-modem": {
    "image": null,
    "outcome": "none",
@@ -1122,7 +1482,7 @@
    "image": "https://www.drugdiscoverytrends.com/wp-content/uploads/2026/09/Protexi_Graphic.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://drugdiscoverytrends.com/merck-and-modernas-cancer-vaccine-is-customized-for-each-patients-tumor": {
    "image": "https://www.drugdiscoverytrends.com/wp-content/uploads/2026/08/MerckModerna.png",
@@ -1147,6 +1507,18 @@
    "outcome": "ok",
    "checked_at": "2026-09-02T15:29:44+00:00",
    "seen_at": "2026-09-03T23:21:29+00:00"
+  },
+  "https://economicsociology.org/2026/08/28/how-social-policy-builds-financial-markets": {
+   "image": "https://economicsociology.org/wp-content/uploads/2026/08/comelli_graph-1024x597-1.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://economist.com/graphic-detail/2026/09/03/the-ai-boom-is-coming-for-your-gadgets": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://eff.org/deeplinks/2026/08/eff-courts-dont-rewrite-copyright-over-ai-hype": {
    "image": "https://www.eff.org/files/banner_library/ai-robot-warhol-2.png",
@@ -1200,7 +1572,7 @@
    "image": "https://europeanspaceflight.com/wp-content/uploads/2026/09/Isar-Aerospace-Could-Attempt-Second-Spectrum-Flight-as-Early-as-4-September.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T14:28:09+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://europeanspaceflight.com/orbexs-sutherland-spaceport-assets-sold-to-scottish-development-agency": {
    "image": "https://europeanspaceflight.com/wp-content/uploads/2026/08/Orbexs-Sutherland-Spaceport-Assets-Sold-to-Scottish-Development-Agency.webp",
@@ -1244,6 +1616,12 @@
    "checked_at": "2026-09-01T19:21:58+00:00",
    "seen_at": "2026-09-03T18:31:19+00:00"
   },
+  "https://finance.yahoo.com/technology/ai/articles/ai-boom-isn-t-just-130033642.html": {
+   "image": "https://s.yimg.com/lo/mysterio/api/65ef8f9583e9fcd4357c26218f66b5ccb18167a0ffe9bbc6c183164e96705074/lightyear_networkapi/resizefill_w1200%3Bquality_80%3Bformat_webp/https%3A%2F%2Fmedia.zenfs.com%2Fen%2F24_7_wall_st__718%2Fb2f9c7cb89d5cc4e471bfce65db4b79d.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://finance.yahoo.com/technology/ai/articles/phonely-launches-alma-voice-llm-130200496.html": {
    "image": "https://s.yimg.com/lo/mysterio/api/ef6bf058e70c8db03ce2a37feef16f82a3973baf0b764a1cc84166372e38c6c4/lightyear_networkapi/resizefill_w1200%3Bquality_80%3Bformat_webp/https%3A%2F%2Fmedia.zenfs.com%2Fen%2Fbusiness-wire.com%2F010e291e6c4b14b9b5261ec88bd0ec55.jpg",
    "outcome": "ok",
@@ -1262,6 +1640,66 @@
    "checked_at": "2026-08-31T14:28:14+00:00",
    "seen_at": "2026-08-31T16:26:56+00:00"
   },
+  "https://foxnews.com/media/michigan-democrat-lost-senate-primary-abdul-el-sayed-takes-aim-bernie-sanders-israel-stance": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/09/STEVENS-SANDERS.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/media/openais-chatgpt-pivots-after-previously-putting-trump-alongside-putin-as-top-threats-to-democracy": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2025/12/laptop-chatgpt-photo-3.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/opinion/mike-davis-cheers-david-warrington-trumps-outgoing-white-house-counsel": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/09/david-warrington_white_house.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/outkick-sports/utah-mackenzie-weegar-reacts-american-players-seeking-trades-out-canada-bit-unfortunate": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/09/mackenzie-weegar.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/politics/blue-state-governor-candidate-claims-met-satan-person-resurfaced-podcast-episode": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/07/victor-marx-june-4-2026.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/politics/dem-senate-hopeful-vows-unleash-alaska-oil-her-record-tells-different-story": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/09/peltola-oil-gas-letter.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/politics/dem-senate-nominee-changes-tune-ice-after-vowing-not-one-more-dime-agency": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/09/ice-agents-ventura-county-detainee.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/politics/vance-reveals-whos-behind-his-recent-weight-loss-first-white-house-press-briefing-since-july": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/09/jd-vance-9-3-26.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/politics/white-house-classic-arcade-games-maga-makeover-online-launch": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/09/white-house-arcade.gif",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://foxnews.com/politics/white-house-rips-activist-biden-judge-upended-trump-birthright-citizenship-order": {
+   "image": "https://static.foxnews.com/foxnews.com/content/uploads/2026/07/Birthright-citizenship-protesters.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://freddiedeboer.substack.com/p/i-think-llms-will-prove-to-be-consequential": {
    "image": null,
    "outcome": "error",
@@ -1274,11 +1712,29 @@
    "checked_at": "2026-09-01T14:27:19+00:00",
    "seen_at": "2026-09-01T18:31:16+00:00"
   },
+  "https://ft.com/content/1a1f6c54-8dbc-4446-a6dc-45a060b7cdc8?syn-25a6b1a6=1": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://ft.com/content/38d95298-8b9b-486a-96d3-0c6616972abb": {
    "image": "https://images.ft.com/v3/image/raw/https%3A%2F%2Fd1e00ek4ebabms.cloudfront.net%2Fproduction%2F57e730af-ad4b-4863-98be-129ae88e4f8b.jpg?source=next-barrier-page&fit=scale-down&quality=highest&width=700&dpr=1",
    "outcome": "ok",
    "checked_at": "2026-08-28T20:13:52+00:00",
    "seen_at": "2026-08-29T13:20:41+00:00"
+  },
+  "https://ft.com/content/55ab40c0-59e2-4c0b-97c9-4f4f5a71a8bb?syn-25a6b1a6=1": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://fusionauth.io/blog/homegrown-auth-business-continuity-risk": {
+   "image": "https://fusionauth.io/img/blogs/homegrown-auth-business-continuity-risk/homegrown-auth-business-continuity-risk-header.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://gatesnotes.com/home/home-page-topic/reader/a-turbulent-ai-era-and-critical-choices-to-make": {
    "image": null,
@@ -1308,7 +1764,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/09/Solvias-eBook-cover-image.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T17:24:04+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/bioprocessing/andelyn-to-support-manufacturing-scaleup-for-genprexs-diabetes-gene-therapy": {
    "image": "https://www.genengnews.com/wp-content/uploads/2026/09/GettyImages-2289017666.jpg",
@@ -1326,13 +1782,13 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/09/Mike-Kojouharov_GBPN_IMAGE_03SEPT26.jpeg",
    "outcome": "ok",
    "checked_at": "2026-09-02T16:29:01+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/bioprocessing/new-spectrometry-technique-could-aid-formulation-development": {
    "image": "https://www.genengnews.com/wp-content/uploads/2024/12/GettyImages-2147604905.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-02T16:29:01+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/bioprocessing/regulatory-demands-for-more-process-control-data-fueling-innovation": {
    "image": "https://www.genengnews.com/wp-content/uploads/2021/04/GettyImages-675822742-scaled.jpg",
@@ -1386,7 +1842,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/09/GettyImages-544546123-e1788367986742.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-02T19:21:49+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/drug-discovery/inhaled-suppressor-trna-restores-gene-function-in-cystic-fibrosis-models": {
    "image": "https://www.genengnews.com/wp-content/uploads/2023/03/GettyImages-831149000-scaled.jpg",
@@ -1398,13 +1854,13 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/03/POV-GettyImages-1227553397.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/infectious-diseases/cancer-drug-reduces-siv-reservoir-in-macaques-may-inform-hiv-cure-strategies": {
    "image": "https://www.genengnews.com/wp-content/uploads/2026/04/Getty_188057801_HIVVirus.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-04T01:31:06+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/infectious-diseases/key-immune-cells-identified-that-could-strengthen-flu-vaccines": {
    "image": "https://www.genengnews.com/wp-content/uploads/2025/03/Low-Res_GettyImages-1127490587.jpg",
@@ -1434,7 +1890,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/09/GettyImages-2221046460.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-04T00:57:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/translational-medicine/advanced-imaging-technique-reveals-immune-cell-metabolic-states-in-blood-samples": {
    "image": "https://www.genengnews.com/wp-content/uploads/2018/08/July29_2014_54649943_RedandWhiteBloodCells_SuspectCancerStressTestWBCs3220417970.jpg",
@@ -1470,13 +1926,13 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2024/02/GettyImages-544546223.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T01:00:18+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/translational-medicine/immune-cells-driving-alzheimers-like-neurodegeneration-traced-to-lymph-nodes": {
    "image": "https://www.genengnews.com/wp-content/uploads/2026/09/Alzheimers_GettyImages-2238757957.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T19:20:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/translational-medicine/lilly-looks-beyond-obesity-with-up-to-2-9b-acquisition-of-merida-biosciences": {
    "image": "https://www.genengnews.com/wp-content/uploads/2026/08/Merida-Biosciences_photo_home_join-us_v2@2x.jpg",
@@ -1494,7 +1950,7 @@
    "image": "https://www.genengnews.com/wp-content/uploads/2026/09/GettyImages-2229675668.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-02T21:22:41+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://genengnews.com/topics/translational-medicine/notch-signaling-switch-enables-scalable-helper-t-cell-production-for-car-t": {
    "image": "https://www.genengnews.com/wp-content/uploads/2025/06/GettyImages-2196144747-scaled.jpg",
@@ -1584,7 +2040,13 @@
    "image": "https://opengraph.githubassets.com/e49373b8ade851f4b67b6d28044bf75fafc9652a928b9484281123347f8e9e94/JamelHammoud/crew",
    "outcome": "ok",
    "checked_at": "2026-09-04T01:31:06+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://github.com/JosPMSilva/ADDOM": {
+   "image": "https://opengraph.githubassets.com/eefefb5d5313da778154a65350693b11ef924a0f1bdd1d680c020ddf95f967a0/JosPMSilva/ADDOM",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://github.com/Octonove/crbro-memory": {
    "image": "https://opengraph.githubassets.com/d09094f43ddeca91dff174fa1af554bf1bdb9aa15e120683bd43e6cd236d39f6/Octonove/crbro-memory",
@@ -1699,6 +2161,12 @@
    "outcome": "ok",
    "checked_at": "2026-09-02T15:29:44+00:00",
    "seen_at": "2026-09-02T19:21:49+00:00"
+  },
+  "https://github.com/audacity/audacity/releases/tag/Audacity-4.0.0": {
+   "image": "https://opengraph.githubassets.com/bda56dd5fb280eb5e9f6e49e854d8cc7fd1ced9647d8f5a85966c6196bd079c1/audacity/audacity/releases/tag/Audacity-4.0.0",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://github.com/axem-solutions/shaide": {
    "image": "https://opengraph.githubassets.com/240ce51c0b16d6b69e9139b616d54de523fc96b3d5e7ed22f26d0bf8e1a4dd29/axem-solutions/shaide",
@@ -1862,6 +2330,12 @@
    "checked_at": "2026-08-31T18:30:40+00:00",
    "seen_at": "2026-09-02T17:23:40+00:00"
   },
+  "https://github.com/openai/codex/issues/28756": {
+   "image": "https://opengraph.githubassets.com/a2e7b79df71d1996da5a719579f33a50f8acd11c121a96728d02dce5ea68dd5e/openai/codex/issues/28756",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://github.com/openvurp/openvurp": {
    "image": "https://opengraph.githubassets.com/c92dc46567e4c2aa5588efe2b6af8516a4af6c4b1d14559c84d510ef7f92b9dc/openvurp/openvurp",
    "outcome": "ok",
@@ -1988,6 +2462,18 @@
    "checked_at": "2026-08-30T17:19:59+00:00",
    "seen_at": "2026-08-31T18:30:40+00:00"
   },
+  "https://gizmodo.com/ozempic-and-other-glp-1s-are-being-linked-to-fewer-serious-infections-including-tb-2000806796": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://gmdmarkets.com/markets-today": {
+   "image": "https://gmdmarkets.com/img/global-markets-dashboard-live-free.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://grith.ai/blog/grith-is-live": {
    "image": "https://grith.ai/og-image.png",
    "outcome": "ok",
@@ -2054,6 +2540,12 @@
    "checked_at": "2026-08-29T03:26:06+00:00",
    "seen_at": "2026-08-29T13:20:41+00:00"
   },
+  "https://ifm.ai/blog/k2": {
+   "image": "https://ifm.ai/blog/k2/assets/k2-horizon-social.webp",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://igupta.in/blog/why-i-am-no-longer-letting-claude-code-add-itself-as-coauthor": {
    "image": null,
    "outcome": "none",
@@ -2065,6 +2557,12 @@
    "outcome": "error",
    "checked_at": "2026-08-28T22:00:26+00:00",
    "seen_at": "2026-08-29T05:23:29+00:00"
+  },
+  "https://inference-docs.cerebras.ai/models/overview": {
+   "image": "https://cerebras-inference.mintlify.app/mintlify-assets/_next/image?url=%2F_mintlify%2Fapi%2Fog%3Fdivision%3DDocumentation%26title%3DModel%2BCatalog%26description%3DBrowse%2Ball%2Bmodels%2Bavailable%2Bon%2BCerebras%2Bpublic%2Bendpoints.%26theme%3D0d969de00f05bf51f42e2bb2&w=1200&q=100",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://infernalcode.com/posts/your-ai-agent-has-root": {
    "image": "https://infernalcode.com/og-default.png",
@@ -2136,7 +2634,7 @@
    "image": "https://www.kedglobal.com/data/ked/image/2026/07/21/ked202607210032.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T01:39:54+00:00",
-   "seen_at": "2026-09-03T09:28:57+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://labiotech.eu/best-biotech/mash-companies-biotech": {
    "image": null,
@@ -2154,7 +2652,7 @@
    "image": null,
    "outcome": "error",
    "checked_at": "2026-09-03T09:28:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://labiotech.eu/in-depth/new-bladder-cancer-treatment": {
    "image": null,
@@ -2197,6 +2695,12 @@
    "outcome": "ok",
    "checked_at": "2026-08-29T01:24:19+00:00",
    "seen_at": "2026-08-29T10:22:18+00:00"
+  },
+  "https://lesswrong.com/posts/PLisnSFir8y5AHkmP/how-concerned-should-we-be-about-astra-s-recurrent": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://link.springer.com/article/10.1007/s10993-026-09798-2": {
    "image": "https://media.springernature.com/full/springer-static/cover-hires/journal/10993",
@@ -2311,6 +2815,12 @@
    "outcome": "ok",
    "checked_at": "2026-09-01T18:31:16+00:00",
    "seen_at": "2026-09-01T23:21:22+00:00"
+  },
+  "https://matklad.github.io/2026/09/02/static-allocation-constant-work.html": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medcitynews.com/2026/08/4-notable-health-tech-funding-announcements-in-august": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/03/investment.jpg",
@@ -2430,7 +2940,7 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2023/09/GettyImages-1214342505.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T13:26:54+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medcitynews.com/2026/09/hhs-provides-77m-in-grants-for-substance-use-prevention-mental-health": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2021/03/GettyImages-1224728211.jpg",
@@ -2442,19 +2952,19 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2021/10/GettyImages-848674014.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T22:23:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medcitynews.com/2026/09/judi-health-taps-color-health-welltheory-cylinder-for-clinical-ecosystem": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2025/03/GettyImages-1947330029.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T23:21:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medcitynews.com/2026/09/lung-biopsy-pneumothorax": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/09/pneumo.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-02T23:22:12+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medcitynews.com/2026/09/merger-rare-disease-patient-data": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/09/rare-disease.jpg",
@@ -2466,7 +2976,7 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2017/02/GettyImages-170324009.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-02T22:24:56+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medcitynews.com/2026/09/the-healthcare-inflection-point-ai-cant-fix-1990s-technology": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/03/bot.jpg",
@@ -2478,13 +2988,13 @@
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2019/06/GettyImages-950962396.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-02T22:24:56+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medcitynews.com/2026/09/ultragenyx-angelman-syndrome-apazunersen-rare-disease-antisense-oligonucleotide-aso": {
    "image": "https://medcitynews.com/wp-content/uploads/sites/7/2026/09/Ultragenyx_headquarters.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medium.com/@MirArshadTalpur/why-auditability-and-compliance-are-now-non-negotiable-for-enterprise-ai-agents-8654c6e9b237": {
    "image": "https://miro.medium.com/v2/resize:fit:1200/1*2hldtqw2sm06mqfj5oRDHA.jpeg",
@@ -2514,13 +3024,13 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-03T21:23:26+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medium.com/@chris.ahrweiler/blockchain-und-bitcoin-erkl%C3%A4rt-in-6-episoden-episode-4-ef6db050756e": {
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-03T23:21:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://medium.com/@fsaint/the-best-home-for-your-agent-is-in-your-junk-drawer-3afe0b0976e8": {
    "image": "https://miro.medium.com/v2/resize:fit:1200/1*_sY_r5LmBq0i36D274PJjg.png",
@@ -2628,7 +3138,7 @@
    "image": "https://www.nasaspaceflight.com/wp-content/uploads/2026/09/16D158EF-E0FF-4622-ABD4-DA387D02F975.jpeg",
    "outcome": "ok",
    "checked_at": "2026-09-02T21:22:41+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://nature.com/articles/d41586-026-02506-4": {
    "image": "https://media.nature.com/lw1200/magazine-assets/d41586-026-02506-4/d41586-026-02506-4_53116512.jpg",
@@ -2653,6 +3163,18 @@
    "outcome": "ok",
    "checked_at": "2026-09-01T15:42:20+00:00",
    "seen_at": "2026-09-03T14:28:09+00:00"
+  },
+  "https://neal.fun/unusual-suspects": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://neil.fraser.name/news/2026/09/03": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://neradot.com/post/cutting-inference-cost-36-percent-with-prompt-caching": {
    "image": "https://www.neradot.com/blog/prompt-caching/cover.webp",
@@ -2683,6 +3205,78 @@
    "outcome": "ok",
    "checked_at": "2026-08-31T11:24:19+00:00",
    "seen_at": "2026-09-01T10:29:17+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMiWkFVX3lxTE5KeC1KN1VNejYtZ0QyeDlNTHFjQllqemZTam1aR0xyOHRQd2RtbDl0OHdha3JiVlJ5c1ZIblhKYlIzVzFENUJ5M0ZQRTBtNnJZZFQyUWd3bnc4QQ?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMiXkFVX3lxTE1FOXhxR0ZhX1hlbU5QWW00el9zMTlUdmZSVGEtLUpaMzdXQWF4bmg3dXVpV3ZORlNzRHd1NHp4cHprdFBoZkh4bDlxME9udXJ6ZEl3cEd5V005cUEzaFE?oc=5": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMiXkFVX3lxTE1FRzI3X3ZyQjZhQlMwZGt6RHpDNmE5LTJSUlJndmJzamdZVi1TQmxXQ2Z4U3NadXZzSzRpaG5jcEdRajdLSjNLYThSc243VU9CT2hEYU9Qb0lXdG42SlE?oc=5": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMiXkFVX3lxTE96NzRjeXk3cmVOUkxwX2RvQlBxbHdwa1hScnFHZVlBNWNmOHJaR3ZGem9JR3liQ3JkNWJ2Vm43SDBDV0ZiMC1pRTFpRXpUMjZYMGFnekwwN2I2QlJYNXc?oc=5": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMiYEFVX3lxTE5GTWcwclFWSlI1cDhabUdUa3gwemtWTFpFMlkyWjNESEhscnVJallqeXMtMkJFeDJNYXUydWQwaGtBV0VEWHVSX2tBN2xQU1ppdl9oSW1heWlXS3JqNHNxZw?oc=5": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMigAFBVV95cUxNek5leHlUczJXaC1sdXJlOU5fVmVXWlZSQ0pjRlR2QUpBWmtFeW9YWEhSazNzNlRBelhQanRqZVV4dDdNYWFNWW1iOGF5WlJWNTEyQ0ZwSmxZZ3lUb1ZaWU9hZ3puNUVJdTBGbHgyX1FXRnVxbWtWSFphQjQ4MDVjQQ?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMimwFBVV95cUxOY19iSHFtcEh1TTlmQ3RFdXBXVHVpR1hpNEw1YmZ5WlIzWUpXMTN3WXZBaDRKSDQ3Rm9aaHh0M0FNREJleV92QTQ4MW05SThtUFFtVjJwaGVfc0hCaXJmOXF3S2oxZW05YXpBa0pIS2Y1anRocXZqc2ZBektBQkw3aTBGSWhDaWluSWVHRmVCZ2lhcEg4NDdZcGtjY9IBoAFBVV95cUxQSFlBQVJwRWZFQ1R0NDdlZ2pUY0praUF3MTNWVXY4NVlJYVNIa2lxbUMxWmJtSDJ0SlFWNmhnbXg5ZGwzUVB4M2tlYktHQVJWeTNOSzRsdVJVM25NNk1iaHFpRmxvODVwVWQzbWJTVHhXcDNmMmhQS0hkM1UyUFFwNEVweHhoNEpEZUxQanQyNDEzSGpEVDNDc2lsSS1PMnJQ?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMimwFBVV95cUxObmhWVlFVcmhmWWN4LXU4dFlCaVZoWUR5dGY0cXhjOWRBaE8tVXFuY2J4TV80bHJuMjQ1RTMyUGhSRVVSQUlwWm5fUkIxcjFscnZZRE9Ya1NnMWdmMDdvZUFKdjgtTGhJRm85bXVNZGZweG1xYk44elM2UkVfdXpUaGZXTXF5ZFVLWE4yUmY4UHBMS2JpWDFaOFJRbw?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMinAFBVV95cUxOQ2l4c2h2R2JEUTlZSkR4QlIzR1RtN0Q0M2dzMHpGR2o0WGJ0N3hUY0tfZlBZWjk0ZnFtMVFYLUZMVnV4eXpMQkxESWd1cUgyUEFqSE5Vb1RxR2VQaDllOHUyVlpndE1PekZKYTJOMDlWOTBEc0dFMUpUWl9zekhvcUdza1lLZ21wYVNYU2JtY2JuVmljblZQUHdacS3SAaIBQVVfeXFMTlpQdmVJNXpScWN6VnoxTk1fMHctWGpzdC1Ib1FkdVNkZVE1b2RFQ1p0S1lZY18zOHJVOE1IdXVGc01nREQtZlg1R3FhaWRNVS1YRnZ2TXhMYUYxNmstTHVTOC0ySnBsQ1dHc2ZzMDJra1A1RjdmdHB1Q29Ja0tyMDNpZXRUaWR4Q0lnaDdBZlZMMGU5Y01aRzJZTmpyVE95emNn?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMingFBVV95cUxPS2JyZTNpRDJZWEJMU1RKY0s2dlhhdmZnZ0ExU3MxNDd6Z1RBRTRFZURvQ0FubXRXYUFORlFueTlzNVNmWFVWTFZTbUVOdmwyX3J5U1NLNXR0REI4cU9SMkd0bjR0R05Qbl90bGpZRlp1RkxNcnUxZmY1emptN1FNbHVUa3ZPanpvang1REtqQ0ZVXzBQWnFERkIxMWlaQQ?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMiowFBVV95cUxPMlhzd0xlVTdHQjdtWUdRdkd1TWp1UUctNHFqeWlkbjRPZ3NWemU5Vm5xc1BRYnRfY1dCYjRWVFQxYnNFQ2k4RFotczk4b2d3WEc3VUJTOEk4NlNTc3ZVWmxFbjd6WE9EOGktbXhwNkgxY0FSWUNMOHkzcUNYYjBxWl9wZ1VHTHpQSnNsVDk5TmVHOXNtWndyZXZZMTBKOHpDdXo0?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.google.com/rss/articles/CBMiswFBVV95cUxORFJJTlFtZlBzLXQ4dkFWM2xPc3A4TTljbDZBZk5Qa0wyV2hXMl9taGUtakVCMDdndHF2cWRJWlFkZFpPUllQdnpLUFlQOEpuRnJrV2R2TmtWUFlkc3NWc09SYzY1ekZfc1BhekxWV1NvMUQ4aDdma000S29FaGtFam11WGV1aWFpd1BkUjFlYkVWWnA5Ni0wMjZUX3lvNmdjREVIQi14TkptbVo3Z0tLb0NJSQ?oc=5&hl=en-US&gl=US&ceid=US%3Aen": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://news.wsu.edu/news/2026/08/24/researchers-use-ai-to-democratize-3d-printing-of-crucial-metal-alloy": {
    "image": "https://wpcdn.web.wsu.edu/news/uploads/sites/2797/2026/08/alloy-LEAD.jpg",
@@ -2828,11 +3422,29 @@
    "checked_at": "2026-09-02T21:22:41+00:00",
    "seen_at": "2026-09-02T23:22:12+00:00"
   },
+  "https://news.ycombinator.com/item?id=49543530": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.ycombinator.com/item?id=49546432": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://news.ycombinator.com/item?id=49548600": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://news.ycombinator.com/item?id=49551096": {
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-03T19:20:29+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://news.ycombinator.com/item?id=49552230": {
    "image": null,
@@ -2852,6 +3464,12 @@
    "checked_at": "2026-09-03T17:24:04+00:00",
    "seen_at": "2026-09-03T18:31:19+00:00"
   },
+  "https://news.ycombinator.com/item?id=49555592": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://news.ycombinator.com/item?id=49556858": {
    "image": null,
    "outcome": "none",
@@ -2868,13 +3486,19 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-03T22:23:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://news.ycombinator.com/item?id=49559320": {
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-04T01:31:06+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://newsguild.org/new-york-times-and-the-athletic-workers-demand-company-scrap-kalshi-deal": {
+   "image": "https://newsguild.org/wp-content/uploads/2026/09/NYT-rally.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://newsletter.eng-leadership.com/p/good-culture-is-the-biggest-productivity": {
    "image": "https://substackcdn.com/image/fetch/$s_!mpv7!,w_1200,h_675,c_fill,f_jpg,q_auto:good,fl_progressive:steep,g_auto/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fc7e34287-d1ea-4437-960e-c80e70dd341e_1600x844.jpeg",
@@ -2918,11 +3542,29 @@
    "checked_at": "2026-08-30T14:22:12+00:00",
    "seen_at": "2026-08-30T16:23:45+00:00"
   },
+  "https://nolanlawson.com/2026/08/23/the-asteroid-currently-hitting-frontend-web-development": {
+   "image": "https://nolanlawson.com/wp-content/uploads/2025/01/favicon.png?w=32",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://npr.org/2026/08/28/nx-s1-5905370/nasa-nancy-grace-roman-space-telescope-dark-energy-supernova": {
    "image": "https://npr.brightspotcdn.com/dims3/default/strip/false/crop/1536x864+0+80/resize/1400/quality/85/format/jpeg/?url=http%3A%2F%2Fnpr-brightspot.s3.amazonaws.com%2F42%2Fb8%2Fee547c464a7589d76ce4a933f883%2Froman-element-assembly-wheel-1536x1024.jpg",
    "outcome": "ok",
    "checked_at": "2026-08-29T22:21:30+00:00",
    "seen_at": "2026-08-29T23:20:32+00:00"
+  },
+  "https://nyti.ms/3UDXTHa": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://nyti.ms/4zL2Yxo": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://nytimes.com/2026/08/28/science/an-experimental-single-time-treatment-slashed-cholesterol-for-a-year.html": {
    "image": null,
@@ -2965,6 +3607,12 @@
    "outcome": "ok",
    "checked_at": "2026-08-30T08:28:33+00:00",
    "seen_at": "2026-09-01T07:28:23+00:00"
+  },
+  "https://openai.com/index/gpt-6-astra": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://openai.com/index/our-decision-on-cursor-following-its-acquisition-by-spacex": {
    "image": "https://images.ctfassets.net/kftzwdyauwt9/6RFKP8tysuxOLxVaiCRlu/ac31b03c2aeb6e3da620f2db89c7b6e9/index-our-decision-on-cursor-following-its-acquisition-by-spacex.png?w=1600&h=900&fit=fill",
@@ -3066,7 +3714,7 @@
    "image": "https://payloadspace.com/wp-content/uploads/2026/03/55165944221_60d35d49b5_k.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-04T00:57:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://payloadspace.com/launch-concerns-cast-a-shadow-over-smallsat-2026": {
    "image": "https://payloadspace.com/wp-content/uploads/2026/08/HQv84d4bkAA6Pwi.jpeg",
@@ -3084,13 +3732,13 @@
    "image": "https://payloadspace.com/wp-content/uploads/2026/09/MTO_MarsTelecomOrbiter_2.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://payloadspace.com/pld-space-hyimpulse-close-major-extension-rounds": {
    "image": "https://payloadspace.com/wp-content/uploads/2026/09/HyImpulse_SR75-scaled.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://payloadspace.com/roman-space-telescope-begins-its-journey-to-l2": {
    "image": "https://payloadspace.com/wp-content/uploads/2026/08/Roman_BeautyPass2026-med-1024x576.png",
@@ -3180,13 +3828,13 @@
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/ls-power-southwest-intertie-project.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/energy-management-goes-beyond-monitoring-to-decision-making": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/omnivise-energy-management-siemens-energy-omterra.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T13:26:54+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/european-countries-boost-variety-of-renewable-energy-projects": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/fig1-dniester-psp-pumped-storage-hydro-c.jpg",
@@ -3216,13 +3864,13 @@
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/nrc-nuclear-regulatory-commission-logo.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T21:23:26+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/nextera-santee-cooper-point-to-real-dollar-savings-from-ai-deployments": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/santee-cooper-control-room.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/one-nuclear-signs-deal-for-2-88-gw-gas-fired-plant-large-bess-for-louisiana-data-center-campus": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/entergy-via-vimeo.png",
@@ -3234,7 +3882,7 @@
    "image": "https://www.powermag.com/wp-content/uploads/2026/03/fig2-or-sunrun-vpp-customer-c.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/power-digest-september-2026": {
    "image": "https://www.powermag.com/wp-content/uploads/2025/08/power-digest-word-art.png",
@@ -3264,19 +3912,19 @@
    "image": "https://www.powermag.com/wp-content/uploads/2026/07/fig3-gvh-bwrx-300-smr-w.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/the-power-interview-how-the-data-center-power-crunch-is-reshaping-the-talent-market": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/power-hardhat-stock.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T21:23:26+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/three-questions-every-utility-should-ask-about-advanced-reactors": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/tedi-imsr-plant-image-26-09-01.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T14:28:09+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://powermag.com/tidal-pwr-btq-develop-blueprint-for-quantum-ready-data-centers": {
    "image": "https://www.powermag.com/wp-content/uploads/2026/09/btq-tidapwr.jpg",
@@ -3295,6 +3943,12 @@
    "outcome": "ok",
    "checked_at": "2026-09-01T17:22:56+00:00",
    "seen_at": "2026-09-01T17:22:56+00:00"
+  },
+  "https://producthunt.com/r/A64EJM6JPVF756": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://profound.academy/": {
    "image": "https://profound.academy/opengraph?title=Profound%20Academy&description=Create%20hands-on%20courses%20with%20AI%20Agents&img=https%3A%2F%2Fprofound.academy%2Fdemo%2Fweb-preview.jpg",
@@ -3666,7 +4320,7 @@
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/Unbenannt-1.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T09:28:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/ai-powered-drone-system-for-autonomous-pv-fault-detection": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/ChatGPT-Image-Sep-2-2026-12_26_04-PM.png",
@@ -3678,19 +4332,19 @@
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/The_Great_wall_-_by_Hao_Wei.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T14:28:09+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/chinese-inverter-and-bess-makers-stress-compliance-as-us-restrictions-widen": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/04/04017_Press_Photo_Yibin_Factory_3-1-1.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T11:22:51+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/chinese-scientists-build-27-39-efficient-inverted-perovskite-solar-cell-based-on-new-molecular-design": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/Solar-cell-and-module.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T11:22:51+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/data-centres-and-the-clean-energy-imperative-powering-indias-digital-economy-sustainably": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/06/1280px-BalticServers_data_center-1024x680-1.jpg",
@@ -3714,37 +4368,37 @@
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/08/08010_Azabache24.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/regulatory-hurdles-persist-in-norways-battery-market": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/Storage_2-scaled.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/scientists-turn-end-of-life-pv-silicon-into-high-value-silicon-nitride": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/Si3N4bearings.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/skyven-technologies-industrial-heat-pump-achieves-cop-of-8-0": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/Skyven-Arcturus-Demonstration-Center.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T09:28:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/solar-reaches-new-power-highs-in-portugal-in-august": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2025/09/Laranjeiras-1179-1.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/south-korea-posts-fifth-highest-power-demand-on-record-amid-heat": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/rawkkim-KKz6NgO69yQ-unsplash.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T09:28:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://pv-magazine.com/2026/09/03/www-pv-magazine-com-2026-09-03-brazilian-senate-approves-law-linking-data-center-incentives-to-renewable-energy-use": {
    "image": "https://www.pv-magazine.com/wp-content/uploads/2026/09/erik-mclean-_uiWUtMqzvI-unsplash-scaled.jpg",
@@ -3792,7 +4446,7 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/09/image-25.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://quantumcomputingreport.com/congressman-langworthy-introduces-american-quantum-competitiveness-act-h-r-10163": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/09/39241861.jpeg",
@@ -3822,7 +4476,7 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/09/image-29.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T19:20:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://quantumcomputingreport.com/governor-newsom-awards-9-74m-to-scale-southern-california-quantum-ecosystem": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-249.png",
@@ -3930,7 +4584,7 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/09/6a997dc27e7a6f0bea129330_Aramco-and-Quantinuum-MoU-Signing-Ceremony.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-04T01:31:06+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://quantumcomputingreport.com/quantrolox-and-qureca-partner-to-launch-quantum-edge-academy-for-hands-on-hardware-training": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-265.png",
@@ -3960,13 +4614,13 @@
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/09/image-23.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://quantumcomputingreport.com/seeqc-signs-mou-with-taiwan-quantum-industry-technology-promotion-office-to-build-cryo-chip-supply-chain": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/09/image-26.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://quantumcomputingreport.com/whos-news-strategic-appointments-at-quantum-sky-ionq-pasqal-and-global-quantum-intelligence": {
    "image": "https://quantumcomputingreport.com/wp-content/uploads/2026/08/image-263.png",
@@ -4070,6 +4724,12 @@
    "checked_at": "2026-09-03T05:23:55+00:00",
    "seen_at": "2026-09-03T09:28:57+00:00"
   },
+  "https://reut.rs/3Uxcowt": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://reuters.com/business/finance/jackson-hole-global-central-bankers-glimpse-dystopian-ai-future-2026-08-31": {
    "image": null,
    "outcome": "error",
@@ -4148,6 +4808,12 @@
    "checked_at": "2026-08-28T16:50:24+00:00",
    "seen_at": "2026-08-28T17:01:57+00:00"
   },
+  "https://sciencealert.com/gps-glitched-across-the-us-by-as-much-as-33-feet-scientists-have-never-seen-this-before": {
+   "image": "https://www.sciencealert.com/images/2026/08/aurora-from-space.jpg",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://scottaaronson.blog/?p=10032": {
    "image": "https://s0.wp.com/_si/?t=eyJpbWciOiJodHRwczpcL1wvc2NvdHRhYXJvbnNvbi5ibG9nXC93cC1jb250ZW50XC91cGxvYWRzXC8yMDIxXC8xMFwvY3JvcHBlZC1KYWNrZXQuZ2lmIiwidHh0IjoiU2h0ZXRsLU9wdGltaXplZCIsInRlbXBsYXRlIjoiZWRnZSIsImZvbnQiOiIiLCJibG9nX2lkIjoxMjk1MjA1ODB9.siOtN7gHw4tefA_rZickBw4GfI6tPxGgOQ1AXr2ZoOQMQ",
    "outcome": "ok",
@@ -4224,7 +4890,7 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-03T20:24:34+00:00",
-   "seen_at": "2026-09-03T21:23:26+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://skillfed.io/packages": {
    "image": "https://skillfed.io/og/default.png",
@@ -4237,6 +4903,12 @@
    "outcome": "none",
    "checked_at": "2026-09-02T01:34:09+00:00",
    "seen_at": "2026-09-02T09:28:50+00:00"
+  },
+  "https://solidot.org/story?sid=85281": {
+   "image": null,
+   "outcome": "none",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://space.com/space-exploration/launches-spacecraft/nasa-roman-space-telescope-launch-success-on-a-spacex-falcon-heavy-rocket-spectacular-launch-video": {
    "image": "https://cdn.mos.cms.futurecdn.net/g9UK3jncfgzqaP9TgoCaAh-2166-80.jpg",
@@ -4278,7 +4950,7 @@
    "image": "https://i0.wp.com/spacenews.com/wp-content/uploads/2026/09/Orange-square-scaled.png?fit=2560%2C2560&ssl=1",
    "outcome": "ok",
    "checked_at": "2026-09-03T13:26:54+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://spacenews.com/long-march-6c-launches-7-satellites-change-7-rocket-rolled-back-to-assembly-building": {
    "image": "https://spacenews.com/wp-content/uploads/2026/08/CZ6C-7sats-25aug2026-TSLC-CASC.png",
@@ -4320,7 +4992,7 @@
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-03T22:23:57+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://spacepolicyonline.com/news/trump-honors-artemis-ii-crew-signs-executive-order-to-establish-a-u-s-space-academy": {
    "image": null,
@@ -4352,11 +5024,23 @@
    "checked_at": "2026-08-28T16:50:24+00:00",
    "seen_at": "2026-09-01T03:31:43+00:00"
   },
+  "https://status.x.ai/": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://steveklabnik.com/writing/so-what-happened-to-my-claude-code-series": {
    "image": null,
    "outcome": "none",
    "checked_at": "2026-09-04T00:57:19+00:00",
    "seen_at": "2026-09-04T00:57:19+00:00"
+  },
+  "https://stevewilliamson.substack.com/p/whats-going-on-in-the-us-treasury": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://stormkit.io/blog/serve-markdown-to-llms-content-negotiation": {
    "image": "https://www.stormkit.io/stormkit-og-image.png",
@@ -4393,6 +5077,12 @@
    "outcome": "ok",
    "checked_at": "2026-08-28T16:50:24+00:00",
    "seen_at": "2026-08-28T17:01:57+00:00"
+  },
+  "https://tasklet.ai/careers/customer-success-engineer": {
+   "image": "https://tasklet.ai/og-image.png",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://techcrunch.com/2026/08/26/amazon-just-tripled-its-order-of-nvidia-chips-over-surging-demand": {
    "image": "https://techcrunch.com/wp-content/uploads/2026/08/jense-nvidi-chip-GettyImages-2266485392.jpg?resize=1200,800",
@@ -4692,7 +5382,7 @@
    "image": "https://techcrunch.com/wp-content/uploads/2024/09/vpn-privacy-cybersecurity-red-bright.jpg?resize=1200,831",
    "outcome": "ok",
    "checked_at": "2026-09-03T19:20:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://techcrunch.com/2026/09/03/accel-reportedly-in-talks-to-lead-1b-round-for-thinking-machines-at-40b-valuation": {
    "image": "https://techcrunch.com/wp-content/uploads/2026/06/Mira-Murati-at-Bloomberg.jpg?w=1024",
@@ -4704,7 +5394,7 @@
    "image": "https://techcrunch.com/wp-content/uploads/2026/08/GettyImages-2245923419.jpg?resize=1200,800",
    "outcome": "ok",
    "checked_at": "2026-09-04T00:57:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://techcrunch.com/2026/09/03/google-launches-ai-voice-features-in-gmail-docs-and-keep": {
    "image": "https://techcrunch.com/wp-content/uploads/2026/09/Gmail-Live-Docs-Live-Keep-Live.jpeg?resize=1200,675",
@@ -4716,13 +5406,13 @@
    "image": "https://techcrunch.com/wp-content/uploads/2026/09/2-Figure-How-WeatherNext-3-works.png?resize=1200,675",
    "outcome": "ok",
    "checked_at": "2026-09-03T15:28:52+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://techcrunch.com/2026/09/03/meta-is-paying-to-peek-at-how-you-use-their-latest-ai-model": {
    "image": "https://techcrunch.com/wp-content/uploads/2025/01/GettyImages-2173579488.jpg?resize=1200,799",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://techcrunch.com/2026/09/03/nvidia-confirms-it-will-buy-hugging-face-for-12-9-billion": {
    "image": "https://techcrunch.com/wp-content/uploads/2026/09/hf-nvidia-partner_hf-nvidia-partner-press-1920x1080-2.jpeg?resize=1200,675",
@@ -4740,7 +5430,7 @@
    "image": "https://techcrunch.com/wp-content/uploads/2025/04/GettyImages-2182154299.jpg?w=1024",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://techcrunch.com/video/pangrams-max-spero-on-why-ai-detection-is-harder-than-real-or-fake": {
    "image": "https://techcrunch.com/wp-content/uploads/2026/07/Pangram-founders.png?resize=1200,675",
@@ -4788,7 +5478,7 @@
    "image": "https://wp.technologyreview.com/wp-content/uploads/2026/08/MITTRI-NiCE-social-card.png?resize=1200,600",
    "outcome": "ok",
    "checked_at": "2026-09-03T10:27:01+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://techrepublic.com/article/news-openai-mac-mini-mac-studio-ai-agents": {
    "image": null,
@@ -4806,13 +5496,19 @@
    "image": "https://images.theconversation.com/files/754997/original/file-20260819-60-gdwpyw.jpg?ixlib=rb-4.1.1&rect=0%2C144%2C3572%2C1786&q=45&auto=format&w=1356&h=668&fit=crop",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
+  "https://theguardian.com/books/2026/sep/03/gloria-steinem-groundbreaking-feminist-campaigner-dies-aged-92": {
+   "image": "https://i.guim.co.uk/img/media/40b70b8f5b6aa7ba38af77c2ac99e035c0c765db/0_68_5256_3154/master/5256.jpg?width=1200&height=630&quality=85&auto=format&fit=crop&precrop=40:21,offset-x50,offset-y0&overlay-align=bottom%2Cleft&overlay-width=100p&overlay-base64=L2ltZy9zdGF0aWMvb3ZlcmxheXMvdGctZGVmYXVsdC5wbmc&enable=upscale&s=43971682c6296560810fc844e5b7bef8",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://theguardian.com/technology/2026/sep/03/openai-artificial-general-intelligence-astra-release": {
    "image": "https://i.guim.co.uk/img/media/ed224d2eb6e632e734dfce88169dcbb73007b858/583_0_2917_2333/master/2917.jpg?width=1200&height=630&quality=85&auto=format&fit=crop&precrop=40:21,offset-x50,offset-y0&overlay-align=bottom%2Cleft&overlay-width=100p&overlay-base64=L2ltZy9zdGF0aWMvb3ZlcmxheXMvdGctZGVmYXVsdC5wbmc&enable=upscale&s=ba920b0071e3f33ae30bc9c76fbc8eb7",
    "outcome": "ok",
    "checked_at": "2026-09-03T19:20:29+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://theopenlake.com/blog/introducing-openlake": {
    "image": null,
@@ -4920,7 +5616,7 @@
    "image": "https://platform.theverge.com/wp-content/uploads/sites/2/2026/09/Screenshot-2026-09-03-at-10.42.02-AM.png?quality=90&strip=all&crop=0%2C3.342396806572%2C100%2C93.315206386856&w=1200",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://theverge.com/ai-artificial-intelligence/989503/chatgpt-grok-claude-outage-down": {
    "image": "https://platform.theverge.com/wp-content/uploads/sites/2/2025/08/STK155_OPEN_AI_4_CVirginia_A.png?quality=90&strip=all&crop=0%2C10.742221417566%2C100%2C78.515557164868&w=1200",
@@ -4932,7 +5628,7 @@
    "image": "https://platform.theverge.com/wp-content/uploads/sites/2/2026/05/STKP221_GREG_BROCKMAN.jpg?quality=90&strip=all&crop=0%2C10.732984293194%2C100%2C78.534031413613&w=1200",
    "outcome": "ok",
    "checked_at": "2026-09-03T18:31:19+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://theverge.com/entertainment/985866/h4rris-nihil-young-edm-suno-ai": {
    "image": "https://platform.theverge.com/wp-content/uploads/sites/2/2026/08/268714_finding_and_shaming_AI_grifters_CVirginia.jpg?quality=90&strip=all&crop=0%2C11.150136769481%2C85.33125%2C67.014037093516&w=1200",
@@ -5108,6 +5804,12 @@
    "checked_at": "2026-08-31T07:34:25+00:00",
    "seen_at": "2026-08-31T12:37:08+00:00"
   },
+  "https://twitter.com/GergelyOrosz/status/2095453567955968398": {
+   "image": "https://pbs.twimg.com/media/HRSLs9oXUAE-rRn.jpg:large",
+   "outcome": "ok",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
+  },
   "https://twitter.com/chandlerwilcox/status/2093742530659766324": {
    "image": "https://pbs.twimg.com/profile_images/2076747898528964608/4yHPo5Ym_400x400.jpg",
    "outcome": "ok",
@@ -5166,7 +5868,7 @@
    "image": "https://imgproxy.divecdn.com/IzorKxHLZSz5ojtmz4vRCgjGa9r6Wa7FtJq8IDhZIAA/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9jYXBlLXN0YXRpb24tYmVhdmVyLWNvdW50eS5qcGc=.webp",
    "outcome": "ok",
    "checked_at": "2026-09-02T16:29:01+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://utilitydive.com/news/california-sues-trump-admin-offshore-wind-extortion-racket/829176": {
    "image": "https://imgproxy.divecdn.com/LvGTle_LbXYyl978h_m2pnTCKeze7dIiht-aAFXytFE/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMzU2OTc2MzM3LmpwZw==.webp",
@@ -5178,13 +5880,13 @@
    "image": "https://imgproxy.divecdn.com/uTLQFkiwL8TfSC-ufRTl1Kh-gHltNO8Zp3QVgdbGpBw/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xNzA2ODA1NzgzLmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://utilitydive.com/news/different-forecasts-dont-mean-higher-bills-they-mean-responsible-planning/829035": {
    "image": "https://imgproxy.divecdn.com/qGWZtevMXRmR3CIGxETajPZPD94GIgz9-QQbNSYERJc/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0xMzU4MTQ1NzA2LmpwZw==.webp",
    "outcome": "ok",
    "checked_at": "2026-09-03T16:27:33+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://utilitydive.com/news/federal-authorities-disrupt-china-hacking-US-critical-infrastructure/829094": {
    "image": "https://imgproxy.divecdn.com/cnTGJ1dXPApSNLfgkPTKanTaglonOirM8Ar4LLiqPTI/g:ce/rs:fit:770:435/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy02MjU3NTMzOTJfWVk0RHIwRS5qcGc=.webp",
@@ -5322,13 +6024,13 @@
    "image": "https://world-nuclear-news.org/images/articles/Tierpplant(Blykalla)_12578.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-02T12:37:38+00:00",
-   "seen_at": "2026-09-03T22:23:57+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://world-nuclear-news.org/articles/consortium-formed-for-swedish-smr-project": {
    "image": "https://world-nuclear-news.org/images/articles/Studsviksigning_40554.png",
    "outcome": "ok",
    "checked_at": "2026-09-03T12:37:25+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://world-nuclear-news.org/articles/decommissioning-of-chernobyl-units-progressing": {
    "image": "https://world-nuclear-news.org/images/articles/Chernobyl2_decommissioning_730_ChNPP_43374.jpg",
@@ -5394,7 +6096,7 @@
    "image": "https://world-nuclear-news.org/images/articles/PinkCorridor(LR)_75167.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T14:28:09+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://world-nuclear-news.org/articles/proposal-for-canadian-marine-based-SMR-plant": {
    "image": "https://world-nuclear-news.org/images/articles/TNPP(ProdigyCleanEnergy)_68138.jpg",
@@ -5412,7 +6114,7 @@
    "image": "https://world-nuclear-news.org/images/articles/kazakhstan_rosatom_EPC_730_Rosatom_37452.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T13:26:54+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://world-nuclear-news.org/articles/tennessee-issues-licence-for-fusion-plant": {
    "image": "https://world-nuclear-news.org/images/articles/TypeOnefusionlicence(TDEC)_70696.jpg",
@@ -5442,7 +6144,7 @@
    "image": "https://world-nuclear-news.org/images/articles/Uzbek_NPP_progressreport_president_730_48059.jpg",
    "outcome": "ok",
    "checked_at": "2026-09-03T14:28:09+00:00",
-   "seen_at": "2026-09-04T01:31:06+00:00"
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://world-nuclear-news.org/articles/welding-of-akkuyu-2s-primary-circuit-completed": {
    "image": "https://world-nuclear-news.org/images/articles/Akkuyu_welding_730_akkuyunpp_24078.jpg",
@@ -5461,6 +6163,12 @@
    "outcome": "error",
    "checked_at": "2026-08-31T10:26:54+00:00",
    "seen_at": "2026-08-31T15:26:17+00:00"
+  },
+  "https://yalereview.org/article/emily-ogden-edgar-allan-poe": {
+   "image": null,
+   "outcome": "error",
+   "checked_at": "2026-09-04T01:57:20+00:00",
+   "seen_at": "2026-09-04T01:57:20+00:00"
   },
   "https://yashwanthreddymali.com/blog/interlock-exfiltration-at-runtime": {
    "image": "https://yashwanthreddymali.com/assets/og/interlock-exfiltration-at-runtime.png",
