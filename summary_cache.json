@@ -1,0 +1,966 @@
+{
+ "version": 1,
+ "note": "Bounded publisher-supplied summaries. No full article body is retained.",
+ "entries": {
+  "en:https://ag3497120.github.io/call-me-vera": {
+   "summary": "Lightweight, local, append-only memory for AI coding agents. Carry project context between Claude, Codex, and local models, with a citation for every entry. Shared project memory for AI coding agents. A lightweight, append-only project log that carries context across agents and sessions. Store locally, resume explicitly, and trace decisions back to their source.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://arstechnica.com/space/2026/09/after-8-years-europes-bepicolombo-mission-is-on-final-approach-to-mercury": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://arstechnica.com/space/2026/09/german-company-becomes-first-in-europe-to-launch-fully-commercial-orbital-rocket": {
+   "summary": "\"We achieved within a few years what had taken the European space industry decades before.\" Isar Aerospace, founded in 2018 by three students at a German university, successfully launched a privately-developed rocket into low-Earth orbit Saturday from a Norwegian spaceport inside the Arctic Circle. The two-stage rocket, named Spectrum, became the first fully commercial launch vehicle in Europe to reach orbit. With Saturday\u2019s success, Isar is the clear leader among a pack of several European launch startups vying to inject some competition into Europe\u2019s stagnant launch market.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://bbc.co.uk/news/articles/c33kzvgn8pyo": {
+   "summary": "Ukraine's third-biggest city Odesa decides this week whether to ban Russian-language content in music and literature in public. These young activists hold up signs saying the Russian language should remain in Russia Ukraine's third-biggest city Odesa will decide this week whether to back a controversial plan to ban the Russian language in the arts. The proposal being considered by councillors in Odesa on the Black Sea coast aims to add to existing restrictions on Russian imposed by national legislation.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://bbc.co.uk/news/articles/c5y7gk9knnlo": {
+   "summary": "Sarah Khalifa is best known for her TV programme Mission Impossible which dealt with crime issues. Egyptian television presenter Sarah Khalifa and 11 other people have been sentenced to death by hanging after being convicted of drugs charges. According to state-owned al-Ahram newspaper, they were part of a criminal gang which imported ingredients used to make drugs with the intent of selling them.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://bbc.co.uk/news/articles/c6248nvqy8po": {
+   "summary": "Steve Witkoff tells reporters the US team feels \"encouraged\" by a \"substantive\" and important discussion. Watch: US envoys Witkoff and Kushner say they are \"encouraged\" by Ukraine talks Ukraine's President Volodymyr Zelensky has held a first round of talks in Kyiv with Donald Trump's top envoys, in their first visit since Russia's full-scale invasion. Steve Witkoff, sitting opposite the Ukrainian leader, told reporters the US team felt \"encouraged\" by what he called a \"substantive\" and important discussion.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://bbc.co.uk/news/articles/c8r6ezx1jmro": {
+   "summary": "As many as 50 people are thought to have been inside the five-storey hostel when it came down. Rescuers race to free people trapped after building collapse in Delhi A residential building in the Indian capital Delhi has collapsed with dozens of students feared trapped inside. Eyewitnesses told local media that as many as 50 people were inside the five-storey building in the Satya Niketan neighbourhood of south-west Delhi when it came down around 13:30 local time (08:00 GMT) on Sunday.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://bbc.co.uk/news/articles/cvgy5k4n07ko": {
+   "summary": "More than 170,000 airline passengers are stranded after ash was detected in airspace near Jakarta following the eruptions. Watch: Lava fountain and ash cloud as Indonesia volcano erupts Around 170,000 passengers have been left stranded after a volcanic eruption forced Indonesian authorities to temporarily suspend operations at eight airports. Jakarta's Soekarno-Hatta International Airport was the first to be closed on Sunday morning after ash from Anak Krakatau was detected in airspace near the airport.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://bbc.co.uk/news/articles/cy4zejgz3z9o": {
+   "summary": "Germany's AfD has hailed a \"historic result\" and is projected to win 44.5% of the vote, far ahead of the conservative CDU on 18.5%. AfD leaders were overjoyed as exit polls projected a big lead in the Saxony-Anhalt vote Germany's AfD is heading for a big victory in the eastern state of Saxony-Anhalt, far ahead of its mainstream rivals, exit polls say. It is not yet clear if that would be enough to take power in the state but the AfD says it has won a mandate to govern.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://beza1e1.tuxen.de/ai_feelings.html": {
+   "summary": "I feel surprise at how well neural networks work. LLMs work like \"gut feeling\" as they just generate one more token after another. There is no planning or reasoning algorithm inside. Yet, some planning and reasoning emerges. I feel fear about an impending doom. Yudkowsky's argument that a superintelligent AI will inevitably destroy humanity seems to have no flaw.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://biopharmadive.com/news/novartis-ionis-pelacarsen-lpa-horizon-study-results-fail/829736": {
+   "summary": "Pelacarsen didn\u2019t protect heart health despite lowering levels of a protein particle, \u201cLp(a),\u201d in a large clinical trial \u2014 a surprise result with important implications for cardiovascular drug research. Pelacarsen didn\u2019t protect heart health despite lowering levels of a protein particle, \u201cLp(a),\u201d in a large clinical trial \u2014 a result with important implications for cardiovascular drug research. High cholesterol and fat levels have long been linked to a higher risk of heart problems, making treatments that can reduce them mainstays of cardiovascular care.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://bitcoinmagazine.com/news/el-salvador-isnt-buying-bitcoin-says-imf": {
+   "summary": "Bitcoin Magazine El Salvador Isn\u2019t Buying Bitcoin With Public Money, Says IMF El Salvador apparently received bitcoin from private donors rather than using government funds, according to the International Monetary Fund. This post El Salvador Isn\u2019t Buying Bitcoin With Public Money, Says IMF first appeared on Bitcoin Magazine and is written by Mathew Di Salvo . El Salvador has not used public funds to accumulate bitcoin since the International Monetary Fund\u2019s last review of its loan program, the fund said Thursday.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://blog.google/innovation-and-ai/models-and-research/google-deepmind/introducing-weathernext-3": {
+   "summary": "WeatherNext 3, our most advanced global weather AI model, is now in Search, Gemini, Maps, Google Maps Platform, and Cloud. Our flagship AI weather forecasting model now includes real-time satellite data, hourly refreshes, higher resolution, precise precipitation forecasting, and clean energy variables. It\u2019s now integrated across Search, Gemini, Maps, Google Maps Platform, and Cloud.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://blog.nebula.tv/artificially-intelligent": {
+   "summary": "Let's talk about how generative AI fits into our vision. A recent Proof News investigation revealed that Nebula creators\u2019 data has been used without permission to train generative AI models for Apple, NVIDIA, and others. \u201cIt\u2019s theft,\u201d said Dave Wiskus, the CEO of Nebula, a streaming service partially owned by its creators, some of whom have had their work taken from YouTube to train AI.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cacm.acm.org/news/leverage-code-review-for-sustainable-ai-coding-development": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cacm.acm.org/research/cash-or-comfort-how-llms-value-your-inconvenience": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cbsnews.com/live-updates/iran-war-us-trump-diesel-gas-prices-labor-day": {
+   "summary": "Iran on Sunday threatened a \"more painful\" response to U.S. strikes on three Iranian oil tankers. Updated on: September 6, 2026 / 11:28 AM EDT / CBS News Energy Secretary Chris Wright said Sunday that the Trump administration is not shutting down diplomatic relations with Iran despite his comments earlier that there \"may not be a nuclear agreement.\" \"We are always open for a deal,\" Wright said on \"Face the Nation with Margaret Brennan.\" \"That's President Trump's goal is to always have a negotiated settlement and not use a military solution unless absolutely necessary.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cbsnews.com/news/911-changed-the-u-s-can-we-change-back": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cbsnews.com/news/guyana-third-country-us-deportees": {
+   "summary": "Guyana is one of more than 30 nations that have now signed deals with the Trump administration as part of President Trump's crackdown on illegal immigration. Guyana on Friday became the latest \"third country\" to accept migrants deported from the United States, a U.S. The South American country received a handful of Afghan and Cuban deportees expelled by the Trump administration, the official said.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cbsnews.com/news/trump-supreme-court-appeal-us-postal-service-mail-ballot-fight": {
+   "summary": "District Court judge extended an order against the Postal Service enforcing President Trump's executive order for the November elections. The Trump administration has once again asked the Supreme Court to intervene in its fight to restrict mail ballots ahead of the midterms. The filing on Sunday comes just two days after U.S.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cbsnews.com/news/ukraine-russia-us-talks-peace-war-witkoff-kushner": {
+   "summary": "After meeting Putin, President Trump's envoys are expected to discuss a proposal to end the war in Ukraine. Updated on: September 6, 2026 / 12:34 PM EDT / CBS News President Trump's White House special envoy Steve Witkoff and son-in-law Jared Kushner held \"encouraging\" talks in Kyiv, part of a trip that began in Moscow in the latest push to end more than 4\u00bd years of Russia's full-scale invasion. The trip marks the first time the envoys have traveled to Ukraine since Mr.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cbsnews.com/video/rep-jason-crow-says-congress-hasnt-been-briefed-on-hegseth-leak-investigation": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/04/white-house-has-vetted-candidates-for-key-cftc-vacancies-sources-tell-cnbc.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/05/ai-data-centers-cost-economy.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/05/fervo-energys-enhanced-geothermal-project-aims-to-power-data-center-boom.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/05/gm-ford-defense-energy.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/05/we-got-more-defensive-last-week-as-wall-street-raised-the-bar-for-ai-stocks.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/06/ai-data-centers-are-transforming-rural-land-markets-fueling-backlash.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/06/artists-ai-secrets-project-collects-hundreds-of-anonymous-confessions.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/06/iran-us-response-oil-tanker-strikes.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/06/meta-google-openai-anthropic-ai-model-fatigue.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/06/parents-who-are-really-good-at-handling-tantrums-do-things-psychologist.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/06/sec-iss-proxy-adviser-subpoena.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnbc.com/2026/09/06/sugar-is-outperforming-the-stock-market-this-year-whats-driving-it.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/04/business/stars-stripes-firings-pentagon-first-amendment": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/04/politics/missouri-asks-supreme-court-to-allow-redistricting": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/04/politics/supreme-court-backs-republican-request-to-lower-tv-ad-rates": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/05/politics/musk-america-pac-texas-paxton": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/05/politics/senate-independents-midterms": {
+   "summary": "Dan Osborn\u2019s Senate candidacy in Nebraska is a roadmap for Democrats. The party is also backing independent candidates in South Dakota and Idaho. The decisions by party leaders to intentionally not run nominees in several states is a blunt acknowledgment of the party\u2019s toxicity in a stretch of the country that once routinely elected Democrats to state and federal office.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/06/china/china-nepal-floods-gyirong-port-intl-hnk": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/06/europe/witkoff-kushner-visit-kyiv-intl": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/06/politics/trump-administration-again-asks-supreme-court-to-allow-mail-ballot-rule-to-take-effect": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/2026/09/06/politics/video/texas-senate-midterms-panel-sotu": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cnn.com/us/video/clancy-supreme-court-defense-emergency-relief-digvid": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://coindesk.com/business/2026/09/02/british-investor-thought-he-lost-usd2-000-in-bitcoin-in-2012-he-just-recovered-usd4-5-million": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://coindesk.com/business/2026/09/05/dollar-backed-stablecoins-can-push-local-currencies-lower-bank-of-korea-study-finds": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://coindesk.com/business/2026/09/05/southeast-asia-s-crypto-funding-rebounds-to-usd680-million-as-investors-focus-on-mature-firms": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://coindesk.com/business/2026/09/06/better-and-coinbase-s-bitcoin-backed-mortgages-can-reuse-borrowers-collateral": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://coindesk.com/business/2026/09/06/ukrainian-police-took-down-a-crypto-scam-that-stole-up-to-usd1-million-a-month": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://coindesk.com/markets/2026/09/05/why-crypto-experts-say-buying-and-holding-bitcoin-easily-beats-trying-to-time-the-market": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://coindesk.com/markets/2026/09/05/xrp-ledger-has-fewer-active-accounts-but-bigger-trades-and-more-value": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/markets/bitcoin-etf-inflows-3-8-billion-strongest-three-week-run-2026": {
+   "summary": "US spot Bitcoin ETFs drew nearly $1 billion in the latest week as Friday inflows stayed positive despite Bitcoin briefly falling below $79,000. Bitcoin ETF inflows rose about 7% week over week, bringing three-week inflows to a 2026 high of $3.8 billion, while Ether and XRP ETF inflows dropped sharply. US-listed spot Bitcoin exchange-traded funds (ETFs) have recorded their strongest three-week inflow stretch of 2026 as Bitcoin traded around $80,000.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/markets/surprise-labor-market-print-sends-bitcoin-back-below-80k": {
+   "summary": "The US economy added far more jobs than expected in August, pressuring Bitcoin lower as traders repriced the odds of a Federal Reserve rate cut this month. Bitcoin drops after August payrolls beat expectations threefold, reviving uncertainty over the Fed\u2019s Sept. According to data released on Friday, the US economy added 162,000 nonfarm payroll jobs in August, significantly outperforming economists\u2019 consensus expectations of roughly 56,000 jobs.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/news/crypto-biz-bitcoin-miners-strategy-strive-bitmine-stablecoins": {
+   "summary": "Corporate crypto bets are getting bigger as rising markets reward direct exposure, putting balance-sheet strategies and institutional adoption back in focus. Bitcoin miners surge as Strategy and Strive add BTC, Bitmine nears 5% of Ether supply and 21 financial firms plan stablecoins. Crypto\u2019s August rally put corporate conviction to the test.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/news/fincen-crypto-overseas-scam-centers-analysis": {
+   "summary": "The agency reported that \u201ctransnational criminal organizations\u201d based in compounds in Southeast Asia were largely behind digital asset scams targeting US residents. Based on an analysis of more than 33,000 reports filed between 2023 and 2025, FinCEN identified about $13 billion in financial transactions tied to suspected crypto scams. An analysis from the US Department of the Treasury\u2019s Financial Crimes Enforcement Network (FinCEN) identified $12.7 billion in crypto transactions \u201cperpetrated by overseas scam centers.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/news/orionx-shut-down-7-million-move-outside-wallets": {
+   "summary": "Tether-backed Orionx is permanently closing after an audit found more than $7 million in customer assets had moved to wallets outside its custody. Orionx, backed by Tether in 2025, is winding down after an audit found asset gaps and the exchange filed a criminal complaint against former executives. Orionx, a Chilean crypto exchange backed by USDt stablecoin issuer Tether, is shutting down after uncovering a multimillion-dollar issue linked to asset custody.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/news/poland-upholds-crypto-bill-veto-zondacrypto-scandal-widens": {
+   "summary": "Polish lawmakers failed to overturn a presidential veto of crypto legislation as the Zondacrypto investigation expands and its Estonian operator enters bankruptcy. Polish lawmakers failed to overturn President Karol Nawrocki\u2019s crypto bill veto as an expanding Zondacrypto investigation adds pressure for tighter oversight. Polish lawmakers have again failed to secure the three-fifths majority needed to overturn President Karol Nawrocki\u2019s veto of legislation aimed at strengthening oversight of the country\u2019s crypto market.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/news/satoshi-era-bitcoin-wakes-16-years-600-btc-moves": {
+   "summary": "Whale Alert identified 12 mining rewards totaling 600 BTC that moved after 16 years of dormancy, with the onchain tracking platform finding no connection to Satoshi Nakamoto. Bitcoin from 12 mining rewards dating to March 2010 and totaling 600 BTC moved after more than 16 years of dormancy, with Whale Alert finding no Satoshi link. Bitcoin mined in 2010 moved from long-dormant addresses after more than 16 years, reigniting speculation over a possible link to Satoshi Nakamoto.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://cointelegraph.com/news/what-happened-in-crypto-today": {
+   "summary": "Need to know what happened in crypto today? Here is the latest news on daily trends and events impacting Bitcoin price, blockchain, DeFi, Web3 and crypto regulation. Today in crypto, Tether-backed Orionx is shutting down, Poland\u2019s crypto bill veto stands as the Zondacrypto probe widens, and US sheriffs drop opposition to the CLARITY Act.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://data4sci.substack.com/p/llms-are-the-new-wikipedia": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://decrypt.co/377280/stablecoins-wont-scale-without-banks": {
+   "summary": "With a growing number of institutions exploring stablecoins, the bottleneck is regulated infrastructure they can trust. Stablecoins were supposed to route around the banking system. Instead, the companies scaling them are building deeper into it than anyone predicted. Stripe paid $1.1 billion for Bridge , whose core product is orchestrating banks.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://decrypt.co/377463/crypto-meme-coin-stock-pairs-robinhood": {
+   "summary": "A meme coin called BONER cornered half of Hims & Hers Health's tokenized shares on Robinhood's new blockchain. It started a new trend that's spreading fast. A meme coin called BONER locked up more than half the tokenized shares of Hims & Hers Health on Robinhood's blockchain over the weekend of August 30. The stunt briefly pushed the wrapped version of the stock to $132.64, more than four times Friday's real close of HIMS stock at $28.84.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://decrypt.co/377483/polymarket-crypto-perpetual-futures": {
+   "summary": "The prediction market platform's new Perps product scaled from 10 markets to 67 on its first day\u2014though the 20x leverage ceiling only applies to some of them, and none of it reaches U.S. The prediction market platform's new Polymarket Perps product scaled from 10 markets to 67 on its first day. Polymarket, the prediction market platform that rose to fame during the 2024 presidential election, opened its perpetual futures product to traders on September 3, extending a platform built around yes-or-no election and sports bets into leveraged derivatives.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://decrypt.co/377494/pencil-finance-1-million-student-loan": {
+   "summary": "The team behind Pencil Finance says the financing supported thousands of Southeast Asian students, but it did not disclose borrower costs, defaults, or investor returns. Pencil Finance says the financing supported thousands of Southeast Asian students, but it did not disclose borrower costs or investor returns. The Animoca Brands-incubated Pencil Finance says it has completed a $1 million student-loan cycle on-chain, from raising investor capital to recording repayments and returning the funds with yield.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://decrypt.co/377510/ancient-bitcoin-wallet-3-million-wakes-up": {
+   "summary": "At least four more decade-old wallets moved a combined $15.7 million between Aug. 4, with one batch of coins sent to Coinbase in a likely sign of a sale. The parade of long-dormant Bitcoin wallets springing back to life is showing no signs of slowing, with at least four more now stirring. The parade of long-dormant Bitcoin wallets springing back to life is showing no signs of slowing, with at least four more ancient stashes stirring in recent days, one of them apparently headed for a sale.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://decrypt.co/377512/xrp-boost-ripple-florida-athletics": {
+   "summary": "The multi-year deal will place the XRP logo on the field at Ben Hill Griffin Stadium starting this season, extending Ripple's push into college athletics. The multi-year deal will place the XRP logo on the field at the Florida stadium, extending Ripple's push into college sports. Ripple is taking its crypto-in-college-sports playbook to the Swamp, striking a multi-year marketing deal with the University of Florida that will splash the XRP logo across the field at Ben Hill Griffin Stadium starting this football season.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://decrypt.co/resources/what-robinhood-chain-ethereum-layer-2-network-tokenized-stocks": {
+   "summary": "Robinhood Chain is an Ethereum layer-2 network built with Arbitrum technology for tokenized assets, crypto apps, and on-chain financial products. Robinhood Chain is an Ethereum layer-2 network built with Arbitrum technology for tokenized assets, crypto apps, and financial products. Robinhood Chain is a blockchain network developed by Robinhood, the financial services company behind the stock and crypto trading platform.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://defensenews.com/industry/techwatch/2026/09/04/space-industry-lacks-workers-needed-to-rebuild-satellites-lost-in-war-report-says": {
+   "summary": "does not have enough engineers, technicians and assemblers to rebuild military space assets destroyed in a war with China or Russia, per RAND. The United States does not have enough engineers, technicians and assemblers to rebuild military space assets destroyed in a war with China or Russia, according to a RAND report published Aug. The study, \u201c Breaking Glass, Missing Hands ,\u201d asks how quickly the country could replace satellites and supporting systems lost early in a protracted conflict.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://foxnews.com/lifestyle/american-culture-quiz-test-yourself-hollywood-health-mountain-missions": {
+   "summary": "Test your knowledge of America in this new quiz about our national traits, trends, history and people. Featured this week: Hollywood health, mountain missions and more. The American Culture Quiz is a weekly test of our national traits, trends, history and people. This time, test your knowledge of Hollywood health, mountain missions and more.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://foxnews.com/politics/destroying-american-way-life-el-sayeds-political-orbit-complicates-effort-moderate-his-image": {
+   "summary": "Abdul El-Sayed claims he is not a socialist, but the Michigan Senate candidate has ties to Bernie Sanders, Rashida Tlaib and the Democratic Socialists of America. Abdul El-Sayed claims he's not a socialist, but Bernie Sanders, Alexandria Ocasio-Cortez and Democratic Socialists of America ties tell a different story. Michigan's 2026 Senate race heats up as progressive nominee Abdul El-Sayed faces intense criticism over his policy platform.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://foxnews.com/politics/missouri-ag-files-petition-asking-supreme-court-revive-trump-backed-redistricting-map": {
+   "summary": "Missouri Attorney General Catherine Hanaway filed an emergency appeal to the U.S. Supreme Court to allow the Trump-backed redistricting map for the midterm election. Missouri Attorney General Catherine Hanaway filed an emergency U.S. Supreme Court appeal to restore the Trump-backed congressional redistricting map. A major midterm shakeup unfolds as the Missouri Supreme Court blocks the state's new congressional map despite its use in primaries where over 1.2 million citizens voted.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://foxnews.com/politics/north-carolina-dem-senate-candidate-added-former-bloods-gang-member-criminal-justice-task-force": {
+   "summary": "Former North Carolina Dem governor turned Senate hopeful Roy Cooper added a former Bloods gang member to a criminal justice reform task force in 2020, according to a report. Roy Cooper appointed a convicted Bloods gang member to his criminal justice reform task force in 2020, a Washington Free Beacon report reveals. Fox News Flash top headlines are here.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://foxnews.com/politics/trump-linked-maga-inc-pours-10m-ken-paxton-texas-senate-race-james-talarico": {
+   "summary": "is spending $10 million on ads to support Texas Attorney General Ken Paxton in his tight Texas Senate race against Democrat James Talarico. drops $10 million in ads backing Ken Paxton against James Talarico in a neck and neck Texas Senate race that could reshape the midterms. Texas Attorney General and GOP U.S. Senate nominee Ken Paxton discusses his race against Democratic rival James Talarico and criticizes his opponent\u2019s policies on \u2018The Ingraham Angle.\u2019",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://foxnews.com/travel/american-airlines-passenger-duct-taped-seat-alleged-racist-homophobic-midair-outburst": {
+   "summary": "An American Airlines flight from Dallas-Fort Worth to Newark, New Jersey, was diverted to Baltimore after a passenger had to be restrained with duct tape and zip ties during a midair outburst. Video and photos show passengers restraining a man with duct tape and zip ties on an American Airlines flight after a violent and racist midair outburst. An American Airlines passenger was duct-taped to his seat after an alleged midair outburst, which forced the flight to be diverted.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://foxnews.com/world/trump-negotiators-witkoff-kushner-arrive-moscow-us-pushes-end-russia-ukraine-war": {
+   "summary": "special envoy Steve Witkoff and Jared Kushner met with Russian President Vladimir Putin on Saturday, as President Donald Trump pushes to end Russia-Ukraine war. Steve Witkoff and Jared Kushner met with Vladimir Putin in Moscow for peace talks before heading to Kyiv, and President Donald Trump says there may be a good chance for a deal. Russian President Vladimir Putin greets U.S.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://genengnews.com/topics/bioprocessing/newbiologix-and-synastra-join-forces-to-advance-raav-manufacturing-for-duchenne-gene-therapy": {
+   "summary": "The collaboration brings together Synastra\u2019s expertise in genomic engineering, AAV vector design, rare-disease gene therapy, and translational development with NewBiologix\u2019s proprietary cell engineering and rAAV manufacturing technologies. The post NewBiologix and Synastra Join Forces to Advance rAAV Manufacturing for Duchenne Gene Therapy appeared first on GEN - Genetic Engineering and Biotechnology News . Gene therapy will not reach its full potential as a transformative treatment for genetic diseases unless manufacturing evolves with it.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://genengnews.com/topics/translational-medicine/micro-bladder-model-demonstrates-how-phage-therapy-could-help-to-reduce-recurrent-utis": {
+   "summary": "Researchers used a novel human 3D micro-bladder model to demonstrate how phage therapy could help to reduce recurrent urinary tract infections (UTIs) by attacking the reservoirs of bacteria hidden deep within the bladder wall, which antibiotics can\u2019t address. The post Micro-Bladder Model Demonstrates How Phage Therapy Could Help to Reduce Recurrent UTIs appeared first on GEN - Genetic Engineering and Biotechnology News . Experiments revealed the profound influence of microenvironmental context on uropathogenic E.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://github.com/LakBud/vernLLM": {
+   "summary": "Resilience, observability, and control for AIs. Resilience, observability, and control for every call. One interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock, with retries, circuit breaking, fallback, rate limiting, caching, and middleware built in, all running in your own process rather than a new network hop.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://github.com/franciscocarloserra/llm-sandbox": {
+   "summary": "Talk to a tiny sassy robot and she builds your voxel world. Fully local: Gemma 4 + Whisper + Supertonic. Meet a tiny robot with a big attitude. Hold a button, tell her \"build me a tower\", and she does: blind, never seen a thing, absolutely sure she just made a masterpiece. Wrong height, wrong place, zero doubt, plenty of sass.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://github.com/manuelschipper/mdmanager": {
+   "summary": "Manage your CLAUDE.md and AGENTS.md across machines and runtimes - manuelschipper/mdmanager Reuse Markdown sections and choose a profile for each setup. Claude and Codex may share your coding conventions, but each also needs instructions of its own. Your work laptop needs a different global setup from a machine running hosted agents.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://github.com/openamer/openamer": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://github.com/thecolourfoundation/rune": {
+   "summary": "Contribute to thecolourfoundation/rune development by creating an account on GitHub. Persistent codebase intelligence for AI coding agents Rune continuously maps your codebase and exposes an evidence-backed understanding through MCP, enabling AI agents to work with your software without rebuilding context from scratch. Claude Code \u00b7 Cursor \u00b7 Codex \u00b7 Claude Desktop \u00b7 MCP They read files, reconstruct context, infer relationships, and build a mental model of your project before they can reliably answer questions.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://health.yahoo.com/your-body/weight-management/weight-loss/articles/glp-1-changed-life-stuck-135300414.html": {
+   "summary": "Even people who have rave reviews of their experience with a GLP-1 have found themselves stuck in a predicament: Is it ever possible to stop the injections? (NEXSTAR) \u2013 Nearly 15% of Americans have tried a GLP-1 \u2013 and for good reason. The medications show incredible promise in helping people lose a substantial amount of weight.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://ign.com/articles/white-house-launches-arcadegov-a-minigame-site-where-you-catch-immigrants-build-a-tetris-border-wall-and-fill-your-kids-trump-accounts-with-bitcoin": {
+   "summary": "Donald Trump's White House has launched Arcade.Gov, a site with mini-games where you catch and deport immigrants, or use Tetris blocks to build a border wall. The site's mini-games riff on existing ideas, such as Flappy Bill, an obvious parody of Flappy Bird, which asks players to keep the bill in the air while flying through the capitol. Rio Run, meanwhile, asks you to \"patrol the line along the river, pick up every crosser.\" It's essentially Snake, with you playing a character wearing a business suit, who collects a chain of orange jumpsuited prisoners.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://independentaustralia.net/business/business-display/meet-claude-abcs-new-regional-cadet-journalist,21521": {
+   "summary": "ABC is rolling out AI-written news stories, but only in its regional newsrooms. The ABC is using AI to write stories \u2014 a journalist who doesn\u2019t have time to do it themselves, points to an under-resourced newsroom, writes Dale Webster . THE AUSTRALIAN BROADCASTING COMMISSION ( ABC ) is rolling out news stories written by artificial intelligence, but only in its regional newsrooms.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://lineofdeparture.army.mil/Journals/Army-Lawyer/Archive/Issue-2-2026/AI-as-Force-Multiplier-for-Judge-Advocates": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://liquid.network/es/block/aad24e4fb64ca8adf4961667da87820cd48e553957ac64e75de7cdb298b5d66b": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://mainstreettoolbox.com/": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://medcitynews.com/2026/09/oracle-healthcare-ehr-va": {
+   "summary": "The House VA Committee voted 19-0 to subpoena Oracle Health executives Larry Ellison and Mike Sicilia after learning the VA\u2019s EHR contract ballooned from $10 billion to $27 billion \u2014 despite Oracle\u2019s promise to Congress that it would absorb any costs beyond the original cap. The post Oracle Health Execs Subpoenaed After VA Contract Costs Nearly Triple appeared first on MedCity News . The House Veterans\u2019 Affairs Committee voted to subpoena Oracle Health executives this week after a hearing on the VA \u2018s massive EHR project turned contentious.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://nasaspaceflight.com/2026/09/blue-origin-expands-test-launch-cape": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://nasaspaceflight.com/2026/09/cape-neighbors-stoke-relativity-advance-lc-14-lc-16": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://nasaspaceflight.com/2026/09/isar-onward-and-upward": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://news.ycombinator.com/item?id=49586552": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://news.ycombinator.com/item?id=49586810": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://news.ycombinator.com/item?id=49587379": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://news.ycombinator.com/item?id=49588265": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://newsroom.clevelandclinic.org/2026/08/28/cleveland-clinic-first-in-human-trial-of-crispr-gene-editing-therapy-shown-to-safely-and-continuously-lower-cholesterol-and-triglycerides-after-one-year": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://openai.com/index/research-acceleration-view-inside-openai": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumcomputingreport.com/whos-news-strategic-appointments-at-quic-atom-computing-and-qilimanjaro-quantum-tech": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/cern-beam-tech-project-university": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/edward-thorp": {
+   "summary": "Edward Thorp used the Kelly criterion, derived from Claude Shannon's information theory, to beat blackjack in Beat the Dealer in 1962 and then to run Princeton/Newport Partners for nearly twenty years. He is not a quantum scientist, and his rule of staking only a measured edge is awkward to apply to a technology whose odds are still moving. Edward Thorp beat blackjack and Wall Street using Claude Shannon's information theory and the Kelly criterion.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/energy-seed-funding-supports-four-fusion": {
+   "summary": "UT Austin\u2019s Institute for Fusion Studies received Fusion Energy Seed Grants to support four graduate students, fostering interdisciplinary research as $2.6 billion was invested in the field last year. Private sector investment in fusion energy reached $2.6 billion in fusion energy research and development last year, and industry forecasts suggest continued growth as companies race to build demonstration reactors. A recent survey indicates that 71% of fusion energy companies now predict commercial electricity from fusion by 2040.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/fugaku-riken-use-qunasys-software-link": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/gpt-6-astra-openais-masters-advanced": {
+   "summary": "GPT-6 Astra, bringing together years of research, is the world\u2019s most intelligent and aligned model, state-of-the-art on computer use, browsing, software engineering, cybersecurity, science, and professional work. Astra saturates FrontierMath Tier 4 with a 98% score, having already helped solve long-standing open problems in mathematics. OpenAI\u2019s GPT-6 Astra has achieved a 98% score on the challenging FrontierMath Tier 4 benchmark, demonstrating an ability to master advanced mathematics and apply that skill to solve previously unsolved problems.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/gpu-factorization-nvidia-speeds-financial": {
+   "summary": "Quant strategies group instruments for portfolio construction, risk aggregation, statistical arbitrage, and trade surveillance, but incorrect groupings can obscure risk and fail under stress. AdaptGrow, a GPU-accelerated matrix factorization algorithm, turns correlation and tail-dependence matrices into clusters and factor loadings at single-GPU and multi-node scale. NVIDIA is enabling financial firms to analyze market dependencies at a scale using AdaptGrow, a GPU-accelerated matrix factorization algorithm, the company says.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/how-do-photonic-quantum-computers-work": {
+   "summary": "Photonic quantum computers encode a qubit in a single particle of light, steer it through a programmable maze of glass and count it with superconducting detectors, and the chips come off ordinary 300 millimetre semiconductor lines. As of mid-2026 no photonic platform has demonstrated a peer-reviewed logical qubit, and PsiQuantum's Nature paper puts fault tolerance at millions of physical qubits. Photonic quantum computers run on single photons, glass meshes and cryogenic detectors.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/lindblad-dynamics-quantum-simulations-four-extra": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/nanoscale-magnetic-polarization-science-tokyo": {
+   "summary": "Science Tokyo researchers achieved reliable reversal of magnetization in 190 nm structures of BiFe\u2080.\u2089Co\u2080.\u2081O\u2083, a multiferroic material offering potential for low-power data storage. Researchers from Science Tokyo have fabricated BFCO nanodots to directly observe how electric fields restructure polarization and reverse magnetization, a key step toward lower-energy data storage. The team reports demonstrating reliable magnetization reversal using electric fields instead of current, potentially solving a growing energy challenge posed by cloud computing, artificial intelligence, and data centers.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/northeastern-university-codes-aim-link-quantum": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/otago-university-post-quantum-computing-gciso": {
+   "summary": "New Zealand agencies face a looming threat as current encryption won\u2019t withstand future quantum computers, according to a 2022 US law. New Zealand government agencies are being urged to invest in post-quantum computing ( PQC ) solutions before 2030, as the arrival of a fully error-corrected quantum computer threatens to unravel current encryption methods. This push follows recognition of a growing practice described as \u201charvest now, decrypt later,\u201d or HNDL , where encrypted data is collected for future decryption.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/photonic-chips-correct-photondeltas-light": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/quantinuum-london-investment-leaders-speak": {
+   "summary": "Quantinuum leaders will discuss investment opportunities at the Bernstein 23rd Annual Pan-European Strategic Decisions Conference, September 9-10 in London. Quantinuum will present at the Bernstein 23rd Annual Pan-European Strategic Decisions Conference in London on September 9-10, 2026, engaging with investors and outlining its approach to commercially viable quantum computing. The company\u2019s systems, built on its QCCD architecture, have achieved what Quantinuum reports as measured by average two-qubit gate fidelity.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/quantum-circuits-four-qubit-entanglement-structure": {
+   "summary": "Advances in quantum control now allow full characterization of entanglement structure in multipartite systems, specifically a four-qubit system. Researchers have developed a technique to detect the entanglement structure of a multipartite system, which is tractable to implement in a quantum computer. By exploiting symmetries under permutations and unitaries, the work detects the ways in which multiple qubits are linked, a notoriously difficult challenge in quantum physics.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/quantum-ultrathin-superconductors-longer-limited": {
+   "summary": "MIT researchers created stable, air-resistant niobium diselenide\u2014an ultrathin superconducting material\u2014by growing it under graphene. Researchers have created an air-stable superconductor only one or a few atoms thick, overcoming a major hurdle in the development of scalable quantum technologies. The team \u201cgrew\u201d niobium diselenide underneath a protective layer of carbon-based graphene , preventing rapid degradation from oxidation while enabling large-scale production.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/qubit-transfer-laser-perfect-longer": {
+   "summary": "Perfect qubit transfer, even with identical qubits and chiral waveguides, faced a limit of 4/e^2\u22480.54 due to pulse shape mismatch. A fundamental limit of 4/e^2 \u2248 0.54 previously capped the excited-state occupation of the receiving qubit in quantum networks, regardless of distance or the strength of connections between qubits. Now, researchers have demonstrated a way to bypass this constraint without relying on an external laser, a technique previously proposed by Cirac et al.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/sber-skoltech-spot-hallucinations-graph": {
+   "summary": "Researchers from Skoltech and Sber have devised TOHA, a new method to detect AI \u201challucinations\u201d in large language models using attention maps. Researchers from Skoltech and Sberbank\u2019s Center for Practical Artificial Intelligence have developed TOHA, a cost-efficient method for pinpointing unsupported responses in large language models. The TOpology-based HAllucination detector analyzes a model\u2019s attention maps as graphs, identifying inconsistencies between source context and generated text without requiring extensive training data.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/steane-code": {
+   "summary": "Andrew Steane's 1996 code uses a classical Hamming code from 1950 twice, once for bit flips and once for phase flips, so seven physical qubits protect one logical qubit. Its cheap gates alone cannot compute anything a classical machine cannot, and the T gate that fills the gap comes from magic state distillation, the largest cost in any fault-tolerant design. The Steane code protects one logical qubit with seven physical ones, built from the Hamming code.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/virgo-uc-santa-merger-barbara-physicists": {
+   "summary": "UC Santa Barbara & UT Austin physicists traced runaway black hole RBH-1, traveling at 1,000 km/s, to a violent galactic collision\u2014a first for predicted black hole mergers. A runaway black hole, designated RBH-1, is tracing an extraordinary path through intergalactic space, marked by a 202,000 light-year-long trail extending from its origin. Researchers from UC Santa Barbara and University of Texas at Austin have reconstructed the violent merger that launched this super-massive black hole, providing the first account of a collision predicted by general relativity.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://quantumzeitgeist.com/what-is-quantum-measurement": {
+   "summary": "Quantum measurement pulls one classical answer out of a quantum state, and the Born rule of 1926 gives each outcome a probability equal to the squared magnitude of its amplitude. Readout fidelities are quoted above ninety-nine percent, and readout speed sets how fast an error-correction cycle can turn, so hardware teams spend more effort on it than on the qubits. A clear guide to quantum measurement, the Born rule, why measuring cannot be undone, why you choose what to measure, and why no conscious observer is needed.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://shiftmag.dev/ai-agents-arent-safe-from-prompt-injection-and-spreadsheets-prove-it-11609": {
+   "summary": "I red-teamed an AI agent with ordinary-looking spreadsheets and escalated the injections step by step to see how easily hidden instructions could change its answer. It\u2019s 2026, and AI agents are taking over more and more of our busywork. I personally rely on them for a lot of boring, but increasingly complex tasks. We do hear about security, staying safe, and the term prompt injection gets thrown around.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/astronomy/galaxies/scientists-detect-signals-of-hydrogen-from-billions-of-years-ago-could-this-help-us-map-out-the-universe": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/astronomy/nasa-expands-deep-space-network-with-giant-new-dish-in-california-desert": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/entertainment/space-movies-shows/this-week-in-space-podcast-episode-226-who-owns-the-moon": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/entertainment/space-movies-shows/trekkies-honor-star-treks-60th-birthday-with-fan-events-special-screenings-and-a-world-record-vulcan-salute": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/entertainment/space-toys-lego/feel-the-force-with-these-ten-out-of-this-world-lego-star-wars-starships": {
+   "summary": "Whether you're a Jedi or a Sith, if you love Star Wars' iconic vessels you'll want to own these ten Lego Star Wars starships. From Luke Skywalker's X-Wing to the Empire's menacing Imperial Star Destroyer, these are the Lego Star Wars starships you'll love to build and own. From Star Destroyers to swooshable Smart Play X-Wings, we've rounded up the best Lego Star Wars starship sets, to help you build the ultimate fleet.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/entertainment/space-toys-lego/this-lego-star-wars-ucs-at-st-set-is-cheaper-than-ever-and-ill-always-love-this-chicken-walker": {
+   "summary": "Forget the AT-AT, the AT-ST is my favorite Star Wars land vehicle. Now, this massive Lego Star Wars Ultimate Collector Series AT-ST is $39 off at Amazon, its lowest ever price. Want Star Wars' striking, silly walker guarding your shelves? At $39 off, this Lego Star Wars UCS AT-ST has never been cheaper. Was Return of the Jedi's Imperial chicken beaten by fuzzy Ewoks?",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/space-exploration/launches-spacecraft/isar-aerospace-second-launch-norway-andoya-spaceport-spectrum-rocket": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/space-exploration/launches-spacecraft/spacex-starlink/group-15-24-launch-ocisly": {
+   "summary": "SpaceX launched yet another batch of its Starlink internet satellites today (Sept. 6), sending them up from California's central coast. It was the 103rd Falcon 9 launch of the year.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/space-exploration/on-this-day-in-space-sept-5-1977-nasa-launches-voyager-1-on-epic-journey-across-the-solar-system": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/space-exploration/on-this-day-in-space-september-6-2026": {
+   "summary": "6, 1947, a V-2 rocket launched from an U.S. Navy aircraft carrier for the first time. The test, while unsucessful, did show that Navy ships could be floating launch pads for a new kind of weapon: the ballistic missile.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/stargazing/venus-is-becoming-a-thinner-crescent-and-thats-when-it-finally-starts-making-sense": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/stargazing/venus-is-disappearing-from-the-evening-sky-heres-how-to-see-it-while-you-can": {
+   "summary": "Venus is sinking lower into the sunset this September, but the brilliant Evening Star won't be gone for long. Venus is disappearing from the evening sky this September. Here's when to see it before it returns as a brilliant Morning Star.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://space.com/technology/nasa-funds-spacecraft-concept-that-aims-to-map-minerals-on-solar-system-planets-and-moons": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://tech.marksblogg.com/iceye-open-satellite-feed.html": {
+   "summary": "Benchmarks & Tips for Big Data, Hadoop, AWS, Google Cloud, PostgreSQL, Spark, Python & More... Posted on Fri 04 September 2026 under Satellites ICEYE is a 14-year-old Synthetic Aperture Radar (SAR) satellite manufacturer and constellation operator. They have a headquarters in Espoo, Finland, about a 25-minute drive from Helsinki city centre, as well as offices in Poland, Luxembourg, Greece and the UK.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://techxplore.com/news/2026-09-australia-renewable-energy-fast.html": {
+   "summary": "Australia's energy transition has never been more urgent. by Mingming Cheng, Peta Ashworth, The Conversation edited by Swati Mestri , reviewed by Andrew Zinin This article has been reviewed according to Science X's editorial process and policies . Editors have highlighted the following attributes while ensuring the content's credibility: Aging coal-fired power stations are retiring , and energy bills are rising sharply .",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://techxplore.com/news/2026-09-triso-fuel-advanced-reactor.html": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theblock.co/news/defi/2026-09-05-ubs-jane-street-among-firms-with-combined-75-million-in-hyperliquid-etf-holdings-bloomberg-413616": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://thedefiant.io/converge/regulation/sec-crypto-custody-rewrite-enters-white-house-review": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://thedefiant.io/converge/tradfi-and-fintech/revolut-starts-eurr-rollout-with-bridge-as-regulated-issuer": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://thedefiant.io/news/markets/august-payrolls-knock-bitcoin-off-81000": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theguardian.com/australia-news/2026/sep/07/zomi-frankcom-israel-gaza-idf-world-central-kitchen-ntwnfb": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theguardian.com/commentisfree/2026/sep/06/prediction-markets-gambling-american-pastime": {
+   "summary": "My parents\u2019 generation may have been on to something when they railed against gambling. I f only George Santos and Bill Simmons had my parents, they wouldn\u2019t be facing down a hailstorm of condemnation for circumventing the basic rules and regulations of dubious \u201cprediction markets\u201d and online gambling. Kalshi just banned the former congressman George Santos from its service and he was forced to pay back his winnings after he was accused of the dumb person\u2019s version of insider trading.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theguardian.com/education/2026/sep/06/schools-england-report-surge-send-applications": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theguardian.com/technology/2026/sep/06/daniel-susskind-father-studies-ai-artificial-intelligence-what-parents-need-know": {
+   "summary": "A Dr Seuss-style story written in seconds alerted me to the power \u2013 and perils \u2013 of the technology. But how can children embrace it without forgetting core skills? W hen I was growing up, my dad and I often talked about a story we wanted to write together. It was called \u201cThe Day Nobody Went to Disneyland\u201d. One day, the story goes, the weather is so perfect that everyone in the world decides to stay away from Disneyland because they expect it to be far too busy.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theguardian.com/us-news/2026/sep/06/trump-administration-supreme-court-mail-in-voting": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theguardian.com/world/2026/sep/06/far-right-afd-saxony-anhalt-state-election-germany": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theguardian.com/world/2026/sep/06/saxony-anhalt-germany-afd-exit-poll-ulrich-siegmund": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://thequantuminsider.com/2026/09/04/europe-looks-to-quantum-act-to-turn-research-strength-into-industry": {
+   "summary": "Insider Brief PRESS RELEASE \u2014 Europe\u2019s quantum community gathered yesterday at the European Parliament for \u201cEurope\u2019s Quantum Moment: From Lab to Leadership\u201d, an event hosted by MEP Dr. Sergey Lagodinskythat brought together representatives from the European Commission, European Council and European Parliament, as well as quantum researchers, business leaders and investors. European quantum leaders called for coordinated action to turn the region\u2019s scientific expertise into strategic strength.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://theregister.com/public-sector/2026/09/06/us-troops-can-still-be-tracked-by-purchased-location-data-and-congress-wants-to-know-why/5294652": {
+   "summary": "DoD controls on mobile ad identifiers haven't stopped military location data turning up for sale The US military's effort to prevent troops from being tracked by adversaries through purchased location data hasn't worked as well as anticipated, and lawmakers want to know why. US Senator Ron Wyden (D-OR) and Rep. Pat Harrigan (R-NC) on Friday asked for an investigation by the Defense Department Inspector General into policies that have only partially stanched the flow of location data that allows military personnel to be tracked and targeted.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://tomshardware.com/tech-industry/artificial-intelligence/frontier-ai-faces-pricing-reckoning-as-token-volume-explodes-25-fold-mid-tier-models-deliver-90-percent-of-flagship-capability-at-one-sixth-the-cost": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://tsoj.link/llm_wahl-o-mat.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://twitter.com/RTomMcCoy/status/2094870131939684488": {
+   "summary": "\ud83e\udd16\ud83e\udde0NEW PAPER\ud83e\udde0\ud83e\udd16 (The result of an 8-year project!) LLMs seem very different from symbolic systems. Yet LLMs excel in symbolic domains (e.g., language/code/math). Our finding: LLM representations have implicit symbolic structure!",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://twitter.com/artficialisabel/status/2095678312773554533": {
+   "summary": null,
+   "outcome": "none",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://wired.com/story/my-brief-summer-fling-with-siri-ai": {
+   "summary": "I was initially enamored with the beta version of Apple\u2019s revamped smartphone assistant. As the full release approaches, I\u2019ve forgotten Siri AI even exists. When I first tested the developer beta of Apple's Siri AI by taking it as my tour guide around San Francisco, I was convinced the overhauled smartphone assistant would be an \u201c everything tool \u201d on the iPhone.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://wired.com/story/why-china-is-still-the-bogeyman-for-data-center-enthusiasts": {
+   "summary": "Polls show that overwhelming majorities of Americans hate data centers. China makes a perfect scapegoat for tech leaders and their allies\u2014the only problem is a lack of evidence. Welcome to the first edition of Power Play! From now until the midterms, senior writer Molly Taft will be sharing their thoughts every Sunday on this political season\u2019s hottest issue: data centers.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://yahoo.com/news/articles/israels-netanyahu-orders-west-bank-150154881.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://yahoo.com/news/articles/putins-envoy-dmitriev-meet-witkoff-100051885.html": {
+   "summary": "MOSCOW, Sept 5 (Reuters) - Russian President Vladimir Putin held more than three hours of \"highly useful\" talks on Saturday with two U. envoys seeking a deal to end the Ukraine war, a Kremlin aide sai... The \u200caide, Yuri Ushakov, said Americans Steve Witkoff and Jared Kushner \"outlined a number of ideas regarding possible avenues for a settlement\".",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://yahoo.com/news/politics/articles/exclusive-white-house-reviews-candidates-021855380.html": {
+   "summary": null,
+   "outcome": "error",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://yahoo.com/news/politics/articles/supreme-court-grants-republican-emergency-195613592.html": {
+   "summary": "The Supreme Court granted an emergency appeal from Republicans in a dispute over campaign ad prices on Friday, clearing a legal roadblock to political parties getting cheaper TV ad time ahead of the m... The justices halted for now a lower-court ruling in favor of Democratic candidates who argued that cheaper broadcast ads should be limited to candidates. One justice publicly dissented from the unsigned order.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  },
+  "en:https://yahoo.com/news/videos/u-strikes-iran-oil-tankers-230028558.html": {
+   "summary": "military destroyed several Iranian oil tankers on Saturday, in retaliation for Iran firing ballistic missiles at U.S. The latest back-and-forth adding to economic issues here at h... NBC News' Yamiche Alcindor reports. After meeting Putin, President Trump's envoys are expected to discuss a proposal to end the war in Ukraine.",
+   "outcome": "ok",
+   "checked_at": "2026-09-06T16:45:06+00:00",
+   "seen_at": "2026-09-06T16:45:06+00:00"
+  }
+ }
+}
