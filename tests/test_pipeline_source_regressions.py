@@ -289,6 +289,11 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
         configuration_digest=snapshot_config_digest(cfg),
     )
     newsletter_path = tmp_path / "newsletter.json"
+    newsletter_summary = (
+        "The newsletter reports a concrete development and names the people involved. "
+        "It gives the background needed to understand why the update matters now. "
+        "It also identifies the expected next step and relevant timing."
+    )
     newsletter_path.write_text(
         json.dumps(
             {
@@ -305,6 +310,7 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
                         "source_id": "newsletter:test",
                         "source_name": "Test Newsletter",
                         "published_at": now.isoformat(),
+                        "description": newsletter_summary,
                         "image_url": "https://tracker.example/pixel.gif",
                     },
                     {
@@ -314,6 +320,7 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
                         "source_id": "newsletter:test",
                         "source_name": "Test Newsletter",
                         "published_at": now.isoformat(),
+                        "description": newsletter_summary,
                         "image_url": "data:image/gif;base64,tracking",
                     },
                     {
@@ -323,6 +330,7 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
                         "source_id": "newsletter:test",
                         "source_name": "Test Newsletter",
                         "published_at": now.isoformat(),
+                        "description": newsletter_summary,
                         "image_url": "https://tracker.example/pixel.gif",
                     },
                     {
@@ -332,6 +340,7 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
                         "source_id": "newsletter:test",
                         "source_name": "Test Newsletter",
                         "published_at": now.isoformat(),
+                        "description": newsletter_summary,
                         "image_url": "https://tracker.example/pixel.gif",
                     }
                 ],

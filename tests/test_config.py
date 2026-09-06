@@ -84,6 +84,13 @@ class TestSources:
     def _topics(self, tmp_path):
         write(tmp_path, "topics.yaml", "topics:\n  - name: X\n    keywords:\n      - AI\n")
 
+    @pytest.mark.parametrize("value", ("[]", "summary"))
+    def test_summaries_must_be_a_mapping(self, tmp_path, value):
+        self._topics(tmp_path)
+        write(tmp_path, "sources.yaml", f"summaries: {value}\n")
+        with pytest.raises(ConfigError, match="summaries.*mapping"):
+            load_config(tmp_path)
+
     def test_bad_feed_url_rejected(self, tmp_path):
         self._topics(tmp_path)
         write(tmp_path, "sources.yaml", "rss:\n  - {id: a, url: 'javascript:alert(1)'}\n")

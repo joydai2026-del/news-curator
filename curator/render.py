@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from .models import Item, TierResult
 from .normalize import safe_url
@@ -283,7 +284,15 @@ body{overflow-x:hidden;background:
 input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .countline{min-height:1.5rem;margin:.2rem .15rem .8rem;color:var(--faint);font-size:.72rem}
 .count{display:inline}
+.sections{display:flex;flex-direction:column;gap:1.35rem;align-items:stretch}
+.topic-section{min-width:0}
+.section-title,.active-topic{margin:0 0 .55rem;padding:0 .15rem;font:650 1.35rem/1.25 var(--serif);letter-spacing:-.02em;color:var(--fg)}
+.active-topic[hidden]{display:none}
 .grid{display:flex;flex-direction:column;gap:0;align-items:stretch;margin:0;border:1px solid var(--line);border-radius:1.1rem;background:var(--card);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05)}
+.sections.filtered{gap:0;border:1px solid var(--line);border-radius:1.1rem;background:var(--card);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05)}
+.sections.filtered .topic-section,.sections.filtered .grid{display:contents}
+.sections.filtered .section-title{display:none}
+.sections.filtered .card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
 .card{display:block;width:100%;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible;cursor:default;transition:none}
 .card+.card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
 .card:hover,.card.open{border-color:transparent;transform:none;box-shadow:none}
@@ -297,7 +306,7 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .panel{padding:0 1.15rem 1.15rem;background:linear-gradient(180deg,color-mix(in srgb,var(--accent-soft) 55%,transparent),transparent)}
 .panelin{border-top:1px solid var(--line);padding-top:1rem;display:grid;grid-template-columns:minmax(0,1fr) 15rem;gap:1.5rem}
 .summary{font-family:var(--serif);color:var(--muted);font-size:.96rem;line-height:1.62}
-.summary p{margin:0}
+.summary p{margin:0;max-width:68ch}
 .provenance{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.8rem;font:700 .625rem/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 .provenance-chip{border:1px solid var(--line);border-radius:999px;background:var(--card);padding:.25rem .5rem;color:var(--accent);letter-spacing:0;text-transform:none}
 .details{margin-top:.8rem;display:grid;gap:.38rem;font:400 .78rem/1.5 var(--sans);color:var(--muted)}
@@ -327,7 +336,9 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
 
 JS = """
 (function(){
-  var grid=document.getElementById('grid');
+  var grid=document.getElementById('sections');
+  var sections=[].slice.call(document.querySelectorAll('.topic-section'));
+  var activeTopic=document.getElementById('active-topic');
   var chips=[].slice.call(document.querySelectorAll('.chip'));
   var box=document.getElementById('q');
   var count=document.getElementById('count');
@@ -381,6 +392,15 @@ JS = """
         collapse(e.el);
       }
     });
+    sections.forEach(function(section){
+      section.hidden=!section.querySelector('.card:not([hidden])');
+    });
+    if(grid){grid.classList.toggle('filtered',tab!=='__all__');}
+    if(activeTopic){
+      var selected=chips.find(function(c){return c.dataset.filter===tab;});
+      activeTopic.hidden=tab==='__all__';
+      activeTopic.textContent=selected?selected.textContent:'';
+    }
     if(count){count.textContent=q?(shown+(shown===1?' matching story':' matching stories')):'';}
     if(empty){
       empty.hidden=shown>0;
@@ -438,7 +458,8 @@ JS = """
 })();
 """
 
-STALE_AFTER_HOURS = 27
+STALE_AFTER_HOURS = 3
+DISPLAY_TIMEZONE = "America/New_York"
 
 
 def _e(text: object) -> str:
@@ -486,7 +507,7 @@ def _accent_hues(slugs: list[str]) -> dict[str, int]:
     Position does both. Even spacing guarantees the maximum distance any set of
     categories can have from each other, and the order of `topics.yaml` is as
     stable as its contents. The cost is that adding a seventh category shifts
-    the other six, which on a page rebuilt daily from a file edited a few times
+    the other six, which on a page rebuilt frequently from a file edited a few times
     a year is not a cost anyone will notice.
     """
     count = len(slugs) or 1
@@ -496,9 +517,14 @@ def _accent_hues(slugs: list[str]) -> dict[str, int]:
     }
 
 
-def _timestamp(item: Item) -> str:
+def _display_time(moment: datetime, timezone_name: str) -> str:
+    local = moment.astimezone(ZoneInfo(timezone_name))
+    return local.strftime("%b %d, %Y at %I:%M %p %Z").replace(" 0", " ")
+
+
+def _timestamp(item: Item, timezone_name: str = DISPLAY_TIMEZONE) -> str:
     """The exact time, spelled out, and labelled for what it actually is."""
-    stamp = item.published_at.strftime("%b %d, %Y at %H:%M UTC").replace(" 0", " ")
+    stamp = _display_time(item.published_at, timezone_name)
     return f"Updated {stamp}" if item.time_is_estimated else stamp
 
 
@@ -650,7 +676,15 @@ def _why_this_appeared(card: _Card, now: datetime) -> str:
     return f"Best rank #{rank + 1} in {card.label}. Visible signals include {reason}."
 
 
-def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, all_rank: int) -> str | None:
+def _render_card(
+    card: _Card,
+    now: datetime,
+    hues: dict[str, int],
+    index: int,
+    all_rank: int,
+    timezone_name: str = DISPLAY_TIMEZONE,
+    require_summary: bool = True,
+) -> str | None:
     """One story as one headline-first accordion row.
 
     Two rules decide whether a card can carry a link, and they are not the same
@@ -671,6 +705,8 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
     href = safe_url(item.url) if item.url else None
     if href is None and not item.is_newsletter:
         return None
+    if require_summary and not card.description:
+        return None
 
     _ = hues  # Category hues remain part of the stable renderer API.
     echo = len(item.echo_platforms)
@@ -684,19 +720,15 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
     detail_id = f"d{index}"
     toggle_id = f"t{index}"
     rows = []
-    if card.description:
-        summary = card.description
-    elif href:
-        summary = "This source did not provide a summary. Open the original story for the full context."
-    else:
-        summary = "This source did not provide a summary or a safe public link."
-    summary_class = "full" if card.description else "summary-notice"
-    summary_label = "Source summary" if card.description else "Summary unavailable"
+    summary = card.description
+    summary_label = "Story summary"
     if item.is_newsletter and item.newsletter_sender:
         rows.append(f'<div class="row"><b>Newsletter</b><span>{_e(item.newsletter_sender)}</span></div>')
     else:
         rows.append(f'<div class="row"><b>Source</b><span>{_e(item.source_name)}</span></div>')
-    rows.append(f'<div class="row"><b>Published</b><span>{_e(_timestamp(item))}</span></div>')
+    rows.append(
+        f'<div class="row"><b>Published</b><span>{_e(_timestamp(item, timezone_name))}</span></div>'
+    )
     cluster = _cluster_links(card)
     if cluster:
         rows.append(cluster)
@@ -726,7 +758,7 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
         f'<div class="panel detail" id="{detail_id}" role="region" '
         f'aria-labelledby="{toggle_id}" hidden><div class="panelin">'
         f'<div class="summary"><div class="provenance" aria-label="Story provenance">'
-        f'{summary_label}{"".join(provenance)}</div><p class="{summary_class}">{_e(summary)}</p>'
+        f'{summary_label}{"".join(provenance)}</div><p class="full">{_e(summary)}</p>'
         f'<div class="details">{"".join(rows)}</div><div class="acts">{"".join(acts)}</div></div>'
         f'<aside class="signal"><b>Why this appeared</b><span>{_e(_why_this_appeared(card, now))}'
         f'</span></aside></div></div>'
@@ -747,7 +779,8 @@ def _render_card(card: _Card, now: datetime, hues: dict[str, int], index: int, a
     # having it.
     newsletter_attr = ' data-newsletter=""' if item.is_newsletter else ""
     return (
-        f'<article class="card" data-topics="{_e(topics)}" data-rank-all="{all_rank}"'
+        f'<article class="card" data-topics="{_e(topics)}" data-rank-all="{all_rank}" '
+        f'data-summary-chars="{len(summary)}"'
         f"{rank_attrs}{image_attr}{newsletter_attr}>"
         f'<h2 class="story-heading"><button type="button" class="accordion-toggle" aria-expanded="false" '
         f'aria-controls="{detail_id}" id="{toggle_id}"><span class="headline">{_e(item.title)}</span>'
@@ -808,9 +841,11 @@ def render_html(
     site_name: str = "News Curator",
     repo_url: str | None = None,
     built_at: datetime | None = None,
+    timezone_name: str = DISPLAY_TIMEZONE,
+    require_summaries: bool = True,
 ) -> str:
     built = built_at or now
-    stamp = built.strftime("%b %d, %Y at %H:%M UTC").replace(" 0", " ")
+    stamp = _display_time(built, timezone_name)
 
     # Staleness is computed in the READER's browser, not here. The build always
     # renders itself as zero seconds old, so a server-side check could never
@@ -831,16 +866,37 @@ def render_html(
             f'<button class="chip" data-filter="{_e(slug)}" aria-pressed="false">{_e(name)}</button>'
         )
 
-    rendered = []
+    rendered: dict[str, list[str]] = {slug: [] for slug in names}
+    rendered_count = 0
     for position, card in enumerate(cards):
-        markup = _render_card(card, now, hues, len(rendered), position)
+        markup = _render_card(
+            card,
+            now,
+            hues,
+            rendered_count,
+            position,
+            timezone_name=timezone_name,
+            require_summary=require_summaries,
+        )
         if markup is not None:
-            rendered.append(markup)
+            rendered[card.best[1]].append(markup)
+            rendered_count += 1
+
+    sections = []
+    for slug, name in names.items():
+        rows = rendered.get(slug) or []
+        if not rows:
+            continue
+        sections.append(
+            f'<section class="topic-section" data-section="{_e(slug)}">'
+            f'<h2 class="section-title">{_e(name)}</h2>'
+            f'<div class="grid">{"".join(rows)}</div></section>'
+        )
 
     # The count is of STORIES, not of rows. One story matching three categories
     # used to be counted three times, which made the number bigger and wronger.
-    total = len(rendered)
-    empty_hidden = " hidden" if rendered else ""
+    total = rendered_count
+    empty_hidden = " hidden" if rendered_count else ""
 
     safe_repo = safe_url(repo_url) if repo_url else None
     edit_url = edit_topics_url(safe_repo)
@@ -851,7 +907,7 @@ def render_html(
         # link, pointed straight at the file rather than at the repo.
         add_line = (
             f'<p><a class="add-topic" href="{_e(edit_url)}">Add a topic or keyword</a> '
-            "&mdash; edit <code>topics.yaml</code> on GitHub. If you can commit to this "
+            "- edit <code>topics.yaml</code> on GitHub. If you can commit to this "
             "repository, saving rebuilds the page. Otherwise GitHub opens a pull request "
             "for the owner to merge, and it appears after they do.</p>"
         )
@@ -874,7 +930,7 @@ def render_html(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_e(site_name)}</title>
-<meta name="description" content="A daily reading companion with sourced news summaries.">
+<meta name="description" content="An hourly reading companion with grounded news summaries.">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
@@ -884,7 +940,7 @@ def render_html(
 <div class="wrap">
 <div class="shell">
   <aside class="rail" aria-label="News Curator navigation">
-    <div class="brand">{_e(site_name)}<small>Daily Reading Companion</small></div>
+    <div class="brand">{_e(site_name)}<small>Hourly Reading Companion</small></div>
     <h2>Topics</h2>
     <nav class="railnav" aria-label="Topic categories">{''.join(chips)}</nav>
     <p class="railnote">One current edition. Open any headline for the source summary and ranking context.</p>
@@ -896,10 +952,10 @@ def render_html(
     </div>
     <header class="intro">
       <div class="eyebrow">Today's edition</div>
-      <h1>Your daily reading companion</h1>
-      <p>Open a headline for the source summary, provenance, and a plain explanation of why it appeared.</p>
+      <h1>Your reading companion</h1>
+      <p>Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.</p>
       <div class="edition-meta">
-        <span>Built {_e(stamp)}</span><span>scheduled daily</span><span>{total} stories</span>{stale}
+        <span>Built {_e(stamp)}</span><span>scheduled hourly</span><span>{total} stories</span>{stale}
       </div>
     </header>
     <div class="tools">
@@ -911,21 +967,23 @@ def render_html(
     </div>
     <p class="countline"><span class="count" id="count" role="status" aria-live="polite"></span></p>
     <main>
-      <div class="grid" id="grid">{''.join(rendered)}</div>
+      <h2 class="active-topic" id="active-topic" hidden></h2>
+      <div class="sections" id="sections">{''.join(sections)}</div>
       <p class="empty" id="empty"{empty_hidden}>Nothing matched in this window.</p>
     </main>
     <footer>
       <p>This edition combines Hacker News, RSS feeds, news sitemaps, and eligible newsletter items,
          then builds one deduplicated story list. When a configured saved-interest profile is
          present, the build uses it as an additional ranking input. Rebuilt on a schedule.</p>
-      <p>Every headline and summary is text the named source supplied at build time. Rows marked
+      <p>Every headline and summary is assembled only from text the named source supplied in its
+         feed, page metadata, or article lead at build time. Rows marked
          <span class="via">via</span> came through an aggregator or newsletter. Nothing here is
-         written, rewritten, or summarized by a machine, and no linked claim has been checked.</p>
+         written or rewritten by an AI, and no linked claim has been checked.</p>
       <p>The Reading Companion loads no publisher images, third-party scripts, web fonts, or
          analytics. Original links use <code>no-referrer</code>. The build may read a publisher's
          image metadata for coverage reporting, but the page does not request or display that image.
-         No destination article body is stored or summarized.</p>
-      <p class="health">Sources this run &mdash; {_health_line(results)}</p>
+         No full destination article body is retained.</p>
+      <p class="health">Sources this run - {_health_line(results)}</p>
       {add_line}
       {repo_line}
     </footer>
@@ -946,11 +1004,21 @@ def render_site(
     *,
     site_name: str = "News Curator",
     repo_url: str | None = None,
+    timezone_name: str = DISPLAY_TIMEZONE,
     cname_source: Path | None = None,
+    require_summaries: bool = True,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
-    payload = render_html(ranked, results, now, site_name=site_name, repo_url=repo_url)
+    payload = render_html(
+        ranked,
+        results,
+        now,
+        site_name=site_name,
+        repo_url=repo_url,
+        timezone_name=timezone_name,
+        require_summaries=require_summaries,
+    )
 
     # Write via a temp file in the same directory, then replace, so an
     # interrupted run can never leave a half-written page published.

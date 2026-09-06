@@ -74,12 +74,12 @@ def test_curate_push_paths_cover_every_runtime_surface() -> None:
     assert {"curator/**", "scripts/**", "static/**"}.issubset(paths)
 
 
-def test_schedule_produces_one_daily_digest_in_new_york() -> None:
+def test_schedule_runs_hourly_at_minute_seventeen() -> None:
     workflow = _workflow(CURATE_PATH)
     trigger = workflow.get("on") or workflow.get(True)
     assert isinstance(trigger, dict)
     schedule = trigger.get("schedule")
-    assert schedule == [{"cron": "17 9 * * *", "timezone": "America/New_York"}]
+    assert schedule == [{"cron": "17 * * * *"}]
 
 
 def test_health_reporting_runs_after_a_failed_build_without_masking_it():
@@ -107,8 +107,20 @@ def test_rendered_reading_companion_contract_is_enforced():
         'aria-expanded="false"',
         'if "<img" in html',
         '>Read original</a>',
+        'data-summary-chars=',
+        'summary length',
     ):
         assert locked in run
+    assert "load_config" in run
+    assert "SUMMARY_DEFAULTS" in run
+    assert "summary_required" in run
+    assert "length < 180" not in run
+
+
+def test_summary_cache_is_persisted_with_other_bounded_state() -> None:
+    workflow = CURATE_PATH.read_text(encoding="utf-8")
+    assert "image_cache.json newsletter_state.json summary_cache.json" in workflow
+    assert "if [ -f summary_cache.json ]; then git add summary_cache.json; fi" in workflow
 
 
 def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:

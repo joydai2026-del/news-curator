@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -68,6 +69,7 @@ _SOURCE_FILE_KEYS = frozenset(
         "hackernews",
         "reddit",
         "images",
+        "summaries",
         "newsletter",
         "translation",
     }
@@ -175,6 +177,7 @@ class Config:
     hackernews: dict[str, Any]
     reddit: dict[str, Any]
     images: dict[str, Any] = field(default_factory=dict)
+    summaries: dict[str, Any] = field(default_factory=dict)
     # The `newsletter:` block from sources.yaml, passed to the lane as a plain
     # mapping. The lane owns its own defaults; config only validates types.
     newsletter: dict[str, Any] = field(default_factory=dict)
@@ -257,6 +260,15 @@ class Config:
     @property
     def site_name(self) -> str:
         return str(self.settings.get("site_name") or "News Curator")
+
+    @property
+    def display_timezone(self) -> str:
+        value = str(self.settings.get("display_timezone") or "America/New_York").strip()
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ConfigError("'settings.display_timezone' must be an installed IANA timezone.") from exc
+        return value
 
 
 def _number(value: Any, label: str) -> float:
@@ -593,7 +605,10 @@ def load_sources(path: Path) -> dict[str, Any]:
         for i, entry in enumerate(generic_entries)
     )
 
-    for key in ("settings", "ranking", "dedup", "hackernews", "reddit", "images", "newsletter", "translation"):
+    for key in (
+        "settings", "ranking", "dedup", "hackernews", "reddit", "images",
+        "summaries", "newsletter", "translation",
+    ):
         if raw.get(key) is not None and not isinstance(raw[key], dict):
             raise ConfigError(f"{path.name}: '{key}' must be a mapping.")
 
@@ -657,10 +672,34 @@ def load_sources(path: Path) -> dict[str, Any]:
     if threshold is not None and not 0 < float(threshold) <= 1:
         raise ConfigError(f"{path.name}: 'dedup.title_similarity_threshold' must be between 0 and 1.")
 
-    for section in ("hackernews", "reddit", "images", "newsletter", "translation"):
+    for section in ("hackernews", "reddit", "images", "summaries", "newsletter", "translation"):
         enabled = (raw.get(section) or {}).get("enabled")
         if enabled is not None and not isinstance(enabled, bool):
             raise ConfigError(f"{path.name}: '{section}.enabled' must be true or false.")
+
+    summaries = raw.get("summaries") or {}
+    for key in (
+        "minimum_characters", "minimum_sentences", "target_characters", "maximum_characters",
+        "max_bytes", "max_fetches_per_run", "workers",
+    ):
+        if key in summaries:
+            value = summaries[key]
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ConfigError(f"{path.name}: 'summaries.{key}' must be a positive integer.")
+    for key in ("timeout", "budget_seconds", "retain_days", "retry_error_after_hours"):
+        if key in summaries:
+            _positive(summaries[key], f"summaries.{key}")
+    if int(summaries.get("max_bytes", 1)) > 8 * 1024 * 1024:
+        raise ConfigError(f"{path.name}: 'summaries.max_bytes' exceeds 8388608.")
+    if int(summaries.get("workers", 1)) > 16:
+        raise ConfigError(f"{path.name}: 'summaries.workers' exceeds 16.")
+    minimum = int(summaries.get("minimum_characters", 1))
+    target = int(summaries.get("target_characters", minimum))
+    maximum = int(summaries.get("maximum_characters", target))
+    if not minimum <= target <= maximum:
+        raise ConfigError(
+            f"{path.name}: summary characters must satisfy minimum <= target <= maximum."
+        )
 
     adapters = (raw.get("newsletter") or {}).get("adapters")
     if adapters is not None and not isinstance(adapters, list):
@@ -720,6 +759,7 @@ def load_config(root: Path) -> Config:
         hackernews=src.get("hackernews") or {},
         reddit=src.get("reddit") or {},
         images=src.get("images") or {},
+        summaries=src.get("summaries") or {},
         newsletter=src.get("newsletter") or {},
         translation=src.get("translation") or {},
     )
@@ -755,6 +795,7 @@ def load_config(root: Path) -> Config:
         cfg.timeout,
         cfg.max_items_per_topic,
         cfg.fetch_workers,
+        cfg.display_timezone,
         cfg.default_source_max_response_bytes,
         cfg.default_source_per_host_concurrency,
     )

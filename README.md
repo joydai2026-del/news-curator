@@ -18,19 +18,19 @@ the published site.
 
 ## What the page looks like
 
-A responsive Reading Companion with headline-only accordion rows. The collapsed
-view stays fast to scan. Opening a headline reveals the source-provided summary,
+A responsive Reading Companion with headline-only accordion rows grouped into
+topic sections. The collapsed view stays fast to scan. Opening a headline reveals a grounded summary,
 provenance, exact publication time, matched keywords, other outlets that covered
 the same story, a plain explanation of visible ranking signals, and the original
 link.
 
 - **One story opens at a time.** Click the headline again, use Close, or press
   Escape to collapse it. Every headline is a real button, so keyboard use works.
-- **Category controls** keep each topic's exact ranking. A story belonging to
+- **The All view is grouped by topic.** Category controls keep each topic's exact ranking. A story belonging to
   three categories is **one row cross-tagged with three slugs**, never three
   copies, so the story count remains honest.
-- **Search** filters visible rows by source headline and source summary as you
-  type. The notice shown when a source supplied no summary is not search data.
+- **Search** filters visible rows by source headline and grounded summary as you
+  type. A story is omitted when it cannot meet the configured summary-quality floor.
 - **No publisher images load in the reader's browser.** The page is text-first
   on purpose, with no web fonts, framework, analytics, or third-party scripts.
 - The desktop has a topic rail. Phones use a compact horizontal topic strip.
@@ -208,7 +208,7 @@ Six signals, all tunable in `sources.yaml` under `ranking:`.
 | **Curated source** | A story from a category's own feed with no keyword hit scores `native_source_score` (0.4) rather than zero, because the feed being single-subject is real evidence. Below a genuine keyword hit on purpose. |
 | **Saved interest** | An owner-only headline match can lift a story. The build receives URL hashes and scores only, never the saved terms or owner identity. |
 
-When personalization is enabled, the daily workflow binds saved-interest scores
+When personalization is enabled, the hourly workflow binds saved-interest scores
 to the exact source snapshot it publishes. A missing, stale, or malformed score
 artifact then blocks the main build instead of quietly publishing an
 unpersonalized edition.
@@ -239,16 +239,16 @@ shows one extra row, a wrong merge silently deletes a story.
 ## What this promises, and what it does not
 
 **It promises:** every headline is the text its source handed us at build time,
-linked to the address that source gave, and every displayed summary is the
-summary that source wrote for its own story. Nothing is written, rewritten, or
-summarized by a machine. There is no LLM anywhere in this pipeline.
+linked to the address that source gave, and every displayed summary is assembled
+only from text that publisher supplied in its feed, page metadata, or article
+lead. Nothing is written or rewritten by an AI. There is no LLM in this pipeline.
 
 **It does not promise:**
 
-- That a link is still live or still carries that title. Building the page reads
-  a linked page only as far as the end of its head, to find the image tag the
-  publisher put there for exactly this purpose. No article text is stored or
-  summarized, so a link may have moved, changed or died since the build.
+- That a link is still live or still carries that title. Building the page may
+  read a bounded prefix of a linked page to obtain image metadata and enough
+  publisher text for a useful summary. No full article body is retained, so a
+  link may have moved, changed or died since the build.
 - That an "also covered by" list is complete. It names the outlets the
   deduplicator folded into this story on this run, which is not the same as
   every outlet that covered it.
@@ -258,7 +258,7 @@ summarized by a machine. There is no LLM anywhere in this pipeline.
   by eye, and `exclude` exists for when it is not enough.
 - That the page is exactly an hour old. GitHub delays and drops scheduled runs
   under load, and disables them entirely after 60 days of repository inactivity.
-  The page shows its real build time and says so when that is over 27 hours.
+  The page shows its real build time in Eastern Time and warns when it is over 3 hours old.
 
 Rows marked **via** come from an aggregator (Hacker News, Reddit, Lobsters),
 where the headline was written by whoever submitted the link rather than by the
@@ -301,14 +301,12 @@ whichever of two places is cheaper:
    from publishers who serve their feed happily and refuse a direct article
    fetch. It covers roughly half the feeds here.
 2. **The `og:image` tag** on the article, for rows the feed left bare. The
-   response is read only as far as the end of the head and then dropped, so the
-   article body is never parsed or stored (the last chunk read can overlap the
-   start of it, which is why this says "as far as", not "only the head"). It
-   runs only for stories that survived ranking.
+   bounded response is shared with the summary-enrichment path when needed. The
+   page never displays publisher images.
 
 Answers are cached in `image_cache.json`, committed to the repo and keyed by
 canonical URL. A found image and a definitive "this page declares none" are
-both kept, so a daily job does not ask the same question again: a live run
+both kept, so an hourly job does not ask the same question again: a live run
 resolved 157 of 180 rows, and the next run fetched nothing. A refusal or a
 timeout is not definitive, so it is retried after 24 hours, and a link that
 stops appearing is pruned after 45 days and would be looked up again if it came
@@ -324,6 +322,15 @@ Newsletter items never load an image and never enter the cache, because a
 newsletter URL can carry a subscriber identifier. That rule is enforced in the
 enricher as well as in the pipeline, on purpose: a privacy rule living in one
 layer is one refactor away from being gone.
+
+## Grounded summary enrichment
+
+Every visible story must pass the programmable `summaries:` quality floor in
+`sources.yaml`. A sufficiently detailed feed summary is used as-is. Otherwise,
+the build reads publisher-declared page metadata and lead paragraphs through the
+same bounded, SSRF-safe transport used by other enrichment. It assembles distinct
+publisher sentences without an LLM. Bounded results are cached in
+`summary_cache.json`; newsletter URLs never enter this fetch or cache path.
 
 ---
 

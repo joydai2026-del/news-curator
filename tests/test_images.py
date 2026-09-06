@@ -184,7 +184,7 @@ class TestImageCache:
         assert ImageCache(None).get("nope", NOW, retry_error_after_hours=24)[0] is False
 
     def test_save_is_a_no_op_when_nothing_changed(self, tmp_path):
-        # A daily job that rewrites an unchanged file makes an empty commit
+        # A scheduled job that rewrites an unchanged file makes an empty commit
         # every day forever.
         path = tmp_path / "c.json"
         cache = ImageCache(path)

@@ -197,6 +197,11 @@ class TestNewsletterCardMarker:
             source_id="newsletter:tldr",
             source_name="TLDR",
             published_at=NOW - timedelta(hours=1),
+            description=(
+                "The newsletter reports the central development and identifies the people involved. "
+                "It adds the background needed to understand why the update matters now. "
+                "It also gives the next expected step and the relevant timing."
+            ),
             is_newsletter=True,
             newsletter_sender="TLDR",
             image_url="",
@@ -217,6 +222,11 @@ class TestNewsletterCardMarker:
             source_id="verge",
             source_name="The Verge",
             published_at=NOW - timedelta(hours=1),
+            description=(
+                "The publisher reports the central development and identifies the people involved. "
+                "It adds the background needed to understand why the update matters now. "
+                "It also gives the next expected step and the relevant timing."
+            ),
         )
         html = render_html({"AI": [item]}, [], NOW)
         assert "data-newsletter" not in html
@@ -310,6 +320,11 @@ class TestClusterLinksAreSanitizedAtTheOutputBoundary:
             source_id="verge",
             source_name="The Verge",
             published_at=NOW - timedelta(hours=1),
+            description=(
+                "The publisher reports the central development and identifies the people involved. "
+                "It adds the background needed to understand why the update matters now. "
+                "It also gives the next expected step and the relevant timing."
+            ),
             cluster=[{"source_name": "Elsewhere", "url": url}],
         )
         return render_html({"AI": [item]}, [], NOW)

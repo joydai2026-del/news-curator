@@ -30,11 +30,11 @@ renderer decides what to do about that.
 v2 adds four fields, and every one of them is a place a machine could have been
 tempted to write prose. None of them is:
 
-`description` — the summary the SOURCE wrote, cleaned the same way the title is
-and nothing more. Not a generated abstract, not a first paragraph scraped from
-the article, not an LLM's idea of the gist. A source that shipped no summary
-leaves this empty and the card renders without one, which is the honest answer
-and looks fine.
+`description` — publisher-written source material, cleaned the same way the
+title is. It starts with the feed summary and may be enriched downstream from
+publisher metadata and lead paragraphs. It is never an LLM-generated abstract.
+When the configured summary requirement cannot be met, the visible edition
+omits the item instead of publishing an empty or misleading summary.
 
 `cluster` — other addresses for the SAME story, gathered when dedup collapsed
 two rows that pointed at different URLs. It is what lets an unfolded card say
@@ -76,7 +76,7 @@ class Item:
     is_aggregator: bool = False
     time_is_estimated: bool = False  # True when only an "updated" time existed
     image_url: str = ""  # publisher-declared preview image metadata, may be empty
-    description: str = ""  # the SOURCE's own summary, cleaned. Never generated.
+    description: str = ""  # cleaned publisher text, optionally enriched; never generated
     # Language is declared by source configuration, not guessed from a title.
     # Legacy artifacts and source rows are English unless they opt into Chinese.
     language: str = "en"

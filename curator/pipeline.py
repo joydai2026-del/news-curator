@@ -32,6 +32,12 @@ from .normalize import canonical_url as normalize_canonical_url
 from .normalize import fold_text
 from .rank import rank_items
 from .render import render_site
+from .summaries import (
+    SUMMARY_CACHE_FILE,
+    SummaryCache,
+    enrich as enrich_summaries,
+    summary_is_usable,
+)
 
 log = logging.getLogger("curator")
 
@@ -468,6 +474,12 @@ def main(argv: list[str] | None = None) -> int:
         help=f"preview-image cache file (default: <root>/{IMAGE_CACHE_FILE})",
     )
     parser.add_argument(
+        "--summary-cache",
+        type=Path,
+        default=None,
+        help=f"grounded-summary cache file (default: <root>/{SUMMARY_CACHE_FILE})",
+    )
+    parser.add_argument(
         "--source-snapshot",
         type=Path,
         default=None,
@@ -628,18 +640,28 @@ def main(argv: list[str] | None = None) -> int:
             "saved-interest ranking applied; published order changed: %s",
             "yes" if order_changed else "no",
         )
-    visible = sum(len(v) for v in ranked.values())
-    visible_zh = sum(len(v) for v in ranked_zh.values())
-
     # Preview images are resolved AFTER ranking and truncation, so the only
     # article heads fetched are the ones a reader will actually see. That is
-    # what keeps a daily job bounded: the ceiling is the union of capped EN
+    # what keeps each scheduled job bounded: the ceiling is the union of capped EN
     # and ZH backend rows, not the number of headlines collected. Native rows
     # in either language are enriched before localization, so a translated
     # projection inherits the image attached to its authoritative original.
     cache_path = args.image_cache or (args.root / IMAGE_CACHE_FILE)
     cache = ImageCache.load(cache_path)
     originals = _ranked_originals(ranked, ranked_zh)
+    translation_input_digests: dict[tuple[str, str], str] = {}
+    if args.translation_artifact:
+        from .localization import story_id_for_item
+        from .translation import TranslationInput
+
+        for item in originals:
+            if item.is_newsletter:
+                continue
+            try:
+                content = TranslationInput.from_item(item)
+            except (TypeError, ValueError):
+                continue
+            translation_input_digests[(story_id_for_item(item), item.language)] = content.digest
     # Newsletter items are excluded here AND refused inside enrich(): the
     # privacy rule (no article fetch, no cache entry for newsletter-derived
     # URLs) should survive either guard being refactored away.
@@ -676,6 +698,58 @@ def main(argv: list[str] | None = None) -> int:
     if cache.save():
         log.info("image cache written to %s (%d entries)", cache_path, len(cache.entries))
 
+    summary_cache_path = args.summary_cache or (args.root / SUMMARY_CACHE_FILE)
+    summary_cache = SummaryCache.load(summary_cache_path)
+    summary_config = {**cfg.summaries, "enabled": False} if args.offline else cfg.summaries
+    summary_stats = enrich_summaries(
+        originals,
+        summary_cache,
+        now,
+        user_agent=cfg.user_agent,
+        config=summary_config,
+    )
+    summary_retain = cfg.summaries.get("retain_days")
+    summary_cache.prune(
+        now,
+        retain_days=float(7 if summary_retain is None else summary_retain),
+    )
+    if summary_cache.save():
+        log.info(
+            "summary cache written to %s (%d entries)",
+            summary_cache_path,
+            len(summary_cache.entries),
+        )
+    summary_policy_enabled = bool(cfg.summaries.get("enabled", False)) and not args.offline
+    if summary_policy_enabled:
+        minimum_characters = int(cfg.summaries.get("minimum_characters", 180))
+        minimum_sentences = int(cfg.summaries.get("minimum_sentences", 3))
+        for view in (ranked, ranked_zh):
+            for category, rows in view.items():
+                view[category] = [
+                    item for item in rows
+                    if summary_is_usable(
+                        item.description,
+                        minimum_characters=minimum_characters,
+                        minimum_sentences=minimum_sentences,
+                    )
+                ]
+    log.info(
+        "summaries: %d feed-ready, %d cached, %d enriched, %d omitted",
+        summary_stats["from_feed"],
+        summary_stats["from_cache"],
+        summary_stats["fetched"],
+        summary_stats["unusable"],
+    )
+    if summary_stats["capped"] or summary_stats["budget_hit"]:
+        log.warning(
+            "summaries: %d lookups deferred by cap, %d by time budget",
+            summary_stats["capped"],
+            summary_stats["budget_hit"],
+        )
+
+    visible = sum(len(v) for v in ranked.values())
+    visible_zh = sum(len(v) for v in ranked_zh.values())
+
     # Language data is a backend artifact. The visual renderer remains
     # unchanged until the separate design phase.
     out_dir = args.out or (args.root / "site")
@@ -695,12 +769,14 @@ def main(argv: list[str] | None = None) -> int:
         native_ranked=ranked,
         source_ranked=ranked_zh,
         translations=translations,
+        source_input_digests=translation_input_digests,
     )
     localized_zh = build_localized_view(
         target_language="zh",
         native_ranked=ranked_zh,
         source_ranked=ranked,
         translations=translations,
+        source_input_digests=translation_input_digests,
     )
     _sanitize_newsletter_projection_urls(localized_en, localized_zh)
     data_dir = out_dir / "data"
@@ -748,7 +824,9 @@ def main(argv: list[str] | None = None) -> int:
         out_dir,
         site_name=args.site_name or cfg.site_name,
         repo_url=_default_repo_url(cfg),
+        timezone_name=cfg.display_timezone,
         cname_source=args.root / "CNAME",
+        require_summaries=summary_policy_enabled,
     )
     log.info(
         "wrote %s (%d rows across %d topics)",

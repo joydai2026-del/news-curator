@@ -11,6 +11,13 @@ from curator.render import human_age, render_html, render_site
 from tests.conftest import make_item, make_newsletter_item
 
 
+TEST_SUMMARY = (
+    "The first sentence provides the central fact and enough concrete context for the reader. "
+    "The second sentence explains why the development matters to the people involved. "
+    "The third sentence adds the next expected step and a useful timeline."
+)
+
+
 def flat(html: str) -> str:
     """Collapse whitespace before matching prose.
 
@@ -37,9 +44,14 @@ def card_with(html: str, needle: str) -> str:
     return matches[0]
 
 
-def render(ranked, results=None, now=None, **kw):
+def render(ranked, results=None, now=None, *, fill_summaries=True, **kw):
     from tests.conftest import NOW
 
+    if fill_summaries:
+        for rows in ranked.values():
+            for item in rows:
+                if not item.description:
+                    item.description = TEST_SUMMARY
     return render_html(ranked, results or [], now or NOW, **kw)
 
 
@@ -93,9 +105,9 @@ class TestContent:
             assert marker not in html
 
     def test_schedule_wording_is_not_a_promise(self, now):
-        # "refreshes daily" claims something GitHub cron cannot guarantee.
+        # "refreshes hourly" claims something GitHub cron cannot guarantee.
         html = render({"T": [make_item("a")]}, now=now)
-        assert "scheduled daily" in html and "refreshes daily" not in html
+        assert "scheduled hourly" in html and "refreshes hourly" not in html
 
 
 class TestHealthLine:
@@ -127,7 +139,7 @@ class TestStaleness:
         assert f'data-built="{(now - timedelta(hours=9)).isoformat()}"' in html
 
     def test_threshold_is_embedded(self, now):
-        assert 'data-after="27"' in render({"T": []}, now=now, built_at=now)
+        assert 'data-after="3"' in render({"T": []}, now=now, built_at=now)
 
     def test_indicator_starts_hidden(self, now):
         # It must not flash on a fresh page before the script runs.
@@ -290,7 +302,7 @@ class TestAccordionMediaBoundary:
         html = flat(render({"T": [make_item("a")]}, now=now))
         assert "never fetched" not in html
         assert "may read a publisher's image metadata" in html
-        assert "No destination article body is stored or summarized" in html
+        assert "No full destination article body is retained" in html
 
     def test_the_footer_matches_the_text_only_request_boundary(self, now):
         item = make_item("A story")
@@ -431,10 +443,28 @@ class TestCardAnatomy:
         card = card_with(render({"T": [item]}, now=now), "A story")
         assert '<p class="full">The publisher&#x27;s own sentence.</p>' in card
 
-    def test_a_story_without_a_summary_renders_without_one(self, now):
-        card = card_with(render({"T": [make_item("A story")]}, now=now), "A story")
-        assert "Summary unavailable" in card
-        assert '<p class="summary-notice">This source did not provide a summary.' in card
+    def test_a_story_without_a_summary_is_not_rendered(self, now):
+        page = render(
+            {"T": [make_item("A story", description="")]},
+            now=now,
+            fill_summaries=False,
+        )
+        assert "A story" not in page
+        assert "Summary unavailable" not in page
+
+    def test_legacy_config_can_render_before_summary_policy_is_enabled(self, now):
+        page = render_html(
+            {"T": [make_item("A story", description="")]},
+            [],
+            now,
+            require_summaries=False,
+        )
+        assert "A story" in page
+
+    def test_every_rendered_card_declares_its_summary_length(self, now):
+        page = render({"T": [make_item("A story")]}, now=now)
+        card = card_with(page, "A story")
+        assert 'data-summary-chars="' in card
 
     def test_a_hostile_description_is_escaped(self, now):
         item = make_item("A story", description="<script>alert(1)</script>")
@@ -531,8 +561,34 @@ class TestAccordionReadingCompanion:
 
     def test_story_container_preserves_per_topic_css_ordering(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        assert ".grid{display:flex;flex-direction:column;gap:0;align-items:stretch" in page
+        assert ".sections{display:flex;flex-direction:column" in page
         assert ".card{display:block;width:100%" in page
+
+    def test_all_view_groups_stories_under_topic_sections(self, now):
+        page = render({
+            "AI": [make_item("AI story", "https://example.com/ai")],
+            "Crypto": [make_item("Crypto story", "https://example.com/crypto")],
+        }, now=now)
+        assert '<section class="topic-section" data-section="ai">' in page
+        assert '<h2 class="section-title">AI</h2>' in page
+        assert '<section class="topic-section" data-section="crypto">' in page
+        assert '<h2 class="section-title">Crypto</h2>' in page
+
+    def test_filtered_view_has_one_dynamic_topic_heading(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert 'id="active-topic"' in page
+        assert "grid.classList.toggle('filtered',tab!=='__all__')" in page
+
+    def test_timestamps_are_eastern_with_dst_labels(self):
+        from datetime import datetime, timezone
+
+        summer = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
+        winter = datetime(2026, 1, 6, 15, 0, tzinfo=timezone.utc)
+        summer_page = render({"AI": [make_item("Summer")]}, now=summer, built_at=summer)
+        winter_page = render({"AI": [make_item("Winter")]}, now=winter, built_at=winter)
+        assert "11:00 AM EDT" in summer_page
+        assert "10:00 AM EST" in winter_page
+        assert " UTC" not in summer_page and " UTC" not in winter_page
 
     def test_mobile_topic_strip_is_hidden_while_desktop_rail_is_visible(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
@@ -572,9 +628,14 @@ class TestAccordionReadingCompanion:
         assert "coverage from a configured topic source" in reason
         assert "freshness" not in reason.casefold()
 
-    def test_missing_summary_notice_is_not_searchable_story_content(self, now):
-        page = render({"AI": [make_item("A story")]}, now=now)
-        assert 'class="summary-notice"' in page
+    def test_missing_summary_never_reaches_searchable_story_content(self, now):
+        page = render(
+            {"AI": [make_item("A story", description="")]},
+            now=now,
+            fill_summaries=False,
+        )
+        assert "A story" not in page
+        assert "Summary unavailable" not in page
         assert "card.querySelector('.full')" in page
 
     def test_mobile_header_uses_the_configured_site_name(self, now):
@@ -597,7 +658,7 @@ class TestAccordionReadingCompanion:
 
     def test_page_metadata_does_not_claim_every_fork_is_personalized(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        assert '<meta name="description" content="A daily reading companion with sourced news summaries.">' in page
+        assert '<meta name="description" content="An hourly reading companion with grounded news summaries.">' in page
         assert '<meta name="description" content="A personalized' not in page
 
     def test_future_milestone_controls_are_not_shown(self, now):
@@ -612,10 +673,10 @@ class TestAccordionReadingCompanion:
         ):
             assert label not in page
 
-    def test_page_identifies_the_daily_reading_companion(self, now):
+    def test_page_identifies_the_reading_companion(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        assert "Your daily reading companion" in page
-        assert "Open a headline for the source summary" in page
+        assert "Your reading companion" in page
+        assert "Open a headline for a grounded summary" in page
 
 
 class TestClusterLinks:
@@ -718,7 +779,7 @@ class TestNewsletterCards:
         assert '<span class="headline">Unlinkable story</span>' in card
         assert "Read original" not in card
         assert "<b>No link</b>" in card
-        assert "did not provide a summary or a safe public link" in card
+        assert "Story summary" in card
         assert "Open the original story" not in card
 
     def test_a_linkable_newsletter_story_still_links(self, now):

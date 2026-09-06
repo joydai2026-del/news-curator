@@ -129,6 +129,7 @@ def build_localized_view(
     native_ranked: Mapping[str, list[Item]],
     source_ranked: Mapping[str, list[Item]],
     translations: Iterable[TranslationRecord],
+    source_input_digests: Mapping[tuple[str, str], str] | None = None,
 ) -> dict[str, list[LocalizedItem]]:
     """Layer validated translations after original-language ranking.
 
@@ -142,6 +143,7 @@ def build_localized_view(
         (record.story_id, record.source_language, record.target_language): record
         for record in translations
     }
+    preserved_digests = source_input_digests or {}
     output: dict[str, list[LocalizedItem]] = {}
     for category_name in dict.fromkeys((*native_ranked, *source_ranked)):
         rows: list[LocalizedItem] = []
@@ -160,7 +162,11 @@ def build_localized_view(
             source_record = records.get(
                 (source_story_id, source_item.language, target_language)
             )
-            if source_record is not None and source_record.input_digest == source_content.digest:
+            expected_digest = preserved_digests.get(
+                (source_story_id, source_item.language),
+                source_content.digest,
+            )
+            if source_record is not None and source_record.input_digest == expected_digest:
                 validated_provenance[source_story_id] = source_record
         for item in native_ranked.get(category_name, []):
             story_id = story_id_for_item(item)
@@ -196,7 +202,11 @@ def build_localized_view(
             except (TypeError, ValueError):
                 continue
             record = records.get((story_id, item.language, target_language))
-            if record is None or record.input_digest != content.digest:
+            expected_digest = preserved_digests.get(
+                (story_id, item.language),
+                content.digest,
+            )
+            if record is None or record.input_digest != expected_digest:
                 continue
             seen.add(story_id)
             rows.append(
