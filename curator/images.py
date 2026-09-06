@@ -244,7 +244,7 @@ def fetch_image_meta(
 class ImageCache:
     """Canonical URL -> the image we found, and when we looked.
 
-    Committed to the repo so a daily job does not ask a publisher the same
+    Committed to the repo so a scheduled job does not ask a publisher the same
     question again. "Again" rather than "twice": a non-definitive miss is
     retried after `retry_error_after_hours`, and a link pruned for going stale
     would be looked up afresh if it ever reappeared.
@@ -332,7 +332,7 @@ class ImageCache:
         return len(stale)
 
     def save(self) -> bool:
-        """Write only when something changed, so the daily job makes no empty commits."""
+        """Write only when something changed, so scheduled runs make no empty commits."""
         if not self._dirty:
             return False
         payload = {
@@ -378,7 +378,7 @@ def enrich(
     """Attach a preview image to every item that does not already have one.
 
     Called AFTER ranking and truncation, so the only pages fetched are the ones
-    a reader will actually see. That is what keeps a daily job bounded: the
+    a reader will actually see. That is what keeps each scheduled job bounded: the
     ceiling is the number of visible rows, not the number of headlines fetched.
 
     Returns counters for the run receipt. Never raises: a page without a picture

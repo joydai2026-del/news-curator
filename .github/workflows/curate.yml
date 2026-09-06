@@ -4,7 +4,7 @@ name: Curate
 #
 # Two honest notes about the schedule:
 #   * GitHub runs cron on a best-effort basis and delays or drops runs under
-#     load. The page therefore says "scheduled daily" and shows the real build
+#     load. The page therefore says "scheduled hourly" and shows the real build
 #     time rather than claiming a guarantee.
 #   * GitHub DISABLES scheduled workflows in a public repo after 60 days with no
 #     repository activity, and emails the owner. If the page goes stale, check
@@ -13,8 +13,7 @@ on:
   schedule:
     # Off the hour on purpose. Minute 0 is the busiest slot on the shared cron
     # pool and the most likely to be delayed.
-    - cron: "17 9 * * *"
-      timezone: "America/New_York"
+    - cron: "17 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -459,13 +458,28 @@ jobs:
           from collections import Counter
           from pathlib import Path
 
+          from curator.config import load_config
+          from curator.summaries import DEFAULTS as SUMMARY_DEFAULTS
+
           page = Path("site/index.html")
           if not page.exists():
               sys.exit("FAIL: site/index.html was not written")
 
           html = page.read_text(encoding="utf-8")
+          summary_config = load_config(Path(".")).summaries
+          summary_required = bool(summary_config.get("enabled", False))
+          summary_minimum = int(
+              summary_config.get(
+                  "minimum_characters", SUMMARY_DEFAULTS["minimum_characters"]
+              )
+          )
           links = re.findall(r'<a href="(https?://[^"]+)"[^>]*>Read original</a>', html)
           cards = re.findall(r'<article class="card"[^>]*?data-topics="([^"]*)"', html)
+          summary_lengths = [
+              int(value) for value in re.findall(
+                  r'<article class="card"[^>]*?data-summary-chars="(\d+)"', html
+              )
+          ]
           images = len(re.findall(r'<article class="card"[^>]*\sdata-image="https?://', html))
           chips = re.findall(r'<button class="chip" data-filter="([^"]+)"', html)
           tabs = list(dict.fromkeys(c for c in chips if c != "__all__"))
@@ -484,6 +498,15 @@ jobs:
               sys.exit("FAIL: every story must render exactly one accordion toggle")
           if html.count('aria-expanded="false"') < len(cards):
               sys.exit("FAIL: every story must start collapsed")
+          if summary_required and len(summary_lengths) != len(cards):
+              sys.exit("FAIL: every story must declare its summary length")
+          if summary_required and any(length < summary_minimum for length in summary_lengths):
+              sys.exit(
+                  "FAIL: every story summary length must be at least "
+                  f"{summary_minimum} characters"
+              )
+          if summary_required and "Summary unavailable" in html:
+              sys.exit("FAIL: a missing-summary placeholder reached the page")
           if "<img" in html:
               sys.exit("FAIL: the Reading Companion must not load publisher images")
           if "javascript:" in html.lower():
@@ -542,7 +565,7 @@ jobs:
       - name: Stage repository state for the write-only job
         run: |
           mkdir -p repository-state
-          for state_file in image_cache.json newsletter_state.json; do
+          for state_file in image_cache.json newsletter_state.json summary_cache.json; do
             if [ -f "$state_file" ]; then cp "$state_file" repository-state/; fi
           done
 
@@ -581,21 +604,22 @@ jobs:
           name: repository-state
           path: ./downloaded-state
 
-      - name: Persist the preview-image cache and newsletter cursor
+      - name: Persist bounded enrichment caches and newsletter cursor
         run: |
-          for state_file in image_cache.json newsletter_state.json; do
+          for state_file in image_cache.json newsletter_state.json summary_cache.json; do
             if [ -f "downloaded-state/$state_file" ]; then
               cp "downloaded-state/$state_file" "$state_file"
             fi
           done
-          if [ -z "$(git status --porcelain image_cache.json newsletter_state.json)" ]; then
+          if [ -z "$(git status --porcelain image_cache.json newsletter_state.json summary_cache.json)" ]; then
             echo "cache and cursor unchanged, nothing to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add image_cache.json newsletter_state.json
-          git commit -m "chore: refresh image cache / newsletter cursor [skip ci]"
+          if [ -f summary_cache.json ]; then git add summary_cache.json; fi
+          git commit -m "chore: refresh enrichment caches / newsletter cursor [skip ci]"
           git push origin HEAD:main || {
             git fetch origin main
             git rebase origin/main

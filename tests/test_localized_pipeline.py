@@ -174,3 +174,35 @@ def test_nonempty_zh_to_en_localization_cannot_change_original_rank_or_order() -
     assert [row.story_id for row in localized["AI"]] == [row[0] for row in before]
     assert [row.original.title for row in localized["AI"]] == [row[1] for row in before]
     assert all(row.translated and row.translation_available for row in localized["AI"])
+
+
+def test_enrichment_does_not_invalidate_a_translation_from_the_same_snapshot() -> None:
+    original = _items()[0]
+    content = TranslationInput.from_item(original)
+    story_id = story_id_for_item(original)
+    translation = TranslationRecord(
+        story_id=story_id,
+        input_digest=content.digest,
+        source_language="en",
+        target_language="zh",
+        title="人工智能模型发布",
+        description="来源提供的翻译摘要。",
+        provider="google",
+        model_version="google-nmt-v3",
+    )
+    original.description = (
+        "The publisher later supplied a longer grounded summary for the visible page. "
+        "It gives the background needed to understand the development. "
+        "It also explains the expected next step and timing."
+    )
+
+    localized = build_localized_view(
+        target_language="zh",
+        native_ranked={"AI": []},
+        source_ranked={"AI": [original]},
+        translations=[translation],
+        source_input_digests={(story_id, "en"): content.digest},
+    )
+
+    assert localized["AI"][0].translated is True
+    assert localized["AI"][0].title == "人工智能模型发布"

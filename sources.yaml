@@ -61,6 +61,9 @@
 settings:
   # Shown in the browser tab and as the page heading.
   site_name: "News Curator"
+  # IANA timezone used for every human-facing build and publication timestamp.
+  # The stored source timestamps remain timezone-aware UTC internally.
+  display_timezone: "America/New_York"
   # Optional. Linked in the footer, and the source of the "Add a topic or
   # keyword" link. Falls back to the GitHub Actions repo, so a fork advertises
   # ITSELF rather than whoever it was forked from.
@@ -162,6 +165,27 @@ images:
   # retention window. A refusal or a timeout is a fact about one moment, so it
   # is retried after this long rather than becoming permanent.
   retry_error_after_hours: 24
+
+# ---------------------------------------------------------------------------
+# Grounded story summaries. This is deterministic source-text enrichment, not
+# an LLM feature. Existing feed summaries are used first. Short or missing ones
+# are extended from the publisher page's declared description and lead
+# paragraphs through the same bounded SSRF-safe transport used by enrichment.
+# A story that still misses this quality floor is not shown.
+# ---------------------------------------------------------------------------
+summaries:
+  enabled: true
+  minimum_characters: 180
+  minimum_sentences: 3
+  target_characters: 320
+  maximum_characters: 600
+  max_bytes: 524288
+  timeout: 10
+  max_fetches_per_run: 160
+  budget_seconds: 90
+  workers: 8
+  retain_days: 7
+  retry_error_after_hours: 6
 
 # ---------------------------------------------------------------------------
 # Tier A — Hacker News via the Algolia API. No auth, no key, no quota observed
