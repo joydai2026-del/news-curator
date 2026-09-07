@@ -115,6 +115,27 @@ def test_saved_interest_changes_rank_while_empty_profile_preserves_baseline(now)
     assert rank_items([interested, baseline], topic, now, cfg, interest_scores={}) == ordinary
 
 
+def test_all_zero_no_match_profile_preserves_weighted_baseline_order(now) -> None:
+    topic = type("Topic", (), {"id": "ai", "terms_for": lambda self, language: []})()
+    weighted = make_item("Weighted", "https://example.com/weighted", hours_ago=8)
+    fresh = make_item("Fresh", "https://example.com/fresh", hours_ago=1)
+    weighted.source_weight = 2.0
+    fresh.source_weight = 0.0
+    cfg = {"weight_recency": 0.0, "weight_keyword": 0.0, "weight_source": 1.0,
+           "weight_echo": 0.0, "weight_interest": 1.0}
+    ordinary = rank_items([fresh, weighted], topic, now, cfg)
+
+    assert ordinary == [weighted, fresh]
+    assert rank_items(
+        [fresh, weighted], topic, now, cfg,
+        interest_scores={story_key(weighted): 0.0, story_key(fresh): 0.0},
+    ) == ordinary
+    assert rank_items(
+        [fresh, weighted], topic, now, cfg,
+        interest_scores={"story:" + "0" * 64: 1.0},
+    ) == ordinary
+
+
 def test_preference_match_is_primary_and_freshness_breaks_equal_preferences(now) -> None:
     topic = type("Topic", (), {"id": "ai", "terms_for": lambda self, language: ["AI"]})()
     old_match = make_item("AI old match", "https://example.com/old", hours_ago=24)
@@ -143,8 +164,7 @@ def test_trending_uses_preferences_when_present_and_native_rank_without_them(now
         [native_first, preferred], topic, now, {}, interest_scores={story_key(preferred): 0.5}
     ) == [preferred, native_first]
     assert rank_items([preferred, native_first], topic, now, {}, interest_scores={}) == [
-        preferred,
-        native_first,
+        native_first, preferred,
     ]
 
 

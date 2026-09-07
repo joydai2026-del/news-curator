@@ -173,6 +173,14 @@ def public_ranking_explanation(
     )
 
 
+def has_effective_interest_scores(
+    items: list[Item], interest_scores: Mapping[str, float] | None
+) -> bool:
+    """Return whether this exact candidate set has a positive preference signal."""
+    scores = interest_scores or {}
+    return any(float(scores.get(story_key(item), 0.0)) > 0.0 for item in items)
+
+
 def rank_items(
     items: list[Item],
     topic: Category,
@@ -182,7 +190,7 @@ def rank_items(
     interest_scores: Mapping[str, float] | None = None,
 ) -> list[Item]:
     """Highest score first. Ties broken by recency, then title, so runs are stable."""
-    preference_mode = interest_scores is not None
+    preference_mode = has_effective_interest_scores(items, interest_scores)
     scores = interest_scores or {}
     if topic.id == "trending" and not preference_mode:
         # HN is the English Trending source and buzzing.cc is the Chinese one,

@@ -16,7 +16,7 @@ from .identity import story_id_for_item
 from .models import CoverageMention, Item
 from .newsletter.sanitize import sanitize as sanitize_newsletter_url
 from .normalize import canonical_url, safe_url
-from .rank import public_ranking_explanation, score_components
+from .rank import has_effective_interest_scores, public_ranking_explanation, score_components
 from .render import publishable_cards
 
 SCHEMA_VERSION = 1
@@ -130,6 +130,7 @@ def build_archive_candidate(
     entries = []
     for topic_name, items in ranked.items():
         topic = topic_by_name.get(topic_name) or Category(name=topic_name)
+        preference_mode = has_effective_interest_scores(items, interest_scores)
         topics.append({"topic_id": topic.id, "name": topic.name})
         for position, item in enumerate(items, start=1):
             story_id = story_id_for_item(item)
@@ -142,7 +143,7 @@ def build_archive_candidate(
             components["final_score"] = sum(
                 value for key, value in components.items() if key != "final_score"
             )
-            if interest_scores is not None:
+            if preference_mode:
                 ordering_mode = "preference_then_freshness"
                 ordering_key = {"published_at": item.published_at.timestamp()}
             elif topic.id == "trending" and item.native_rank is not None:
