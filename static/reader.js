@@ -207,8 +207,7 @@
   function createApi(rawConfig, sessionProvider, fetchImpl = fetch) {
     const config = validateApiConfig(rawConfig);
     async function rpc(name, body, validator, requiresAuth = false) {
-      let session = null;
-      try { session = await sessionProvider(); } catch (_) { session = null; }
+      const session = await sessionProvider();
       if (requiresAuth && (!session || !boundedString(session.access_token, 16384))) fail("Sign in to continue.");
       const requestedUrl = `${config.url}/rest/v1/rpc/${name}`;
       const headers = { apikey: config.key, accept: "application/json", "content-type": "application/json" };
@@ -469,7 +468,7 @@
     const updatesButton = document.getElementById("show-updates");
     if (!auth || !view || !status || !loadButton || !updatesStatus || !updatesButton) return;
     let api;
-    try { api = createApi(auth.config(), () => auth.loadSession()); } catch (_) {
+    try { api = createApi(auth.config(), () => auth.sessionForRequest()); } catch (_) {
       loadButton.hidden = true;
       return;
     }
@@ -485,7 +484,7 @@
     const pendingUpdates = new Map();
 
     function announce(message) { status.textContent = message; }
-    function signedIn() { try { return Boolean(auth.loadSession()); } catch (_) { return false; } }
+    function signedIn() { try { return auth.hasSessionCandidate(); } catch (_) { return false; } }
     function requireSignIn() {
       if (signedIn()) return true;
       announce("Sign in to sync reading controls.");

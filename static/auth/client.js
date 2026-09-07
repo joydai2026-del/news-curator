@@ -418,6 +418,26 @@
       : refreshSession(authConfig, session, fetchImpl, nowSeconds);
   }
 
+  let readerRefreshInFlight = null;
+  function hasSessionCandidate() {
+    try {
+      loadSessionCandidate();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  async function readerSessionForRequest(fetchImpl = fetch, nowSeconds = Date.now() / 1000) {
+    if (!sessionStorage.getItem(SESSION_KEY)) return null;
+    const candidate = loadSessionCandidate();
+    if (candidate.expires_at > nowSeconds) return candidate;
+    if (!readerRefreshInFlight) {
+      readerRefreshInFlight = sessionForRequest(config(), candidate, fetchImpl, nowSeconds)
+        .finally(() => { readerRefreshInFlight = null; });
+    }
+    return readerRefreshInFlight;
+  }
+
   function preferenceHeaders(authConfig, session, representation = false) {
     const headers = {
       apikey: authConfig.key,
@@ -581,9 +601,11 @@
     getPreferences,
     isPublishableKey,
     loadSession,
+    hasSessionCandidate,
     projectSession,
     projectRefreshedSession,
     refreshSession,
+    readerSessionForRequest,
     requestEmailCode,
     setPreferences,
     signOut,
@@ -609,7 +631,8 @@
     acceptSession,
     channelName: CHANNEL_NAME,
     config,
-    loadSession,
+    hasSessionCandidate,
+    sessionForRequest: readerSessionForRequest,
   });
 
   async function run() {
