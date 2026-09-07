@@ -693,28 +693,10 @@ def _why_this_appeared(card: _Card, now: datetime) -> str:
     if not components:
         return "Score components were not supplied for this precomputed row."
     mode = card.item.ranking_mode_by_topic.get(card.label, "weighted_total")
-    ordering_key = card.item.ranking_key_by_topic.get(card.label, {})
-    labels = (
-        ("interest", "Preference match"),
-        ("recency", "Freshness"),
-        ("topic_fit", "Topic fit"),
-        ("source", "Source"),
-        ("coverage", "Coverage"),
-    )
-    details = ", ".join(f"{label} {components[key]:.3f}" for key, label in labels)
-    if mode == "preference_then_freshness":
-        return (
-            f"Order: preference match {ordering_key.get('preference_score', 0.0):.3f} first, "
-            "newer publication time second. "
-            f"Context only: {details}."
-        )
-    if mode == "native_rank_then_freshness":
-        return (
-            f"Order: configured source rank {ordering_key.get('native_rank', 0.0):.0f} first, "
-            "newer publication time second. "
-            f"Context only: {details}."
-        )
-    return f"Order: Weighted total {components['final_score']:.3f}. Contributions: {details}."
+    from .rank import public_ranking_explanation
+
+    public_components = {key: value for key, value in components.items() if key != "interest"}
+    return public_ranking_explanation(mode, public_components)
 
 
 def _render_card(

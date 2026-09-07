@@ -145,6 +145,34 @@ def score_components(
     return components
 
 
+def public_ranking_explanation(
+    ordering_mode: str, score_components: Mapping[str, float]
+) -> str:
+    """Explain public ordering without disclosing private preference values."""
+    if ordering_mode == "preference_then_freshness":
+        return "Saved interests were considered first, then freshness."
+    if ordering_mode == "native_rank_then_freshness":
+        return "The source's captured rank was considered first, then freshness."
+    labels = {
+        "recency": "freshness",
+        "topic_fit": "topic fit",
+        "source": "source",
+        "coverage": "coverage",
+    }
+    names = [
+        labels[key]
+        for key, value in sorted(
+            score_components.items(), key=lambda pair: abs(float(pair[1])), reverse=True
+        )
+        if key in labels and isinstance(value, (int, float)) and value != 0
+    ][:3]
+    return (
+        f"Weighted using {', '.join(names)}."
+        if names
+        else "No non-zero weighted signal was returned."
+    )
+
+
 def rank_items(
     items: list[Item],
     topic: Category,

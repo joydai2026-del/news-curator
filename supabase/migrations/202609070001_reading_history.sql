@@ -11,6 +11,8 @@ create table public.feed_policy (
   refresh_poll_seconds integer not null default 300 check (refresh_poll_seconds between 30 and 86400),
   physical_purge_grace_days integer not null default 7 check (physical_purge_grace_days between 1 and 90),
   more_like_topic_weight numeric not null default 0.8 check (more_like_topic_weight between 0 and 10),
+  receipt_retention_days integer not null default 30 check (receipt_retention_days between 1 and 365),
+  receipt_max_per_user integer not null default 1000 check (receipt_max_per_user between 1 and 100000),
   updated_at timestamptz not null default now()
 );
 insert into public.feed_policy(singleton) values (true);
@@ -32,6 +34,8 @@ create table public.canonical_stories (
   title text not null check (title <> '' and octet_length(title) <= 8000),
   summary text not null default '' check (octet_length(summary) <= 32000),
   language text not null check (language in ('en', 'zh')),
+  source_kind text not null check (source_kind in ('outlet', 'newsletter')),
+  source_name text not null check (source_name <> '' and octet_length(source_name) <= 1000),
   published_at timestamptz not null,
   first_archived_at timestamptz not null default now(),
   last_archived_at timestamptz not null default now()
@@ -101,9 +105,16 @@ create table public.publication_entries (
   summary text not null check (octet_length(summary) <= 32000),
   language text not null check (language in ('en', 'zh')),
   published_at timestamptz not null,
-  score_components jsonb not null check (jsonb_typeof(score_components) = 'object' and octet_length(score_components::text) <= 8192),
+  score_components jsonb not null check (jsonb_typeof(score_components) = 'object'
+    and not (score_components ? 'interest') and octet_length(score_components::text) <= 8192),
   ordering_mode text not null check (ordering_mode in ('weighted_total', 'preference_then_freshness', 'native_rank_then_freshness')),
-  ordering_key jsonb not null check (jsonb_typeof(ordering_key) = 'object' and octet_length(ordering_key::text) <= 2048),
+  ordering_key jsonb not null check (jsonb_typeof(ordering_key) = 'object'
+    and not (ordering_key ? 'preference_score') and octet_length(ordering_key::text) <= 2048),
+  topic_ranks jsonb not null check (jsonb_typeof(topic_ranks) = 'object'
+    and octet_length(topic_ranks::text) <= 8192),
+  source_kind text not null check (source_kind in ('outlet', 'newsletter')),
+  source_name text not null check (source_name <> '' and octet_length(source_name) <= 1000),
+  ranking_explanation text not null check (ranking_explanation <> '' and octet_length(ranking_explanation) <= 2000),
   primary key (publication_seq, topic_id, story_id),
   unique (publication_seq, topic_id, position),
   foreign key (publication_seq, topic_id)
@@ -144,6 +155,7 @@ create table public.user_action_receipts (
   created_at timestamptz not null default now(),
   primary key (user_id, idempotency_key)
 );
+create index user_action_receipts_created_idx on public.user_action_receipts(created_at);
 
 alter table public.feed_policy enable row level security;
 alter table public.feed_policy force row level security;
@@ -249,7 +261,9 @@ begin
       'summary', pe.summary, 'language', pe.language, 'published_at', pe.published_at,
       'publication_seq', pe.publication_seq, 'position', pe.position,
       'score_components', pe.score_components, 'ordering_mode', pe.ordering_mode,
-      'ordering_key', pe.ordering_key, 'page_order_mode', 'edition_rank',
+      'ordering_key', pe.ordering_key, 'topic_ranks', pe.topic_ranks,
+      'source_kind', pe.source_kind, 'source_name', pe.source_name,
+      'ranking_explanation', pe.ranking_explanation, 'page_order_mode', 'edition_rank',
       'next_cursor', jsonb_build_object('after_position', pe.position, 'after_story_id', pe.story_id),
       'topic_ids', coalesce((select jsonb_agg(topic_id order by topic_id) from (
         select distinct pe2.topic_id from public.publication_entries pe2
@@ -297,6 +311,8 @@ begin
     'summary', e.summary, 'language', e.language, 'published_at', e.published_at,
     'publication_seq', e.publication_seq, 'position', e.position, 'score_components', e.score_components,
     'ordering_mode', e.ordering_mode, 'ordering_key', e.ordering_key,
+    'topic_ranks', e.topic_ranks, 'source_kind', e.source_kind, 'source_name', e.source_name,
+    'ranking_explanation', e.ranking_explanation,
     'topic_ids', coalesce((select jsonb_agg(topic_id order by topic_id) from (
       select distinct pe2.topic_id from public.publication_entries pe2
       join public.publication_runs pr2 using (publication_seq)
@@ -365,6 +381,10 @@ begin
     'score_components', coalesce(card.score_components, '{}'::jsonb),
     'ordering_mode', coalesce(card.ordering_mode, 'weighted_total'),
     'ordering_key', coalesce(card.ordering_key, '{}'::jsonb),
+    'topic_ranks', coalesce(card.topic_ranks, '{}'::jsonb),
+    'source_kind', coalesce(card.source_kind, s.source_kind),
+    'source_name', coalesce(card.source_name, s.source_name),
+    'ranking_explanation', coalesce(card.ranking_explanation, 'No archived ranking explanation is available.'),
     'page_order_mode', 'saved_at',
     'next_cursor', jsonb_build_object('before_saved_at', us.saved_at, 'before_story_id', s.story_id),
     'saved_at', us.saved_at, 'read_at', us.read_at, 'state_revision', us.revision,
@@ -373,6 +393,7 @@ begin
   left join lateral (
     select pe.publication_seq, pe.topic_id, pe.position, pe.title, pe.summary, pe.canonical_url,
       pe.language, pe.published_at, pe.score_components, pe.ordering_mode, pe.ordering_key,
+      pe.topic_ranks, pe.source_kind, pe.source_name, pe.ranking_explanation,
       (select jsonb_agg(distinct pe2.topic_id order by pe2.topic_id)
         from public.publication_entries pe2 where pe2.publication_seq = pe.publication_seq
         and pe2.story_id = pe.story_id) topic_ids
@@ -449,7 +470,8 @@ $$;
 create or replace function public.set_story_state(
   p_story_id text, p_read boolean, p_saved boolean, p_expected_revision bigint, p_idempotency_key text
 ) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
-declare caller uuid := auth.uid(); current_revision bigint; answer jsonb; resource text; request_hash text;
+declare caller uuid := auth.uid(); current_revision bigint; answer jsonb; resource text;
+  request_hash text; receipt_cap integer;
 begin
   if caller is null then raise exception 'authentication required' using errcode = '42501'; end if;
   if p_story_id is null or p_story_id !~ '^story:[0-9a-f]{64}$'
@@ -458,6 +480,9 @@ begin
      or p_idempotency_key is null or p_idempotency_key = ''
      or octet_length(p_idempotency_key) > 512 then
     raise exception 'invalid state write';
+  end if;
+  if not exists (select 1 from public.canonical_stories where story_id = p_story_id) then
+    raise exception 'story does not exist';
   end if;
   if p_saved and not exists (
     select 1 from public.story_topics where story_id = p_story_id
@@ -478,6 +503,12 @@ begin
       raise exception 'idempotency key reuse mismatch';
     end if;
     return answer;
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(caller::text || ':receipt-cap', 0));
+  select receipt_max_per_user into receipt_cap from public.feed_policy where singleton;
+  if receipt_cap is null then raise exception 'feed policy unavailable'; end if;
+  if (select count(*) from public.user_action_receipts where user_id = caller) >= receipt_cap then
+    raise exception 'receipt limit reached';
   end if;
   select revision into current_revision from public.user_story_state
     where user_id = caller and story_id = p_story_id for update;
@@ -503,7 +534,8 @@ $$;
 create or replace function public.set_story_interest(
   p_story_id text, p_topic_id text, p_signal text, p_expected_revision bigint, p_idempotency_key text
 ) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
-declare caller uuid := auth.uid(); current_revision bigint; answer jsonb; resource text; request_hash text;
+declare caller uuid := auth.uid(); current_revision bigint; answer jsonb; resource text;
+  request_hash text; receipt_cap integer;
 begin
   if caller is null then raise exception 'authentication required' using errcode = '42501'; end if;
   if p_story_id is null or p_story_id !~ '^story:[0-9a-f]{64}$'
@@ -513,6 +545,10 @@ begin
      or p_idempotency_key is null or p_idempotency_key = ''
      or octet_length(p_idempotency_key) > 512 then
     raise exception 'invalid interest write';
+  end if;
+  if not exists (select 1 from public.story_topics
+    where story_id = p_story_id and topic_id = p_topic_id) then
+    raise exception 'story topic does not exist';
   end if;
   resource := p_story_id || ':' || p_topic_id;
   request_hash := encode(extensions.digest(convert_to(jsonb_build_object(
@@ -528,6 +564,12 @@ begin
       raise exception 'idempotency key reuse mismatch';
     end if;
     return answer;
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(caller::text || ':receipt-cap', 0));
+  select receipt_max_per_user into receipt_cap from public.feed_policy where singleton;
+  if receipt_cap is null then raise exception 'feed policy unavailable'; end if;
+  if (select count(*) from public.user_action_receipts where user_id = caller) >= receipt_cap then
+    raise exception 'receipt limit reached';
   end if;
   select revision into current_revision from public.user_story_interests
     where user_id = caller and story_id = p_story_id and topic_id = p_topic_id for update;
@@ -610,10 +652,14 @@ begin
   on conflict (build_nonce) do nothing returning publication_seq into seq;
   if seq is null then raise exception 'concurrent publication replay'; end if;
   for row in select value from jsonb_array_elements(p_candidate->'stories') loop
-    insert into public.canonical_stories(story_id, canonical_url, title, summary, language, published_at)
-    values (row->>'story_id', row->>'canonical_url', row->>'title', row->>'summary', row->>'language', (row->>'published_at')::timestamptz)
+    if char_length(row->>'source_name') > 200 then raise exception 'invalid story source'; end if;
+    insert into public.canonical_stories(story_id, canonical_url, title, summary, language,
+      source_kind, source_name, published_at)
+    values (row->>'story_id', row->>'canonical_url', row->>'title', row->>'summary', row->>'language',
+      row->>'source_kind', row->>'source_name', (row->>'published_at')::timestamptz)
     on conflict (story_id) do update set canonical_url=excluded.canonical_url, title=excluded.title,
-      summary=excluded.summary, language=excluded.language, published_at=excluded.published_at, last_archived_at=now();
+      summary=excluded.summary, language=excluded.language, source_kind=excluded.source_kind,
+      source_name=excluded.source_name, last_archived_at=now();
   end loop;
   for row in select value from jsonb_array_elements(p_candidate->'aliases') loop
     if exists (select 1 from public.story_aliases
@@ -638,12 +684,26 @@ begin
     on conflict (story_id, topic_id) do update set topic_name=excluded.topic_name, last_seen_at=now();
   end loop;
   for row in select value from jsonb_array_elements(p_candidate->'entries') loop
+    if row->'score_components' ? 'interest' or row->'ordering_key' ? 'preference_score' then
+      raise exception 'private ranking metadata is not archivable';
+    end if;
+    if jsonb_typeof(row->'topic_ranks') is distinct from 'object'
+       or (select count(*) from jsonb_each(row->'topic_ranks')) > 100
+       or exists (select 1 from jsonb_each(row->'topic_ranks') as rank(topic_id, position)
+         where topic_id !~ '^[a-z0-9][a-z0-9-]{0,79}$'
+           or jsonb_typeof(position) <> 'number'
+           or position::text !~ '^[1-9][0-9]*$') then
+      raise exception 'invalid topic ranks';
+    end if;
+    if char_length(row->>'source_name') > 200 then raise exception 'invalid entry source'; end if;
     insert into public.publication_entries(publication_seq, story_id, topic_id, position,
       canonical_url, title, summary, language, published_at,
-      score_components, ordering_mode, ordering_key)
+      score_components, ordering_mode, ordering_key, topic_ranks,
+      source_kind, source_name, ranking_explanation)
     select seq, row->>'story_id', row->>'topic_id', (row->>'position')::integer,
       s.canonical_url, s.title, s.summary, s.language, s.published_at,
-      row->'score_components', row->>'ordering_mode', row->'ordering_key'
+      row->'score_components', row->>'ordering_mode', row->'ordering_key', row->'topic_ranks',
+      row->>'source_kind', row->>'source_name', row->>'ranking_explanation'
     from public.canonical_stories s where s.story_id = row->>'story_id';
   end loop;
   return jsonb_build_object('publication_seq', seq, 'build_nonce', p_candidate->>'build_nonce',
@@ -657,30 +717,28 @@ $$;
 
 create or replace function public.prune_publication_history() returns jsonb
 language plpgsql security definer set search_path = pg_catalog, public as $$
-declare cutoff timestamptz; entry_count bigint; topic_count bigint; run_count bigint; saved_count bigint;
+declare cutoff timestamptz; receipt_cutoff timestamptz; entry_count bigint; topic_count bigint;
+  run_count bigint; saved_count bigint; receipt_count bigint;
 begin
-  select now() - make_interval(days => unsaved_retention_days + physical_purge_grace_days)
-    into cutoff from public.feed_policy where singleton;
+  select now() - make_interval(days => unsaved_retention_days + physical_purge_grace_days),
+    now() - make_interval(days => receipt_retention_days)
+    into cutoff, receipt_cutoff from public.feed_policy where singleton;
   if cutoff is null then raise exception 'feed policy unavailable'; end if;
   select count(*) into saved_count from public.canonical_stories s
     join public.user_story_state us using (story_id) where us.saved_at is not null;
   delete from public.publication_entries pe using public.publication_runs pr
-    where pe.publication_seq = pr.publication_seq and pr.built_at < cutoff
-      and not exists (select 1 from public.user_story_state us
-        where us.story_id = pe.story_id and us.saved_at is not null);
+    where pe.publication_seq = pr.publication_seq and pr.built_at < cutoff;
   get diagnostics entry_count = row_count;
   delete from public.publication_topics pt using public.publication_runs pr
-    where pt.publication_seq = pr.publication_seq and pr.built_at < cutoff
-      and not exists (select 1 from public.publication_entries pe
-        where pe.publication_seq = pt.publication_seq and pe.topic_id = pt.topic_id);
+    where pt.publication_seq = pr.publication_seq and pr.built_at < cutoff;
   get diagnostics topic_count = row_count;
-  delete from public.publication_runs pr where built_at < cutoff
-    and not exists (select 1 from public.publication_entries pe
-      where pe.publication_seq = pr.publication_seq);
+  delete from public.publication_runs where built_at < cutoff;
   get diagnostics run_count = row_count;
+  delete from public.user_action_receipts where created_at < receipt_cutoff;
+  get diagnostics receipt_count = row_count;
   return jsonb_build_object('cutoff', cutoff, 'entries_pruned', entry_count,
     'topics_pruned', topic_count, 'runs_pruned', run_count,
-    'saved_canonical_stories_preserved', saved_count);
+    'saved_canonical_stories_preserved', saved_count, 'receipts_pruned', receipt_count);
 end;
 $$;
 

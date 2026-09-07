@@ -172,7 +172,14 @@ def _request(session: requests.Session, method: str, url: str, *, timeout: float
     last: Exception | None = None
     for attempt in (1, 2):
         try:
-            return session.request(method, url, timeout=timeout, **kwargs)
+            response = session.request(
+                method, url, timeout=timeout, allow_redirects=False, **kwargs
+            )
+            if 300 <= response.status_code < 400:
+                raise _Unavailable(API_ERROR)
+            return response
+        except _Unavailable:
+            raise
         except requests.RequestException as exc:
             last = exc
             log.warning("gmail request failed (%s), attempt %d", type(exc).__name__, attempt)

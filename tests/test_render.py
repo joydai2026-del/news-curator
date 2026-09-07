@@ -601,7 +601,7 @@ class TestAccordionReadingCompanion:
         assert '<span class="provenance-chip">AI</span>' in card
         assert '<p class="full">Publisher summary.</p>' in card
         assert '<aside class="signal"><b>Why this appeared</b>' in card
-        assert "Freshness 1.000" in card and "Topic fit 0.600" in card
+        assert "Weighted using freshness, topic fit, source." in card
 
     def test_touch_targets_and_mobile_overflow_are_guarded(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
@@ -663,9 +663,9 @@ class TestAccordionReadingCompanion:
             "source": 0.2, "coverage": 0.0, "final_score": 1.8,
         }
         page = render({"AI": [item]}, now=now)
-        assert "Preference match 0.400" in page
-        assert "Freshness 0.900" in page
-        assert "Weighted total 1.800" in page
+        assert "Weighted using freshness, topic fit, source." in page
+        assert "Preference match" not in page
+        assert "0.400" not in page
         assert "Best rank" not in page
 
     def test_ranking_explanation_matches_recomputed_components(self, now):
@@ -680,12 +680,8 @@ class TestAccordionReadingCompanion:
 
         page = render({"AI": [item]}, now=now)
 
-        for key, label in (
-            ("interest", "Preference match"), ("recency", "Freshness"),
-            ("topic_fit", "Topic fit"), ("source", "Source"), ("coverage", "Coverage"),
-        ):
-            assert f"{label} {components[key]:.3f}" in page
-        assert f"Weighted total {components['final_score']:.3f}" in page
+        assert "Weighted using freshness, topic fit, source." in page
+        assert f"{components['interest']:.3f}" not in page
 
     def test_preference_explanation_names_the_real_sort_key_and_context(self, now):
         item = make_item("Preferred story")
@@ -700,8 +696,9 @@ class TestAccordionReadingCompanion:
 
         page = render({"AI": [item]}, now=now)
 
-        assert "Order: preference match 0.500 first, newer publication time second" in page
-        assert "Context only:" in page
+        assert "Saved interests were considered first, then freshness." in page
+        assert "0.500" not in page
+        assert "Preference match" not in page
         assert "Order: Weighted total" not in page
 
     def test_shared_story_labels_its_best_rank_instead_of_the_active_topic(self, now):

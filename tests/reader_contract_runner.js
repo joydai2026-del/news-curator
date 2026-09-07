@@ -31,6 +31,10 @@ function story(overrides = {}) {
     ordering_key: { score: 1, story_id: "story:" + "a".repeat(64) },
     score_components: { freshness: 1 },
     topic_ids: ["ai"],
+    topic_ranks: { ai: 1 },
+    source_kind: "outlet",
+    source_name: "Publisher",
+    ranking_explanation: "Weighted using freshness.",
     coverage_mentions: [],
     read_at: null,
     saved_at: null,
@@ -38,6 +42,43 @@ function story(overrides = {}) {
     interests: [],
     ...overrides,
   };
+}
+
+class FakeElement {
+  constructor(tag = "div") {
+    this.tagName = tag;
+    this.children = [];
+    this.dataset = {};
+    this.attrs = {};
+    this.className = "";
+    this.textContent = "";
+    this.hidden = false;
+    this.classList = {
+      contains: (name) => this.className.split(/\s+/).includes(name),
+      toggle: (name, on) => {
+        const names = new Set(this.className.split(/\s+/).filter(Boolean));
+        if (on) names.add(name); else names.delete(name);
+        this.className = [...names].join(" ");
+      },
+    };
+  }
+  append(...children) { this.children.push(...children); this.lastChild = children.at(-1); }
+  addEventListener() {}
+  setAttribute(name, value) { this.attrs[name] = String(value); }
+  getAttribute(name) { return this.attrs[name]; }
+  hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); }
+  querySelector(selector) {
+    if (selector.startsWith(".")) {
+      const name = selector.slice(1);
+      return this.children.find((child) => child instanceof FakeElement && child.classList.contains(name)) || null;
+    }
+    return null;
+  }
+}
+
+function textOf(node) {
+  if (!(node instanceof FakeElement)) return String(node.textContent || "");
+  return node.textContent + node.children.map(textOf).join("");
 }
 
 async function main() {
@@ -212,6 +253,32 @@ async function main() {
   const existing = { dataset: { topicIds: "ai" } };
   reader.mergeTopicMembership(existing, ["ai", "crypto"]);
   assert.equal(existing.dataset.topicIds, "ai crypto");
+  const rankedCard = {
+    attrs: { "data-rank-all": "3" },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); },
+  };
+  reader.applyServerRank(rankedCard, story({
+    page_order_mode: "edition_rank", position: 17, topic_ids: ["ai", "crypto"],
+    topic_ranks: { ai: 4, crypto: 17 },
+  }), "crypto");
+  assert.equal(rankedCard.attrs["data-rank-crypto"], "17");
+  assert.equal(rankedCard.attrs["data-rank-ai"], "4");
+  reader.applyServerRank(rankedCard, story({
+    page_order_mode: "history_freshness", position: 2,
+  }), "__all__");
+  assert.equal(rankedCard.attrs["data-rank-all"], "3");
+  const historyCard = {
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); },
+  };
+  reader.applyServerRank(historyCard, story({
+    page_order_mode: "history_freshness", position: 2, topic_ranks: { ai: 9, crypto: 2 },
+  }), "__all__");
+  assert.equal(historyCard.attrs["data-rank-all"], "1000002");
+  assert.equal(historyCard.attrs["data-rank-ai"], "9");
+  assert.equal(historyCard.attrs["data-rank-crypto"], "2");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "crypto"), "crypto");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "__all__"), "ai");
 
@@ -281,6 +348,100 @@ async function main() {
     updatesSince: async (baseline) => baseline === 8 ? [{ ...updateRows[0], publication_seq: 9 }] : [],
   }, 8, null);
   assert.equal(newer.rows[0].publication_seq, 9);
+
+  const controls = new Map([
+    ["reader-status", { textContent: "" }],
+    ["load-more", { hidden: false, addEventListener() {} }],
+    ["updates-status", { hidden: true }],
+    ["show-updates", { dataset: {}, addEventListener() {} }],
+    ["sections", { addEventListener() {}, append() {} }],
+  ]);
+  global.window = {
+    NewsCuratorAuth: {
+      config: () => ({ url: "https://reader.example", key: "public-key" }),
+      loadSession: () => null,
+    },
+    NewsCuratorView: { currentTab: () => "__all__", addCard() {}, apply() {} },
+    location: { reload() {} },
+    setInterval() { throw new Error("polling should not start without a publication"); },
+  };
+  global.document = {
+    getElementById: (id) => controls.get(id) || null,
+    querySelectorAll: () => [],
+    querySelector: () => null,
+  };
+  global.BroadcastChannel = undefined;
+  global.fetch = async (url) => response(200, {}, url);
+  await reader.run();
+  assert.equal(controls.get("reader-status").textContent, "No published edition is available yet.");
+  assert.equal(controls.get("load-more").hidden, true);
+  delete global.fetch;
+  delete global.document;
+  delete global.window;
+  delete global.BroadcastChannel;
+
+  const sections = new FakeElement("div");
+  const aiSection = new FakeElement("section");
+  aiSection.dataset.section = "ai";
+  const grid = new FakeElement("div");
+  grid.className = "grid";
+  aiSection.append(grid);
+  sections.append(aiSection);
+  const liveControls = new Map([
+    ["reader-status", new FakeElement()], ["load-more", new FakeElement("button")],
+    ["updates-status", new FakeElement()], ["show-updates", new FakeElement("button")],
+    ["sections", sections],
+  ]);
+  const addedCards = [];
+  global.BroadcastChannel = undefined;
+  global.CSS = { escape: (value) => value };
+  global.window = {
+    NewsCuratorAuth: {
+      config: () => ({ url: "https://reader.example", key: "public-key" }),
+      loadSession: () => null,
+    },
+    NewsCuratorView: {
+      currentTab: () => "__all__", addCard: (card) => addedCards.push(card), apply() {},
+    },
+    location: { reload() {} }, setInterval: () => 1,
+  };
+  global.document = {
+    createElement: (tag) => new FakeElement(tag),
+    createTextNode: (value) => ({ textContent: value }),
+    getElementById: (id) => liveControls.get(id) || null,
+    querySelectorAll: () => [],
+    querySelector: (selector) => selector.includes('data-section="ai"') ? aiSection : null,
+  };
+  let controllerCalls = 0;
+  global.fetch = async (url) => {
+    controllerCalls += 1;
+    if (url.endsWith("/latest_publication")) return response(200, {
+      publication_seq: 7, finalized_at: "2026-09-07T12:00:00Z",
+      topics: [{ topic_id: "ai", name: "AI" }],
+      initial_history_cursor: null, poll_seconds: 60,
+    }, url);
+    return response(200, [story({
+      page_order_mode: "history_freshness",
+      next_cursor: { before_published_at: "2026-09-07T12:00:00Z", before_story_id: story().story_id },
+      topic_ids: ["ai", "crypto"], topic_ranks: { ai: 2, crypto: 1 },
+      source_kind: "newsletter", source_name: "Daily Brief",
+      ranking_explanation: "Saved interests were considered first, then freshness.",
+    })], url);
+  };
+  await reader.run();
+  assert.equal(controllerCalls, 2);
+  assert.equal(addedCards.length, 1);
+  assert.equal(addedCards[0].attrs["data-rank-ai"], "2");
+  assert.equal(addedCards[0].attrs["data-rank-crypto"], "1");
+  const renderedText = textOf(addedCards[0]);
+  assert.match(renderedText, /NewsletterDaily Brief/);
+  assert.match(renderedText, /Published/);
+  assert.match(renderedText, /Saved interests were considered first, then freshness\./);
+  delete global.BroadcastChannel;
+  delete global.CSS;
+  delete global.fetch;
+  delete global.document;
+  delete global.window;
   console.log("reader contract: PASS");
 }
 

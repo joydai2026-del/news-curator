@@ -3,6 +3,7 @@
 
   const PAGE_SIZE = 20;
   const UPDATE_LIMIT = 20;
+  const HISTORY_RANK_OFFSET = 1000000;
   const MAX_RESPONSE_BYTES = 256 * 1024;
   const STORY_ID = /^story:[0-9a-f]{64}$/;
   const TOPIC_ID = /^[a-z0-9][a-z0-9-]{0,79}$/;
@@ -83,7 +84,8 @@
   const CARD_FIELDS = [
     "canonical_url", "coverage_mentions", "language", "next_cursor", "ordering_key", "ordering_mode",
     "page_order_mode", "position", "publication_seq", "published_at", "score_components", "story_id",
-    "summary", "title", "topic_ids", "read_at", "saved_at", "state_revision", "interests",
+    "summary", "title", "topic_ids", "topic_ranks", "source_kind", "source_name",
+    "ranking_explanation", "read_at", "saved_at", "state_revision", "interests",
   ];
   function validateStory(value, pageModes) {
     if (!isObject(value) || !exactFields(value, CARD_FIELDS) ||
@@ -98,6 +100,11 @@
         encoder.encode(JSON.stringify(value.score_components)).length > 8192 ||
         !Array.isArray(value.topic_ids) || value.topic_ids.length < 1 || value.topic_ids.length > 20 ||
         !value.topic_ids.every((topic) => TOPIC_ID.test(topic)) ||
+        !isObject(value.topic_ranks) || Object.keys(value.topic_ranks).length > 100 ||
+        !Object.entries(value.topic_ranks).every(([topic, position]) =>
+          TOPIC_ID.test(topic) && Number.isSafeInteger(position) && position > 0) ||
+        !["outlet", "newsletter"].includes(value.source_kind) ||
+        !boundedString(value.source_name, 200) || !boundedString(value.ranking_explanation, 2000) ||
         !Array.isArray(value.coverage_mentions) || value.coverage_mentions.length > 20 ||
         !validNullableTimestamp(value.read_at) || !validNullableTimestamp(value.saved_at) ||
         !Number.isSafeInteger(value.state_revision) || value.state_revision < 0 ||
@@ -255,6 +262,15 @@
     card.dataset.topicIds = value;
     card.dataset.topics = value;
   }
+  function applyServerRank(card, row, selectedTopic) {
+    Object.entries(row.topic_ranks || {}).forEach(([topic, position]) => {
+      card.setAttribute(`data-rank-${topic}`, String(position));
+    });
+    if (row.page_order_mode === "history_freshness" &&
+               (!card.hasAttribute || !card.hasAttribute("data-rank-all"))) {
+      card.setAttribute("data-rank-all", String(HISTORY_RANK_OFFSET + row.position));
+    }
+  }
   function effectiveTopic(topicIds, selectedTopic) {
     if (TOPIC_ID.test(selectedTopic || "") && topicIds.includes(selectedTopic)) return selectedTopic;
     return [...topicIds].sort()[0];
@@ -323,9 +339,8 @@
   function createStoryCard(row, selectedTopic) {
     const card = element("article", "card");
     card.dataset.storyId = row.story_id;
-    card.dataset.rankAll = String(row.position);
     mergeTopicMembership(card, row.topic_ids);
-    row.topic_ids.forEach((topicId) => card.setAttribute(`data-rank-${topicId}`, String(row.position)));
+    applyServerRank(card, row, selectedTopic);
     const heading = element("h2", "story-heading");
     const toggle = element("button", "accordion-toggle");
     const suffix = row.story_id.slice(-12);
@@ -344,8 +359,19 @@
     const panel = element("div", "panelin");
     const summary = element("div", "summary");
     summary.append(element("p", "full", row.summary));
+    const details = element("div", "details");
+    const source = element("div", "row");
+    source.append(
+      element("b", "", row.source_kind === "newsletter" ? "Newsletter" : "Source"),
+      element("span", "", row.source_name),
+    );
+    const published = element("div", "row");
+    published.append(
+      element("b", "", "Published"),
+      element("span", "", new Date(row.published_at).toLocaleString()),
+    );
+    details.append(source, published);
     if (row.coverage_mentions.length) {
-      const details = element("div", "details");
       const coverage = element("div", "row");
       coverage.append(element("b", "", "Also covered by"));
       const mentions = element("span");
@@ -360,8 +386,8 @@
       });
       coverage.append(mentions);
       details.append(coverage);
-      summary.append(details);
     }
+    summary.append(details);
     const actions = element("div", "acts");
     const destination = safeDestination(row.canonical_url);
     if (destination) {
@@ -385,7 +411,7 @@
     const reason = element("aside", "signal");
     reason.append(
       element("b", "", "Ranking signals"),
-      element("span", "", rankingReason(row.ordering_mode, row.ordering_key, row.score_components)),
+      element("span", "", row.ranking_explanation),
     );
     panel.append(summary, reason);
     detail.append(panel);
@@ -425,13 +451,13 @@
   }
 
   const contract = {
-    applyServerState, createApi, drainUpdates, effectiveTopic, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
-    rankingReason, safeDestination,
+    applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
+    rankingReason, run, safeDestination,
     validateFeedPage, validateLatestPublication, validateUpdates,
   };
-  if (typeof module !== "undefined" && module.exports) {
+  const commonJs = typeof module !== "undefined" && module.exports;
+  if (commonJs) {
     module.exports = contract;
-    return;
   }
 
   async function run() {
@@ -483,6 +509,7 @@
         const existing = cards.get(row.story_id);
         if (existing) {
           mergeTopicMembership(existing, row.topic_ids);
+          applyServerRank(existing, row, selectedTopic());
           applyServerState(existing, row);
           view.addCard(existing);
           return;
@@ -635,5 +662,5 @@
       await hydrate();
     } catch (_) { announce("Synced reading features are temporarily unavailable."); }
   }
-  void run();
+  if (!commonJs) void run();
 })();
