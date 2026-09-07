@@ -9,11 +9,11 @@ from types import SimpleNamespace
 import pytest
 
 from curator.config import Category, Config
+from curator.identity import story_id_for_item
 from curator.localization import (
     TranslationArtifactError,
     build_localized_view,
     load_translation_artifact,
-    story_id_for_item,
 )
 from curator.models import Item
 from curator.translation import (

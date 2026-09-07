@@ -8,7 +8,7 @@ from pathlib import Path
 
 import re
 
-from curator.localization import story_id_for_item
+from curator.identity import story_id_for_item
 from curator.models import TierResult
 from curator.render import human_age, render_html, render_site
 from tests.conftest import make_item, make_newsletter_item
