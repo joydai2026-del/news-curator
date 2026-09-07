@@ -230,6 +230,9 @@ class TestRenderSite:
         assert (tmp_path / "reader.js").read_text(encoding="utf-8") == (
             Path(__file__).resolve().parents[1] / "static/reader.js"
         ).read_text(encoding="utf-8")
+        assert (tmp_path / "auth/client.js").read_text(encoding="utf-8") == (
+            Path(__file__).resolve().parents[1] / "static/auth/client.js"
+        ).read_text(encoding="utf-8")
 
     def test_leaves_no_temp_file_behind(self, tmp_path, now):
         render_site({"T": [make_item("a")]}, [], now, tmp_path)

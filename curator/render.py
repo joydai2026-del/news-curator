@@ -1079,9 +1079,16 @@ def render_site(
     tmp.replace(path)
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
-    reader_source = Path(__file__).resolve().parents[1] / "static" / "reader.js"
-    if reader_source.is_file():
-        (out_dir / "reader.js").write_text(reader_source.read_text(encoding="utf-8"), encoding="utf-8")
+    static_dir = Path(__file__).resolve().parents[1] / "static"
+    for relative_path in (Path("reader.js"), Path("auth/client.js")):
+        source = static_dir / relative_path
+        if not source.is_file():
+            continue
+        destination = out_dir / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        asset_tmp = destination.with_suffix(destination.suffix + ".tmp")
+        asset_tmp.write_bytes(source.read_bytes())
+        asset_tmp.replace(destination)
 
     # A CNAME committed at the repo root has to be copied into the published
     # output or a custom domain silently resets on every deploy. The README
