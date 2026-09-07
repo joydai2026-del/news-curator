@@ -44,8 +44,8 @@ def _story(index: int, mode: str = "edition_rank") -> dict[str, object]:
         "ordering_mode": "weighted_total",
         "ordering_key": {"weighted_total": 1},
         "score_components": {"freshness": 1},
-        "topic_ids": ["quantum"],
-        "topic_ranks": {"quantum": index},
+        "topic_ids": ["ai", "quantum"] if index == 1 else ["quantum"],
+        "topic_ranks": {"ai": index, "quantum": index} if index == 1 else {"quantum": index},
         "source_kind": "outlet",
         "source_name": "Publisher",
         "ranking_explanation": "Weighted using freshness.",
@@ -97,7 +97,15 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         <p id="reader-status"></p><button id="load-more">Load more</button>
         <p id="updates-status" hidden><button id="show-updates"></button></p>
         <main id="sections"><section class="topic-section" data-section="quantum-computing" data-topic-id="quantum">
-          <h2>Quantum Computing</h2><div class="grid"></div>
+          <h2>Quantum Computing</h2><div class="grid">
+            <article class="card" data-story-id="story:0000000000000000000000000000000000000000000000000000000000000001"
+              data-topic-ids="ai quantum-computing" data-topic-api-ids="ai quantum"
+              data-state-revision="0" data-interest-revision="0">
+              <button class="accordion-toggle" aria-expanded="false">Controller story 1</button>
+              <button class="read-action">Mark read</button><button class="save-action">Save</button>
+              <button class="interest-action" data-topic-id="ai">More like this</button>
+            </article>
+          </div>
         </section></main><div class="spacer"></div>
         <script>
         window.__tab = "__all__";
@@ -147,8 +155,10 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "topics": [{"topic_id": "quantum", "name": "Quantum Computing"}],
                 "initial_history_cursor": None,
                 "poll_seconds": 30,
+                "page_size": 3,
             }
         elif request.url.endswith("/feed_page"):
+            assert body["p_limit"] == 3
             if counts["latest"] >= 3:
                 payload = [_story(900)]
             elif body["p_topic_id"] is None:
@@ -178,6 +188,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             counts["interest"] += 1
             payload = {"status": "updated", "signal": "more_like", "revision": 1}
         elif request.url.endswith("/updates_since"):
+            assert body["p_limit"] == 3
             counts["updates"] += 1
             payload = [_update(1)]
         else:
@@ -214,6 +225,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 page.wait_for_function(completed, arg=first.element_handle())
                 assert _visible_story_ids(page) == before_ids
                 assert page.evaluate("window.scrollY") == before_scroll
+            assert first.locator(".interest-action").get_attribute("data-topic-id") == "quantum"
 
             before_page = _visible_story_ids(page)
             page.locator("#load-more").evaluate("button => button.click()")

@@ -78,6 +78,9 @@ def test_interest_materialization_aggregates_current_topics_without_a_row_cap():
 
 def test_feed_contract_is_keyset_paginated_and_saved_rows_survive_window():
     text = sql()
+    latest = text[text.index("create or replace function public.latest_publication"):
+                  text.index("create or replace function public.feed_page")]
+    assert "'page_size', fp.page_size" in latest
     assert "p_before_published_at timestamptz" in text
     assert "p_before_story_id text" in text
     assert "p_after_story_id text" in text

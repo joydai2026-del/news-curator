@@ -1,8 +1,7 @@
 (() => {
   "use strict";
 
-  const PAGE_SIZE = 20;
-  const UPDATE_LIMIT = 20;
+  const MAX_PAGE_SIZE = 100;
   const HISTORY_RANK_OFFSET = 1000000;
   const MAX_RESPONSE_BYTES = 256 * 1024;
   const STORY_ID = /^story:[0-9a-f]{64}$/;
@@ -57,10 +56,11 @@
   }
   function validateLatestPublication(value) {
     if (exactFields(value, [])) return null;
-    if (!exactFields(value, ["finalized_at", "initial_history_cursor", "poll_seconds", "publication_seq", "topics"]) ||
+    if (!exactFields(value, ["finalized_at", "initial_history_cursor", "page_size", "poll_seconds", "publication_seq", "topics"]) ||
         !Number.isSafeInteger(value.publication_seq) || value.publication_seq < 0 ||
         !validTimestamp(value.finalized_at) || !Number.isInteger(value.poll_seconds) ||
         value.poll_seconds < 15 || value.poll_seconds > 86400 ||
+        !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
         !Array.isArray(value.topics) || value.topics.length > 100) {
       fail("The publication response was invalid.");
     }
@@ -79,6 +79,7 @@
         true,
       ),
       poll_seconds: value.poll_seconds,
+      page_size: value.page_size,
     };
   }
   const CARD_FIELDS = [
@@ -135,8 +136,12 @@
     }
     return value;
   }
-  function validateCardPage(value, pageModes) {
-    if (!Array.isArray(value) || value.length > PAGE_SIZE) fail("The feed response was invalid.");
+  function validatePageSize(value) {
+    if (!Number.isInteger(value) || value < 1 || value > MAX_PAGE_SIZE) fail("The page size was invalid.");
+    return value;
+  }
+  function validateCardPage(value, pageModes, pageSize = MAX_PAGE_SIZE) {
+    if (!Array.isArray(value) || value.length > validatePageSize(pageSize)) fail("The feed response was invalid.");
     const seen = new Set();
     return value.map((row) => {
       const checked = validateStory(row, pageModes);
@@ -145,14 +150,14 @@
       return checked;
     });
   }
-  function validateFeedPage(value) {
-    return validateCardPage(value, ["edition_rank", "history_freshness"]);
+  function validateFeedPage(value, pageSize = MAX_PAGE_SIZE) {
+    return validateCardPage(value, ["edition_rank", "history_freshness"], pageSize);
   }
-  function validateSavedPage(value) {
-    return validateCardPage(value, ["saved_at"]);
+  function validateSavedPage(value, pageSize = MAX_PAGE_SIZE) {
+    return validateCardPage(value, ["saved_at"], pageSize);
   }
-  function validateUpdates(value) {
-    if (!Array.isArray(value) || value.length > UPDATE_LIMIT) fail("The updates response was invalid.");
+  function validateUpdates(value, pageSize = MAX_PAGE_SIZE) {
+    if (!Array.isArray(value) || value.length > validatePageSize(pageSize)) fail("The updates response was invalid.");
     return value.map((row) => {
       if (!exactFields(row, ["next_cursor", "publication_seq", "published_at", "story_id", "title", "topic_ids"]) ||
           !STORY_ID.test(row.story_id) || !boundedString(row.title, 2000) ||
@@ -231,27 +236,27 @@
     }
     return Object.freeze({
       latestPublication: () => rpc("latest_publication", {}, validateLatestPublication),
-      feedPage: (topicId, cursor) => rpc("feed_page", {
+      feedPage: (topicId, cursor, pageSize) => rpc("feed_page", {
         p_topic_id: topicId === "__all__" ? null : topicId,
         p_order_mode: cursor ? cursor.order_mode : (topicId === "__all__" ? "history_freshness" : "edition_rank"),
         p_after_position: cursor && cursor.order_mode === "edition_rank" ? cursor.after_position : null,
         p_after_story_id: cursor && cursor.order_mode === "edition_rank" ? cursor.after_story_id : null,
         p_before_published_at: cursor && cursor.order_mode === "history_freshness" ? cursor.before_published_at : null,
         p_before_story_id: cursor && cursor.order_mode === "history_freshness" ? cursor.before_story_id : null,
-        p_limit: PAGE_SIZE,
-      }, validateFeedPage),
-      savedPage: (cursor) => rpc("saved_page", {
+        p_limit: validatePageSize(pageSize),
+      }, (payload) => validateFeedPage(payload, pageSize)),
+      savedPage: (cursor, pageSize) => rpc("saved_page", {
         p_before_saved_at: cursor ? cursor.before_saved_at : null,
         p_before_story_id: cursor ? cursor.before_story_id : null,
-        p_limit: PAGE_SIZE,
-      }, validateSavedPage, true),
-      updatesSince: (publicationSeq, cursor = null) => rpc("updates_since", {
+        p_limit: validatePageSize(pageSize),
+      }, (payload) => validateSavedPage(payload, pageSize), true),
+      updatesSince: (publicationSeq, cursor, pageSize) => rpc("updates_since", {
         p_since_publication_seq: publicationSeq,
         p_after_publication_seq: cursor ? cursor.after_publication_seq : null,
         p_after_published_at: cursor ? cursor.after_published_at : null,
         p_after_story_id: cursor ? cursor.after_story_id : null,
-        p_limit: UPDATE_LIMIT,
-      }, validateUpdates),
+        p_limit: validatePageSize(pageSize),
+      }, (payload) => validateUpdates(payload, pageSize)),
       setStoryState: (storyId, read, saved, revision, idempotencyKey) => rpc("set_story_state", {
         p_story_id: storyId, p_read: read, p_saved: saved,
         p_expected_revision: revision, p_idempotency_key: idempotencyKey,
@@ -282,20 +287,29 @@
     if (TOPIC_ID.test(selectedTopic || "") && topicIds.includes(selectedTopic)) return selectedTopic;
     return [...topicIds].sort()[0];
   }
-  function nextFeedCursor(rows, initialCursor = null, currentCursor = null) {
+  function actionTopic(topicIds, selectedTopic, selectedTopicId, fallbackTopicId) {
+    if (!["__all__", "__saved__"].includes(selectedTopic) &&
+        TOPIC_ID.test(selectedTopicId || "") && topicIds.includes(selectedTopicId)) return selectedTopicId;
+    if (TOPIC_ID.test(fallbackTopicId || "") && topicIds.includes(fallbackTopicId)) return fallbackTopicId;
+    return effectiveTopic(topicIds, "__all__");
+  }
+  function nextFeedCursor(rows, initialCursor = null, currentCursor = null, pageSize = MAX_PAGE_SIZE) {
+    validatePageSize(pageSize);
     if (!rows.length) {
       return currentCursor && currentCursor.order_mode === "history_freshness"
         ? null
         : (initialCursor ? { order_mode: "history_freshness", ...initialCursor } : null);
     }
     const last = rows.at(-1);
-    if (last.page_order_mode === "edition_rank" && rows.length < PAGE_SIZE) {
+    if (last.page_order_mode === "edition_rank" && rows.length < pageSize) {
       return { order_mode: "history_freshness", ...(initialCursor || {}) };
     }
+    if (last.page_order_mode === "history_freshness" && rows.length < pageSize) return null;
     return { order_mode: last.page_order_mode, ...last.next_cursor };
   }
-  function nextSavedCursor(rows) {
-    if (!rows.length) return null;
+  function nextSavedCursor(rows, pageSize = MAX_PAGE_SIZE) {
+    validatePageSize(pageSize);
+    if (!rows.length || rows.length < pageSize) return null;
     return { ...rows.at(-1).next_cursor };
   }
   function loadedStatus(count) {
@@ -451,20 +465,21 @@
     return names.length ? `Weighted using ${names.join(", ")}.` : "No non-zero weighted signal was returned.";
   }
 
-  async function drainUpdates(api, publicationSeq, cursor, maxPages = 10) {
+  async function drainUpdates(api, publicationSeq, cursor, pageSize, maxPages = 10) {
+    validatePageSize(pageSize);
     const collected = [];
     let nextCursor = cursor;
     for (let page = 0; page < maxPages; page += 1) {
-      const rows = await api.updatesSince(publicationSeq, nextCursor);
+      const rows = await api.updatesSince(publicationSeq, nextCursor, pageSize);
       collected.push(...rows);
-      if (rows.length < UPDATE_LIMIT) return { rows: collected, cursor: null, drained: true };
+      if (rows.length < pageSize) return { rows: collected, cursor: null, drained: true };
       nextCursor = rows.at(-1).next_cursor;
     }
     return { rows: collected, cursor: nextCursor, drained: false };
   }
 
   const contract = {
-    applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
+    actionTopic, applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
     rankingReason, run, safeDestination,
     validateFeedPage, validateLatestPublication, validateUpdates,
   };
@@ -560,12 +575,12 @@
       const wasHydrated = hydrated.has(topic);
       const initialCursor = topic === "__all__" ? { order_mode: "history_freshness" } : null;
       const rows = topic === "__saved__"
-        ? await api.savedPage(null)
-        : await api.feedPage(topicIdForSlug(topic), initialCursor);
+        ? await api.savedPage(null, latest.page_size)
+        : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
       mergeRows(rows, true);
       const cursor = topic === "__saved__"
-        ? nextSavedCursor(rows)
-        : nextFeedCursor(rows, latest && latest.initial_history_cursor, initialCursor);
+        ? nextSavedCursor(rows, latest.page_size)
+        : nextFeedCursor(rows, latest.initial_history_cursor, initialCursor, latest.page_size);
       if (!wasHydrated) {
         if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
         hydrated.add(topic);
@@ -580,16 +595,16 @@
         let rows;
         const currentCursor = cursors.get(topic) || null;
         if (topic === "__saved__") {
-          rows = await api.savedPage(currentCursor);
-          const cursor = nextSavedCursor(rows);
+          rows = await api.savedPage(currentCursor, latest.page_size);
+          const cursor = nextSavedCursor(rows, latest.page_size);
           if (cursor) cursors.set(topic, cursor);
         } else {
-          rows = await api.feedPage(topicIdForSlug(topic), currentCursor);
-          const cursor = nextFeedCursor(rows, latest && latest.initial_history_cursor, currentCursor);
+          rows = await api.feedPage(topicIdForSlug(topic), currentCursor, latest.page_size);
+          const cursor = nextFeedCursor(rows, latest.initial_history_cursor, currentCursor, latest.page_size);
           if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
         }
         mergeRows(rows, true);
-        if (topic === "__saved__" && rows.length < PAGE_SIZE) exhausted.add(topic);
+        if (topic === "__saved__" && rows.length < latest.page_size) exhausted.add(topic);
         announce(rows.length ? loadedStatus(rows.length) : "No older stories remain in this section.");
       } catch (_) {
         announce("Older stories could not be loaded. Try again.");
@@ -629,7 +644,11 @@
                  !card.classList.contains("is-more-like")) {
         const revision = Number(card.dataset.interestRevision || 0);
         target.disabled = true;
-        api.setStoryInterest(card.dataset.storyId, target.dataset.topicId, revision, idempotencyKey())
+        const topicIds = (card.dataset.topicApiIds || "").split(/\s+/).filter(Boolean);
+        const topic = selectedTopic();
+        const topicId = actionTopic(topicIds, topic, topicIdForSlug(topic), target.dataset.topicId);
+        target.dataset.topicId = topicId;
+        api.setStoryInterest(card.dataset.storyId, topicId, revision, idempotencyKey())
           .then((result) => {
             if (result.status === "conflict") fail("Story interest changed in another session.");
             applyServerState(card, result);
@@ -669,7 +688,7 @@
         try {
           const current = await api.latestPublication();
           if (!current || current.publication_seq <= publicationSeq) return;
-          const updatePage = await drainUpdates(api, publicationSeq, updateCursor);
+          const updatePage = await drainUpdates(api, publicationSeq, updateCursor, current.page_size);
           const rows = updatePage.rows;
           updateCursor = updatePage.cursor;
           if (!rows.length && updatePage.drained) {

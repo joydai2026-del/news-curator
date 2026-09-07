@@ -203,7 +203,8 @@ language sql stable security definer set search_path = pg_catalog, public as $$
     'initial_history_cursor', jsonb_build_object(
       'before_published_at', pr.built_at - make_interval(days => fp.initial_window_days),
       'before_story_id', ''),
-    'poll_seconds', (select refresh_poll_seconds from public.feed_policy where singleton)
+    'poll_seconds', fp.refresh_poll_seconds,
+    'page_size', fp.page_size
   ) from public.publication_runs pr cross join public.feed_policy fp
   where pr.finalized_at is not null and fp.singleton
   order by pr.publication_seq desc limit 1), '{}'::jsonb)

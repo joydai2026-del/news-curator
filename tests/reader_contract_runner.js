@@ -91,8 +91,12 @@ async function main() {
       before_story_id: "",
     },
     poll_seconds: 60,
+    page_size: 7,
   });
   assert.equal(latest.publication_seq, 7);
+  assert.equal(latest.page_size, 7);
+  assert.throws(() => reader.validateLatestPublication({ ...latest, page_size: 0 }), /publication response/);
+  assert.throws(() => reader.validateLatestPublication({ ...latest, page_size: 101 }), /publication response/);
   assert.equal(reader.validateLatestPublication({ ...latest, poll_seconds: 86400 }).poll_seconds, 86400);
   assert.throws(() => reader.validateLatestPublication({ ...latest, poll_seconds: 86401 }), /publication response/);
   assert.throws(() => reader.validateLatestPublication({ ...latest, extra: true }), /publication response/);
@@ -154,9 +158,30 @@ async function main() {
   assert.deepEqual(reader.nextFeedCursor([story()], null), {
     order_mode: "history_freshness",
   });
+  assert.deepEqual(reader.nextFeedCursor([story()], latest.initial_history_cursor, null, 1), {
+    order_mode: "edition_rank",
+    ...story().next_cursor,
+  });
+  assert.equal(reader.nextFeedCursor([
+    story({
+      page_order_mode: "history_freshness",
+      next_cursor: {
+        before_published_at: "2026-09-07T12:00:00Z",
+        before_story_id: story().story_id,
+      },
+    }),
+  ], latest.initial_history_cursor, { order_mode: "history_freshness" }, 2), null);
+  assert.equal(reader.nextSavedCursor([story({
+    page_order_mode: "saved_at",
+    saved_at: "2026-09-07T12:02:00Z",
+    next_cursor: {
+      before_saved_at: "2026-09-07T12:02:00Z",
+      before_story_id: story().story_id,
+    },
+  })], 2), null);
   assert.throws(() => reader.validateFeedPage([story({ title: "x".repeat(2001) })]), /feed response/);
   assert.throws(
-    () => reader.validateFeedPage([story({ state_revision: undefined })], true),
+    () => reader.validateFeedPage([story({ state_revision: undefined })], latest.page_size),
     /feed response/
   );
 
@@ -173,7 +198,7 @@ async function main() {
     order_mode: "history_freshness",
     before_published_at: "2026-09-07T11:00:00Z",
     before_story_id: "story:" + "b".repeat(64),
-  });
+  }, latest.page_size);
   assert.equal(calls[0].url.endsWith("/rest/v1/rpc/feed_page"), true);
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     p_topic_id: "ai",
@@ -182,11 +207,11 @@ async function main() {
     p_after_story_id: null,
     p_before_published_at: "2026-09-07T11:00:00Z",
     p_before_story_id: "story:" + "b".repeat(64),
-    p_limit: 20,
+    p_limit: 7,
   });
   assert.equal(calls[0].options.credentials, "omit");
   assert.equal(calls[0].options.redirect, "error");
-  await api.feedPage("__all__", null);
+  await api.feedPage("__all__", null, latest.page_size);
   assert.deepEqual(JSON.parse(calls[1].options.body), {
     p_topic_id: null,
     p_order_mode: "history_freshness",
@@ -194,13 +219,13 @@ async function main() {
     p_after_story_id: null,
     p_before_published_at: null,
     p_before_story_id: null,
-    p_limit: 20,
+    p_limit: 7,
   });
   await api.feedPage("ai", {
     order_mode: "edition_rank",
     after_position: 20,
     after_story_id: "story:" + "c".repeat(64),
-  });
+  }, latest.page_size);
   assert.deepEqual(JSON.parse(calls[2].options.body), {
     p_topic_id: "ai",
     p_order_mode: "edition_rank",
@@ -208,7 +233,7 @@ async function main() {
     p_after_story_id: "story:" + "c".repeat(64),
     p_before_published_at: null,
     p_before_story_id: null,
-    p_limit: 20,
+    p_limit: 7,
   });
 
   calls.length = 0;
@@ -248,18 +273,18 @@ async function main() {
       }, url);
     }
   );
-  await stateApi.savedPage({ before_saved_at: "2026-09-07T12:02:00Z", before_story_id: story().story_id });
-  await stateApi.updatesSince(7);
+  await stateApi.savedPage({ before_saved_at: "2026-09-07T12:02:00Z", before_story_id: story().story_id }, latest.page_size);
+  await stateApi.updatesSince(7, null, latest.page_size);
   await stateApi.setStoryState(story().story_id, true, false, 1, "idem-state");
   await stateApi.setStoryInterest(story().story_id, "ai", 0, "idem-interest");
   assert.deepEqual(calls.map((call) => JSON.parse(call.options.body)), [
-    { p_before_saved_at: "2026-09-07T12:02:00Z", p_before_story_id: story().story_id, p_limit: 20 },
+    { p_before_saved_at: "2026-09-07T12:02:00Z", p_before_story_id: story().story_id, p_limit: 7 },
     {
       p_since_publication_seq: 7,
       p_after_publication_seq: null,
       p_after_published_at: null,
       p_after_story_id: null,
-      p_limit: 20,
+      p_limit: 7,
     },
     {
       p_story_id: story().story_id, p_read: true, p_saved: false,
@@ -307,6 +332,9 @@ async function main() {
   assert.equal(historyCard.attrs["data-rank-crypto"], "2");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "crypto"), "crypto");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "__all__"), "ai");
+  assert.equal(reader.actionTopic(["ai", "quantum"], "quantum-computing", "quantum", "ai"), "quantum");
+  assert.equal(reader.actionTopic(["ai", "quantum"], "__all__", "__all__", "ai"), "ai");
+  assert.equal(reader.actionTopic(["ai", "quantum"], "__saved__", "__saved__", "ai"), "ai");
   assert.equal(reader.loadedStatus(1), "1 older story loaded.");
   assert.equal(reader.loadedStatus(2), "2 older stories loaded.");
 
@@ -351,7 +379,7 @@ async function main() {
   );
 
   let updateCall = 0;
-  const updateRows = Array.from({ length: 21 }, (_, index) => story({
+  const updateRows = Array.from({ length: 4 }, (_, index) => story({
     story_id: "story:" + (index + 1).toString(16).padStart(64, "0"),
     publication_seq: 8,
   })).map((row) => ({
@@ -367,14 +395,14 @@ async function main() {
     },
   }));
   const drained = await reader.drainUpdates({
-    updatesSince: async () => updateCall++ === 0 ? updateRows.slice(0, 20) : updateRows.slice(20),
-  }, 7, null);
-  assert.equal(drained.rows.length, 21);
+    updatesSince: async () => updateCall++ === 0 ? updateRows.slice(0, 3) : updateRows.slice(3),
+  }, 7, null, 3);
+  assert.equal(drained.rows.length, 4);
   assert.equal(drained.drained, true);
   assert.equal(drained.cursor, null);
   const newer = await reader.drainUpdates({
     updatesSince: async (baseline) => baseline === 8 ? [{ ...updateRows[0], publication_seq: 9 }] : [],
-  }, 8, null);
+  }, 8, null, 3);
   assert.equal(newer.rows[0].publication_seq, 9);
 
   const controls = new Map([
@@ -455,6 +483,7 @@ async function main() {
       publication_seq: 7, finalized_at: "2026-09-07T12:00:00Z",
       topics: [{ topic_id: "ai", name: "AI" }],
       initial_history_cursor: null, poll_seconds: 60,
+      page_size: 7,
     }, url);
     return response(200, [story({
       page_order_mode: "history_freshness",
@@ -487,7 +516,7 @@ async function main() {
       }, url);
     },
   );
-  await refreshedApi.feedPage("ai", null);
+  await refreshedApi.feedPage("ai", null, latest.page_size);
   await refreshedApi.setStoryState(story().story_id, true, false, 1, "refresh-write");
   assert.deepEqual(
     refreshedRpcHeaders.map((headers) => headers.authorization),
@@ -505,15 +534,15 @@ async function main() {
     },
   );
   await failedRefreshApi.latestPublication();
-  await failedRefreshApi.feedPage("ai", null);
-  await failedRefreshApi.updatesSince(7);
+  await failedRefreshApi.feedPage("ai", null, latest.page_size);
+  await failedRefreshApi.updatesSince(7, null, latest.page_size);
   assert.equal(failedRefreshCalls.length, 3);
   failedRefreshCalls.forEach(({ options }) => {
     assert.equal(options.headers.authorization, undefined);
     assert.equal(JSON.stringify(options).includes(expiredToken), false);
   });
   const authenticatedCallsBefore = failedRefreshCalls.length;
-  await assert.rejects(failedRefreshApi.savedPage(null), /^Error: Sign in to continue\.$/);
+  await assert.rejects(failedRefreshApi.savedPage(null, latest.page_size), /^Error: Sign in to continue\.$/);
   await assert.rejects(
     failedRefreshApi.setStoryState(story().story_id, true, false, 0, "failed-refresh-state"),
     /^Error: Sign in to continue\.$/,
@@ -532,7 +561,7 @@ async function main() {
       return response(200, [], url);
     },
   );
-  await afterClearApi.feedPage("ai", null);
+  await afterClearApi.feedPage("ai", null, latest.page_size);
   assert.equal(anonymousAuthorization, undefined);
   delete global.BroadcastChannel;
   delete global.CSS;
