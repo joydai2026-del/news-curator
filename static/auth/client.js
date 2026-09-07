@@ -5,6 +5,7 @@
   const STATE_KEY = "news-curator.auth.state";
   const VERIFIER_KEY = "news-curator.auth.verifier";
   const SESSION_KEY = "news-curator.auth.session";
+  const CHANNEL_NAME = "news-curator.auth.v1";
   const SESSION_FIELDS = ["access_token", "expires_at", "refresh_token", "user_id"];
   const MAX_TOKEN_CHARS = 16384;
   const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -219,6 +220,24 @@
     }
   }
 
+  function acceptSession(value, nowSeconds = Date.now() / 1000) {
+    const session = validateStoredSession(value, nowSeconds);
+    const identity = decodePayload(session.access_token);
+    if (!identity || identity.sub !== session.user_id) fail("The shared session was invalid.");
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    return session;
+  }
+
+  function broadcastSession(session) {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(CHANNEL_NAME);
+    try {
+      channel.postMessage({ type: "session", session: validateStoredSession(session) });
+    } finally {
+      channel.close();
+    }
+  }
+
   function boundedText(value, maxChars, maxBytes) {
     return typeof value === "string" && value === value.trim() && value.length >= 1 &&
       value.length <= maxChars && encoder.encode(value).length <= maxBytes;
@@ -357,6 +376,7 @@
     const rawSession = await boundedJson(response, "The authentication response was invalid.");
     const safeSession = projectSession(rawSession);
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+    broadcastSession(safeSession);
     return safeSession;
   }
 
@@ -531,6 +551,7 @@
     const rawSession = await boundedJson(response, "The authentication response was invalid.");
     const safeSession = projectSession(rawSession);
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+    broadcastSession(safeSession);
     return true;
   }
 
@@ -571,6 +592,8 @@
     validatePreferenceRecord,
     validateStoredSession,
     verifyEmailCode,
+    acceptSession,
+    broadcastSession,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -582,9 +605,16 @@
     get: () => getPreferences(config(), loadSessionCandidate()),
     set: (input) => setPreferences(config(), loadSessionCandidate(), input),
   });
+  window.NewsCuratorAuth = Object.freeze({
+    acceptSession,
+    channelName: CHANNEL_NAME,
+    config,
+    loadSession,
+  });
 
   async function run() {
     const status = document.getElementById("status");
+    if (!status) return;
     const loginPanel = document.getElementById("login-panel");
     const codePanel = document.getElementById("code-panel");
     const preferencesPanel = document.getElementById("preferences-panel");
@@ -652,6 +682,15 @@
       } catch (_) {
         announce("We could not send a code. Check the email address and try again.");
       } finally {
+        setBusy(false);
+      }
+    });
+    document.getElementById("google-sign-in").addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        await beginSignIn();
+      } catch (_) {
+        announce("Google sign in could not start. Try again.");
         setBusy(false);
       }
     });
