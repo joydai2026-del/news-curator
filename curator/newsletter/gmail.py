@@ -54,6 +54,7 @@ log = logging.getLogger(__name__)
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API_ROOT = "https://gmail.googleapis.com/gmail/v1/users/me"
+PROFILE_URL = f"{API_ROOT}/profile"
 
 ENV_CLIENT_ID = "GMAIL_CLIENT_ID"
 ENV_CLIENT_SECRET = "GMAIL_CLIENT_SECRET"
@@ -240,7 +241,7 @@ def _verify_profile(
     response = _request(
         session,
         "GET",
-        API_ROOT,
+        PROFILE_URL,
         timeout=timeout,
         headers={"Authorization": f"Bearer {token}"},
     )

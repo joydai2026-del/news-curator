@@ -69,7 +69,7 @@ class FakeSession:
                 raise requests.ConnectionError("fixture connection failure")
         if url.startswith(gmail.TOKEN_URL):
             return self.token
-        if url == gmail.API_ROOT:
+        if url == gmail.PROFILE_URL:
             return self.profile
         if url.endswith("/messages"):
             return self.listing
@@ -125,7 +125,7 @@ def test_profile_guard_runs_after_token_and_before_message_listing():
     assert result.ok
     assert [url for _method, url in session.calls[:3]] == [
         gmail.TOKEN_URL,
-        gmail.API_ROOT,
+        gmail.PROFILE_URL,
         f"{gmail.API_ROOT}/messages",
     ]
 
@@ -142,7 +142,7 @@ def test_oauth_and_gmail_redirects_fail_closed_without_forwarding_credentials(
     assert all(kwargs.get("allow_redirects") is False for _url, kwargs in session.request_kwargs)
     expected_calls = 1 if redirect_stage == "oauth" else 2
     assert len(session.request_kwargs) == expected_calls
-    assert {url for url, _kwargs in session.request_kwargs} <= {gmail.TOKEN_URL, gmail.API_ROOT}
+    assert {url for url, _kwargs in session.request_kwargs} <= {gmail.TOKEN_URL, gmail.PROFILE_URL}
     if redirect_stage == "gmail":
         assert session.request_kwargs[-1][1]["headers"]["Authorization"] == "Bearer fixture-access"
 
@@ -164,7 +164,7 @@ def test_profile_mismatch_fails_before_listing_message_ids():
     session = FakeSession()
     result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=env, session=session)
     assert (result.ok, result.reason) == (False, gmail.PROFILE_MISMATCH)
-    assert [url for _method, url in session.calls] == [gmail.TOKEN_URL, gmail.API_ROOT]
+    assert [url for _method, url in session.calls] == [gmail.TOKEN_URL, gmail.PROFILE_URL]
 
 
 def test_profile_guard_result_and_logs_do_not_expose_protected_values(caplog):
@@ -198,7 +198,7 @@ def test_malformed_profile_fails_closed_before_listing_message_ids(profile):
     session = FakeSession(profile=profile)
     result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
     assert (result.ok, result.reason) == (False, gmail.PROFILE_INVALID)
-    assert [url for _method, url in session.calls] == [gmail.TOKEN_URL, gmail.API_ROOT]
+    assert [url for _method, url in session.calls] == [gmail.TOKEN_URL, gmail.PROFILE_URL]
 
 
 # --------------------------------------------------------------------------
