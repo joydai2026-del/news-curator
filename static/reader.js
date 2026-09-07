@@ -609,11 +609,19 @@
       document.getElementById("sections").append(section);
       return section;
     }
+    function historySection() {
+      let section = document.querySelector('.topic-section[data-section="__history__"]');
+      if (section) return section;
+      section = element("section", "topic-section");
+      section.dataset.section = "__history__";
+      section.append(element("div", "grid"));
+      document.getElementById("sections").append(section);
+      return section;
+    }
     function mergeRows(rows, appendNew, hydratedTopic = selectedTopic()) {
       rows.forEach((row) => {
         const existing = cards.get(row.story_id);
-        const historyAllRank = hydratedTopic === "__all__" &&
-          row.page_order_mode === "history_freshness" &&
+        const historyAllRank = row.page_order_mode === "history_freshness" &&
           (!existing || !existing.hasAttribute("data-rank-all"))
           ? ++nextHistoryAllRank
           : null;
@@ -633,7 +641,10 @@
         );
         cards.set(row.story_id, card);
         hydratedTopics(card).add(hydratedTopic);
-        sectionFor(row.topic_ids[0]).querySelector(".grid").append(card);
+        const section = row.page_order_mode === "history_freshness"
+          ? historySection()
+          : sectionFor(row.topic_ids[0]);
+        section.querySelector(".grid").append(card);
         view.addCard(card);
       });
       view.apply();

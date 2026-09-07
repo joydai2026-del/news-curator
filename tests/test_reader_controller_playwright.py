@@ -228,8 +228,14 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 else:
                     assert body["p_order_mode"] == "history_freshness"
                     assert body.get("p_before_published_at") is None
-                    payload = [_story(1, "history_freshness"),
-                               _story(2, "history_freshness"),
+                    first_history = _story(1, "history_freshness")
+                    first_history["saved_at"] = "2026-09-07T12:02:00Z"
+                    first_history["state_revision"] = counts["state"]
+                    first_history["interests"] = [
+                        {"topic_id": "ai", "signal": "more_like", "revision": 1},
+                        {"topic_id": "quantum", "signal": "more_like", "revision": 1},
+                    ]
+                    payload = [first_history, _story(2, "history_freshness"),
                                _story(3, "history_freshness")]
         elif request.url.endswith("/saved_page"):
             payload = [{
@@ -346,7 +352,18 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             assert first.evaluate("card => card.classList.contains('is-more-like')")
             assert first.get_attribute("data-interest-revision") == "1"
 
+            before_page = _visible_story_ids(page)
+            page.locator("#load-more").evaluate("button => button.click()")
+            page.locator("#reader-status").get_by_text("3 older stories loaded.").wait_for()
+            after_page = _visible_story_ids(page)
+            assert after_page[: len(before_page)] == before_page
+            assert len(after_page) == len(set(after_page)) == len(before_page) + 1
+
+            topic_history_id = "story:" + f"{3:064x}"
             page.locator('.chip[data-filter="__all__"]').click()
+            all_after_topic_history = _visually_ordered_story_ids(page)
+            assert all_after_topic_history[: len(current_ids)] == current_ids
+            assert all_after_topic_history == current_ids + history_ids + [topic_history_id]
             assert interest_button.get_attribute("data-topic-id") == "ai"
             assert interest_button.get_attribute("aria-pressed") == "true"
             page.locator('.chip[data-filter="__saved__"]').click()
@@ -373,14 +390,6 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "document.activeElement.matches('.chip[data-filter=\"__saved__\"]')"
             )
             assert page.evaluate("window.scrollY") == rollback_scroll
-            page.locator('.chip[data-filter="quantum-computing"]').click()
-
-            before_page = _visible_story_ids(page)
-            page.locator("#load-more").evaluate("button => button.click()")
-            page.locator("#reader-status").get_by_text("3 older stories loaded.").wait_for()
-            after_page = _visible_story_ids(page)
-            assert after_page[: len(before_page)] == before_page
-            assert len(after_page) == len(set(after_page)) == len(before_page) + 1
 
             before_poll = _visible_story_ids(page)
             page.evaluate("window.__poll()")
