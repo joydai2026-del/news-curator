@@ -156,15 +156,18 @@ def enabled(env: dict | None = None, *, flag: bool = False, client=gmail_module)
 # item construction
 # --------------------------------------------------------------------------
 
-def _fallback_canonical(title: str) -> str:
+def linkless_story_canonical(*, source_id: str, title: str, description: str) -> str:
     """Identity for a story whose link had to be dropped.
 
-    Unsalted on purpose: it is derived from a public headline, it must stay
-    stable across runs so the story dedupes against itself, and it carries
-    nothing about the subscriber. The salted hash in the state file is a
-    different mechanism for a different job.
+    The opaque digest uses only public-safe story fields. Source identity
+    prevents cross-newsletter collisions, while the bounded description
+    separates repeated generic headlines inside one source. Publication time
+    is deliberately excluded so a date correction keeps the same story.
     """
-    digest = hashlib.sha256(fold_text(title).encode("utf-8")).hexdigest()[:16]
+    material = "\x1f".join(
+        (source_id, fold_text(title), fold_text(description))
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
     return f"newsletter:{digest}"
 
 
@@ -184,17 +187,23 @@ def build_record(
     (`image_url` empty, `url` sanitized-or-empty) live in ONE place.
     """
     clean = clean_title(title)
+    description = clean_title(blurb)[:adapters_module.MAX_BLURB_CHARS]
+    source_id = f"newsletter:{adapter_id}"
     safe = url or ""
-    canonical = (canonical_url(safe) if safe else None) or _fallback_canonical(clean)
+    canonical = (canonical_url(safe) if safe else None) or linkless_story_canonical(
+        source_id=source_id,
+        title=clean,
+        description=description,
+    )
     return {
         "title": clean,
         "url": safe,
         "canonical_url": canonical,
-        "source_id": f"newsletter:{adapter_id}",
+        "source_id": source_id,
         "source_name": display_name,
         "platform": f"newsletter:{adapter_id}",
         "published_at": published_at,
-        "description": clean_title(blurb)[:adapters_module.MAX_BLURB_CHARS],
+        "description": description,
         "is_newsletter": True,
         "newsletter_sender": display_name,
         "image_url": "",  # PRIVACY RULE: newsletter items never carry an image

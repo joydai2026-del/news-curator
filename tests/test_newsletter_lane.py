@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+from curator.identity import story_id_for_item
 from curator.newsletter import gmail, lane, state as state_module
 from tests.test_newsletter_fixtures import (
     EXPECTED_STORIES,
@@ -543,6 +544,47 @@ def test_build_record_falls_back_to_a_stable_content_identity():
     )
     assert a["canonical_url"] == b["canonical_url"] != ""
     assert a["canonical_url"].startswith("newsletter:")
+
+
+def test_linkless_same_headline_from_different_sources_has_distinct_identity():
+    first = lane.build_record(
+        title="Today's update", url="", blurb="One public summary.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+    other_source = lane.build_record(
+        title="Today's update", url="", blurb="One public summary.", adapter_id="theneuron",
+        display_name="The Neuron", published_at=NOW,
+    )
+
+    assert first["canonical_url"] != other_source["canonical_url"]
+
+
+def test_repeated_linkless_generic_headline_uses_story_content_discriminator():
+    first = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about chips.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+    repeated = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about robotics.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+
+    assert first["canonical_url"] != repeated["canonical_url"]
+
+
+def test_linkless_story_id_survives_publisher_date_correction():
+    first = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about chips.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+    corrected = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about chips.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW + timedelta(days=1),
+    )
+
+    assert story_id_for_item(lane.to_items([first])[0]) == story_id_for_item(
+        lane.to_items([corrected])[0]
+    )
 
 
 def test_records_convert_to_items_only_when_the_model_supports_them():

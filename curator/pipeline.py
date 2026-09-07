@@ -29,6 +29,7 @@ from .filter import assign_categories
 from .images import ImageCache, enrich
 from .identity import story_id_for_item
 from .models import CoverageMention, Item, TierResult
+from .newsletter.lane import linkless_story_canonical
 from .newsletter.sanitize import sanitize as sanitize_newsletter_url
 from .normalize import canonical_url as normalize_canonical_url
 from .normalize import fold_text
@@ -51,13 +52,6 @@ IMAGE_CACHE_FILE = "image_cache.json"
 # lane stamps on its items, so it can never be empty while the lane is lit.
 NEWSLETTER_CATEGORY_ID = "newsletters"
 NEWSLETTER_CATEGORY_NAME = "Newsletters"
-
-
-def _newsletter_fallback_canonical(title: str) -> str:
-    """Generate a non-link identity without trusting an artifact value."""
-
-    digest = hashlib.sha256(fold_text(title).encode("utf-8")).hexdigest()[:16]
-    return f"newsletter:{digest}"
 
 
 def _feed_source_row(source: RssSource, cfg: Config) -> dict:
@@ -229,6 +223,8 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
         # value can be safely rebuilt from a valid display URL. If neither is
         # safe, a recomputed opaque key supports dedup but is never published.
         title = str(record.get("title") or "")
+        source_id = str(record.get("source_id") or "newsletter")
+        description = str(record.get("description") or "")
         article_url = sanitize_newsletter_url(str(record.get("url") or "")) or ""
         artifact_canonical_url = sanitize_newsletter_url(
             str(record.get("canonical_url") or "")
@@ -239,18 +235,22 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
             # An unlinked newsletter story still needs a stable internal key
             # for dedup. Recompute it from public title text rather than
             # accepting an artifact-provided non-HTTP scheme.
-            or _newsletter_fallback_canonical(title)
+            or linkless_story_canonical(
+                source_id=source_id,
+                title=title,
+                description=description,
+            )
         )
         items.append(
             Item(
                 title=title,
                 url=article_url,
                 canonical_url=article_canonical_url,
-                source_id=str(record.get("source_id") or "newsletter"),
+                source_id=source_id,
                 source_name=str(record.get("source_name") or "Newsletter"),
                 platform=str(record.get("platform") or "newsletter"),
                 published_at=published,
-                description=str(record.get("description") or ""),
+                description=description,
                 is_newsletter=True,
                 is_aggregator=True,
                 newsletter_sender=str(record.get("newsletter_sender") or ""),
