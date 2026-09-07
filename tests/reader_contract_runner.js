@@ -443,6 +443,21 @@ async function main() {
   delete global.window;
   delete global.BroadcastChannel;
 
+  const unavailableActions = [new FakeElement("button"), new FakeElement("button"), new FakeElement("button")];
+  unavailableActions.forEach((button) => { button.hidden = true; button.disabled = true; });
+  global.window = {
+    NewsCuratorAuth: { config: () => { throw new Error("unconfigured"); } },
+    NewsCuratorView: {},
+  };
+  global.document = {
+    getElementById: (id) => controls.get(id) || null,
+    querySelectorAll: (selector) => selector === ".state-action" ? unavailableActions : [],
+  };
+  await reader.run();
+  assert.equal(unavailableActions.every((button) => button.hidden && button.disabled), true);
+  delete global.document;
+  delete global.window;
+
   const sections = new FakeElement("div");
   const aiSection = new FakeElement("section");
   aiSection.dataset.section = "ai";
@@ -456,6 +471,8 @@ async function main() {
     ["sections", sections],
   ]);
   const addedCards = [];
+  const configuredActions = [new FakeElement("button"), new FakeElement("button"), new FakeElement("button")];
+  configuredActions.forEach((button) => { button.hidden = true; button.disabled = true; });
   global.BroadcastChannel = undefined;
   global.CSS = { escape: (value) => value };
   global.window = {
@@ -473,7 +490,7 @@ async function main() {
     createElement: (tag) => new FakeElement(tag),
     createTextNode: (value) => ({ textContent: value }),
     getElementById: (id) => liveControls.get(id) || null,
-    querySelectorAll: () => [],
+    querySelectorAll: (selector) => selector === ".state-action" ? configuredActions : [],
     querySelector: (selector) => selector.includes('data-section="ai"') ? aiSection : null,
   };
   const linklessCard = reader.createStoryCard(story({
@@ -524,6 +541,7 @@ async function main() {
     })], url);
   };
   await reader.run();
+  assert.equal(configuredActions.every((button) => !button.hidden && !button.disabled), true);
   assert.equal(controllerCalls, 2);
   assert.equal(controllerHeaders[1].authorization, "Bearer refreshed-reader-token");
   assert.equal(addedCards.length, 1);

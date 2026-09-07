@@ -508,6 +508,10 @@
       loadButton.hidden = true;
       return;
     }
+    document.querySelectorAll(".state-action").forEach((button) => {
+      button.hidden = false;
+      button.disabled = false;
+    });
     const cards = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => cards.set(card.dataset.storyId, card));
     const cursors = new Map();

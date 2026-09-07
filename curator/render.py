@@ -322,6 +322,7 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .signal span{display:block;font-size:.72rem;line-height:1.45;color:var(--muted)}
 .acts{margin-top:1rem;display:flex;flex-wrap:wrap;gap:.5rem}
 .acts a,.acts button{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:.5rem .9rem;color:var(--accent);background:var(--card);font-size:.78rem;font-weight:650}
+.state-action[hidden]{display:none}
 .state-action,.load-more,.updates-button{border:1px solid var(--line);cursor:pointer}
 .state-action[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
 .reader-status{min-height:1.5rem;color:var(--muted);font-size:.78rem}
@@ -778,10 +779,11 @@ def _render_card(
         )
     acts.extend(
         (
-            '<button type="button" class="state-action read-action">Mark read</button>',
-            '<button type="button" class="state-action save-action" '
+            '<button type="button" class="state-action read-action" hidden disabled>Mark read</button>',
+            '<button type="button" class="state-action save-action" hidden disabled '
             'aria-pressed="false">Save</button>',
             f'<button type="button" class="state-action interest-action" '
+            'hidden disabled '
             f'data-topic-id="{_e((topic_ids_by_slug or {}).get(card.best[1], card.best[1]))}" '
             'aria-pressed="false">More like this</button>',
         )

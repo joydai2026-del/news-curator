@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from curator.models import TierResult
+from curator.render import render_site
+from tests.conftest import make_item
+
 
 playwright_api = pytest.importorskip("playwright.sync_api")
 
@@ -103,8 +107,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
               data-topic-ids="ai quantum-computing" data-topic-api-ids="ai quantum"
               data-state-revision="0" data-interest-revision="0">
               <button class="accordion-toggle" aria-expanded="false">Controller story 1</button>
-              <button class="read-action">Mark read</button><button class="save-action">Save</button>
-              <button class="interest-action" data-topic-id="ai">More like this</button>
+              <button class="state-action read-action" hidden disabled>Mark read</button>
+              <button class="state-action save-action" hidden disabled>Save</button>
+              <button class="state-action interest-action" data-topic-id="ai" hidden disabled>More like this</button>
             </article>
           </div>
         </section></main><div class="spacer"></div>
@@ -222,6 +227,8 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page = browser.new_page(viewport={"width": 900, "height": 700})
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            assert page.locator(".state-action:visible").count() == 3
+            assert page.locator(".state-action:enabled").count() == 3
             page.locator('.chip[data-filter="quantum-computing"]').click()
             page.locator("article.card", has_text="Controller story 2").wait_for()
             assert page.locator("article.card:visible").count() == 2
@@ -291,6 +298,44 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page.locator('article.card[data-story-id="story:' + f"{900:064x}" + '"]').wait_for()
             assert counts["latest"] == 3
             assert counts["updates"] == 1
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_unconfigured_page_keeps_articles_readable_without_interactive_state_controls(
+    tmp_path: Path, now: object
+) -> None:
+    site = tmp_path / "site"
+    item = make_item("Public story")
+    item.description = (
+        "The publisher supplied a complete summary of this public story for readers. "
+        "It explains the reported development with enough context to understand why it matters. "
+        "It also identifies the next expected step without requiring any synchronized reading features."
+    )
+    render_site(
+        {"AI": [item]},
+        [TierResult(tier="rss", items=[], ok=True)],
+        now,
+        site,
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            assert page.get_by_text("Public story", exact=True).is_visible()
+            page.get_by_text("Public story", exact=True).click()
+            assert page.locator("a", has_text="Read original").is_visible()
+            assert page.locator(".state-action:visible").count() == 0
+            assert page.locator(".state-action:enabled").count() == 0
             browser.close()
     finally:
         server.shutdown()

@@ -113,7 +113,10 @@ class TestContent:
             in page
         )
         assert 'data-topic-api-ids="quantum"' in card
-        assert 'class="state-action interest-action" data-topic-id="quantum"' in card
+        assert (
+            'class="state-action interest-action" hidden disabled '
+            'data-topic-id="quantum"' in card
+        )
 
     def test_every_generated_anchor_opens_a_safe_new_tab(self, now):
         item = make_item("Real headline", "https://example.com/a")
@@ -775,12 +778,16 @@ class TestAccordionReadingCompanion:
     def test_synced_reading_controls_and_saved_filter_are_rendered(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
         assert 'data-filter="__saved__" aria-pressed="false">Saved</button>' in page
-        assert 'class="state-action read-action"' in page
+        assert 'class="state-action read-action" hidden disabled' in page
         assert '>Mark read</button>' in page
-        assert 'class="state-action save-action" aria-pressed="false">Save</button>' in page
-        assert 'class="state-action interest-action"' in page
+        assert (
+            'class="state-action save-action" hidden disabled '
+            'aria-pressed="false">Save</button>' in page
+        )
+        assert 'class="state-action interest-action" hidden disabled' in page
         assert 'aria-pressed="false">More like this</button>' in page
         assert '>More like this</button>' in page
+        assert ".state-action[hidden]{display:none}" in page
         assert 'id="load-more"' in page and '>Load 20 more</button>' in page
         assert 'id="updates-status" role="status" aria-live="polite"' in page
 
