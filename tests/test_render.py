@@ -808,6 +808,21 @@ class TestAccordionReadingCompanion:
 
 
 class TestClusterLinks:
+    def test_fuzzy_merge_does_not_render_an_unsupported_source_count(self, now):
+        from curator.dedup import dedupe
+
+        keeper = make_item(
+            "AI systems ship today", "https://publisher.example/story",
+            source_id="publisher", source_name="Publisher", weight=2.0,
+        )
+        other = make_item(
+            "AI systems ship today!", "https://other.example/report",
+            source_id="other", source_name="Other Outlet",
+        )
+        card = card_with(render({"AI": dedupe([keeper, other])}, now=now), keeper.title)
+
+        assert "2 sources" not in card
+
     def test_merged_away_outlets_are_named_and_linked(self, now):
         item = make_item("A story")
         item.cluster = [{"source_name": "The Register", "url": "https://theregister.com/x"}]

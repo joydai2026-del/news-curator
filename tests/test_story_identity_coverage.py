@@ -49,6 +49,24 @@ def test_dedup_preserves_named_coverage_and_counts_distinct_sources() -> None:
     assert survivor.distinct_coverage_source_count == 2
 
 
+def test_fuzzy_dedup_does_not_copy_named_coverage_from_a_different_url() -> None:
+    publisher = make_item(
+        "AI systems ship today", "https://publisher.example/story",
+        source_id="publisher", source_name="Publisher", weight=2.0,
+    )
+    other = make_item(
+        "AI systems ship today!", "https://other.example/report",
+        source_id="other", source_name="Other Outlet",
+    )
+
+    survivor = dedupe([publisher, other])[0]
+
+    assert [(m.source_id, m.source_name) for m in survivor.coverage_mentions] == [
+        ("publisher", "Publisher")
+    ]
+    assert survivor.distinct_coverage_source_count == 1
+
+
 def test_repeated_mentions_from_one_newsletter_are_preserved_but_count_once() -> None:
     item = make_item("AI systems ship", "https://example.com/story")
     item.source_id = "newsletter:tldr"

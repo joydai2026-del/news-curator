@@ -13,6 +13,7 @@ from curator.archive_candidate import (
     write_archive_candidate,
 )
 from curator.config import Category
+from curator.dedup import dedupe
 from curator.identity import story_id_for_item
 from curator.models import CoverageMention
 from curator.rank import score_components
@@ -194,6 +195,27 @@ def test_candidate_keeps_safe_named_coverage_and_distinct_source_count(now):
     assert len(candidate["coverage_mentions"]) == 2
     assert candidate["stories"][0]["distinct_coverage_source_count"] == 2
     assert all(row["url"].startswith("https://") for row in candidate["coverage_mentions"])
+
+
+def test_fuzzy_different_url_merge_does_not_inflate_archive_coverage(now):
+    publisher = make_item(
+        "AI systems ship today", "https://publisher.example/story",
+        source_id="publisher", source_name="Publisher", weight=2.0,
+    )
+    other = make_item(
+        "AI systems ship today!", "https://other.example/report",
+        source_id="other", source_name="Other Outlet",
+    )
+    publisher.description = other.description = "Publisher summary"
+    survivor = dedupe([publisher, other])[0]
+    candidate = build_archive_candidate(
+        {"AI": [survivor]}, categories=[Category(name="AI", id="ai")], ranking={},
+        now=now, build_nonce="fuzzy-coverage", commit_sha="b" * 40,
+        site_sha256=SITE_SHA256, require_summaries=True,
+    )
+
+    assert [row["source_name"] for row in candidate["coverage_mentions"]] == ["Publisher"]
+    assert candidate["stories"][0]["distinct_coverage_source_count"] == 1
 
 
 def test_candidate_attaches_a_filtered_newsletter_mention_by_story_identity(now):
