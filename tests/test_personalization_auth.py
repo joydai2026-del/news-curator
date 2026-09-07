@@ -632,7 +632,12 @@ def test_static_interest_settings_page_has_restrictive_csp_and_accessible_contro
     assert 'id="interests"' in html
     assert 'id="save-interests"' in html
     assert 'role="status"' in html
-    assert '<a class="back-link" href="../../">Back to the digest</a>' in html
+    assert (
+        '<a class="back-link" href="../../" target="_blank" rel="noopener noreferrer">'
+        "Back to the digest</a>"
+    ) in html
+    privacy = (ROOT / "static/privacy.html").read_text()
+    assert '<a href="/" target="_blank" rel="noopener noreferrer">main page</a>' in privacy
     assert ".back-link:focus-visible" in (ROOT / "static/auth/styles.css").read_text()
     assert "Sign in with Google" not in html
     assert "sessionStorage" in js

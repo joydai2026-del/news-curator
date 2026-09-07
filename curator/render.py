@@ -654,7 +654,8 @@ def _cluster_links(card: _Card) -> str:
             continue
         name = str(entry.get("source_name") or "") or (urlsplit(href).hostname or "the source")
         links.append(
-            f'<a href="{_e(href)}" rel="noopener noreferrer nofollow">{_e(name)}</a>'
+            f'<a href="{_e(href)}" target="_blank" '
+            f'rel="noopener noreferrer nofollow">{_e(name)}</a>'
         )
     if not links:
         return ""
@@ -755,7 +756,8 @@ def _render_card(
     acts = []
     if href:
         acts.append(
-            f'<a href="{_e(href)}" rel="noopener noreferrer nofollow">Read original</a>'
+            f'<a href="{_e(href)}" target="_blank" '
+            'rel="noopener noreferrer nofollow">Read original</a>'
         )
     else:
         rows.append(
@@ -923,7 +925,8 @@ def render_html(
         # thing anyone needs to change what this page collects, so that is the
         # link, pointed straight at the file rather than at the repo.
         add_line = (
-            f'<p><a class="add-topic" href="{_e(edit_url)}">Add a topic or keyword</a> '
+            f'<p><a class="add-topic" href="{_e(edit_url)}" target="_blank" '
+            'rel="noopener noreferrer">Add a topic or keyword</a> '
             "- edit <code>topics.yaml</code> on GitHub. If you can commit to this "
             "repository, saving rebuilds the page. Otherwise GitHub opens a pull request "
             "for the owner to merge, and it appears after they do.</p>"
@@ -935,7 +938,8 @@ def render_html(
         )
 
     repo_line = (
-        f'<p><a href="{_e(safe_repo)}">Open source on GitHub</a>. Fork it, edit '
+        f'<p><a href="{_e(safe_repo)}" target="_blank" '
+        'rel="noopener noreferrer">Open source on GitHub</a>. Fork it, edit '
         f"<code>topics.yaml</code>, and it becomes yours.</p>"
         if safe_repo
         else "<p>Open source. Fork it, edit <code>topics.yaml</code>, and it becomes yours.</p>"

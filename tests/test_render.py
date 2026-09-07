@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from html.parser import HTMLParser
 
 import re
 
@@ -44,6 +45,22 @@ def card_with(html: str, needle: str) -> str:
     return matches[0]
 
 
+class AnchorParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchors: list[dict[str, str | None]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            self.anchors.append(dict(attrs))
+
+
+def anchors(html: str) -> list[dict[str, str | None]]:
+    parser = AnchorParser()
+    parser.feed(html)
+    return parser.anchors
+
+
 def render(ranked, results=None, now=None, *, fill_summaries=True, **kw):
     from tests.conftest import NOW
 
@@ -77,6 +94,30 @@ class TestContent:
 
     def test_empty_topic_says_so(self, now):
         assert "Nothing matched" in render({"T": []}, now=now)
+
+    def test_every_generated_anchor_opens_a_safe_new_tab(self, now):
+        item = make_item("Real headline", "https://example.com/a")
+        item.cluster = [{"source_name": "Other source", "url": "https://other.example/a"}]
+        page = render(
+            {"T": [item]},
+            now=now,
+            repo_url="https://github.com/example/news-curator",
+        )
+
+        rendered_anchors = anchors(page)
+        assert rendered_anchors
+        for anchor in rendered_anchors:
+            assert anchor["target"] == "_blank"
+            rel = set((anchor["rel"] or "").split())
+            assert {"noopener", "noreferrer"} <= rel
+
+        publisher_anchors = [
+            anchor
+            for anchor in rendered_anchors
+            if anchor["href"] in {"https://example.com/a", "https://other.example/a"}
+        ]
+        assert len(publisher_anchors) == 2
+        assert all("nofollow" in set((anchor["rel"] or "").split()) for anchor in publisher_anchors)
 
     def test_no_topics_still_renders(self, now):
         html = render({}, now=now)
@@ -732,7 +773,7 @@ class TestClusterLinks:
         item.cluster = [{"source_name": "The Register", "url": "https://theregister.com/x"}]
         card = card_with(render({"T": [item]}, now=now), "A story")
         assert "<b>Also covered by</b>" in card
-        assert '<a href="https://theregister.com/x" rel="noopener noreferrer nofollow">The Register</a>' in card
+        assert '<a href="https://theregister.com/x" target="_blank" rel="noopener noreferrer nofollow">The Register</a>' in card
 
     def test_an_unsafe_cluster_url_never_becomes_a_link(self, now):
         # The deduper collected these from sources we do not control, so the
@@ -832,7 +873,7 @@ class TestNewsletterCards:
     def test_a_linkable_newsletter_story_still_links(self, now):
         item = make_newsletter_item("Linkable story", "https://publisher.com/story")
         card = card_with(render({"T": [item]}, now=now), "Linkable story")
-        assert '<a href="https://publisher.com/story" rel="noopener noreferrer nofollow">Read original</a>' in card
+        assert '<a href="https://publisher.com/story" target="_blank" rel="noopener noreferrer nofollow">Read original</a>' in card
 
     def test_a_newsletter_canonical_key_does_not_break_uniqueness(self, now):
         one = make_newsletter_item("Same story", "")

@@ -56,7 +56,8 @@ def test_activate_personalization_link_uses_a_repository_path_safe_relative_url(
     activate_personalization_link(index)
 
     assert index.read_text() == (
-        '<header><a class="profile-link" href="auth/callback/">Tune my interests</a></header>'
+        '<header><a class="profile-link" href="auth/callback/" target="_blank" '
+        'rel="noopener noreferrer">Tune my interests</a></header>'
     )
 
 
