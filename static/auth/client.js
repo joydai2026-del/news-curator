@@ -646,6 +646,9 @@
     const interests = document.getElementById("interests");
     const interestCount = document.getElementById("interest-count");
     const buttons = [...document.querySelectorAll("button")];
+    const callback = new URL(window.location.href);
+    const hasCallback = ["code", "client_state", "error"].some((name) =>
+      callback.searchParams.has(name));
     let currentSession = null;
     let currentPreference = null;
 
@@ -786,12 +789,13 @@
     });
 
     try {
+      if (hasCallback) await finishCallback(callback);
       currentSession = loadSessionCandidate();
       await loadPreferences();
-      announce("Your interests are ready.");
+      announce(hasCallback ? "Signed in. Your interests are ready." : "Your interests are ready.");
     } catch (_) {
       showSignedOut();
-      announce("Sign in to personalize your feed.");
+      announce(hasCallback ? "Sign in failed. Try again." : "Sign in to personalize your feed.");
     }
   }
 
