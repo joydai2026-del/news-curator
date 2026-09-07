@@ -357,7 +357,18 @@ def test_personalization_scores_never_leave_the_build_job() -> None:
     command = str(step["run"])
     assert "python scripts/build_interest_ranking.py build" in command
     assert '--source-snapshot "$RUNNER_TEMP/source-snapshot.json"' in command
+    assert "--newsletter-artifact ./newsletter_artifact.json" in command
     assert '--output "$RUNNER_TEMP/interest-ranking.json"' in command
+    steps = _jobs()["build"]["steps"]
+    newsletter_download = next(
+        index for index, candidate in enumerate(steps)
+        if candidate.get("with", {}).get("name") == "newsletter-artifact"
+    )
+    materialize = next(
+        index for index, candidate in enumerate(steps)
+        if candidate.get("name") == "Materialize saved-interest ranking"
+    )
+    assert newsletter_download < materialize
     assert step["if"] == (
         "${{ github.ref == 'refs/heads/main' && "
         "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}"
@@ -376,6 +387,7 @@ def test_enabled_main_build_requires_the_interest_ranking_file() -> None:
     }
     command = str(step["run"])
     assert "python scripts/build_interest_ranking.py validate" in command
+    assert "--newsletter-artifact ./newsletter_artifact.json" in command
     assert 'if [ "$REQUIRE_PERSONALIZATION" = "true" ]' in command
     assert "saved-interest ranking artifact is required on main" in command
 

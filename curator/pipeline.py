@@ -673,6 +673,24 @@ def main(argv: list[str] | None = None) -> int:
     else:
         results = collect(cfg, offline=args.offline)
 
+    # Reconstruct the privacy-sanitized newsletter rows before validating the
+    # private score artifact. The score producer and renderer must agree on the
+    # exact story-id set and newsletter input digest.
+    newsletter_meta: dict = {"dark": True, "ok": False}
+    newsletter_items: list[Item] = []
+    if args.newsletter_artifact and args.newsletter_artifact.is_file():
+        try:
+            newsletter_items, nl_tier, newsletter_meta = load_newsletter_artifact(
+                args.newsletter_artifact
+            )
+        except (ValueError, OSError):
+            log.warning("newsletter artifact unreadable; lane dark this run")
+        else:
+            results.append(nl_tier)
+            log.info("newsletter lane: %d items (%s)", len(newsletter_items), nl_tier.note or "ok")
+    elif args.newsletter_artifact:
+        log.warning("newsletter artifact %s missing; lane dark this run", args.newsletter_artifact)
+
     interest_scores: Mapping[str, float] | None = None
     interest_meta = None
     if args.interest_ranking_artifact:
@@ -683,40 +701,32 @@ def main(argv: list[str] | None = None) -> int:
             InterestArtifactError,
             load_interest_artifact,
             ranking_config_digest,
+            newsletter_input_digest,
             story_key,
         )
 
+        ranking_newsletter_items = (
+            newsletter_items if not newsletter_meta.get("dark", True) else []
+        )
         allowed_story_keys = {
             story_key(item)
-            for result in snapshot.results
-            for item in result.items
+            for item in [
+                *(item for result in snapshot.results for item in result.items),
+                *ranking_newsletter_items,
+            ]
         }
         try:
             interest_meta = load_interest_artifact(
                 args.interest_ranking_artifact,
                 expected_source_snapshot_digest=snapshot.content_digest,
                 expected_configuration_digest=ranking_config_digest(cfg),
+                expected_newsletter_digest=newsletter_input_digest(ranking_newsletter_items),
                 allowed_story_keys=allowed_story_keys,
             )
         except InterestArtifactError:
             log.error("saved-interest ranking artifact invalid; refusing an unpersonalized build")
             return 2
         interest_scores = interest_meta.scores
-
-    # The newsletter lane arrives pre-fetched as an artifact from its own
-    # secrets-scoped job. A missing or unreadable artifact is a dark lane and
-    # a note in the log, never a failed build of the six healthy tabs.
-    newsletter_meta: dict = {"dark": True, "ok": False}
-    if args.newsletter_artifact and args.newsletter_artifact.is_file():
-        try:
-            nl_items, nl_tier, newsletter_meta = load_newsletter_artifact(args.newsletter_artifact)
-        except (ValueError, OSError):
-            log.warning("newsletter artifact unreadable; lane dark this run")
-        else:
-            results.append(nl_tier)
-            log.info("newsletter lane: %d items (%s)", len(nl_items), nl_tier.note or "ok")
-    elif args.newsletter_artifact:
-        log.warning("newsletter artifact %s missing; lane dark this run", args.newsletter_artifact)
 
     if args.health_report:
         from .health import write_report

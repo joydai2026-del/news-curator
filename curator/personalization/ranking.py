@@ -29,6 +29,7 @@ _ARTIFACT_FIELDS = {
     "schema_version",
     "generated_at",
     "source_snapshot_digest",
+    "newsletter_input_digest",
     "configuration_digest",
     "preference_revision",
     "interest_count",
@@ -54,11 +55,39 @@ class InterestProfile:
 class InterestArtifact:
     generated_at: str
     source_snapshot_digest: str
+    newsletter_input_digest: str
     configuration_digest: str
     preference_revision: int
     interest_count: int
     matched_story_count: int
     scores: Mapping[str, float]
+
+
+EMPTY_NEWSLETTER_INPUT_DIGEST = hashlib.sha256(b"[]").hexdigest()
+
+
+def newsletter_input_digest(items: Iterable[Item]) -> str:
+    """Bind scores to the exact public-safe newsletter inputs used to build them."""
+
+    rows = sorted(
+        (
+            {
+                "story_id": story_key(item),
+                "title": item.title,
+                "language": item.language,
+                "native_categories": sorted(item.native_categories),
+            }
+            for item in items
+            if item.is_newsletter
+        ),
+        key=lambda row: (
+            row["story_id"], row["title"], row["language"], row["native_categories"]
+        ),
+    )
+    encoded = json.dumps(
+        rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def story_key(item: Item) -> str:
@@ -169,6 +198,7 @@ def build_interest_artifact(
     *,
     source_snapshot_digest: str,
     configuration_digest: str,
+    newsletter_digest: str = EMPTY_NEWSLETTER_INPUT_DIGEST,
     generated_at: datetime | None = None,
     categories: Sequence["Category"] = (),
 ) -> dict[str, object]:
@@ -202,6 +232,7 @@ def build_interest_artifact(
         "schema_version": 1,
         "generated_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_snapshot_digest": source_snapshot_digest,
+        "newsletter_input_digest": newsletter_digest,
         "configuration_digest": configuration_digest,
         "preference_revision": profile.revision,
         "interest_count": (
@@ -225,6 +256,7 @@ def load_interest_artifact(
     *,
     expected_source_snapshot_digest: str,
     expected_configuration_digest: str,
+    expected_newsletter_digest: str = EMPTY_NEWSLETTER_INPUT_DIGEST,
     allowed_story_keys: set[str] | None = None,
 ) -> InterestArtifact:
     """Load an exact, bounded artifact and bind it to this build's snapshot."""
@@ -246,14 +278,21 @@ def load_interest_artifact(
 
     generated_at = payload["generated_at"]
     source_digest = payload["source_snapshot_digest"]
+    newsletter_digest = payload["newsletter_input_digest"]
     config_digest = payload["configuration_digest"]
     if not isinstance(generated_at, str) or not _TIMESTAMP.fullmatch(generated_at):
         raise InterestArtifactError("interest ranking artifact is invalid")
     if not isinstance(source_digest, str) or not _DIGEST.fullmatch(source_digest):
         raise InterestArtifactError("interest ranking artifact is invalid")
+    if not isinstance(newsletter_digest, str) or not _DIGEST.fullmatch(newsletter_digest):
+        raise InterestArtifactError("interest ranking artifact is invalid")
     if not isinstance(config_digest, str) or not _DIGEST.fullmatch(config_digest):
         raise InterestArtifactError("interest ranking artifact is invalid")
-    if source_digest != expected_source_snapshot_digest or config_digest != expected_configuration_digest:
+    if (
+        source_digest != expected_source_snapshot_digest
+        or newsletter_digest != expected_newsletter_digest
+        or config_digest != expected_configuration_digest
+    ):
         raise InterestArtifactError("interest ranking artifact does not belong to this build")
 
     revision = _nonnegative_int(payload["preference_revision"])
@@ -287,6 +326,7 @@ def load_interest_artifact(
     return InterestArtifact(
         generated_at=generated_at,
         source_snapshot_digest=source_digest,
+        newsletter_input_digest=newsletter_digest,
         configuration_digest=config_digest,
         preference_revision=revision,
         interest_count=interest_count,

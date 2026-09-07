@@ -14,6 +14,7 @@ from curator.personalization.ranking import (
     interest_score,
     load_interest_artifact,
     measure_ranking_impact,
+    newsletter_input_digest,
     ranking_config_digest,
     story_key,
 )
@@ -306,6 +307,47 @@ def test_artifact_fails_closed_on_wrong_binding_or_invalid_scores(tmp_path, muta
             path,
             expected_source_snapshot_digest=SNAPSHOT_DIGEST,
             expected_configuration_digest=CONFIG_DIGEST,
+        )
+
+
+def test_newsletter_input_digest_is_deterministic_and_changes_with_scoring_input() -> None:
+    linked = make_item("Linked newsletter", "https://publisher.example/linked")
+    linked.is_newsletter = True
+    linked.native_categories = {"newsletters"}
+    linkless = make_item("Linkless newsletter", "")
+    linkless.is_newsletter = True
+    linkless.canonical_url = "newsletter:0123456789abcdef"
+    linkless.native_categories = {"newsletters"}
+
+    digest = newsletter_input_digest([linked, linkless])
+
+    assert digest == newsletter_input_digest([linkless, linked])
+    linkless.title = "Corrected linkless newsletter title"
+    assert newsletter_input_digest([linked, linkless]) != digest
+
+
+def test_artifact_rejects_a_stale_newsletter_input_digest(tmp_path) -> None:
+    item = make_item("Newsletter", "https://publisher.example/story")
+    item.is_newsletter = True
+    item.native_categories = {"newsletters"}
+    payload = build_interest_artifact(
+        InterestProfile(revision=1, interests=("Newsletter",)),
+        [item],
+        source_snapshot_digest=SNAPSHOT_DIGEST,
+        configuration_digest=CONFIG_DIGEST,
+        newsletter_digest=newsletter_input_digest([item]),
+        generated_at=datetime(2026, 9, 3, 13, 0, tzinfo=timezone.utc),
+    )
+    path = tmp_path / "newsletter-interest-ranking.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(InterestArtifactError, match="does not belong"):
+        load_interest_artifact(
+            path,
+            expected_source_snapshot_digest=SNAPSHOT_DIGEST,
+            expected_configuration_digest=CONFIG_DIGEST,
+            expected_newsletter_digest="f" * 64,
+            allowed_story_keys={story_key(item)},
         )
 
 
