@@ -13,6 +13,8 @@ from curator.archive_finalize import (
     _RejectRedirects,
     finalize_deployment,
 )
+from curator.archive_candidate import stamp_archive_candidate_site
+from curator.pipeline import main as pipeline_main
 
 
 SITE = b"<!doctype html><html><body>deployed edition</body></html>"
@@ -133,6 +135,48 @@ def test_finalize_verifies_live_page_then_attests_and_prunes(
         assert timeout == 30
         assert request.get_header("Authorization") is None
         assert request.get_header("Apikey") == "sb_secret_test-only-value"
+
+
+def test_pipeline_candidate_is_restamped_after_final_site_mutation_before_finalize(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "topics.yaml").write_text(
+        "topics:\n  - name: AI\n    keywords:\n      - AI\n", encoding="utf-8"
+    )
+    (tmp_path / "sources.yaml").write_text("rss: []\n", encoding="utf-8")
+    site = tmp_path / "site"
+    candidate_path = tmp_path / "archive-candidate.json"
+    assert pipeline_main([
+        "--root", str(tmp_path), "--offline", "--allow-empty", "--out", str(site),
+        "--archive-candidate", str(candidate_path), "--build-nonce", "integration:1",
+        "--commit-sha", "a" * 40,
+    ]) == 0
+    initial = json.loads(candidate_path.read_text(encoding="utf-8"))
+    site_index = site / "index.html"
+    final_bytes = site_index.read_bytes() + b"\n<!-- auth callback materialized -->\n"
+    site_index.write_bytes(final_bytes)
+
+    stamp_archive_candidate_site(candidate_path, site_index)
+
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    assert candidate["site_sha256"] != initial["site_sha256"]
+    assert candidate["site_sha256"] == hashlib.sha256(final_bytes).hexdigest()
+    responses = iter([
+        _Response(final_bytes, raw=True), _Response(_attestation(candidate)), _Response(_prune())
+    ])
+    monkeypatch.setattr(
+        "curator.archive_finalize._open_no_redirect",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    receipt = finalize_deployment(
+        candidate_path=candidate_path,
+        deployed_url="https://news.example.test/",
+        expected_commit="a" * 40,
+        supabase_url="https://project.supabase.co",
+        service_key="sb_secret_test-only-value",
+    )
+    assert receipt["status"] == "finalized"
+    assert receipt["site_sha256"] == hashlib.sha256(final_bytes).hexdigest()
 
 
 def test_prune_is_not_called_when_finalize_response_is_invalid(
