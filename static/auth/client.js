@@ -228,6 +228,10 @@
     return session;
   }
 
+  function clearSession() {
+    sessionStorage.removeItem(SESSION_KEY);
+  }
+
   function broadcastSession(session) {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel(CHANNEL_NAME);
@@ -236,6 +240,18 @@
     } finally {
       channel.close();
     }
+  }
+
+  function broadcastLogout() {
+    if (typeof BroadcastChannel === "undefined") return;
+    let channel;
+    try {
+      channel = new BroadcastChannel(CHANNEL_NAME);
+      channel.postMessage({ type: "logout" });
+    } catch (_) {
+      // Server sign-out and local token clearing already succeeded. A browser
+      // that blocks channel delivery must not be shown a false sign-out error.
+    } finally { if (channel) channel.close(); }
   }
 
   function boundedText(value, maxChars, maxBytes) {
@@ -576,12 +592,7 @@
   }
 
   async function signOut(fetchImpl = fetch) {
-    let session;
-    try {
-      session = loadSessionCandidate();
-    } finally {
-      sessionStorage.removeItem(SESSION_KEY);
-    }
+    const session = loadSessionCandidate();
     const { url, key } = config();
     const logoutUrl = `${url}/auth/v1/logout`;
     const response = await fetchImpl(logoutUrl, {
@@ -592,6 +603,9 @@
       redirect: "error",
     });
     requireExactResponse(response, logoutUrl, "The authentication endpoint redirected unexpectedly.");
+    if (!response.ok) fail("Sign out failed. Try again.");
+    clearSession();
+    broadcastLogout();
   }
 
   const contract = {
@@ -615,7 +629,9 @@
     validateStoredSession,
     verifyEmailCode,
     acceptSession,
+    clearSession,
     broadcastSession,
+    broadcastLogout,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -629,6 +645,7 @@
   });
   window.NewsCuratorAuth = Object.freeze({
     acceptSession,
+    clearSession,
     channelName: CHANNEL_NAME,
     config,
     hasSessionCandidate,
@@ -780,10 +797,10 @@
       try {
         await signOut();
         announce("Signed out.");
-      } catch (_) {
-        announce("Signed out on this device.");
-      } finally {
         showSignedOut();
+      } catch (_) {
+        announce("Sign out failed. Try again.");
+      } finally {
         setBusy(false);
       }
     });

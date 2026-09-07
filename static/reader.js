@@ -534,6 +534,15 @@
     document.querySelectorAll(".state-action").forEach((button) => { button.hidden = false; });
     const cards = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => {
+      card.newsCuratorStaticCard = true;
+      card.newsCuratorPublicAttributes = {
+        topicIds: card.dataset.topicIds || "",
+        topicApiIds: card.dataset.topicApiIds || "",
+        topics: card.dataset.topics || "",
+        ranks: [...card.attributes]
+          .filter((attribute) => attribute.name.startsWith("data-rank-"))
+          .map((attribute) => [attribute.name, attribute.value]),
+      };
       const interestButton = card.querySelector(".interest-action");
       if (interestButton && !interestButton.dataset.fallbackTopicId) {
         interestButton.dataset.fallbackTopicId = interestButton.dataset.topicId;
@@ -548,6 +557,7 @@
     let pollTimer = null;
     let updateCursor = null;
     let nextHistoryAllRank = HISTORY_RANK_OFFSET;
+    let authEpoch = 0;
     const authoritativeAllHistoryOrder = [];
     const authoritativeAllHistoryIds = new Set();
     const pendingUpdates = new Map();
@@ -598,6 +608,74 @@
         );
         applyInterestTopic(card, topicId);
       });
+    }
+    function clearPrivateCardState(card) {
+      card.classList.remove("is-read", "is-saved", "is-more-like", "is-less-like");
+      interestStates(card).clear();
+      hydratedTopics(card).clear();
+      card.dataset.stateRevision = "0";
+      card.dataset.interestRevision = "0";
+      const readButton = card.querySelector(".read-action");
+      const saveButton = card.querySelector(".save-action");
+      const interestButton = card.querySelector(".interest-action");
+      if (readButton) readButton.textContent = "Mark read";
+      if (saveButton) {
+        saveButton.textContent = "Save";
+        saveButton.setAttribute("aria-pressed", "false");
+      }
+      if (interestButton) {
+        interestButton.textContent = "More like this";
+        interestButton.setAttribute("aria-pressed", "false");
+      }
+      const snapshot = card.newsCuratorPublicAttributes;
+      if (snapshot) {
+        card.dataset.topicIds = snapshot.topicIds;
+        card.dataset.topicApiIds = snapshot.topicApiIds;
+        card.dataset.topics = snapshot.topics;
+        [...card.attributes]
+          .filter((attribute) => attribute.name.startsWith("data-rank-"))
+          .forEach((attribute) => card.removeAttribute(attribute.name));
+        snapshot.ranks.forEach(([name, value]) => card.setAttribute(name, value));
+      }
+    }
+    async function handleLogout() {
+      authEpoch += 1;
+      auth.clearSession();
+      document.querySelectorAll(".state-action").forEach((button) => { button.disabled = true; });
+      cards.forEach((card, storyId) => {
+        if (!card.newsCuratorStaticCard) {
+          cards.delete(storyId);
+          card.replaceChildren();
+          [...card.attributes].forEach((attribute) => card.removeAttribute(attribute.name));
+          view.addCard(card);
+          card.remove();
+          return;
+        }
+        clearPrivateCardState(card);
+      });
+      cursors.clear();
+      exhausted.clear();
+      hydrated.clear();
+      authoritativeAllHistoryOrder.length = 0;
+      authoritativeAllHistoryIds.clear();
+      nextHistoryAllRank = HISTORY_RANK_OFFSET;
+      if (selectedTopic() === "__saved__") {
+        const publicTab = document.querySelector('.chip[data-filter="__all__"]');
+        if (publicTab) {
+          hydrated.add("__all__");
+          publicTab.click();
+          hydrated.delete("__all__");
+        }
+      }
+      refreshInterestControls();
+      view.apply();
+      announce("Signed out. Public stories are syncing.");
+      try {
+        await hydrate(true);
+        announce("Signed out. Public stories are ready.");
+      } catch (_) {
+        announce("Signed out. Public stories could not be synced. Try again.");
+      }
     }
     function sectionFor(topicId) {
       const slug = topicSlugForId(topicId);
@@ -694,10 +772,12 @@
         return;
       }
       const wasHydrated = hydrated.has(topic);
+      const requestEpoch = authEpoch;
       const initialCursor = topic === "__all__" ? { order_mode: "history_freshness" } : null;
       const rows = topic === "__saved__"
         ? await api.savedPage(null, latest.page_size)
         : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
+      if (requestEpoch !== authEpoch) return;
       mergeRows(rows, true, topic);
       const cursor = topic === "__saved__"
         ? nextSavedCursor(rows, latest.page_size)
@@ -712,15 +792,18 @@
       if (exhausted.has(topic)) return;
       if (topic === "__saved__" && !requireSignIn()) return;
       loadButton.disabled = true;
+      const requestEpoch = authEpoch;
       try {
         let rows;
         const currentCursor = cursors.get(topic) || null;
         if (topic === "__saved__") {
           rows = await api.savedPage(currentCursor, latest.page_size);
+          if (requestEpoch !== authEpoch) return;
           const cursor = nextSavedCursor(rows, latest.page_size);
           if (cursor) cursors.set(topic, cursor);
         } else {
           rows = await api.feedPage(topicIdForSlug(topic), currentCursor, latest.page_size);
+          if (requestEpoch !== authEpoch) return;
           const cursor = nextFeedCursor(rows, latest.initial_history_cursor, currentCursor, latest.page_size);
           if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
         }
@@ -728,7 +811,7 @@
         if (topic === "__saved__" && rows.length < latest.page_size) exhausted.add(topic);
         announce(rows.length ? loadedStatus(rows.length) : "No older stories remain in this section.");
       } catch (_) {
-        announce("Older stories could not be loaded. Try again.");
+        if (requestEpoch === authEpoch) announce("Older stories could not be loaded. Try again.");
       } finally { loadButton.disabled = false; }
     }
     function reapplyCurrentMembership(card) {
@@ -746,6 +829,7 @@
       window.scrollTo(scrollX, scrollY);
     }
     async function mutateState(card, read, saved) {
+      const requestEpoch = authEpoch;
       const previous = {
         read_at: card.classList.contains("is-read") ? "local" : null,
         saved_at: card.classList.contains("is-saved") ? "local" : null,
@@ -754,11 +838,13 @@
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
         const result = await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, idempotencyKey());
+        if (requestEpoch !== authEpoch) return;
         if (result.status === "conflict") fail("Story state changed in another session.");
         applyServerState(card, { ...previous, ...result });
         reapplyCurrentMembership(card);
         announce("Reading state saved.");
       } catch (_) {
+        if (requestEpoch !== authEpoch) return;
         applyServerState(card, previous);
         reapplyCurrentMembership(card);
         announce("Reading state could not be saved. Try again.");
@@ -789,14 +875,18 @@
         applyInterestTopic(card, topicId);
         if (card.classList.contains("is-more-like")) return;
         const revision = Number(card.dataset.interestRevision || 0);
+        const requestEpoch = authEpoch;
         target.disabled = true;
         api.setStoryInterest(card.dataset.storyId, topicId, revision, idempotencyKey())
           .then((result) => {
+            if (requestEpoch !== authEpoch) return;
             if (result.status === "conflict") fail("Story interest changed in another session.");
             applyServerState(card, result, topicId);
             announce("More like this was saved for future rankings.");
           })
-          .catch(() => { announce("More like this could not be saved. Try again."); })
+          .catch(() => {
+            if (requestEpoch === authEpoch) announce("More like this could not be saved. Try again.");
+          })
           .finally(() => { target.disabled = !stateReady(card); });
       }
     });
@@ -812,12 +902,18 @@
     if (typeof BroadcastChannel !== "undefined") {
       const channel = new BroadcastChannel(auth.channelName);
       channel.addEventListener("message", (event) => {
-        if (!exactFields(event.data, ["session", "type"]) || event.data.type !== "session") return;
-        try {
-          auth.acceptSession(event.data.session);
-          void hydrate(true).catch(() => { announce("Signed in, but reading state could not be synced."); });
-          announce("Signed in. Reading state is syncing.");
-        } catch (_) {}
+        if (exactFields(event.data, ["session", "type"]) && event.data.type === "session") {
+          try {
+            auth.acceptSession(event.data.session);
+            authEpoch += 1;
+            void hydrate(true).catch(() => { announce("Signed in, but reading state could not be synced."); });
+            announce("Signed in. Reading state is syncing.");
+          } catch (_) {}
+          return;
+        }
+        if (exactFields(event.data, ["type"]) && event.data.type === "logout") {
+          void handleLogout();
+        }
       });
     }
     try {
