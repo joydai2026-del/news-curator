@@ -22,7 +22,7 @@ CSP_PLACEHOLDER = "connect-src 'self';"
 INDEX_PLACEHOLDER = "<!-- personalization-link -->"
 PERSONALIZATION_LINK = (
     '<a class="profile-link" href="auth/callback/" target="_blank" '
-    'rel="noopener noreferrer">Tune my interests</a>'
+    'rel="noopener noreferrer">Sign in / Interests</a>'
 )
 
 
@@ -42,12 +42,31 @@ def materialize_callback(*, supabase_url: str, publishable_key: str, output: Pat
     output.write_text(rendered, encoding="utf-8")
 
 
-def activate_personalization_link(site_index: Path) -> None:
+def activate_personalization_link(
+    site_index: Path,
+    *,
+    supabase_url: str | None = None,
+    publishable_key: str | None = None,
+) -> None:
     """Expose the settings entry point only in a configured site build."""
     page = site_index.read_text(encoding="utf-8")
     if page.count(INDEX_PLACEHOLDER) != 1:
         raise ValueError("The rendered site personalization-link contract changed.")
-    site_index.write_text(page.replace(INDEX_PLACEHOLDER, PERSONALIZATION_LINK), encoding="utf-8")
+    page = page.replace(INDEX_PLACEHOLDER, PERSONALIZATION_LINK)
+    if supabase_url is not None or publishable_key is not None:
+        config = AuthConfig(supabase_url or "", publishable_key or "")
+        if (
+            page.count(URL_PLACEHOLDER) != 1
+            or page.count(KEY_PLACEHOLDER) != 1
+            or page.count(CSP_PLACEHOLDER) != 1
+        ):
+            raise ValueError("The rendered site auth configuration contract changed.")
+        exact_origin = html.escape(config.supabase_url, quote=True)
+        public_key = html.escape(config.publishable_key, quote=True)
+        page = page.replace(URL_PLACEHOLDER, f'<meta name="supabase-url" content="{exact_origin}">')
+        page = page.replace(KEY_PLACEHOLDER, f'<meta name="supabase-publishable-key" content="{public_key}">')
+        page = page.replace(CSP_PLACEHOLDER, f"connect-src 'self' {exact_origin};")
+    site_index.write_text(page, encoding="utf-8")
 
 
 def main() -> int:
@@ -64,7 +83,11 @@ def main() -> int:
             output=args.output,
         )
         if args.site_index is not None:
-            activate_personalization_link(args.site_index)
+            activate_personalization_link(
+                args.site_index,
+                supabase_url=args.supabase_url,
+                publishable_key=args.publishable_key,
+            )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     print(f"Wrote configured callback: {args.output}")

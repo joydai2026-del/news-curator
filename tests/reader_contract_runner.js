@@ -1,0 +1,290 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const path = require("node:path");
+const reader = require(path.join(__dirname, "..", "static", "reader.js"));
+
+function response(status, payload, url, overrides = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    redirected: false,
+    status,
+    url,
+    text: async () => JSON.stringify(payload),
+    ...overrides,
+  };
+}
+
+function story(overrides = {}) {
+  return {
+    story_id: "story:" + "a".repeat(64),
+    canonical_url: "https://publisher.example/story",
+    title: "A real story",
+    summary: "A publisher supplied summary.",
+    language: "en",
+    published_at: "2026-09-07T12:00:00Z",
+    publication_seq: 7,
+    position: 1,
+    page_order_mode: "edition_rank",
+    next_cursor: { after_position: 1, after_story_id: "story:" + "a".repeat(64) },
+    ordering_mode: "weighted_total",
+    ordering_key: { score: 1, story_id: "story:" + "a".repeat(64) },
+    score_components: { freshness: 1 },
+    topic_ids: ["ai"],
+    coverage_mentions: [],
+    read_at: null,
+    saved_at: null,
+    state_revision: 0,
+    interests: [],
+    ...overrides,
+  };
+}
+
+async function main() {
+  const latest = reader.validateLatestPublication({
+    publication_seq: 7,
+    finalized_at: "2026-09-07T12:00:00Z",
+    topics: [{ topic_id: "ai", name: "AI" }],
+    initial_history_cursor: {
+      before_published_at: "2026-09-07T11:00:00Z",
+      before_story_id: "",
+    },
+    poll_seconds: 60,
+  });
+  assert.equal(latest.publication_seq, 7);
+  assert.equal(reader.validateLatestPublication({ ...latest, poll_seconds: 86400 }).poll_seconds, 86400);
+  assert.throws(() => reader.validateLatestPublication({ ...latest, poll_seconds: 86401 }), /publication response/);
+  assert.throws(() => reader.validateLatestPublication({ ...latest, extra: true }), /publication response/);
+  assert.equal(reader.validateFeedPage([story()])[0].story_id, story().story_id);
+  assert.throws(
+    () => reader.validateFeedPage([story({ ordering_mode: "unknown" })]),
+    /feed response/
+  );
+  assert.throws(
+    () => reader.validateFeedPage([story({ coverage_mentions: [{
+      source_kind: "outlet",
+      source_id: "source-a",
+      source_name: "Source A",
+      url: "http://publisher.example/story",
+      headline: "A real story",
+      mentioned_at: "2026-09-07T12:00:00Z",
+    }] })]),
+    /feed response/
+  );
+  assert.equal(reader.validateFeedPage([story({ coverage_mentions: [{
+    source_kind: "newsletter",
+    source_id: "newsletter-a",
+    source_name: "Newsletter A",
+    url: "https://publisher.example/story",
+    headline: "A real story",
+    mentioned_at: "2026-09-07T12:00:00Z",
+  }] })])[0].coverage_mentions.length, 1);
+  assert.throws(() => {
+    const malformed = story();
+    delete malformed.state_revision;
+    reader.validateFeedPage([malformed]);
+  }, /feed response/);
+  assert.deepEqual(reader.nextFeedCursor([], latest.initial_history_cursor), {
+    order_mode: "history_freshness",
+    ...latest.initial_history_cursor,
+  });
+  assert.deepEqual(reader.nextFeedCursor([story()], latest.initial_history_cursor), {
+    order_mode: "history_freshness",
+    ...latest.initial_history_cursor,
+  });
+  assert.throws(() => reader.validateFeedPage([story({ title: "x".repeat(2001) })]), /feed response/);
+  assert.throws(
+    () => reader.validateFeedPage([story({ state_revision: undefined })], true),
+    /feed response/
+  );
+
+  const calls = [];
+  const api = reader.createApi(
+    { url: "https://project-ref.supabase.co", key: "sb_publishable_example" },
+    () => ({ access_token: "header.payload.signature" }),
+    async (url, options) => {
+      calls.push({ url, options });
+      return response(200, [story()], url);
+    }
+  );
+  await api.feedPage("ai", {
+    order_mode: "history_freshness",
+    before_published_at: "2026-09-07T11:00:00Z",
+    before_story_id: "story:" + "b".repeat(64),
+  });
+  assert.equal(calls[0].url.endsWith("/rest/v1/rpc/feed_page"), true);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    p_topic_id: "ai",
+    p_order_mode: "history_freshness",
+    p_after_position: null,
+    p_after_story_id: null,
+    p_before_published_at: "2026-09-07T11:00:00Z",
+    p_before_story_id: "story:" + "b".repeat(64),
+    p_limit: 20,
+  });
+  assert.equal(calls[0].options.credentials, "omit");
+  assert.equal(calls[0].options.redirect, "error");
+  await api.feedPage("__all__", null);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    p_topic_id: null,
+    p_order_mode: "history_freshness",
+    p_after_position: null,
+    p_after_story_id: null,
+    p_before_published_at: null,
+    p_before_story_id: null,
+    p_limit: 20,
+  });
+  await api.feedPage("ai", {
+    order_mode: "edition_rank",
+    after_position: 20,
+    after_story_id: "story:" + "c".repeat(64),
+  });
+  assert.deepEqual(JSON.parse(calls[2].options.body), {
+    p_topic_id: "ai",
+    p_order_mode: "edition_rank",
+    p_after_position: 20,
+    p_after_story_id: "story:" + "c".repeat(64),
+    p_before_published_at: null,
+    p_before_story_id: null,
+    p_limit: 20,
+  });
+
+  calls.length = 0;
+  const stateApi = reader.createApi(
+    { url: "https://project-ref.supabase.co", key: "sb_publishable_example" },
+    () => ({ access_token: "header.payload.signature" }),
+    async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/saved_page")) {
+        const row = story({
+          saved_at: "2026-09-07T12:02:00Z",
+          page_order_mode: "saved_at",
+          next_cursor: {
+            before_saved_at: "2026-09-07T12:02:00Z",
+            before_story_id: story().story_id,
+          },
+        });
+        return response(200, [row], url);
+      }
+      if (url.endsWith("/updates_since")) return response(200, [{
+        publication_seq: 8,
+        story_id: story().story_id,
+        title: "A real story",
+        published_at: "2026-09-07T12:00:00Z",
+        topic_ids: ["ai"],
+        next_cursor: {
+          after_publication_seq: 8,
+          after_published_at: "2026-09-07T12:00:00Z",
+          after_story_id: story().story_id,
+        },
+      }], url);
+      if (url.endsWith("/set_story_state")) return response(200, {
+        status: "updated", read_at: "2026-09-07T12:03:00Z", saved_at: null, revision: 2,
+      }, url);
+      return response(200, {
+        status: "updated", signal: "more_like", revision: 1,
+      }, url);
+    }
+  );
+  await stateApi.savedPage({ before_saved_at: "2026-09-07T12:02:00Z", before_story_id: story().story_id });
+  await stateApi.updatesSince(7);
+  await stateApi.setStoryState(story().story_id, true, false, 1, "idem-state");
+  await stateApi.setStoryInterest(story().story_id, "ai", 0, "idem-interest");
+  assert.deepEqual(calls.map((call) => JSON.parse(call.options.body)), [
+    { p_before_saved_at: "2026-09-07T12:02:00Z", p_before_story_id: story().story_id, p_limit: 20 },
+    {
+      p_since_publication_seq: 7,
+      p_after_publication_seq: null,
+      p_after_published_at: null,
+      p_after_story_id: null,
+      p_limit: 20,
+    },
+    {
+      p_story_id: story().story_id, p_read: true, p_saved: false,
+      p_expected_revision: 1, p_idempotency_key: "idem-state",
+    },
+    {
+      p_story_id: story().story_id, p_topic_id: "ai", p_signal: "more_like",
+      p_expected_revision: 0, p_idempotency_key: "idem-interest",
+    },
+  ]);
+
+  const existing = { dataset: { topicIds: "ai" } };
+  reader.mergeTopicMembership(existing, ["ai", "crypto"]);
+  assert.equal(existing.dataset.topicIds, "ai crypto");
+  assert.equal(reader.effectiveTopic(["crypto", "ai"], "crypto"), "crypto");
+  assert.equal(reader.effectiveTopic(["crypto", "ai"], "__all__"), "ai");
+
+  const fakeCard = {
+    dataset: {},
+    classList: {
+      values: new Set(),
+      toggle(name, on) { if (on) this.values.add(name); else this.values.delete(name); },
+    },
+    controls: {
+      ".read-action": { textContent: "", setAttribute() {} },
+      ".save-action": { textContent: "", attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } },
+      ".interest-action": {
+        textContent: "", dataset: { topicId: "ai" }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; },
+      },
+    },
+    querySelector(selector) { return this.controls[selector] || null; },
+  };
+  reader.applyServerState(fakeCard, story({ read_at: "2026-09-07T12:01:00Z" }));
+  assert.equal(fakeCard.classList.values.has("is-read"), true);
+  assert.equal(fakeCard.controls[".read-action"].textContent, "Mark unread");
+  assert.equal(fakeCard.controls[".save-action"].textContent, "Save");
+  reader.applyServerState(fakeCard, {
+    interests: [{ topic_id: "ai", signal: "more_like", revision: 1 }],
+  });
+  assert.equal(fakeCard.classList.values.has("is-read"), true);
+  assert.equal(fakeCard.controls[".read-action"].textContent, "Mark unread");
+  assert.equal(fakeCard.classList.values.has("is-more-like"), true);
+  assert.equal(reader.safeDestination("https://publisher.example/a"), "https://publisher.example/a");
+  assert.equal(reader.safeDestination("javascript:alert(1)"), null);
+  assert.equal(
+    reader.rankingReason("preference_then_freshness", { preference: 1, freshness: 2 }, {}),
+    "Your saved interests are considered first, then freshness."
+  );
+  assert.equal(
+    reader.rankingReason("native_rank_then_freshness", { native_rank: 1 }, {}),
+    "The source's captured rank is considered first, then freshness."
+  );
+  assert.equal(
+    reader.rankingReason("weighted_total", { score: 3 }, { freshness: 2, topic_fit: 1 }),
+    "Weighted using freshness, topic fit."
+  );
+
+  let updateCall = 0;
+  const updateRows = Array.from({ length: 21 }, (_, index) => story({
+    story_id: "story:" + (index + 1).toString(16).padStart(64, "0"),
+    publication_seq: 8,
+  })).map((row) => ({
+    publication_seq: row.publication_seq,
+    story_id: row.story_id,
+    title: row.title,
+    published_at: row.published_at,
+    topic_ids: row.topic_ids,
+    next_cursor: {
+      after_publication_seq: row.publication_seq,
+      after_published_at: row.published_at,
+      after_story_id: row.story_id,
+    },
+  }));
+  const drained = await reader.drainUpdates({
+    updatesSince: async () => updateCall++ === 0 ? updateRows.slice(0, 20) : updateRows.slice(20),
+  }, 7, null);
+  assert.equal(drained.rows.length, 21);
+  assert.equal(drained.drained, true);
+  assert.equal(drained.cursor, null);
+  const newer = await reader.drainUpdates({
+    updatesSince: async (baseline) => baseline === 8 ? [{ ...updateRows[0], publication_seq: 9 }] : [],
+  }, 8, null);
+  assert.equal(newer.rows[0].publication_seq, 9);
+  console.log("reader contract: PASS");
+}
+
+main().catch((error) => {
+  console.error(error && error.stack ? error.stack : "reader contract failed");
+  process.exitCode = 1;
+});

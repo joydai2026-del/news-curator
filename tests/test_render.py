@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 from html.parser import HTMLParser
+from pathlib import Path
 
 import re
 
+from curator.localization import story_id_for_item
 from curator.models import TierResult
 from curator.render import human_age, render_html, render_site
 from tests.conftest import make_item, make_newsletter_item
@@ -142,7 +144,7 @@ class TestContent:
     def test_the_page_loads_no_third_party_code(self, now):
         # The accordion edition loads no third-party code or media.
         html = render({"T": [make_item("a")]}, now=now)
-        for marker in ("<script src", "fonts.googleapis", "<link rel=\"stylesheet\""):
+        for marker in ('<script src="http', "fonts.googleapis", '<link rel="stylesheet" href="http'):
             assert marker not in html
 
     def test_schedule_wording_is_not_a_promise(self, now):
@@ -225,6 +227,9 @@ class TestRenderSite:
         path = render_site({"T": [make_item("a")]}, [], now, tmp_path)
         assert path.exists() and (tmp_path / ".nojekyll").exists()
         assert "<html" in path.read_text(encoding="utf-8")
+        assert (tmp_path / "reader.js").read_text(encoding="utf-8") == (
+            Path(__file__).resolve().parents[1] / "static/reader.js"
+        ).read_text(encoding="utf-8")
 
     def test_leaves_no_temp_file_behind(self, tmp_path, now):
         render_site({"T": [make_item("a")]}, [], now, tmp_path)
@@ -738,7 +743,7 @@ class TestAccordionReadingCompanion:
 
     def test_primary_controls_have_a_visible_keyboard_focus_style(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        assert ".profile-link:focus-visible,.accordion-toggle:focus-visible" in page
+        assert ".profile-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible" in page
 
     def test_footer_only_claims_personalization_when_a_profile_is_present(self, now):
         page = flat(render({"AI": [make_item("A story")]}, now=now))
@@ -749,17 +754,34 @@ class TestAccordionReadingCompanion:
         assert '<meta name="description" content="An hourly reading companion with grounded news summaries.">' in page
         assert '<meta name="description" content="A personalized' not in page
 
-    def test_future_milestone_controls_are_not_shown(self, now):
+    def test_synced_reading_controls_and_saved_filter_are_rendered(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        for label in (
-            "Ask AI",
-            "Save insight",
-            "More like this",
-            "Less like this",
-            "Already knew this",
-            "Surprise me",
-        ):
-            assert label not in page
+        assert 'data-filter="__saved__" aria-pressed="false">Saved</button>' in page
+        assert 'class="state-action read-action"' in page
+        assert '>Mark read</button>' in page
+        assert 'class="state-action save-action" aria-pressed="false">Save</button>' in page
+        assert 'class="state-action interest-action"' in page
+        assert 'aria-pressed="false">More like this</button>' in page
+        assert '>More like this</button>' in page
+        assert 'id="load-more"' in page and '>Load 20 more</button>' in page
+        assert 'id="updates-status" role="status" aria-live="polite"' in page
+
+    def test_card_exposes_canonical_story_and_topic_ids(self, now):
+        item = make_item("A story")
+        card = card_with(render({"AI News": [item]}, now=now), "A story")
+        assert f'data-story-id="{story_id_for_item(item)}"' in card
+        assert 'data-topic-ids="ai-news"' in card
+        assert 'data-topic-id="ai-news"' in card
+
+    def test_main_page_has_strict_csp_and_external_reader_assets(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "default-src 'none'" in page
+        assert "script-src 'self' 'sha256-" in page
+        assert "connect-src 'self';" in page
+        assert '<meta name="supabase-url" content="">' in page
+        assert '<meta name="supabase-publishable-key" content="">' in page
+        assert '<script src="auth/client.js" defer></script>' in page
+        assert '<script src="reader.js" defer></script>' in page
 
     def test_page_identifies_the_reading_companion(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)

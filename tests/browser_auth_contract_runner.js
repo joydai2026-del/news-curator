@@ -59,6 +59,12 @@ function preference(revision = 0) {
 
 function installBrowserMocks() {
   const storage = new Map();
+  const broadcasts = [];
+  global.BroadcastChannel = class {
+    constructor(name) { this.name = name; }
+    postMessage(value) { broadcasts.push({ name: this.name, value }); }
+    close() {}
+  };
   const metas = {
     'meta[name="supabase-url"]': "https://example.supabase.co",
     'meta[name="supabase-publishable-key"]': "sb_publishable_test",
@@ -79,7 +85,7 @@ function installBrowserMocks() {
   };
   const historyCalls = [];
   global.history = { replaceState: (...args) => historyCalls.push(args) };
-  return { assigned, historyCalls, metas, storage };
+  return { assigned, broadcasts, historyCalls, metas, storage };
 }
 
 function assertFailClosedFetch(call) {
@@ -138,6 +144,8 @@ async function main() {
   };
   const callback = new URL(`https://news.example/auth/callback/?code=auth-code&client_state=${state}`);
   assert.equal(await client.finishCallback(callback, lifecycleFetch), true);
+  assert.equal(browser.broadcasts[0].name, "news-curator.auth.v1");
+  assert.deepEqual(browser.broadcasts[0].value, { type: "session", session: projected });
   assert.deepEqual(browser.historyCalls[0], [null, "", "/auth/callback/"]);
   assert.equal(browser.storage.has("news-curator.auth.state"), false);
   assert.equal(browser.storage.has("news-curator.auth.verifier"), false);
