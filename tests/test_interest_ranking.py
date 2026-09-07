@@ -199,6 +199,35 @@ def test_more_like_topic_signal_materializes_and_changes_next_rank(now) -> None:
     assert ranked[0] is old_match
 
 
+def test_aggregated_topic_adjustment_preserves_all_story_signal_weight(now) -> None:
+    topic = Category(name="Energy", id="energy", keywords=["grid"])
+    item = make_item("Grid storage expands", "https://example.com/grid", hours_ago=12)
+    item.matched_keywords = ["grid"]
+
+    repeated = build_interest_artifact(
+        InterestProfile(
+            revision=205,
+            interests=(),
+            topic_signals=(("energy", "more_like"),) * 3 + (("energy", "less_like"),),
+            more_like_topic_weight=0.2,
+        ),
+        [item], categories=[topic], source_snapshot_digest=SNAPSHOT_DIGEST,
+        configuration_digest=CONFIG_DIGEST, generated_at=now,
+    )
+    aggregated = build_interest_artifact(
+        InterestProfile(
+            revision=205,
+            interests=(),
+            topic_adjustments=(("energy", 2.0),),
+            more_like_topic_weight=0.2,
+        ),
+        [item], categories=[topic], source_snapshot_digest=SNAPSHOT_DIGEST,
+        configuration_digest=CONFIG_DIGEST, generated_at=now,
+    )
+
+    assert aggregated["scores"] == repeated["scores"] == {story_key(item): 0.4}
+
+
 def test_artifact_contains_scores_and_receipt_but_not_interests_or_user_id(tmp_path) -> None:
     matching = make_item("Quantum networking breakthrough", "https://example.com/q")
     other = make_item("Space launch", "https://example.com/s")

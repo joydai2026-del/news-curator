@@ -46,6 +46,7 @@ class InterestProfile:
     revision: int
     interests: tuple[str, ...]
     topic_signals: tuple[tuple[str, str], ...] = ()
+    topic_adjustments: tuple[tuple[str, float], ...] = ()
     more_like_topic_weight: float = 0.8
 
 
@@ -181,6 +182,8 @@ def build_interest_artifact(
     for topic_id, signal in profile.topic_signals:
         direction = 1.0 if signal == "more_like" else -1.0
         topic_adjustments[topic_id] = topic_adjustments.get(topic_id, 0.0) + direction
+    for topic_id, adjustment in profile.topic_adjustments:
+        topic_adjustments[topic_id] = topic_adjustments.get(topic_id, 0.0) + adjustment
     for item in items:
         score = interest_score(item, profile.interests)
         for category in categories:
@@ -201,7 +204,11 @@ def build_interest_artifact(
         "source_snapshot_digest": source_snapshot_digest,
         "configuration_digest": configuration_digest,
         "preference_revision": profile.revision,
-        "interest_count": len(profile.interests) + len(profile.topic_signals),
+        "interest_count": (
+            len(profile.interests)
+            + len(profile.topic_signals)
+            + len(profile.topic_adjustments)
+        ),
         "matched_story_count": len(scores),
         "scores": dict(sorted(scores.items())),
     }

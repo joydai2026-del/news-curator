@@ -19,6 +19,7 @@ def test_migration_has_policy_archive_and_private_state_contracts():
         "more_like_topic_weight numeric not null default 0.8",
         "receipt_retention_days integer not null default 30",
         "receipt_max_per_user integer not null default 1000",
+        "materialized_topic_signal_limit integer not null default 100",
         "create table public.canonical_stories",
         "canonical_url_hash char(64) generated always as (",
         "create table public.story_aliases",
@@ -51,13 +52,28 @@ def test_rpc_surface_is_narrow_and_finalization_is_service_only():
     for name in (
         "latest_publication", "feed_page", "saved_page", "updates_since",
         "set_story_state", "set_story_interest", "finalize_archive", "prune_publication_history",
+        "materialize_user_interest_signals",
     ):
         assert f"create or replace function public.{name}" in text
         assert f"revoke execute on function public.{name}" in text
     assert "grant execute on function public.finalize_archive(jsonb, text) to service_role" in text
     assert "grant execute on function public.finalize_archive(jsonb, text) to anon" not in text
+    assert "grant execute on function public.materialize_user_interest_signals(uuid) to service_role" in text
+    assert "grant execute on function public.materialize_user_interest_signals(uuid) to authenticated" not in text
     assert "where user_id = auth.uid()" in text
     assert "on conflict (build_nonce) do nothing" in text
+
+
+def test_interest_materialization_aggregates_current_topics_without_a_row_cap():
+    text = sql()
+    rpc = text[text.index("create or replace function public.materialize_user_interest_signals"):
+               text.index("revoke all on table public.feed_policy")]
+    assert "join latest l on l.publication_seq = pt.publication_seq" in rpc
+    assert "group by topic_id" in rpc
+    assert "order by topic_id limit signal_limit" in rpc
+    assert "'topic_adjustments'" in rpc
+    assert "select * from public.user_story_interests" not in rpc
+    assert "limit 201" not in rpc
 
 
 def test_feed_contract_is_keyset_paginated_and_saved_rows_survive_window():

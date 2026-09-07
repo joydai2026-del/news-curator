@@ -11,6 +11,8 @@ create table public.feed_policy (
   refresh_poll_seconds integer not null default 300 check (refresh_poll_seconds between 30 and 86400),
   physical_purge_grace_days integer not null default 7 check (physical_purge_grace_days between 1 and 90),
   more_like_topic_weight numeric not null default 0.8 check (more_like_topic_weight between 0 and 10),
+  materialized_topic_signal_limit integer not null default 100
+    check (materialized_topic_signal_limit between 1 and 100),
   receipt_retention_days integer not null default 30 check (receipt_retention_days between 1 and 365),
   receipt_max_per_user integer not null default 1000 check (receipt_max_per_user between 1 and 100000),
   updated_at timestamptz not null default now()
@@ -745,6 +747,44 @@ begin
 end;
 $$;
 
+create or replace function public.materialize_user_interest_signals(p_user_id uuid) returns jsonb
+language plpgsql stable security definer set search_path = pg_catalog, public as $$
+declare signal_limit integer; signal_weight numeric; answer jsonb;
+begin
+  if p_user_id is null or not exists (select 1 from auth.users where id = p_user_id) then
+    raise exception 'invalid user';
+  end if;
+  select materialized_topic_signal_limit, more_like_topic_weight
+    into signal_limit, signal_weight from public.feed_policy where singleton;
+  if signal_limit is null then raise exception 'feed policy unavailable'; end if;
+  with latest as (
+    select publication_seq from public.publication_runs
+    where finalized_at is not null order by publication_seq desc limit 1
+  ), current_signals as (
+    select usi.topic_id, usi.signal, usi.revision
+    from public.user_story_interests usi
+    join public.publication_topics pt on pt.topic_id = usi.topic_id
+    join latest l on l.publication_seq = pt.publication_seq
+    where usi.user_id = p_user_id
+  ), aggregated as (
+    select topic_id, sum(case when signal = 'more_like' then 1 else -1 end) as adjustment
+    from current_signals group by topic_id
+    having sum(case when signal = 'more_like' then 1 else -1 end) <> 0
+  ), selected as (
+    select topic_id, adjustment from aggregated
+    order by topic_id limit signal_limit
+  )
+  select jsonb_build_object(
+    'revision', coalesce((select max(revision) from current_signals), 0),
+    'topic_adjustments', coalesce(jsonb_agg(jsonb_build_object(
+      'topic_id', topic_id, 'adjustment', adjustment) order by topic_id), '[]'::jsonb),
+    'more_like_topic_weight', signal_weight,
+    'topic_signal_limit', signal_limit
+  ) into answer from selected;
+  return answer;
+end;
+$$;
+
 revoke all on table public.feed_policy from public, anon, authenticated;
 revoke all on table public.canonical_stories from public, anon, authenticated;
 revoke all on table public.story_aliases from public, anon, authenticated;
@@ -765,6 +805,7 @@ revoke execute on function public.set_story_state(text, boolean, boolean, bigint
 revoke execute on function public.set_story_interest(text, text, text, bigint, text) from public, anon, authenticated;
 revoke execute on function public.finalize_archive(jsonb, text) from public, anon, authenticated;
 revoke execute on function public.prune_publication_history() from public, anon, authenticated;
+revoke execute on function public.materialize_user_interest_signals(uuid) from public, anon, authenticated;
 grant execute on function public.latest_publication() to anon, authenticated;
 grant execute on function public.feed_page(text, text, integer, text, timestamptz, text, integer) to anon, authenticated;
 grant execute on function public.saved_page(timestamptz, text, integer) to authenticated;
@@ -773,5 +814,6 @@ grant execute on function public.set_story_state(text, boolean, boolean, bigint,
 grant execute on function public.set_story_interest(text, text, text, bigint, text) to authenticated;
 grant execute on function public.finalize_archive(jsonb, text) to service_role;
 grant execute on function public.prune_publication_history() to service_role;
+grant execute on function public.materialize_user_interest_signals(uuid) to service_role;
 
 commit;

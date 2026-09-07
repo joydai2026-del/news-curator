@@ -41,11 +41,15 @@ class FakeTransport:
         return self.response
 
 
-def profile_responses(revision=4, interests=None, signals=None, weight=0.8):
+def profile_responses(revision=4, interests=None, adjustments=None, weight=0.8, signal_revision=0):
     return [
         (200, [{"revision": revision, "interests": interests or []}]),
-        (200, signals or []),
-        (200, [{"more_like_topic_weight": weight}]),
+        (200, {
+            "revision": signal_revision,
+            "topic_adjustments": adjustments or [],
+            "more_like_topic_weight": weight,
+            "topic_signal_limit": 100,
+        }),
     ]
 
 
@@ -95,6 +99,30 @@ def test_fetches_only_the_configured_owner_and_returns_a_valid_profile() -> None
     assert call["headers"]["apikey"] == SECRET
     assert "authorization" not in call["headers"]
     assert SECRET not in repr(config)
+    signal_call = transport.calls[1]
+    assert signal_call["method"] == "POST"
+    assert signal_call["url"].endswith("/rest/v1/rpc/materialize_user_interest_signals")
+    assert signal_call["body"] == {"p_user_id": OWNER_ID}
+    assert "user_story_interests" not in signal_call["url"]
+
+
+def test_more_than_200_historical_rows_are_represented_by_bounded_topic_aggregation() -> None:
+    transport = FakeTransport(profile_responses(
+        revision=4,
+        adjustments=[
+            {"topic_id": "ai", "adjustment": 201},
+            {"topic_id": "energy", "adjustment": -4},
+        ],
+        signal_revision=205,
+    ))
+    profile = fetch_interest_profile(
+        SecretPreferenceConfig("https://example.supabase.co", SECRET, OWNER_ID),
+        transport=transport,
+    )
+
+    assert profile.revision == 205
+    assert profile.topic_adjustments == (("ai", 201.0), ("energy", -4.0))
+    assert len(transport.calls) == 2
 
 
 def test_legacy_service_role_jwt_uses_bearer_compatibility_header() -> None:
