@@ -281,6 +281,8 @@ async function main() {
   assert.equal(historyCard.attrs["data-rank-crypto"], "2");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "crypto"), "crypto");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "__all__"), "ai");
+  assert.equal(reader.loadedStatus(1), "1 older story loaded.");
+  assert.equal(reader.loadedStatus(2), "2 older stories loaded.");
 
   const fakeCard = {
     dataset: {},
