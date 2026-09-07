@@ -2,6 +2,8 @@
 
 Keywords in, ranked fresh headlines out.
 
+![news-curator demo: keywords in, a self-updating page of ranked fresh headlines out](docs/news-curator-readme-demo.gif)
+
 Current plan: [Fall 2026 AI Sprint in Notion](https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2)
 
 You have topics you care about but don't want to actively track. Write the
