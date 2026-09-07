@@ -112,6 +112,14 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
               <button class="state-action save-action" hidden disabled>Save</button>
               <button class="state-action interest-action" data-topic-id="ai" hidden disabled>More like this</button>
             </article>
+            <article class="card" data-story-id="story:0000000000000000000000000000000000000000000000000000000000000002"
+              data-topic-ids="quantum-computing" data-topic-api-ids="quantum"
+              data-state-revision="0" data-interest-revision="0">
+              <button class="accordion-toggle" aria-expanded="false">Controller story 2</button>
+              <button class="state-action read-action" hidden disabled>Mark read</button>
+              <button class="state-action save-action" hidden disabled>Save</button>
+              <button class="state-action interest-action" data-topic-id="quantum" hidden disabled>More like this</button>
+            </article>
           </div>
         </section></main><div class="spacer"></div>
         <script>
@@ -152,6 +160,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     thread.start()
     counts = {"latest": 0, "category": 0, "state": 0, "interest": 0, "updates": 0}
     interest_writes: list[tuple[str, int]] = []
+    state_writes: list[tuple[str, int]] = []
     fail_next_state = {"value": False}
 
     def fulfill(route: object) -> None:
@@ -176,7 +185,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             if counts["latest"] >= 3:
                 payload = [_story(900)]
             elif body["p_topic_id"] is None:
-                payload = []
+                payload = [_story(1)]
             elif body["p_topic_id"] == "ai":
                 row = _story(1)
                 row["saved_at"] = "2026-09-07T12:02:00Z"
@@ -190,7 +199,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 counts["category"] += 1
                 if counts["category"] == 1:
                     assert body["p_order_mode"] == "edition_rank"
-                    payload = [_story(1), _story(2)]
+                    second = _story(2)
+                    second["state_revision"] = 7
+                    payload = [_story(1), second]
                 else:
                     assert body["p_order_mode"] == "history_freshness"
                     assert body.get("p_before_published_at") is None
@@ -207,6 +218,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 },
             }]
         elif request.url.endswith("/set_story_state"):
+            state_writes.append((body["p_story_id"], body["p_expected_revision"]))
             if fail_next_state["value"]:
                 fail_next_state["value"] = False
                 route.fulfill(
@@ -241,11 +253,22 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page = browser.new_page(viewport={"width": 900, "height": 700})
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
-            assert page.locator(".state-action:visible").count() == 3
+            assert page.locator(".state-action:visible").count() == 6
             assert page.locator(".state-action:enabled").count() == 3
+            second = page.locator("article.card", has_text="Controller story 2")
+            assert second.locator(".state-action:enabled").count() == 0
+            second.locator(".save-action").evaluate(
+                "button => button.dispatchEvent(new MouseEvent('click', {bubbles: true}))"
+            )
+            assert state_writes == []
             page.locator('.chip[data-filter="quantum-computing"]').click()
             page.locator("article.card", has_text="Controller story 2").wait_for()
             assert page.locator("article.card:visible").count() == 2
+            assert second.locator(".state-action:enabled").count() == 3
+            assert second.get_attribute("data-state-revision") == "7"
+            second.locator(".read-action").click()
+            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            assert state_writes[-1] == (second.get_attribute("data-story-id"), 7)
 
             first = page.locator("article.card").first
             first.locator(".accordion-toggle").evaluate(

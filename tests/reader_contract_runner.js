@@ -68,11 +68,18 @@ class FakeElement {
   getAttribute(name) { return this.attrs[name]; }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); }
   querySelector(selector) {
-    if (selector.startsWith(".")) {
-      const name = selector.slice(1);
-      return this.children.find((child) => child instanceof FakeElement && child.classList.contains(name)) || null;
-    }
-    return null;
+    return this.querySelectorAll(selector)[0] || null;
+  }
+  querySelectorAll(selector) {
+    if (!selector.startsWith(".")) return [];
+    const name = selector.slice(1);
+    const matches = [];
+    this.children.forEach((child) => {
+      if (!(child instanceof FakeElement)) return;
+      if (child.classList.contains(name)) matches.push(child);
+      matches.push(...child.querySelectorAll(selector));
+    });
+    return matches;
   }
 }
 
@@ -573,10 +580,11 @@ async function main() {
     })], url);
   };
   await reader.run();
-  assert.equal(configuredActions.every((button) => !button.hidden && !button.disabled), true);
+  assert.equal(configuredActions.every((button) => !button.hidden && button.disabled), true);
   assert.equal(controllerCalls, 2);
   assert.equal(controllerHeaders[1].authorization, "Bearer refreshed-reader-token");
   assert.equal(addedCards.length, 1);
+  assert.equal(addedCards[0].querySelectorAll(".state-action").every((button) => !button.disabled), true);
   assert.equal(addedCards[0].attrs["data-rank-ai"], "2");
   assert.equal(addedCards[0].attrs["data-rank-crypto"], "1");
   const renderedText = textOf(addedCards[0]);

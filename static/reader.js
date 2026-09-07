@@ -527,10 +527,7 @@
       loadButton.hidden = true;
       return;
     }
-    document.querySelectorAll(".state-action").forEach((button) => {
-      button.hidden = false;
-      button.disabled = false;
-    });
+    document.querySelectorAll(".state-action").forEach((button) => { button.hidden = false; });
     const cards = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => {
       const interestButton = card.querySelector(".interest-action");
@@ -567,6 +564,19 @@
       const chip = document.querySelector(`.chip[data-topic-id="${CSS.escape(topicId)}"]`);
       return chip && chip.dataset.filter ? chip.dataset.filter : topicId;
     }
+    function hydratedTopics(card) {
+      if (!(card.newsCuratorHydratedTopics instanceof Set)) {
+        card.newsCuratorHydratedTopics = new Set();
+      }
+      return card.newsCuratorHydratedTopics;
+    }
+    function stateReady(card) { return hydratedTopics(card).has(selectedTopic()); }
+    function refreshStateControls() {
+      cards.forEach((card) => {
+        const disabled = !stateReady(card);
+        card.querySelectorAll(".state-action").forEach((button) => { button.disabled = disabled; });
+      });
+    }
     function refreshInterestControls() {
       const topic = selectedTopic();
       cards.forEach((card) => {
@@ -594,7 +604,7 @@
       document.getElementById("sections").append(section);
       return section;
     }
-    function mergeRows(rows, appendNew) {
+    function mergeRows(rows, appendNew, hydratedTopic = selectedTopic()) {
       rows.forEach((row) => {
         const existing = cards.get(row.story_id);
         if (existing) {
@@ -602,6 +612,7 @@
           existing.dataset.topicApiIds = [...row.topic_ids].sort().join(" ");
           applyServerRank(existing, row, selectedTopic(), topicSlugForId);
           applyServerState(existing, row);
+          hydratedTopics(existing).add(hydratedTopic);
           view.addCard(existing);
           return;
         }
@@ -611,10 +622,12 @@
           row, selected, topicSlugForId, topicIdForSlug(selected),
         );
         cards.set(row.story_id, card);
+        hydratedTopics(card).add(hydratedTopic);
         sectionFor(row.topic_ids[0]).querySelector(".grid").append(card);
         view.addCard(card);
       });
       view.apply();
+      refreshStateControls();
     }
     async function hydrate(force = false) {
       const topic = selectedTopic();
@@ -628,7 +641,7 @@
       const rows = topic === "__saved__"
         ? await api.savedPage(null, latest.page_size)
         : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
-      mergeRows(rows, true);
+      mergeRows(rows, true, topic);
       const cursor = topic === "__saved__"
         ? nextSavedCursor(rows, latest.page_size)
         : nextFeedCursor(rows, latest.initial_history_cursor, initialCursor, latest.page_size);
@@ -654,7 +667,7 @@
           const cursor = nextFeedCursor(rows, latest.initial_history_cursor, currentCursor, latest.page_size);
           if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
         }
-        mergeRows(rows, true);
+        mergeRows(rows, true, topic);
         if (topic === "__saved__" && rows.length < latest.page_size) exhausted.add(topic);
         announce(rows.length ? loadedStatus(rows.length) : "No older stories remain in this section.");
       } catch (_) {
@@ -698,6 +711,8 @@
       const target = event.target.closest && event.target.closest("button");
       const card = event.target.closest && event.target.closest(".card[data-story-id]");
       if (!target || !card) return;
+      const stateAction = target.classList.contains("state-action");
+      if ((stateAction || target.classList.contains("accordion-toggle")) && !stateReady(card)) return;
       if (target.classList.contains("accordion-toggle") && target.getAttribute("aria-expanded") === "true" &&
           !card.classList.contains("is-read") && requireSignIn()) {
         void mutateState(card, true, card.classList.contains("is-saved"));
@@ -725,11 +740,12 @@
             announce("More like this was saved for future rankings.");
           })
           .catch(() => { announce("More like this could not be saved. Try again."); })
-          .finally(() => { target.disabled = false; });
+          .finally(() => { target.disabled = !stateReady(card); });
       }
     });
     document.querySelectorAll(".chip").forEach((chip) => {
       chip.addEventListener("click", () => {
+        refreshStateControls();
         refreshInterestControls();
         void hydrate().catch(() => { announce("This section could not be synced. Try again."); });
       });
