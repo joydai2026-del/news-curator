@@ -290,6 +290,43 @@ async function main() {
   );
 
   browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
+  assert.equal(client.hasSessionCandidate(), true);
+  let releaseRefresh;
+  let readerRefreshCalls = 0;
+  const readerRefreshFetch = async (url, options) => {
+    readerRefreshCalls += 1;
+    assertFailClosedFetch({ url, options });
+    await new Promise((resolve) => { releaseRefresh = resolve; });
+    return response(200, refreshedSession(), url);
+  };
+  const readerSessionOne = client.readerSessionForRequest(readerRefreshFetch, now);
+  const readerSessionTwo = client.readerSessionForRequest(readerRefreshFetch, now);
+  await Promise.resolve();
+  releaseRefresh();
+  const [readerOne, readerTwo] = await Promise.all([readerSessionOne, readerSessionTwo]);
+  assert.equal(readerRefreshCalls, 1);
+  assert.equal(readerOne.access_token, refreshedProjection.access_token);
+  assert.deepEqual(readerTwo, readerOne);
+  assert.equal(
+    JSON.parse(browser.storage.get("news-curator.auth.session")).access_token,
+    refreshedProjection.access_token,
+  );
+
+  browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
+  await assert.rejects(
+    client.readerSessionForRequest(
+      async (url, options) => {
+        assertFailClosedFetch({ url, options });
+        return response(401, { error: "invalid_grant" }, url);
+      },
+      now,
+    ),
+    /Session refresh failed/,
+  );
+  assert.equal(browser.storage.has("news-curator.auth.session"), false);
+  assert.equal(client.hasSessionCandidate(), false);
+
+  browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
   await assert.rejects(
     client.getPreferences(authConfig, expired, async (url) => response(401, { error: "invalid_grant" }, url)),
     /Session refresh failed/

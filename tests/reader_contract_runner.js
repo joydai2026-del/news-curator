@@ -359,7 +359,8 @@ async function main() {
   global.window = {
     NewsCuratorAuth: {
       config: () => ({ url: "https://reader.example", key: "public-key" }),
-      loadSession: () => null,
+      hasSessionCandidate: () => false,
+      sessionForRequest: async () => null,
     },
     NewsCuratorView: { currentTab: () => "__all__", addCard() {}, apply() {} },
     location: { reload() {} },
@@ -398,7 +399,8 @@ async function main() {
   global.window = {
     NewsCuratorAuth: {
       config: () => ({ url: "https://reader.example", key: "public-key" }),
-      loadSession: () => null,
+      hasSessionCandidate: () => true,
+      sessionForRequest: async () => ({ access_token: "refreshed-reader-token" }),
     },
     NewsCuratorView: {
       currentTab: () => "__all__", addCard: (card) => addedCards.push(card), apply() {},
@@ -413,7 +415,9 @@ async function main() {
     querySelector: (selector) => selector.includes('data-section="ai"') ? aiSection : null,
   };
   let controllerCalls = 0;
-  global.fetch = async (url) => {
+  const controllerHeaders = [];
+  global.fetch = async (url, options) => {
+    controllerHeaders.push(options.headers);
     controllerCalls += 1;
     if (url.endsWith("/latest_publication")) return response(200, {
       publication_seq: 7, finalized_at: "2026-09-07T12:00:00Z",
@@ -430,6 +434,7 @@ async function main() {
   };
   await reader.run();
   assert.equal(controllerCalls, 2);
+  assert.equal(controllerHeaders[1].authorization, "Bearer refreshed-reader-token");
   assert.equal(addedCards.length, 1);
   assert.equal(addedCards[0].attrs["data-rank-ai"], "2");
   assert.equal(addedCards[0].attrs["data-rank-crypto"], "1");
@@ -437,6 +442,44 @@ async function main() {
   assert.match(renderedText, /NewsletterDaily Brief/);
   assert.match(renderedText, /Published/);
   assert.match(renderedText, /Saved interests were considered first, then freshness\./);
+
+  const refreshedRpcHeaders = [];
+  const refreshedApi = reader.createApi(
+    { url: "https://reader.example", key: "public-key" },
+    async () => ({ access_token: "refreshed-reader-token" }),
+    async (url, options) => {
+      refreshedRpcHeaders.push(options.headers);
+      if (url.endsWith("/feed_page")) return response(200, [], url);
+      return response(200, {
+        status: "updated", read_at: "2026-09-07T12:03:00Z", saved_at: null, revision: 2,
+      }, url);
+    },
+  );
+  await refreshedApi.feedPage("ai", null);
+  await refreshedApi.setStoryState(story().story_id, true, false, 1, "refresh-write");
+  assert.deepEqual(
+    refreshedRpcHeaders.map((headers) => headers.authorization),
+    ["Bearer refreshed-reader-token", "Bearer refreshed-reader-token"],
+  );
+  let failedRefreshReachedRpc = false;
+  const failedRefreshApi = reader.createApi(
+    { url: "https://reader.example", key: "public-key" },
+    async () => { throw new Error("Session refresh failed."); },
+    async () => { failedRefreshReachedRpc = true; throw new Error("RPC must not run"); },
+  );
+  await assert.rejects(failedRefreshApi.feedPage("ai", null), /Session refresh failed/);
+  assert.equal(failedRefreshReachedRpc, false);
+  let anonymousAuthorization = "not-called";
+  const afterClearApi = reader.createApi(
+    { url: "https://reader.example", key: "public-key" },
+    async () => null,
+    async (url, options) => {
+      anonymousAuthorization = options.headers.authorization;
+      return response(200, [], url);
+    },
+  );
+  await afterClearApi.feedPage("ai", null);
+  assert.equal(anonymousAuthorization, undefined);
   delete global.BroadcastChannel;
   delete global.CSS;
   delete global.fetch;
