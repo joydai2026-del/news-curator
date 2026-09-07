@@ -151,6 +151,23 @@ def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
     )
 
 
+def test_newsletter_profile_guard_secret_is_scoped_to_the_newsletter_step() -> None:
+    jobs = _jobs()
+    step = _step_named(jobs["newsletter"], "Fetch the newsletter lane")
+    expected = "${{ secrets.GMAIL_EXPECTED_PROFILE_SHA256 }}"
+    assert step["env"]["GMAIL_EXPECTED_PROFILE_SHA256"] == expected
+    assert step["env"].keys() == {
+        "GMAIL_CLIENT_ID",
+        "GMAIL_CLIENT_SECRET",
+        "GMAIL_REFRESH_TOKEN",
+        "GMAIL_EXPECTED_PROFILE_SHA256",
+    }
+    for job_name, job in jobs.items():
+        if job_name == "newsletter":
+            continue
+        assert expected not in yaml.safe_dump(job, sort_keys=True)
+
+
 def test_translation_is_dark_without_exact_enable_variable() -> None:
     condition = _jobs()["translation"]["if"]
     assert condition == (
