@@ -23,6 +23,7 @@ on:
       - "curator/**"
       - "scripts/**"
       - "static/**"
+      - "supabase/**"
       - "CNAME"
       - ".github/workflows/curate.yml"
 
@@ -398,6 +399,9 @@ jobs:
             --source-snapshot "$RUNNER_TEMP/source-snapshot.json" \
             --health-report ./source-health.json \
             --newsletter-artifact ./newsletter_artifact.json \
+            --archive-candidate "$RUNNER_TEMP/archive-candidate.json" \
+            --build-nonce "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT" \
+            --commit-sha "$GITHUB_SHA" \
             "${interest_args[@]}" \
             "${translation_args[@]}"
 
@@ -449,6 +453,12 @@ jobs:
           cp static/auth/client.js site/auth/client.js
           cp static/auth/styles.css site/auth/styles.css
           cp static/privacy.html site/privacy.html
+
+      - name: Stamp archive candidate with final deployed page
+        run: >
+          python -m curator.archive_candidate
+          "$RUNNER_TEMP/archive-candidate.json"
+          --stamp-site ./site/index.html
 
       - name: Verify the rendered page has real content
         # A green exit code and an existing file do not prove a page is any
@@ -577,6 +587,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: archive-candidate
+          path: ${{ runner.temp }}/archive-candidate.json
+          if-no-files-found: error
+          retention-days: 2
+
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: ./site
@@ -643,6 +660,46 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  # The database archive is written only after Pages confirms the exact site
+  # deployment. This job has no Pages, repository-write, or OIDC permission.
+  finalize-archive:
+    needs: [build, deploy]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build.result == 'success' && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: personalization
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: archive-candidate
+          path: ${{ runner.temp }}/archive
+
+      - name: Finalize deployed archive and prune expired history
+        env:
+          DEPLOYED_URL: ${{ needs.deploy.outputs.page_url }}
+          NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
+          NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
+          NEWS_CURATOR_DEPLOY_VERIFY_ATTEMPTS: ${{ vars.NEWS_CURATOR_DEPLOY_VERIFY_ATTEMPTS || '6' }}
+          NEWS_CURATOR_DEPLOY_VERIFY_DELAY_SECONDS: ${{ vars.NEWS_CURATOR_DEPLOY_VERIFY_DELAY_SECONDS || '10' }}
+        run: >
+          python -m curator.archive_finalize
+          --candidate "$RUNNER_TEMP/archive/archive-candidate.json"
+          --deployed-url "$DEPLOYED_URL"
+          --expected-commit "$GITHUB_SHA"

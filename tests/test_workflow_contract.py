@@ -130,7 +130,7 @@ def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
         for name, job in jobs.items()
         if "${{ secrets." in yaml.safe_dump(job, sort_keys=True)
     }
-    assert secret_jobs == {"newsletter", "build", "translation"}
+    assert secret_jobs == {"newsletter", "build", "translation", "finalize-archive"}
     for name in ("newsletter", "translation"):
         job = jobs[name]
         condition = str(job.get("if", ""))
@@ -144,6 +144,9 @@ def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
     build = jobs["build"]
     assert build["permissions"] == {"contents": "read"}
     assert _environment_name(build) == "personalization"
+    finalizer = jobs["finalize-archive"]
+    assert finalizer["permissions"] == {"contents": "read"}
+    assert _environment_name(finalizer) == "personalization"
     materialize = _step_named(build, "Materialize saved-interest ranking")
     assert materialize["if"] == (
         "${{ github.ref == 'refs/heads/main' && "
@@ -178,10 +181,10 @@ def test_translation_is_dark_without_exact_enable_variable() -> None:
 
 def test_secret_job_checkouts_never_persist_credentials() -> None:
     jobs = _jobs()
-    for name in ("newsletter", "build", "translation"):
+    for name in ("newsletter", "build", "translation", "finalize-archive"):
         checkouts = _action_steps(jobs[name], "actions/checkout")
         assert len(checkouts) == 1
-        assert checkouts[0].get("with") == {"persist-credentials": False}
+        assert checkouts[0].get("with", {}).get("persist-credentials") is False
 
 
 def test_permissions_are_bound_to_the_exact_jobs() -> None:
@@ -189,6 +192,7 @@ def test_permissions_are_bound_to_the_exact_jobs() -> None:
     assert jobs["newsletter"]["permissions"] == {"contents": "read"}
     assert jobs["translation"]["permissions"] == {"contents": "read", "id-token": "write"}
     assert jobs["build"]["permissions"] == {"contents": "read"}
+    assert jobs["finalize-archive"]["permissions"] == {"contents": "read"}
     assert jobs["persist-state"]["permissions"] == {"contents": "write"}
     assert jobs["deploy"]["permissions"] == {"pages": "write", "id-token": "write"}
     id_token_jobs = {
