@@ -360,6 +360,9 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
+  function sourceIdentity(sourceKind, sourceName) {
+    return `${sourceKind}:${sourceName.trim().replace(/\s+/g, " ").toLowerCase()}`;
+  }
   function createStoryCard(
     row, selectedTopic, topicSlug = (value) => value, selectedTopicId = selectedTopic,
   ) {
@@ -398,11 +401,14 @@
       element("span", "", new Date(row.published_at).toLocaleString()),
     );
     details.append(source, published);
-    if (row.coverage_mentions.length) {
+    const primarySource = sourceIdentity(row.source_kind, row.source_name);
+    const additionalMentions = row.coverage_mentions.filter((mention) =>
+      sourceIdentity(mention.source_kind, mention.source_name) !== primarySource);
+    if (additionalMentions.length) {
       const coverage = element("div", "row");
       coverage.append(element("b", "", "Also covered by"));
       const mentions = element("span");
-      row.coverage_mentions.forEach((mention, index) => {
+      additionalMentions.forEach((mention, index) => {
         if (index) mentions.append(document.createTextNode(", "));
         const link = element("a", "", mention.source_name);
         link.href = mention.url;

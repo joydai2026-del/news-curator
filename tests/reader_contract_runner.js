@@ -474,6 +474,30 @@ async function main() {
     canonical_url: "", source_kind: "newsletter", source_name: "Daily Brief",
   }), "ai");
   assert.doesNotMatch(textOf(linklessCard), /Read original/);
+  const primaryMention = {
+    source_kind: "outlet",
+    source_id: "publisher",
+    source_name: "  PUBLISHER  ",
+    url: "https://publisher.example/story",
+    headline: "A real story",
+    mentioned_at: "2026-09-07T12:00:00Z",
+  };
+  const primaryOnlyCard = reader.createStoryCard(story({
+    coverage_mentions: [primaryMention],
+  }), "ai");
+  assert.doesNotMatch(textOf(primaryOnlyCard), /Also covered by/);
+  const multiOutletCard = reader.createStoryCard(story({
+    coverage_mentions: [primaryMention, {
+      source_kind: "outlet",
+      source_id: "other-outlet",
+      source_name: "Other Outlet",
+      url: "https://other.example/story",
+      headline: "Another report",
+      mentioned_at: "2026-09-07T12:01:00Z",
+    }],
+  }), "ai");
+  assert.match(textOf(multiOutletCard), /Also covered byOther Outlet/);
+  assert.doesNotMatch(textOf(multiOutletCard), /PUBLISHER/);
   let controllerCalls = 0;
   const controllerHeaders = [];
   global.fetch = async (url, options) => {
