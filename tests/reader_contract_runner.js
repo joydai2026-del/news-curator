@@ -479,14 +479,36 @@ async function main() {
     refreshedRpcHeaders.map((headers) => headers.authorization),
     ["Bearer refreshed-reader-token", "Bearer refreshed-reader-token"],
   );
-  let failedRefreshReachedRpc = false;
+  const expiredToken = "expired-token-must-not-be-reused";
+  const failedRefreshCalls = [];
   const failedRefreshApi = reader.createApi(
     { url: "https://reader.example", key: "public-key" },
-    async () => { throw new Error("Session refresh failed."); },
-    async () => { failedRefreshReachedRpc = true; throw new Error("RPC must not run"); },
+    async () => { throw new Error(`Session refresh failed: ${expiredToken}`); },
+    async (url, options) => {
+      failedRefreshCalls.push({ url, options });
+      if (url.endsWith("/latest_publication")) return response(200, {}, url);
+      return response(200, [], url);
+    },
   );
-  await assert.rejects(failedRefreshApi.feedPage("ai", null), /Session refresh failed/);
-  assert.equal(failedRefreshReachedRpc, false);
+  await failedRefreshApi.latestPublication();
+  await failedRefreshApi.feedPage("ai", null);
+  await failedRefreshApi.updatesSince(7);
+  assert.equal(failedRefreshCalls.length, 3);
+  failedRefreshCalls.forEach(({ options }) => {
+    assert.equal(options.headers.authorization, undefined);
+    assert.equal(JSON.stringify(options).includes(expiredToken), false);
+  });
+  const authenticatedCallsBefore = failedRefreshCalls.length;
+  await assert.rejects(failedRefreshApi.savedPage(null), /^Error: Sign in to continue\.$/);
+  await assert.rejects(
+    failedRefreshApi.setStoryState(story().story_id, true, false, 0, "failed-refresh-state"),
+    /^Error: Sign in to continue\.$/,
+  );
+  await assert.rejects(
+    failedRefreshApi.setStoryInterest(story().story_id, "ai", 0, "failed-refresh-interest"),
+    /^Error: Sign in to continue\.$/,
+  );
+  assert.equal(failedRefreshCalls.length, authenticatedCallsBefore);
   let anonymousAuthorization = "not-called";
   const afterClearApi = reader.createApi(
     { url: "https://reader.example", key: "public-key" },

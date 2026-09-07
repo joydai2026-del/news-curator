@@ -207,7 +207,12 @@
   function createApi(rawConfig, sessionProvider, fetchImpl = fetch) {
     const config = validateApiConfig(rawConfig);
     async function rpc(name, body, validator, requiresAuth = false) {
-      const session = await sessionProvider();
+      let session = null;
+      try {
+        session = await sessionProvider();
+      } catch (_) {
+        if (requiresAuth) fail("Sign in to continue.");
+      }
       if (requiresAuth && (!session || !boundedString(session.access_token, 16384))) fail("Sign in to continue.");
       const requestedUrl = `${config.url}/rest/v1/rpc/${name}`;
       const headers = { apikey: config.key, accept: "application/json", "content-type": "application/json" };

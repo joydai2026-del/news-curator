@@ -325,6 +325,14 @@ async function main() {
   );
   assert.equal(browser.storage.has("news-curator.auth.session"), false);
   assert.equal(client.hasSessionCandidate(), false);
+  let postFailureRefreshCalled = false;
+  assert.equal(
+    await client.readerSessionForRequest(async () => { postFailureRefreshCalled = true; }, now),
+    null,
+  );
+  assert.equal(postFailureRefreshCalled, false);
+  assert.equal(JSON.stringify([...browser.storage.values()]).includes(expired.access_token), false);
+  assert.equal(JSON.stringify([...browser.storage.values()]).includes(expired.refresh_token), false);
 
   browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
   await assert.rejects(
