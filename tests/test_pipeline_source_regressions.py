@@ -6,7 +6,8 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from curator.config import load_config
-from curator.localization import story_id_for_item, write_translation_artifact
+from curator.identity import story_id_for_item
+from curator.localization import write_translation_artifact
 from curator.models import Item, TierResult, TranslationRecord
 from curator.personalization.ranking import (
     InterestProfile,

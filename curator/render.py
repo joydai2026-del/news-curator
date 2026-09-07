@@ -58,7 +58,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from .models import Item, TierResult
-from .localization import story_id_for_item
+from .identity import story_id_for_item
 from .normalize import safe_url
 
 CSS = """
