@@ -45,7 +45,7 @@
       fail("The feed response was invalid.");
     }
     const url = safeDestination(value.url);
-    if (!url || !url.startsWith("https://")) fail("The feed response was invalid.");
+    if (!url) fail("The feed response was invalid.");
     return { ...value, url };
   }
   function validateCursor(value, message = "The cursor response was invalid.", allowEmptyStory = false) {
