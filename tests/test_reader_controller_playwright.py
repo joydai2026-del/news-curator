@@ -20,8 +20,16 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
-def _story(index: int) -> dict[str, object]:
+def _story(index: int, mode: str = "edition_rank") -> dict[str, object]:
     story_id = "story:" + f"{index:064x}"
+    cursor = (
+        {"after_position": index, "after_story_id": story_id}
+        if mode == "edition_rank"
+        else {
+            "before_published_at": "2026-09-07T11:00:00Z",
+            "before_story_id": story_id,
+        }
+    )
     return {
         "story_id": story_id,
         "canonical_url": f"https://publisher.example/story-{index}",
@@ -31,8 +39,8 @@ def _story(index: int) -> dict[str, object]:
         "published_at": "2026-09-07T12:00:00Z",
         "publication_seq": 7 if index < 900 else 8,
         "position": index,
-        "page_order_mode": "edition_rank",
-        "next_cursor": {"after_position": index, "after_story_id": story_id},
+        "page_order_mode": mode,
+        "next_cursor": cursor,
         "ordering_mode": "weighted_total",
         "ordering_key": {"weighted_total": 1},
         "score_components": {"freshness": 1},
@@ -144,15 +152,19 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             if counts["latest"] >= 3:
                 payload = [_story(900)]
             elif body["p_topic_id"] is None:
-                payload = [_story(index) for index in range(1, 21)]
+                payload = []
             else:
                 assert body["p_topic_id"] == "quantum"
                 counts["category"] += 1
-                payload = (
-                    [_story(index) for index in range(1, 21)]
-                    if counts["category"] == 1
-                    else [_story(21)]
-                )
+                if counts["category"] == 1:
+                    assert body["p_order_mode"] == "edition_rank"
+                    payload = [_story(1), _story(2)]
+                else:
+                    assert body["p_order_mode"] == "history_freshness"
+                    assert body.get("p_before_published_at") is None
+                    payload = [_story(1, "history_freshness"),
+                               _story(2, "history_freshness"),
+                               _story(3, "history_freshness")]
         elif request.url.endswith("/set_story_state"):
             counts["state"] += 1
             payload = {
@@ -178,8 +190,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page = browser.new_page(viewport={"width": 900, "height": 700})
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
-            page.locator("article.card", has_text="Controller story 20").wait_for()
             page.locator('.chip[data-filter="quantum-computing"]').click()
+            page.locator("article.card", has_text="Controller story 2").wait_for()
+            assert page.locator("article.card:visible").count() == 2
 
             first = page.locator("article.card").first
             first.locator(".accordion-toggle").evaluate(
@@ -204,7 +217,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
 
             before_page = _visible_story_ids(page)
             page.locator("#load-more").evaluate("button => button.click()")
-            page.locator("#reader-status").get_by_text("1 older story loaded.").wait_for()
+            page.locator("#reader-status").get_by_text("3 older stories loaded.").wait_for()
             after_page = _visible_story_ids(page)
             assert after_page[: len(before_page)] == before_page
             assert len(after_page) == len(set(after_page)) == len(before_page) + 1
