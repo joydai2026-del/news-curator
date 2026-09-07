@@ -665,7 +665,7 @@ begin
       row->>'source_kind', row->>'source_name', (row->>'published_at')::timestamptz)
     on conflict (story_id) do update set canonical_url=excluded.canonical_url, title=excluded.title,
       summary=excluded.summary, language=excluded.language, source_kind=excluded.source_kind,
-      source_name=excluded.source_name, last_archived_at=now();
+      source_name=excluded.source_name, published_at=excluded.published_at, last_archived_at=now();
   end loop;
   for row in select value from jsonb_array_elements(p_candidate->'aliases') loop
     if exists (select 1 from public.story_aliases
