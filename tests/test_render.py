@@ -97,6 +97,24 @@ class TestContent:
     def test_empty_topic_says_so(self, now):
         assert "Nothing matched" in render({"T": []}, now=now)
 
+    def test_category_id_is_carried_separately_from_display_slug(self, now):
+        page = render(
+            {"Quantum Computing": [make_item("Quantum milestone")]},
+            now=now,
+            topic_ids_by_name={"Quantum Computing": "quantum"},
+        )
+        card = card_with(page, "Quantum milestone")
+        assert (
+            'data-filter="quantum-computing" data-topic-id="quantum"'
+            in page
+        )
+        assert (
+            'data-section="quantum-computing" data-topic-id="quantum"'
+            in page
+        )
+        assert 'data-topic-api-ids="quantum"' in card
+        assert 'class="state-action interest-action" data-topic-id="quantum"' in card
+
     def test_every_generated_anchor_opens_a_safe_new_tab(self, now):
         item = make_item("Real headline", "https://example.com/a")
         item.cluster = [{"source_name": "Other source", "url": "https://other.example/a"}]
@@ -622,9 +640,9 @@ class TestAccordionReadingCompanion:
             "AI": [make_item("AI story", "https://example.com/ai")],
             "Crypto": [make_item("Crypto story", "https://example.com/crypto")],
         }, now=now)
-        assert '<section class="topic-section" data-section="ai">' in page
+        assert '<section class="topic-section" data-section="ai" data-topic-id="ai">' in page
         assert '<h2 class="section-title">AI</h2>' in page
-        assert '<section class="topic-section" data-section="crypto">' in page
+        assert '<section class="topic-section" data-section="crypto" data-topic-id="crypto">' in page
         assert '<h2 class="section-title">Crypto</h2>' in page
 
     def test_filtered_view_has_one_dynamic_topic_heading(self, now):
@@ -845,8 +863,8 @@ class TestCategoryTabs:
         html = render({"AI": [make_item("a", "https://e.com/1")],
                        "Crypto": [make_item("b", "https://e.com/2")]}, now=now)
         assert '<button class="chip" data-filter="__all__"' in html
-        assert 'data-filter="ai" aria-pressed="false">AI</button>' in html
-        assert 'data-filter="crypto" aria-pressed="false">Crypto</button>' in html
+        assert 'data-filter="ai" data-topic-id="ai" aria-pressed="false">AI</button>' in html
+        assert 'data-filter="crypto" data-topic-id="crypto" aria-pressed="false">Crypto</button>' in html
 
     def test_switching_a_tab_reorders_by_that_tabs_rank(self, now):
         html = render({"AI": [make_item("a")]}, now=now)

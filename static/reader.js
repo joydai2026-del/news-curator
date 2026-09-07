@@ -261,9 +261,9 @@
     card.dataset.topicIds = value;
     card.dataset.topics = value;
   }
-  function applyServerRank(card, row, selectedTopic) {
+  function applyServerRank(card, row, selectedTopic, topicSlug = (value) => value) {
     Object.entries(row.topic_ranks || {}).forEach(([topic, position]) => {
-      card.setAttribute(`data-rank-${topic}`, String(position));
+      card.setAttribute(`data-rank-${topicSlug(topic)}`, String(position));
     });
     if (row.page_order_mode === "history_freshness" &&
                (!card.hasAttribute || !card.hasAttribute("data-rank-all"))) {
@@ -338,11 +338,14 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
-  function createStoryCard(row, selectedTopic) {
+  function createStoryCard(
+    row, selectedTopic, topicSlug = (value) => value, selectedTopicId = selectedTopic,
+  ) {
     const card = element("article", "card");
     card.dataset.storyId = row.story_id;
-    mergeTopicMembership(card, row.topic_ids);
-    applyServerRank(card, row, selectedTopic);
+    mergeTopicMembership(card, row.topic_ids.map(topicSlug));
+    card.dataset.topicApiIds = [...row.topic_ids].sort().join(" ");
+    applyServerRank(card, row, selectedTopic, topicSlug);
     const heading = element("h2", "story-heading");
     const toggle = element("button", "accordion-toggle");
     const suffix = row.story_id.slice(-12);
@@ -405,7 +408,7 @@
     [read, save, interest].forEach((button) => { button.type = "button"; });
     save.setAttribute("aria-pressed", "false");
     interest.setAttribute("aria-pressed", "false");
-    interest.dataset.topicId = effectiveTopic(row.topic_ids, selectedTopic);
+    interest.dataset.topicId = effectiveTopic(row.topic_ids, selectedTopicId);
     const close = element("button", "shut", "Close");
     close.type = "button";
     actions.append(read, save, interest, close);
@@ -496,12 +499,23 @@
       return false;
     }
     function selectedTopic() { return view.currentTab(); }
+    function topicIdForSlug(slug) {
+      if (slug === "__all__" || slug === "__saved__") return slug;
+      const chip = document.querySelector(`.chip[data-filter="${CSS.escape(slug)}"]`);
+      return chip && chip.dataset.topicId ? chip.dataset.topicId : slug;
+    }
+    function topicSlugForId(topicId) {
+      const chip = document.querySelector(`.chip[data-topic-id="${CSS.escape(topicId)}"]`);
+      return chip && chip.dataset.filter ? chip.dataset.filter : topicId;
+    }
     function sectionFor(topicId) {
-      let section = document.querySelector(`.topic-section[data-section="${CSS.escape(topicId)}"]`);
+      const slug = topicSlugForId(topicId);
+      let section = document.querySelector(`.topic-section[data-section="${CSS.escape(slug)}"]`);
       if (section) return section;
       const topic = latest && latest.topics.find((entry) => entry.topic_id === topicId);
       section = element("section", "topic-section");
-      section.dataset.section = topicId;
+      section.dataset.section = slug;
+      section.dataset.topicId = topicId;
       section.append(element("h2", "section-title", topic ? topic.name : topicId), element("div", "grid"));
       document.getElementById("sections").append(section);
       return section;
@@ -510,14 +524,18 @@
       rows.forEach((row) => {
         const existing = cards.get(row.story_id);
         if (existing) {
-          mergeTopicMembership(existing, row.topic_ids);
-          applyServerRank(existing, row, selectedTopic());
+          mergeTopicMembership(existing, row.topic_ids.map(topicSlugForId));
+          existing.dataset.topicApiIds = [...row.topic_ids].sort().join(" ");
+          applyServerRank(existing, row, selectedTopic(), topicSlugForId);
           applyServerState(existing, row);
           view.addCard(existing);
           return;
         }
         if (!appendNew) return;
-        const card = createStoryCard(row, selectedTopic());
+        const selected = selectedTopic();
+        const card = createStoryCard(
+          row, selected, topicSlugForId, topicIdForSlug(selected),
+        );
         cards.set(row.story_id, card);
         sectionFor(row.topic_ids[0]).querySelector(".grid").append(card);
         view.addCard(card);
@@ -533,7 +551,9 @@
       }
       const wasHydrated = hydrated.has(topic);
       const initialCursor = topic === "__all__" ? { order_mode: "history_freshness" } : null;
-      const rows = topic === "__saved__" ? await api.savedPage(null) : await api.feedPage(topic, initialCursor);
+      const rows = topic === "__saved__"
+        ? await api.savedPage(null)
+        : await api.feedPage(topicIdForSlug(topic), initialCursor);
       mergeRows(rows, true);
       const cursor = topic === "__saved__"
         ? nextSavedCursor(rows)
@@ -556,7 +576,7 @@
           const cursor = nextSavedCursor(rows);
           if (cursor) cursors.set(topic, cursor);
         } else {
-          rows = await api.feedPage(topic, currentCursor);
+          rows = await api.feedPage(topicIdForSlug(topic), currentCursor);
           const cursor = nextFeedCursor(rows, latest && latest.initial_history_cursor, currentCursor);
           if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
         }

@@ -275,6 +275,11 @@ async function main() {
   }), "crypto");
   assert.equal(rankedCard.attrs["data-rank-crypto"], "17");
   assert.equal(rankedCard.attrs["data-rank-ai"], "4");
+  const topicSlug = (topicId) => topicId === "quantum" ? "quantum-computing" : topicId;
+  reader.applyServerRank(rankedCard, story({
+    topic_ids: ["quantum"], topic_ranks: { quantum: 8 },
+  }), "quantum-computing", topicSlug);
+  assert.equal(rankedCard.attrs["data-rank-quantum-computing"], "8");
   reader.applyServerRank(rankedCard, story({
     page_order_mode: "history_freshness", position: 2,
   }), "__all__");
