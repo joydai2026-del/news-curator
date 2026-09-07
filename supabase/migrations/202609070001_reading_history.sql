@@ -282,7 +282,7 @@ begin
         'revision', revision) order by topic_id) rows
       from public.user_story_interests where user_id = auth.uid() and story_id = pe.story_id
     ) interests on true
-    where pe.topic_id = p_topic_id and pe.canonical_url <> ''
+    where pe.topic_id = p_topic_id
       and (p_after_position is null or pe.position > p_after_position
         or (pe.position = p_after_position and pe.story_id > p_after_story_id))
     order by pe.position, pe.story_id
@@ -336,7 +336,6 @@ begin
     from public.user_story_interests where user_id = auth.uid() and story_id = s.story_id
   ) interests on true
   where e.story_version = 1
-    and e.canonical_url <> ''
     and (p_before_published_at is null or e.published_at < p_before_published_at
       or (e.published_at = p_before_published_at and s.story_id > coalesce(p_before_story_id, '')))
   order by e.published_at desc, s.story_id
@@ -408,7 +407,6 @@ begin
     from public.user_story_interests where user_id = auth.uid() and story_id = s.story_id
   ) interests on true
   where user_id = auth.uid() and us.saved_at is not null
-    and coalesce(card.canonical_url, s.canonical_url) ~ '^https?://[^/@[:space:]]+(/|$)'
     and (p_before_saved_at is null or us.saved_at < p_before_saved_at
       or (us.saved_at = p_before_saved_at and s.story_id > coalesce(p_before_story_id, '')))
   order by us.saved_at desc, s.story_id

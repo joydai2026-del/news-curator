@@ -97,6 +97,7 @@ async function main() {
   assert.throws(() => reader.validateLatestPublication({ ...latest, poll_seconds: 86401 }), /publication response/);
   assert.throws(() => reader.validateLatestPublication({ ...latest, extra: true }), /publication response/);
   assert.equal(reader.validateFeedPage([story()])[0].story_id, story().story_id);
+  assert.equal(reader.validateFeedPage([story({ canonical_url: "" })])[0].canonical_url, "");
   assert.throws(
     () => reader.validateFeedPage([story({ ordering_mode: "unknown" })]),
     /feed response/
@@ -432,6 +433,10 @@ async function main() {
     querySelectorAll: () => [],
     querySelector: (selector) => selector.includes('data-section="ai"') ? aiSection : null,
   };
+  const linklessCard = reader.createStoryCard(story({
+    canonical_url: "", source_kind: "newsletter", source_name: "Daily Brief",
+  }), "ai");
+  assert.doesNotMatch(textOf(linklessCard), /Read original/);
   let controllerCalls = 0;
   const controllerHeaders = [];
   global.fetch = async (url, options) => {

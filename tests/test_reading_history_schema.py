@@ -73,6 +73,16 @@ def test_feed_contract_is_keyset_paginated_and_saved_rows_survive_window():
     assert "public.feed_page(text, text, integer, text, timestamptz, text, integer)" in text
 
 
+def test_linkless_newsletter_rows_remain_in_feed_and_saved_state_contracts():
+    text = sql()
+    feed = text[text.index("create or replace function public.feed_page"):
+                text.index("create or replace function public.saved_page")]
+    saved = text[text.index("create or replace function public.saved_page"):
+                 text.index("create or replace function public.updates_since")]
+    assert "canonical_url <> ''" not in feed
+    assert "coalesce(card.canonical_url, s.canonical_url) ~ '^https?://" not in saved
+
+
 def test_public_ranking_storage_rejects_private_preference_values():
     text = sql()
     assert "not (score_components ? 'interest')" in text
