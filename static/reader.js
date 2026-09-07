@@ -288,7 +288,7 @@
     }
     const last = rows.at(-1);
     if (last.page_order_mode === "edition_rank" && rows.length < PAGE_SIZE) {
-      return initialCursor ? { order_mode: "history_freshness", ...initialCursor } : null;
+      return { order_mode: "history_freshness", ...(initialCursor || {}) };
     }
     return { order_mode: last.page_order_mode, ...last.next_cursor };
   }

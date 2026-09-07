@@ -145,6 +145,9 @@ async function main() {
     order_mode: "history_freshness",
     ...latest.initial_history_cursor,
   });
+  assert.deepEqual(reader.nextFeedCursor([story()], null), {
+    order_mode: "history_freshness",
+  });
   assert.throws(() => reader.validateFeedPage([story({ title: "x".repeat(2001) })]), /feed response/);
   assert.throws(
     () => reader.validateFeedPage([story({ state_revision: undefined })], true),
