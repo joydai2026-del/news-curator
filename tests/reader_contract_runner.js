@@ -101,12 +101,23 @@ async function main() {
     () => reader.validateFeedPage([story({ ordering_mode: "unknown" })]),
     /feed response/
   );
+  assert.equal(
+    reader.validateFeedPage([story({ coverage_mentions: [{
+      source_kind: "outlet",
+      source_id: "source-a",
+      source_name: "Source A",
+      url: "http://publisher.example/story",
+      headline: "A real story",
+      mentioned_at: "2026-09-07T12:00:00Z",
+    }] })])[0].coverage_mentions[0].url,
+    "http://publisher.example/story"
+  );
   assert.throws(
     () => reader.validateFeedPage([story({ coverage_mentions: [{
       source_kind: "outlet",
       source_id: "source-a",
       source_name: "Source A",
-      url: "http://publisher.example/story",
+      url: "javascript:alert(1)",
       headline: "A real story",
       mentioned_at: "2026-09-07T12:00:00Z",
     }] })]),
