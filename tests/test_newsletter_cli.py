@@ -46,6 +46,8 @@ def test_the_artifact_carries_what_the_run_did_not_see():
     assert payload["unreadable_messages"] == 3
     assert payload["unauthenticated_messages"] == 0
     assert payload["unauthenticated_missing"] == 0
+    assert payload["display_candidates"] == payload["items"]
+    assert len(payload["mentions"]) >= len(payload["display_candidates"])
 
 
 def test_a_clean_run_says_nothing_was_missed():

@@ -127,6 +127,9 @@ def assign_categories(items: list[Item], categories: list[Category]) -> dict[str
             # fields, and a shared list is one downstream mutation away from
             # cross-category contamination.
             clone.cluster = list(item.cluster)
+            clone.score_components_by_topic = dict(item.score_components_by_topic)
+            clone.ranking_mode_by_topic = dict(item.ranking_mode_by_topic)
+            clone.ranking_key_by_topic = dict(item.ranking_key_by_topic)
             buckets[category.name].append(clone)
     return buckets
 

@@ -36,7 +36,17 @@ class FakeTransport:
                 "timeout": timeout,
             }
         )
+        if isinstance(self.response, list) and self.response and isinstance(self.response[0], tuple):
+            return self.response.pop(0)
         return self.response
+
+
+def profile_responses(revision=4, interests=None, signals=None, weight=0.8):
+    return [
+        (200, [{"revision": revision, "interests": interests or []}]),
+        (200, signals or []),
+        (200, [{"more_like_topic_weight": weight}]),
+    ]
 
 
 def test_build_script_uses_the_configured_snapshot_lifetime(tmp_path, monkeypatch) -> None:
@@ -69,7 +79,7 @@ def test_build_script_uses_the_configured_snapshot_lifetime(tmp_path, monkeypatc
 
 def test_fetches_only_the_configured_owner_and_returns_a_valid_profile() -> None:
     transport = FakeTransport(
-        (200, [{"revision": 4, "interests": ["AI agents"]}])
+        profile_responses(interests=["AI agents"])
     )
     config = SecretPreferenceConfig("https://example.supabase.co", SECRET, OWNER_ID)
 
@@ -93,7 +103,7 @@ def test_legacy_service_role_jwt_uses_bearer_compatibility_header() -> None:
 
     legacy = f"{encode({'alg': 'HS256'})}.{encode({'role': 'service_role'})}.signature"
     transport = FakeTransport(
-        (200, [{"revision": 1, "interests": ["AI"]}])
+        profile_responses(revision=1, interests=["AI"])
     )
 
     fetch_interest_profile(
@@ -126,10 +136,19 @@ def test_empty_interests_are_a_valid_opt_out() -> None:
 
     profile = fetch_interest_profile(
         config,
-        transport=FakeTransport((200, [{"revision": 3, "interests": []}])),
+        transport=FakeTransport(profile_responses(revision=3)),
     )
 
-    assert profile == InterestProfile(revision=3, interests=())
+    assert profile == InterestProfile(revision=3, interests=(), more_like_topic_weight=0.8)
+
+
+def test_topic_signal_and_policy_reads_fail_closed() -> None:
+    config = SecretPreferenceConfig("https://example.supabase.co", SECRET, OWNER_ID)
+    responses = profile_responses()
+    responses[1] = (500, {"private": "body"})
+
+    with pytest.raises(MaterializationError):
+        fetch_interest_profile(config, transport=FakeTransport(responses))
 
 
 @pytest.mark.parametrize(

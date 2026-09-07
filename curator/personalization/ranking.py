@@ -14,14 +14,16 @@ from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from ..models import Item
 from ..normalize import fold_text
+from ..identity import story_id_for_item
 
 if TYPE_CHECKING:
-    from ..config import Config
+    from ..config import Category, Config
 
 
 MAX_ARTIFACT_BYTES = 2_000_000
 MAX_SCORE_ROWS = 20_000
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_STORY_ID = re.compile(r"^story:[0-9a-f]{64}$")
 _TIMESTAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 _ARTIFACT_FIELDS = {
     "schema_version",
@@ -43,6 +45,8 @@ class InterestArtifactError(ValueError):
 class InterestProfile:
     revision: int
     interests: tuple[str, ...]
+    topic_signals: tuple[tuple[str, str], ...] = ()
+    more_like_topic_weight: float = 0.8
 
 
 @dataclass(frozen=True)
@@ -57,11 +61,9 @@ class InterestArtifact:
 
 
 def story_key(item: Item) -> str:
-    """Bind a score to the exact source headline that will receive it."""
+    """Return the same stable story identity used by translations and storage."""
 
-    identity = item.canonical_url or item.url
-    headline = fold_text(item.title).casefold()
-    return hashlib.sha256(f"{identity}\0{headline}".encode("utf-8")).hexdigest()
+    return story_id_for_item(item)
 
 
 def ranking_config_digest(cfg: "Config") -> str:
@@ -70,6 +72,15 @@ def ranking_config_digest(cfg: "Config") -> str:
     payload = {
         "algorithm_version": 1,
         "ranking": cfg.ranking,
+        "categories": [
+            {
+                "id": category.id,
+                "terms": category.all_terms,
+                "keywords_by_language": category.keywords_by_language,
+                "exclude": category.exclude,
+            }
+            for category in cfg.categories
+        ],
     }
     encoded = json.dumps(
         payload,
@@ -158,6 +169,7 @@ def build_interest_artifact(
     source_snapshot_digest: str,
     configuration_digest: str,
     generated_at: datetime | None = None,
+    categories: Sequence["Category"] = (),
 ) -> dict[str, object]:
     """Build a score-only artifact. Raw interests and user identity never leave the job."""
 
@@ -165,8 +177,20 @@ def build_interest_artifact(
     if when.tzinfo is None:
         raise ValueError("generated_at must be timezone-aware")
     scores: dict[str, float] = {}
+    topic_adjustments: dict[str, float] = {}
+    for topic_id, signal in profile.topic_signals:
+        direction = 1.0 if signal == "more_like" else -1.0
+        topic_adjustments[topic_id] = topic_adjustments.get(topic_id, 0.0) + direction
     for item in items:
         score = interest_score(item, profile.interests)
+        for category in categories:
+            if category.id not in topic_adjustments:
+                continue
+            from ..filter import topic_match
+
+            if topic_match(item, category) is not None:
+                score += profile.more_like_topic_weight * topic_adjustments[category.id]
+        score = max(0.0, min(1.0, score))
         if score <= 0:
             continue
         key = story_key(item)
@@ -177,7 +201,7 @@ def build_interest_artifact(
         "source_snapshot_digest": source_snapshot_digest,
         "configuration_digest": configuration_digest,
         "preference_revision": profile.revision,
-        "interest_count": len(profile.interests),
+        "interest_count": len(profile.interests) + len(profile.topic_signals),
         "matched_story_count": len(scores),
         "scores": dict(sorted(scores.items())),
     }
@@ -228,7 +252,7 @@ def load_interest_artifact(
     revision = _nonnegative_int(payload["preference_revision"])
     interest_count = _nonnegative_int(payload["interest_count"])
     matched_count = _nonnegative_int(payload["matched_story_count"])
-    if not 0 <= interest_count <= 20:
+    if not 0 <= interest_count <= 220:
         raise InterestArtifactError("interest ranking artifact is invalid")
     scores = payload["scores"]
     if not isinstance(scores, dict) or len(scores) > MAX_SCORE_ROWS or matched_count != len(scores):
@@ -239,7 +263,7 @@ def load_interest_artifact(
     for key, value in scores.items():
         if (
             not isinstance(key, str)
-            or not _DIGEST.fullmatch(key)
+            or not _STORY_ID.fullmatch(key)
             or isinstance(value, bool)
             or not isinstance(value, (int, float))
         ):

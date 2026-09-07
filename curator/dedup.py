@@ -165,6 +165,11 @@ def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     """
     if count_echo:
         keep.echo_platforms |= drop.echo_platforms
+    known_mentions = {mention.mention_id for mention in keep.coverage_mentions}
+    for mention in drop.coverage_mentions:
+        if mention.mention_id not in known_mentions:
+            keep.coverage_mentions.append(mention)
+            known_mentions.add(mention.mention_id)
     # Both passes. What the merged-away row leaves behind is its ADDRESS, which
     # is a fact either way, unlike the badge, which is a claim.
     _collect_cluster(keep, drop)

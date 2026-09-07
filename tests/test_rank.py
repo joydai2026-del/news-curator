@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from curator.config import Category
-from curator.rank import echo_score, keyword_score, rank_items, recency_score, score_item
+from curator.rank import echo_score, keyword_score, rank_items, recency_score, score_components, score_item
 from tests.conftest import make_item
 
 CFG = {
@@ -109,3 +109,19 @@ class TestRankOrdering:
         item = make_item("AI news")
         item.matched_keywords = ["AI"]
         assert 0 < score_item(item, TOPIC, now, CFG) < 10
+
+    def test_score_components_are_the_exact_inputs_to_the_final_score(self, now):
+        item = make_item("AI news")
+        item.matched_keywords = ["AI"]
+        item.echo_platforms = {"one", "two"}
+
+        components = score_components(item, TOPIC, now, CFG, interest_score=0.5)
+
+        assert set(components) == {
+            "recency", "topic_fit", "source", "coverage", "interest", "final_score"
+        }
+        assert components["interest"] == 0.4
+        assert components["final_score"] == sum(
+            value for key, value in components.items() if key != "final_score"
+        )
+        assert score_item(item, TOPIC, now, CFG, interest_score=0.5) == components["final_score"]
