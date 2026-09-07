@@ -670,7 +670,7 @@ jobs:
   # deployment. This job has no Pages, repository-write, or OIDC permission.
   finalize-archive:
     needs: [build, deploy]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build.result == 'success' && needs.deploy.result == 'success' }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && needs.build.result == 'success' && needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: personalization

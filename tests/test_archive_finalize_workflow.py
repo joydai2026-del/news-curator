@@ -60,6 +60,7 @@ def test_archive_finalization_is_bound_to_successful_exact_deploy() -> None:
     assert set(finalizer["needs"]) == {"build", "deploy"}
     assert finalizer["if"] == (
         "${{ !cancelled() && github.ref == 'refs/heads/main' && "
+        "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && "
         "needs.build.result == 'success' && needs.deploy.result == 'success' }}"
     )
     assert finalizer["permissions"] == {"contents": "read"}
@@ -90,6 +91,24 @@ def test_archive_finalization_is_bound_to_successful_exact_deploy() -> None:
     assert "python -m curator.archive_finalize" in str(command["run"])
     assert '"$DEPLOYED_URL"' in str(command["run"])
     assert '--expected-commit "$GITHUB_SHA"' in str(command["run"])
+
+
+def test_unconfigured_personalization_skips_the_secret_archive_job() -> None:
+    finalizer = _jobs()["finalize-archive"]
+    condition = str(finalizer["if"])
+    assert "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true'" in condition
+    assert finalizer.get("continue-on-error") is None
+
+
+def test_configured_personalization_keeps_archive_finalization_mandatory() -> None:
+    finalizer = _jobs()["finalize-archive"]
+    condition = str(finalizer["if"])
+    assert "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true'" in condition
+    assert "needs.build.result == 'success'" in condition
+    assert "needs.deploy.result == 'success'" in condition
+    finalization = _step(finalizer, "Finalize deployed archive and prune expired history")
+    assert finalization.get("if") is None
+    assert finalization.get("continue-on-error") is None
 
 
 def test_archive_service_secret_is_not_exposed_to_deploy() -> None:
