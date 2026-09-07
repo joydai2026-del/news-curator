@@ -612,7 +612,12 @@ def _collect_cards(ranked: dict[str, list[Item]]) -> tuple[list[_Card], dict[str
         for position, item in enumerate(items):
             key = item.canonical_url or item.url
             if not key:
-                continue
+                if not item.is_newsletter:
+                    continue
+                # The newsletter privacy gate may remove both public URLs.
+                # Keep those rows addressable internally without restoring a
+                # tracking URL or weakening the article-link requirement.
+                key = f"story-id:{story_id_for_item(item)}"
             card = cards.get(key)
             if card is None:
                 card = _Card(item=item, image=item.image_url, description=item.description)

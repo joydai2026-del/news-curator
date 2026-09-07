@@ -364,6 +364,7 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
         },
     )
     out = tmp_path / "site"
+    archive_candidate = tmp_path / "archive-candidate.json"
 
     assert main(
         [
@@ -375,6 +376,12 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
             str(snapshot_path),
             "--newsletter-artifact",
             str(newsletter_path),
+            "--archive-candidate",
+            str(archive_candidate),
+            "--build-nonce",
+            "privacy-sanitization-regression",
+            "--commit-sha",
+            "a" * 40,
         ]
     ) == 0
 
@@ -400,6 +407,11 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
     assert "reader@example.invalid" not in html
     assert "link.mail.beehiiv.com" not in html
     assert "https://publisher.example/story" in html
+
+    archive = json.loads(archive_candidate.read_text(encoding="utf-8"))
+    archived_stories = {story["title"]: story for story in archive["stories"]}
+    assert archived_stories["AI newsletter opaque tracker"]["canonical_url"] == ""
+    assert archived_stories["AI newsletter opaque tracker"]["source_kind"] == "newsletter"
 
 
 def test_non_trending_feed_position_cannot_replace_hackernews_trending_rank(
