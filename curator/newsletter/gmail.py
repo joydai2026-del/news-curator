@@ -10,9 +10,11 @@ more than the convenience of a client library.
 
 **Auth.** A refresh token from a PUBLISHED OAuth app, so it does not expire
 after seven days the way a Testing-mode token does. The three secrets arrive
-only through the environment:
+only through the environment. A fourth protected value binds ingestion to the
+intended mailbox without storing or logging its address:
 
     GMAIL_CLIENT_ID  GMAIL_CLIENT_SECRET  GMAIL_REFRESH_TOKEN
+    GMAIL_EXPECTED_PROFILE_SHA256
 
 Scope needed: https://www.googleapis.com/auth/gmail.readonly
 
@@ -36,8 +38,11 @@ from __future__ import annotations
 import base64
 import binascii
 import email
+import hashlib
+import hmac
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import Message
@@ -53,7 +58,9 @@ API_ROOT = "https://gmail.googleapis.com/gmail/v1/users/me"
 ENV_CLIENT_ID = "GMAIL_CLIENT_ID"
 ENV_CLIENT_SECRET = "GMAIL_CLIENT_SECRET"
 ENV_REFRESH_TOKEN = "GMAIL_REFRESH_TOKEN"
+ENV_EXPECTED_PROFILE_SHA256 = "GMAIL_EXPECTED_PROFILE_SHA256"
 REQUIRED_ENV = (ENV_CLIENT_ID, ENV_CLIENT_SECRET, ENV_REFRESH_TOKEN)
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_MAX_MESSAGES = 30
@@ -74,6 +81,9 @@ AUTH_FAILED = "auth_failed"
 API_ERROR = "api_error"
 NETWORK_ERROR = "network_error"
 NO_SENDERS = "no_senders"
+PROFILE_GUARD_INVALID = "profile_guard_invalid"
+PROFILE_INVALID = "profile_invalid"
+PROFILE_MISMATCH = "profile_mismatch"
 
 REASON_TEXT = {
     OK: "newsletter mailbox read",
@@ -83,6 +93,9 @@ REASON_TEXT = {
     API_ERROR: "Gmail API returned an error",
     NETWORK_ERROR: "Gmail API unreachable",
     NO_SENDERS: "no newsletter senders configured",
+    PROFILE_GUARD_INVALID: "newsletter mailbox profile guard is not configured correctly",
+    PROFILE_INVALID: "newsletter mailbox profile could not be verified",
+    PROFILE_MISMATCH: "newsletter mailbox profile did not match the configured identity",
 }
 
 
@@ -205,6 +218,42 @@ def _access_token(session: requests.Session, env, timeout: float) -> str:
         revoked = False
     log.warning("gmail token endpoint returned %d", response.status_code)
     raise _Unavailable(AUTH_REVOKED if revoked else AUTH_FAILED)
+
+
+def _expected_profile_digest(env) -> str | None:
+    """Return the exact lowercase digest form, never the protected value itself."""
+    expected = str(env.get(ENV_EXPECTED_PROFILE_SHA256) or "").strip()
+    return expected if _SHA256_RE.fullmatch(expected) else None
+
+
+def _verify_profile(
+    session: requests.Session, token: str, expected_digest: str, timeout: float
+) -> None:
+    """Bind the token to the intended mailbox before reading message ids."""
+    response = _request(
+        session,
+        "GET",
+        API_ROOT,
+        timeout=timeout,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if response.status_code in (401, 403):
+        raise _Unavailable(AUTH_REVOKED)
+    if response.status_code != 200:
+        log.warning("gmail profile endpoint returned %d", response.status_code)
+        raise _Unavailable(PROFILE_INVALID)
+    try:
+        payload = response.json()
+    except ValueError:
+        raise _Unavailable(PROFILE_INVALID) from None
+    if not isinstance(payload, dict):
+        raise _Unavailable(PROFILE_INVALID)
+    address = payload.get("emailAddress")
+    if not isinstance(address, str) or not address.strip():
+        raise _Unavailable(PROFILE_INVALID)
+    actual_digest = hashlib.sha256(address.strip().lower().encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(actual_digest, expected_digest):
+        raise _Unavailable(PROFILE_MISMATCH)
 
 
 def _list_message_ids(
@@ -330,6 +379,9 @@ def fetch(
     source = os.environ if env is None else env
     if not has_credentials(source):
         return GmailResult(ok=False, reason=MISSING_CREDENTIALS)
+    expected_digest = _expected_profile_digest(source)
+    if expected_digest is None:
+        return GmailResult(ok=False, reason=PROFILE_GUARD_INVALID)
     if not [s for s in senders if s and s.strip()]:
         return GmailResult(ok=False, reason=NO_SENDERS)
 
@@ -337,6 +389,7 @@ def fetch(
     client = session or requests.Session()
     try:
         token = _access_token(client, source, timeout)
+        _verify_profile(client, token, expected_digest, timeout)
         ids, budget_hit = _list_message_ids(
             client, token, build_query(senders, after), timeout, id_budget=id_budget
         )

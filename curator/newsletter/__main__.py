@@ -44,6 +44,7 @@ CONFIG_ERROR = "config_error"
 # a configuration choice, not a problem, so it is deliberately not here.
 WARN_REASONS = {"auth_revoked", "auth_failed", "missing_credentials",
                 "api_error", "network_error", "no_adapters_enabled",
+                "profile_guard_invalid", "profile_invalid", "profile_mismatch",
                 CONFIG_ERROR}
 
 
