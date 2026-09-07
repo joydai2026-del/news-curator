@@ -338,11 +338,29 @@ async function main() {
     hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); },
   };
   reader.applyServerRank(historyCard, story({
-    page_order_mode: "history_freshness", position: 2, topic_ranks: { ai: 9, crypto: 2 },
-  }), "__all__");
-  assert.equal(historyCard.attrs["data-rank-all"], "1000002");
+    page_order_mode: "history_freshness", position: 20, topic_ranks: { ai: 9, crypto: 2 },
+  }), "__all__", (value) => value, 1000001);
+  assert.equal(historyCard.attrs["data-rank-all"], "1000001");
   assert.equal(historyCard.attrs["data-rank-ai"], "9");
   assert.equal(historyCard.attrs["data-rank-crypto"], "2");
+  const olderHistoryCard = {
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); },
+  };
+  reader.applyServerRank(olderHistoryCard, story({
+    page_order_mode: "history_freshness", publication_seq: 6, position: 1,
+  }), "__all__", (value) => value, 1000002);
+  assert.equal(olderHistoryCard.attrs["data-rank-all"], "1000002");
+  const nextPageHistoryCard = {
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); },
+  };
+  reader.applyServerRank(nextPageHistoryCard, story({
+    page_order_mode: "history_freshness", publication_seq: 5, position: 1,
+  }), "__all__", (value) => value, 1000003);
+  assert.equal(nextPageHistoryCard.attrs["data-rank-all"], "1000003");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "crypto"), "crypto");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "__all__"), "ai");
   assert.equal(reader.actionTopic(["ai", "quantum"], "quantum-computing", "quantum", "ai"), "quantum");

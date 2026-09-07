@@ -83,13 +83,20 @@ def _visible_story_ids(page: object) -> list[str]:
     )
 
 
+def _visually_ordered_story_ids(page: object) -> list[str]:
+    return page.locator("article.card:visible").evaluate_all(
+        "cards => cards.map(card => ({id: card.dataset.storyId, top: card.getBoundingClientRect().top}))"
+        ".sort((left, right) => left.top - right.top).map(entry => entry.id)"
+    )
+
+
 def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_path: Path) -> None:
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
     (site / "index.html").write_text(
         """<!doctype html><html><head><meta charset="utf-8"><style>
-        body{margin:0}.tools{height:80px}.grid{display:block}.card{height:180px;margin:8px}
+        body{margin:0}.tools{height:80px}.grid{display:flex;flex-direction:column}.card{height:180px;margin:8px}
         .story-detail[hidden],.topic-section[hidden],.card[hidden],#updates-status[hidden]{display:none}
         .spacer{height:1200px}
         </style></head><body>
@@ -106,7 +113,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
           <h2>Quantum Computing</h2><div class="grid">
             <article class="card" data-story-id="story:0000000000000000000000000000000000000000000000000000000000000001"
               data-topic-ids="ai quantum-computing" data-topic-api-ids="ai quantum"
-              data-state-revision="0" data-interest-revision="0">
+              data-state-revision="0" data-interest-revision="0" data-rank-all="1">
               <button class="accordion-toggle" aria-expanded="false">Controller story 1</button>
               <button class="state-action read-action" hidden disabled>Mark read</button>
               <button class="state-action save-action" hidden disabled>Save</button>
@@ -114,7 +121,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             </article>
             <article class="card" data-story-id="story:0000000000000000000000000000000000000000000000000000000000000002"
               data-topic-ids="quantum-computing" data-topic-api-ids="quantum"
-              data-state-revision="0" data-interest-revision="0">
+              data-state-revision="0" data-interest-revision="0" data-rank-all="2">
               <button class="accordion-toggle" aria-expanded="false">Controller story 2</button>
               <button class="state-action read-action" hidden disabled>Mark read</button>
               <button class="state-action save-action" hidden disabled>Save</button>
@@ -141,6 +148,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 ? !card.classList.contains("is-saved")
                 : window.__tab !== "__all__" &&
                   !(card.dataset.topicIds || "").split(" ").includes(window.__tab);
+              const rank = card.getAttribute(window.__tab === "__all__"
+                ? "data-rank-all" : `data-rank-${window.__tab}`);
+              card.style.order = rank === null ? "0" : rank;
             });
           }
         };
@@ -158,7 +168,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    counts = {"latest": 0, "category": 0, "state": 0, "interest": 0, "updates": 0}
+    counts = {"latest": 0, "all": 0, "category": 0, "state": 0, "interest": 0, "updates": 0}
     interest_writes: list[tuple[str, int]] = []
     state_writes: list[tuple[str, int]] = []
     fail_next_state = {"value": False}
@@ -185,7 +195,20 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             if counts["latest"] >= 3:
                 payload = [_story(900)]
             elif body["p_topic_id"] is None:
-                payload = [_story(1)]
+                counts["all"] += 1
+                if counts["all"] == 1:
+                    fresher = _story(10, "history_freshness")
+                    fresher.update({"position": 20, "publication_seq": 6,
+                                    "topic_ids": ["ai"], "topic_ranks": {"ai": 20}})
+                    older = _story(11, "history_freshness")
+                    older.update({"position": 1, "publication_seq": 5,
+                                  "topic_ids": ["ai"], "topic_ranks": {"ai": 1}})
+                    payload = [_story(1, "history_freshness"), fresher, older]
+                else:
+                    duplicate_position = _story(12, "history_freshness")
+                    duplicate_position.update({"position": 1, "publication_seq": 4,
+                                               "topic_ids": ["ai"], "topic_ranks": {"ai": 1}})
+                    payload = [duplicate_position]
             elif body["p_topic_id"] == "ai":
                 row = _story(1)
                 row["saved_at"] = "2026-09-07T12:02:00Z"
@@ -253,15 +276,24 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page = browser.new_page(viewport={"width": 900, "height": 700})
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            current_ids = ["story:" + f"{index:064x}" for index in (1, 2)]
+            history_ids = ["story:" + f"{index:064x}" for index in (10, 11, 12)]
+            assert _visually_ordered_story_ids(page) == current_ids + history_ids[:2]
+            page.locator("#load-more").click()
+            page.locator("#reader-status").get_by_text("1 older story loaded.").wait_for()
+            assert _visually_ordered_story_ids(page) == current_ids + history_ids
             assert page.locator(".state-action:visible").count() == 6
-            assert page.locator(".state-action:enabled").count() == 3
+            assert page.locator(".state-action:enabled").count() == 12
             second = page.locator("article.card", has_text="Controller story 2")
             assert second.locator(".state-action:enabled").count() == 0
             second.locator(".save-action").evaluate(
                 "button => button.dispatchEvent(new MouseEvent('click', {bubbles: true}))"
             )
             assert state_writes == []
-            page.locator('.chip[data-filter="quantum-computing"]').click()
+            with page.expect_response(
+                lambda response: response.url.endswith("/feed_page")
+            ):
+                page.locator('.chip[data-filter="quantum-computing"]').click()
             page.locator("article.card", has_text="Controller story 2").wait_for()
             assert page.locator("article.card:visible").count() == 2
             assert second.locator(".state-action:enabled").count() == 3

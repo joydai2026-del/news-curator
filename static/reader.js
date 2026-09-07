@@ -275,13 +275,16 @@
     card.dataset.topicIds = value;
     card.dataset.topics = value;
   }
-  function applyServerRank(card, row, selectedTopic, topicSlug = (value) => value) {
+  function applyServerRank(
+    card, row, _selectedTopic, topicSlug = (value) => value, historyAllRank = null,
+  ) {
     Object.entries(row.topic_ranks || {}).forEach(([topic, position]) => {
       card.setAttribute(`data-rank-${topicSlug(topic)}`, String(position));
     });
     if (row.page_order_mode === "history_freshness" &&
-               (!card.hasAttribute || !card.hasAttribute("data-rank-all"))) {
-      card.setAttribute("data-rank-all", String(HISTORY_RANK_OFFSET + row.position));
+        Number.isSafeInteger(historyAllRank) && historyAllRank > HISTORY_RANK_OFFSET &&
+        (!card.hasAttribute || !card.hasAttribute("data-rank-all"))) {
+      card.setAttribute("data-rank-all", String(historyAllRank));
     }
   }
   function effectiveTopic(topicIds, selectedTopic) {
@@ -384,12 +387,13 @@
   }
   function createStoryCard(
     row, selectedTopic, topicSlug = (value) => value, selectedTopicId = selectedTopic,
+    historyAllRank = null,
   ) {
     const card = element("article", "card");
     card.dataset.storyId = row.story_id;
     mergeTopicMembership(card, row.topic_ids.map(topicSlug));
     card.dataset.topicApiIds = [...row.topic_ids].sort().join(" ");
-    applyServerRank(card, row, selectedTopic, topicSlug);
+    applyServerRank(card, row, selectedTopic, topicSlug, historyAllRank);
     const heading = element("h2", "story-heading");
     const toggle = element("button", "accordion-toggle");
     const suffix = row.story_id.slice(-12);
@@ -543,6 +547,7 @@
     let latest = null;
     let pollTimer = null;
     let updateCursor = null;
+    let nextHistoryAllRank = HISTORY_RANK_OFFSET;
     const pendingUpdates = new Map();
 
     function announce(message) { status.textContent = message; }
@@ -607,10 +612,15 @@
     function mergeRows(rows, appendNew, hydratedTopic = selectedTopic()) {
       rows.forEach((row) => {
         const existing = cards.get(row.story_id);
+        const historyAllRank = hydratedTopic === "__all__" &&
+          row.page_order_mode === "history_freshness" &&
+          (!existing || !existing.hasAttribute("data-rank-all"))
+          ? ++nextHistoryAllRank
+          : null;
         if (existing) {
           mergeTopicMembership(existing, row.topic_ids.map(topicSlugForId));
           existing.dataset.topicApiIds = [...row.topic_ids].sort().join(" ");
-          applyServerRank(existing, row, selectedTopic(), topicSlugForId);
+          applyServerRank(existing, row, selectedTopic(), topicSlugForId, historyAllRank);
           applyServerState(existing, row);
           hydratedTopics(existing).add(hydratedTopic);
           view.addCard(existing);
@@ -619,7 +629,7 @@
         if (!appendNew) return;
         const selected = selectedTopic();
         const card = createStoryCard(
-          row, selected, topicSlugForId, topicIdForSlug(selected),
+          row, selected, topicSlugForId, topicIdForSlug(selected), historyAllRank,
         );
         cards.set(row.story_id, card);
         hydratedTopics(card).add(hydratedTopic);
