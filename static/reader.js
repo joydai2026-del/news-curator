@@ -290,6 +290,9 @@
     if (!rows.length) return null;
     return { ...rows.at(-1).next_cursor };
   }
+  function loadedStatus(count) {
+    return count === 1 ? "1 older story loaded." : `${count} older stories loaded.`;
+  }
   function applyServerState(card, state) {
     const hasRead = Object.prototype.hasOwnProperty.call(state, "read_at");
     const hasSaved = Object.prototype.hasOwnProperty.call(state, "saved_at");
@@ -450,7 +453,7 @@
   }
 
   const contract = {
-    applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
+    applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
     rankingReason, run, safeDestination,
     validateFeedPage, validateLatestPublication, validateUpdates,
   };
@@ -559,7 +562,7 @@
         }
         mergeRows(rows, true);
         if (topic === "__saved__" && rows.length < PAGE_SIZE) exhausted.add(topic);
-        announce(rows.length ? `${rows.length} older stories loaded.` : "No older stories remain in this section.");
+        announce(rows.length ? loadedStatus(rows.length) : "No older stories remain in this section.");
       } catch (_) {
         announce("Older stories could not be loaded. Try again.");
       } finally { loadButton.disabled = false; }
