@@ -16,7 +16,7 @@ from curator.config import Category
 from curator.identity import story_id_for_item
 from curator.models import CoverageMention
 from curator.rank import score_components
-from tests.conftest import make_item
+from tests.conftest import make_item, make_newsletter_item
 
 SITE_SHA256 = "f" * 64
 
@@ -92,6 +92,35 @@ def test_candidate_uses_baseline_mode_when_no_interest_signal_is_effective(now, 
         site_sha256=SITE_SHA256, require_summaries=True, interest_scores=interest_scores,
     )
     assert candidate["entries"][0]["ordering_mode"] == "weighted_total"
+
+
+def test_candidate_accepts_linkless_newsletter_but_rejects_linkless_outlet(now):
+    newsletter = make_newsletter_item("Private newsletter link")
+    newsletter.description = "Newsletter summary"
+    candidate = build_archive_candidate(
+        {"AI": [newsletter]}, categories=[Category(name="AI", id="ai")], ranking={},
+        now=now, build_nonce="linkless-newsletter", commit_sha="a" * 40,
+        site_sha256=SITE_SHA256, require_summaries=True,
+    )
+    assert candidate["stories"][0]["canonical_url"] == ""
+    validate_archive_candidate(candidate)
+
+    candidate["stories"][0]["source_kind"] = "outlet"
+    with pytest.raises(ValueError, match="provenance"):
+        validate_archive_candidate(candidate)
+
+
+def test_candidate_rejects_outlet_entry_for_linkless_newsletter_story(now):
+    newsletter = make_newsletter_item("Private newsletter link")
+    newsletter.description = "Newsletter summary"
+    candidate = build_archive_candidate(
+        {"AI": [newsletter]}, categories=[Category(name="AI", id="ai")], ranking={},
+        now=now, build_nonce="linkless-entry", commit_sha="a" * 40,
+        site_sha256=SITE_SHA256, require_summaries=True,
+    )
+    candidate["entries"][0]["source_kind"] = "outlet"
+    with pytest.raises(ValueError, match="public-safe"):
+        validate_archive_candidate(candidate)
 
 
 def test_candidate_carries_every_snapshot_topic_rank_on_each_story_entry(now):

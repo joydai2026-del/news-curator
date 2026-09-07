@@ -97,7 +97,13 @@ async function main() {
   assert.throws(() => reader.validateLatestPublication({ ...latest, poll_seconds: 86401 }), /publication response/);
   assert.throws(() => reader.validateLatestPublication({ ...latest, extra: true }), /publication response/);
   assert.equal(reader.validateFeedPage([story()])[0].story_id, story().story_id);
-  assert.equal(reader.validateFeedPage([story({ canonical_url: "" })])[0].canonical_url, "");
+  assert.equal(reader.validateFeedPage([story({
+    canonical_url: "", source_kind: "newsletter", source_name: "Daily Brief",
+  })])[0].canonical_url, "");
+  assert.throws(
+    () => reader.validateFeedPage([story({ canonical_url: "", source_kind: "outlet" })]),
+    /feed response/,
+  );
   assert.throws(
     () => reader.validateFeedPage([story({ ordering_mode: "unknown" })]),
     /feed response/

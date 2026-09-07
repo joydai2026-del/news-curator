@@ -83,6 +83,15 @@ def test_linkless_newsletter_rows_remain_in_feed_and_saved_state_contracts():
     assert "coalesce(card.canonical_url, s.canonical_url) ~ '^https?://" not in saved
 
 
+def test_linkless_sentinel_is_restricted_to_newsletter_provenance():
+    text = sql()
+    assert text.count("check (canonical_url <> '' or source_kind = 'newsletter')") == 2
+    assert (
+        "if row->>'canonical_url' = '' and row->>'source_kind' is distinct from 'newsletter'"
+        in text
+    )
+
+
 def test_public_ranking_storage_rejects_private_preference_values():
     text = sql()
     assert "not (score_components ? 'interest')" in text

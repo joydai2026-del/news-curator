@@ -90,7 +90,9 @@
   function validateStory(value, pageModes) {
     if (!isObject(value) || !exactFields(value, CARD_FIELDS) ||
         !STORY_ID.test(value.story_id) ||
-        (value.canonical_url !== "" && !safeDestination(value.canonical_url)) ||
+        (value.canonical_url === ""
+          ? value.source_kind !== "newsletter"
+          : !safeDestination(value.canonical_url)) ||
         !boundedString(value.title, 2000) || typeof value.summary !== "string" || value.summary.length > 8000 ||
         !["en", "zh"].includes(value.language) || !validTimestamp(value.published_at) ||
         !Number.isSafeInteger(value.publication_seq) || value.publication_seq < 0 ||

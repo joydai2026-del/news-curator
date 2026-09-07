@@ -38,7 +38,8 @@ create table public.canonical_stories (
   source_name text not null check (source_name <> '' and octet_length(source_name) <= 1000),
   published_at timestamptz not null,
   first_archived_at timestamptz not null default now(),
-  last_archived_at timestamptz not null default now()
+  last_archived_at timestamptz not null default now(),
+  check (canonical_url <> '' or source_kind = 'newsletter')
 );
 create index canonical_stories_feed_idx on public.canonical_stories(published_at desc, story_id);
 
@@ -115,6 +116,7 @@ create table public.publication_entries (
   source_kind text not null check (source_kind in ('outlet', 'newsletter')),
   source_name text not null check (source_name <> '' and octet_length(source_name) <= 1000),
   ranking_explanation text not null check (ranking_explanation <> '' and octet_length(ranking_explanation) <= 2000),
+  check (canonical_url <> '' or source_kind = 'newsletter'),
   primary key (publication_seq, topic_id, story_id),
   unique (publication_seq, topic_id, position),
   foreign key (publication_seq, topic_id)
@@ -650,6 +652,9 @@ begin
   on conflict (build_nonce) do nothing returning publication_seq into seq;
   if seq is null then raise exception 'concurrent publication replay'; end if;
   for row in select value from jsonb_array_elements(p_candidate->'stories') loop
+    if row->>'canonical_url' = '' and row->>'source_kind' is distinct from 'newsletter' then
+      raise exception 'linkless story must be a newsletter';
+    end if;
     if char_length(row->>'source_name') > 200 then raise exception 'invalid story source'; end if;
     insert into public.canonical_stories(story_id, canonical_url, title, summary, language,
       source_kind, source_name, published_at)

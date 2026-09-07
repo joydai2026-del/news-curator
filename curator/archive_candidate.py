@@ -214,16 +214,21 @@ def validate_archive_candidate(candidate: dict) -> None:
     ):
         if not isinstance(candidate[key], list) or len(candidate[key]) > maximum:
             raise ValueError(f"archive candidate {key} is invalid")
+    linkless_story_ids = set()
     for story in candidate["stories"]:
         if (
             not isinstance(story, dict)
             or story.get("source_kind") not in {"outlet", "newsletter"}
+            or not isinstance(story.get("canonical_url"), str)
+            or (story["canonical_url"] == "" and story["source_kind"] != "newsletter")
             or not isinstance(story.get("source_name"), str)
             or not story["source_name"]
             or len(story["source_name"]) > 200
             or len(story["source_name"].encode("utf-8")) > 1_000
         ):
             raise ValueError("archive candidate story provenance is invalid")
+        if story["canonical_url"] == "":
+            linkless_story_ids.add(story.get("story_id"))
     for entry in candidate["entries"]:
         if (
             not isinstance(entry, dict)
@@ -232,6 +237,10 @@ def validate_archive_candidate(candidate: dict) -> None:
             or "interest" in entry["score_components"]
             or "preference_score" in entry["ordering_key"]
             or entry.get("source_kind") not in {"outlet", "newsletter"}
+            or (
+                entry.get("story_id") in linkless_story_ids
+                and entry.get("source_kind") != "newsletter"
+            )
             or not isinstance(entry.get("source_name"), str)
             or not entry["source_name"]
             or len(entry["source_name"]) > 200
