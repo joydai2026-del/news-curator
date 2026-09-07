@@ -602,12 +602,28 @@ def _collect_cards(ranked: dict[str, list[Item]]) -> tuple[list[_Card], dict[str
             # picture or a summary supplies it for all of them.
             card.image = card.image or item.image_url
             card.description = card.description or item.description
+            card.item.score_components_by_topic.update(item.score_components_by_topic)
+            card.item.ranking_mode_by_topic.update(item.ranking_mode_by_topic)
+            card.item.ranking_key_by_topic.update(item.ranking_key_by_topic)
             for keyword in item.matched_keywords:
                 if keyword not in card.keywords:
                     card.keywords.append(keyword)
 
     order.sort(key=lambda c: (c.best[0], -c.item.published_at.timestamp(), c.item.title))
     return order, names
+
+
+def publishable_cards(
+    ranked: dict[str, list[Item]], *, require_summaries: bool = True
+) -> list[_Card]:
+    """Return exactly the story cards the public renderer is allowed to emit."""
+    cards, _names = _collect_cards(ranked)
+    return [
+        card
+        for card in cards
+        if (safe_url(card.item.url) is not None or card.item.is_newsletter)
+        and (not require_summaries or bool(card.description))
+    ]
 
 
 def _cluster_links(card: _Card) -> str:
@@ -646,34 +662,34 @@ def _cluster_links(card: _Card) -> str:
 
 
 def _why_this_appeared(card: _Card, now: datetime) -> str:
-    """Explain the deterministic signals visible to this renderer.
-
-    The renderer does not receive private preference values or raw scores, so
-    it names only evidence it can prove from the ranked item. The published
-    order still reflects saved-interest ranking when the build supplies it.
-    """
-    rank, _slug_key = card.best
-    signals: list[str] = []
-    if card.keywords:
-        signals.append("topic fit")
-    if card.item.age_hours(now) <= 24:
-        signals.append("freshness")
-    source_count = len(card.item.echo_platforms)
-    if source_count > 1:
-        signals.append(f"coverage from {source_count} sources")
-    if card.item.is_newsletter:
-        signals.append("newsletter coverage")
-    elif card.item.is_aggregator:
-        signals.append(f"a discovery signal from {card.item.source_name}")
-    elif card.item.native_categories:
-        signals.append("coverage from a configured topic source")
-    if not signals:
-        signals.append("topic ranking")
-    if len(signals) == 1:
-        reason = signals[0]
-    else:
-        reason = ", ".join(signals[:-1]) + f", and {signals[-1]}"
-    return f"Best rank #{rank + 1} in {card.label}. Visible signals include {reason}."
+    """Explain only the exact weighted score components used for this topic."""
+    _ = now
+    components = card.item.score_components_by_topic.get(card.label)
+    if not components:
+        return "Score components were not supplied for this precomputed row."
+    mode = card.item.ranking_mode_by_topic.get(card.label, "weighted_total")
+    ordering_key = card.item.ranking_key_by_topic.get(card.label, {})
+    labels = (
+        ("interest", "Preference match"),
+        ("recency", "Freshness"),
+        ("topic_fit", "Topic fit"),
+        ("source", "Source"),
+        ("coverage", "Coverage"),
+    )
+    details = ", ".join(f"{label} {components[key]:.3f}" for key, label in labels)
+    if mode == "preference_then_freshness":
+        return (
+            f"Order: preference match {ordering_key.get('preference_score', 0.0):.3f} first, "
+            "newer publication time second. "
+            f"Context only: {details}."
+        )
+    if mode == "native_rank_then_freshness":
+        return (
+            f"Order: configured source rank {ordering_key.get('native_rank', 0.0):.0f} first, "
+            "newer publication time second. "
+            f"Context only: {details}."
+        )
+    return f"Order: Weighted total {components['final_score']:.3f}. Contributions: {details}."
 
 
 def _render_card(
@@ -857,7 +873,8 @@ def render_html(
         f'data-after="{STALE_AFTER_HOURS}" hidden></span>'
     )
 
-    cards, names = _collect_cards(ranked)
+    _all_cards, names = _collect_cards(ranked)
+    cards = publishable_cards(ranked, require_summaries=require_summaries)
     hues = _accent_hues(list(names))
 
     chips = ['<button class="chip" data-filter="__all__" aria-pressed="true">All</button>']

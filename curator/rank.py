@@ -103,6 +103,24 @@ def score_item(
     *,
     interest_score: float = 0.0,
 ) -> float:
+    return score_components(
+        item,
+        topic,
+        now,
+        cfg,
+        interest_score=interest_score,
+    )["final_score"]
+
+
+def score_components(
+    item: Item,
+    topic: Category,
+    now: datetime,
+    cfg: dict,
+    *,
+    interest_score: float = 0.0,
+) -> dict[str, float]:
+    """Return the weighted inputs used to produce an item's final score."""
     rec = recency_score(item, now, float(cfg.get("recency_half_life_hours", 12.0)))
     kw = keyword_score(
         item,
@@ -116,13 +134,15 @@ def score_item(
     src = max(0.0, min(1.0, item.source_weight / 2.0))
     echo = echo_score(item, max_sources=int(cfg.get("echo_max_sources", 3)))
 
-    return (
-        float(cfg.get("weight_recency", 1.0)) * rec
-        + float(cfg.get("weight_keyword", 0.6)) * kw
-        + float(cfg.get("weight_source", 0.4)) * src
-        + float(cfg.get("weight_echo", 0.5)) * echo
-        + float(cfg.get("weight_interest", 0.8)) * interest_score
-    )
+    components = {
+        "recency": float(cfg.get("weight_recency", 1.0)) * rec,
+        "topic_fit": float(cfg.get("weight_keyword", 0.6)) * kw,
+        "source": float(cfg.get("weight_source", 0.4)) * src,
+        "coverage": float(cfg.get("weight_echo", 0.5)) * echo,
+        "interest": float(cfg.get("weight_interest", 0.8)) * interest_score,
+    }
+    components["final_score"] = sum(components.values())
+    return components
 
 
 def rank_items(
@@ -134,7 +154,9 @@ def rank_items(
     interest_scores: Mapping[str, float] | None = None,
 ) -> list[Item]:
     """Highest score first. Ties broken by recency, then title, so runs are stable."""
-    if topic.id == "trending":
+    preference_mode = interest_scores is not None
+    scores = interest_scores or {}
+    if topic.id == "trending" and not preference_mode:
         # HN is the English Trending source and buzzing.cc is the Chinese one,
         # so each language view contains one source-local rank scale. Unranked
         # rows stay behind the native list and use deterministic fallbacks.
@@ -147,7 +169,31 @@ def rank_items(
                 i.title,
             ),
         )
-    scores = interest_scores or {}
+    if topic.id == "trending":
+        return sorted(
+            items,
+            key=lambda i: (
+                -float(scores.get(story_key(i), 0.0)),
+                -i.published_at.timestamp(),
+                i.title,
+            ),
+        )
+    if preference_mode:
+        return sorted(
+            items,
+            key=lambda i: (
+                -float(scores.get(story_key(i), 0.0)),
+                -i.published_at.timestamp(),
+                -score_item(
+                    i,
+                    topic,
+                    now,
+                    cfg,
+                    interest_score=float(scores.get(story_key(i), 0.0)),
+                ),
+                i.title,
+            ),
+        )
     return sorted(
         items,
         key=lambda i: (

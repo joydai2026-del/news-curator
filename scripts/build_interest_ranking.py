@@ -51,6 +51,7 @@ def _build(args: argparse.Namespace) -> int:
         os.environ.get("NEWS_CURATOR_OWNER_USER_ID", ""),
     )
     snapshot, config_digest = _snapshot(args.root, args.source_snapshot)
+    project_config = load_config(args.root)
     profile = fetch_interest_profile(config)
     items = [item for result in snapshot.results for item in result.items]
     payload = build_interest_artifact(
@@ -58,6 +59,7 @@ def _build(args: argparse.Namespace) -> int:
         items,
         source_snapshot_digest=snapshot.content_digest,
         configuration_digest=config_digest,
+        categories=project_config.categories,
     )
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     # Raw preferences cannot enter the exact artifact schema. Credentials and

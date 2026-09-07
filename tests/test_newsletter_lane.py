@@ -7,6 +7,7 @@ exercise routing, extraction, dedup and reporting without a socket in sight.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -199,6 +200,17 @@ def test_only_published_stories_are_remembered():
     assert len(result.hashes) == 4, "a story cut by the cap must be eligible again next run"
 
 
+def test_safe_mentions_are_not_cut_by_display_dedup_or_cap():
+    result = run(cfg={"enabled": True, "max_items": 1})
+
+    assert len(result.items) == 1
+    assert len(result.mentions) > len(result.items)
+    assert {mention["source_id"] for mention in result.mentions} == {
+        f"newsletter:{adapter_id}" for adapter_id in EXPECTED_STORIES
+    }
+    assert all("@" not in json.dumps(mention, default=str) for mention in result.mentions)
+
+
 def test_a_second_run_after_advancing_the_cursor_publishes_nothing_new(tmp_path):
     path = tmp_path / "newsletter_state.json"
     first = state_module.load(path, now=NOW)
@@ -208,6 +220,7 @@ def test_a_second_run_after_advancing_the_cursor_publishes_nothing_new(tmp_path)
 
     second = run(st=committed)
     assert second.items == [], "the salted hashes must suppress the overlap re-read"
+    assert second.mentions, "coverage survives display suppression in the overlap window"
     assert second.status["tldr"].extracted == EXPECTED_STORIES["tldr"], (
         "the stories were still seen and counted"
     )

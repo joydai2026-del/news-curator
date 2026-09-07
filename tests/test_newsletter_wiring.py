@@ -67,6 +67,52 @@ def artifact(tmp_path: Path, **overrides) -> Path:
 
 
 class TestArtifactLoading:
+    def test_v2_safe_mentions_are_exposed_separately_and_attached_by_canonical_url(self, tmp_path):
+        path = artifact(tmp_path)
+        raw = json.loads(path.read_text())
+        raw["version"] = 2
+        raw["display_candidates"] = raw["items"]
+        raw["mentions"] = [{
+            "mention_id": "mention:" + "a" * 64,
+            "source_kind": "newsletter",
+            "source_id": "newsletter:theneuron",
+            "source_name": "The Neuron",
+            "url": "https://example.com/story",
+            "canonical_url": "https://example.com/story",
+            "headline": "Another headline for the same story",
+            "mentioned_at": NOW.isoformat(),
+        }]
+        path.write_text(json.dumps(raw))
+
+        items, tier, meta = load_newsletter_artifact(path)
+
+        assert [mention.source_name for mention in tier.coverage_mentions] == ["The Neuron"]
+        assert [mention.source_name for mention in items[0].coverage_mentions] == ["TLDR", "The Neuron"]
+        assert meta["mentions"] == tier.coverage_mentions
+
+    def test_filtered_display_candidate_still_carries_attachable_story_identity(self, tmp_path):
+        path = artifact(tmp_path)
+        raw = json.loads(path.read_text())
+        raw["version"] = 2
+        raw["display_candidates"] = []
+        raw["mentions"] = [{
+            "mention_id": "mention:" + "b" * 64,
+            "source_kind": "newsletter",
+            "source_id": "newsletter:tldr",
+            "source_name": "TLDR",
+            "url": "https://www.example.com/story/?utm_source=mail",
+            "canonical_url": "https://example.com/story",
+            "headline": "Coverage survives display filtering",
+            "mentioned_at": NOW.isoformat(),
+        }]
+        path.write_text(json.dumps(raw))
+
+        items, tier, _ = load_newsletter_artifact(path)
+
+        assert items == []
+        assert tier.coverage_mentions[0].canonical_url == "https://example.com/story"
+        assert tier.coverage_mentions[0].story_id.startswith("story:")
+
     def test_items_carry_the_privacy_critical_fields(self, tmp_path):
         items, tier, meta = load_newsletter_artifact(artifact(tmp_path))
         (item,) = items

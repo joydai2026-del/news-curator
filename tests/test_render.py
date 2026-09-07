@@ -546,12 +546,16 @@ class TestAccordionReadingCompanion:
     def test_expansion_has_summary_provenance_and_reason(self, now):
         item = make_item("A story", source_name="The Verge", description="Publisher summary.")
         item.matched_keywords = ["AI"]
+        item.score_components_by_topic["AI"] = {
+            "interest": 0.0, "recency": 1.0, "topic_fit": 0.6,
+            "source": 0.2, "coverage": 0.0, "final_score": 1.8,
+        }
         card = card_with(render({"AI": [item]}, now=now), "A story")
         assert '<div class="provenance" aria-label="Story provenance">' in card
         assert '<span class="provenance-chip">AI</span>' in card
         assert '<p class="full">Publisher summary.</p>' in card
         assert '<aside class="signal"><b>Why this appeared</b>' in card
-        assert "freshness" in card.casefold() and "topic" in card.casefold()
+        assert "Freshness 1.000" in card and "Topic fit 0.600" in card
 
     def test_touch_targets_and_mobile_overflow_are_guarded(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
@@ -607,9 +611,52 @@ class TestAccordionReadingCompanion:
         assert "</button></h2>" in card
 
     def test_ranking_explanation_names_signals_without_overclaiming_causation(self, now):
-        page = render({"AI": [make_item("A story")]}, now=now)
-        assert "Visible signals include" in page
-        assert "Ranked #1 in AI from" not in page
+        item = make_item("A story")
+        item.score_components_by_topic["AI"] = {
+            "interest": 0.4, "recency": 0.9, "topic_fit": 0.3,
+            "source": 0.2, "coverage": 0.0, "final_score": 1.8,
+        }
+        page = render({"AI": [item]}, now=now)
+        assert "Preference match 0.400" in page
+        assert "Freshness 0.900" in page
+        assert "Weighted total 1.800" in page
+        assert "Best rank" not in page
+
+    def test_ranking_explanation_matches_recomputed_components(self, now):
+        from curator.config import Category
+        from curator.rank import score_components
+
+        item = make_item("AI story", hours_ago=3)
+        item.matched_keywords = ["AI"]
+        topic = Category(name="AI", id="ai", keywords=["AI"])
+        components = score_components(item, topic, now, {}, interest_score=0.5)
+        item.score_components_by_topic["AI"] = components
+
+        page = render({"AI": [item]}, now=now)
+
+        for key, label in (
+            ("interest", "Preference match"), ("recency", "Freshness"),
+            ("topic_fit", "Topic fit"), ("source", "Source"), ("coverage", "Coverage"),
+        ):
+            assert f"{label} {components[key]:.3f}" in page
+        assert f"Weighted total {components['final_score']:.3f}" in page
+
+    def test_preference_explanation_names_the_real_sort_key_and_context(self, now):
+        item = make_item("Preferred story")
+        item.score_components_by_topic["AI"] = {
+            "interest": 0.4, "recency": 0.9, "topic_fit": 0.3,
+            "source": 0.2, "coverage": 0.0, "final_score": 1.8,
+        }
+        item.ranking_mode_by_topic["AI"] = "preference_then_freshness"
+        item.ranking_key_by_topic["AI"] = {
+            "preference_score": 0.5, "published_at": item.published_at.timestamp()
+        }
+
+        page = render({"AI": [item]}, now=now)
+
+        assert "Order: preference match 0.500 first, newer publication time second" in page
+        assert "Context only:" in page
+        assert "Order: Weighted total" not in page
 
     def test_shared_story_labels_its_best_rank_instead_of_the_active_topic(self, now):
         shared = make_item("Shared story", "https://example.com/shared")
@@ -618,15 +665,15 @@ class TestAccordionReadingCompanion:
             render({"AI": [filler, shared], "Crypto": [shared]}, now=now),
             "Shared story",
         )
-        assert "Best rank #1 in Crypto" in card
+        assert "Best rank" not in card
+        assert "Score components were not supplied" in card
 
     def test_older_native_source_story_does_not_claim_freshness(self, now):
         item = make_item("Native story", hours_ago=30)
         item.native_categories = {"energy"}
         card = card_with(render({"Energy": [item]}, now=now), "Native story")
         reason = card[card.index("Why this appeared"):]
-        assert "coverage from a configured topic source" in reason
-        assert "freshness" not in reason.casefold()
+        assert "Score components were not supplied" in reason
 
     def test_missing_summary_never_reaches_searchable_story_content(self, now):
         page = render(

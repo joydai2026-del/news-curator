@@ -96,6 +96,7 @@ class AdapterStatus:
 @dataclass
 class LaneResult:
     items: list = field(default_factory=list)
+    mentions: list[dict] = field(default_factory=list)
     status: dict[str, AdapterStatus] = field(default_factory=dict)
     ok: bool = True
     dark: bool = False
@@ -197,6 +198,28 @@ def build_record(
         "is_newsletter": True,
         "newsletter_sender": display_name,
         "image_url": "",  # PRIVACY RULE: newsletter items never carry an image
+    }
+
+
+def build_mention(record: dict) -> dict:
+    """Project one parsed row into the exact public-safe coverage shape."""
+
+    from ..identity import coverage_mention_id
+
+    published_at = record["published_at"]
+    return {
+        "mention_id": coverage_mention_id(
+            source_kind="newsletter", source_id=str(record["source_id"]),
+            mentioned_at=published_at, url=str(record["canonical_url"]),
+            headline=str(record["title"]),
+        ),
+        "source_kind": "newsletter",
+        "source_id": record["source_id"],
+        "source_name": record["newsletter_sender"],
+        "url": record["url"],
+        "headline": record["title"],
+        "canonical_url": record["canonical_url"],
+        "mentioned_at": published_at,
     }
 
 
@@ -351,7 +374,9 @@ def fetch(
     cutoff = now - timedelta(hours=max_age_hours)
     already = state.seen
     seen_now: set[str] = set()
+    seen_mention_ids: set[str] = set()
     records: list[dict] = []
+    mentions: list[dict] = []
     unmatched = 0
     unauthenticated = 0
     unauthenticated_missing = 0
@@ -393,20 +418,23 @@ def fetch(
         if sent < cutoff:
             continue
         for story in parsed.stories:
+            record = build_record(
+                title=story.title,
+                url=story.url,
+                blurb=story.blurb,
+                adapter_id=adapter.id,
+                display_name=adapter.name,
+                published_at=sent,
+            )
+            mention = build_mention(record)
+            if mention["mention_id"] not in seen_mention_ids:
+                mentions.append(mention)
+                seen_mention_ids.add(mention["mention_id"])
             digest = state.story_hash(story.title, story.url)
             if digest in already or digest in seen_now:
                 continue
             seen_now.add(digest)
-            records.append(
-                build_record(
-                    title=story.title,
-                    url=story.url,
-                    blurb=story.blurb,
-                    adapter_id=adapter.id,
-                    display_name=adapter.name,
-                    published_at=sent,
-                )
-            )
+            records.append(record)
 
     records = fair_cap(records, max(0, max_items))
     for record in records:
@@ -471,6 +499,7 @@ def fetch(
 
     return LaneResult(
         items=to_items(records),
+        mentions=mentions,
         status=status,
         ok=True,
         dark=False,

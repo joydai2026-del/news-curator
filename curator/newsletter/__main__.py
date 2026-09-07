@@ -36,7 +36,7 @@ from . import lane, state
 
 log = logging.getLogger(__name__)
 
-ARTIFACT_VERSION = 1
+ARTIFACT_VERSION = 2
 
 CONFIG_ERROR = "config_error"
 
@@ -69,6 +69,13 @@ def serialize(result: lane.LaneResult) -> dict:
             "description": _field(record, "description"),
             "newsletter_sender": _field(record, "newsletter_sender"),
         })
+    mentions = []
+    for mention in result.mentions:
+        mentioned = mention.get("mentioned_at")
+        mentions.append({
+            **mention,
+            "mentioned_at": mentioned.isoformat() if isinstance(mentioned, datetime) else str(mentioned or ""),
+        })
     return {
         "version": ARTIFACT_VERSION,
         "ok": result.ok,
@@ -97,6 +104,10 @@ def serialize(result: lane.LaneResult) -> dict:
             for adapter_id, status in result.status.items()
         },
         "items": items,
+        # Compatibility alias for the v1 consumer. New consumers use the name
+        # that states why these rows are bounded.
+        "display_candidates": items,
+        "mentions": mentions,
     }
 
 

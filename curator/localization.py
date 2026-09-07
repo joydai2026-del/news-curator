@@ -6,7 +6,6 @@ back into identity, deduplication, category matching, or ranking.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from .config import Category
+from .identity import story_id_for_item
 from .models import Item, LocalizedItem, TranslationRecord
 from .normalize import clean_title
 
@@ -37,17 +37,6 @@ _TRANSLATION_KEYS = {
 
 class TranslationArtifactError(ValueError):
     """A low-information artifact validation failure."""
-
-
-def story_id_for_item(item: Item) -> str:
-    """Stable public identity derived only from authoritative item fields."""
-
-    anchor = item.canonical_url or item.url
-    if not anchor:
-        anchor = "\0".join(
-            (item.source_id, item.title, item.published_at.astimezone(timezone.utc).isoformat())
-        )
-    return "story:" + hashlib.sha256(anchor.encode("utf-8")).hexdigest()
 
 
 def load_translation_artifact(path: Path) -> tuple[TranslationRecord, ...]:

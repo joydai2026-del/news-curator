@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from curator.config import Category, Config
 from curator.models import TierResult
 from curator.pipeline import build, main
@@ -88,6 +91,20 @@ class TestPublishGuard:
         (tmp_path / "topics.yaml").write_text("topics:\n  - name: X\n    keywords: AI\n", encoding="utf-8")
         (tmp_path / "sources.yaml").write_text("rss: []\n", encoding="utf-8")
         assert main(["--root", str(tmp_path), "--offline"]) == 2
+
+    def test_archive_candidate_hashes_the_exact_rendered_page(self, tmp_path):
+        root = self._repo(tmp_path)
+        site = root / "site"
+        candidate = root / "candidate.json"
+        code = main([
+            "--root", str(root), "--offline", "--allow-empty", "--out", str(site),
+            "--archive-candidate", str(candidate), "--build-nonce", "run-site-hash",
+            "--commit-sha", "a" * 40,
+        ])
+
+        assert code == 0
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+        assert payload["site_sha256"] == hashlib.sha256((site / "index.html").read_bytes()).hexdigest()
 
 
 class TestRound2EmptyTopicsGuard:

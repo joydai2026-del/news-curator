@@ -14,8 +14,11 @@ from curator.personalization.ranking import (
     interest_score,
     load_interest_artifact,
     measure_ranking_impact,
+    ranking_config_digest,
     story_key,
 )
+from curator.config import Config
+from curator.config import Category
 from curator.rank import rank_items
 from tests.conftest import make_item
 
@@ -67,7 +70,7 @@ def test_duplicate_interests_do_not_inflate_the_score() -> None:
     assert interest_score(item, ("AI", "ai")) == interest_score(item, ("AI",))
 
 
-def test_score_key_does_not_transfer_between_different_headlines_for_one_url() -> None:
+def test_score_key_survives_a_headline_change_for_one_canonical_story() -> None:
     publisher = make_item("Publisher headline", "https://example.com/story")
     aggregator = make_item("Quantum networking breakthrough", "https://example.com/story")
 
@@ -79,8 +82,8 @@ def test_score_key_does_not_transfer_between_different_headlines_for_one_url() -
         generated_at=datetime(2026, 9, 3, 13, 0, tzinfo=timezone.utc),
     )
 
-    assert story_key(publisher) not in payload["scores"]
-    assert story_key(aggregator) in payload["scores"]
+    assert story_key(publisher) in payload["scores"]
+    assert story_key(aggregator) == story_key(publisher)
 
 
 def test_saved_interest_changes_rank_while_empty_profile_preserves_baseline(now) -> None:
@@ -110,6 +113,70 @@ def test_saved_interest_changes_rank_while_empty_profile_preserves_baseline(now)
     assert ordinary[0] is baseline
     assert personalized[0] is interested
     assert rank_items([interested, baseline], topic, now, cfg, interest_scores={}) == ordinary
+
+
+def test_preference_match_is_primary_and_freshness_breaks_equal_preferences(now) -> None:
+    topic = type("Topic", (), {"id": "ai", "terms_for": lambda self, language: ["AI"]})()
+    old_match = make_item("AI old match", "https://example.com/old", hours_ago=24)
+    fresh_match = make_item("AI fresh match", "https://example.com/fresh", hours_ago=1)
+    fresh_unmatched = make_item("AI newest", "https://example.com/newest", hours_ago=0)
+    for item in (old_match, fresh_match, fresh_unmatched):
+        item.matched_keywords = ["AI"]
+    scores = {story_key(old_match): 0.5, story_key(fresh_match): 0.5}
+
+    assert rank_items(
+        [fresh_unmatched, old_match, fresh_match], topic, now, {}, interest_scores=scores
+    ) == [fresh_match, old_match, fresh_unmatched]
+
+
+def test_trending_uses_preferences_when_present_and_native_rank_without_them(now) -> None:
+    topic = type("Topic", (), {"id": "trending", "terms_for": lambda self, language: []})()
+    native_first = make_item("Native first", "https://example.com/first", hours_ago=1)
+    preferred = make_item("Preferred", "https://example.com/preferred", hours_ago=0)
+    native_first.native_categories = {"trending"}
+    preferred.native_categories = {"trending"}
+    native_first.native_rank = 1
+    preferred.native_rank = 2
+
+    assert rank_items([preferred, native_first], topic, now, {}) == [native_first, preferred]
+    assert rank_items(
+        [native_first, preferred], topic, now, {}, interest_scores={story_key(preferred): 0.5}
+    ) == [preferred, native_first]
+    assert rank_items([preferred, native_first], topic, now, {}, interest_scores={}) == [
+        preferred,
+        native_first,
+    ]
+
+
+def test_ranking_config_digest_is_available() -> None:
+    cfg = Config([], [], {}, {"weight_interest": 0.8}, {}, {}, {})
+    assert len(ranking_config_digest(cfg)) == 64
+
+
+def test_more_like_topic_signal_materializes_and_changes_next_rank(now) -> None:
+    topic = Category(name="Energy", id="energy", keywords=["grid"])
+    old_match = make_item("Grid storage expands", "https://example.com/grid", hours_ago=12)
+    fresh_other = make_item("AI release", "https://example.com/ai", hours_ago=1)
+    old_match.matched_keywords = ["grid"]
+    fresh_other.matched_keywords = []
+    profile = InterestProfile(
+        revision=2,
+        interests=(),
+        topic_signals=(("energy", "more_like"),),
+        more_like_topic_weight=0.8,
+    )
+    payload = build_interest_artifact(
+        profile, [old_match, fresh_other], categories=[topic],
+        source_snapshot_digest=SNAPSHOT_DIGEST, configuration_digest=CONFIG_DIGEST,
+        generated_at=now,
+    )
+
+    ranked = rank_items(
+        [fresh_other, old_match], topic, now, {}, interest_scores=payload["scores"]
+    )
+
+    assert payload["scores"] == {story_key(old_match): 0.8}
+    assert ranked[0] is old_match
 
 
 def test_artifact_contains_scores_and_receipt_but_not_interests_or_user_id(tmp_path) -> None:
