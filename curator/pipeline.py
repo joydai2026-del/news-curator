@@ -923,6 +923,7 @@ def main(argv: list[str] | None = None) -> int:
         timezone_name=cfg.display_timezone,
         cname_source=args.root / "CNAME",
         require_summaries=summary_policy_enabled,
+        topic_ids_by_name={category.name: category.id for category in en_categories},
     )
     log.info(
         "wrote %s (%d rows across %d topics)",

@@ -36,8 +36,8 @@ def _story(index: int) -> dict[str, object]:
         "ordering_mode": "weighted_total",
         "ordering_key": {"weighted_total": 1},
         "score_components": {"freshness": 1},
-        "topic_ids": ["ai"],
-        "topic_ranks": {"ai": index},
+        "topic_ids": ["quantum"],
+        "topic_ranks": {"quantum": index},
         "source_kind": "outlet",
         "source_name": "Publisher",
         "ranking_explanation": "Weighted using freshness.",
@@ -56,7 +56,7 @@ def _update(index: int) -> dict[str, object]:
         "story_id": story_id,
         "title": f"Update {index}",
         "published_at": "2026-09-07T13:00:00Z",
-        "topic_ids": ["ai"],
+        "topic_ids": ["quantum"],
         "next_cursor": {
             "after_publication_seq": 8,
             "after_published_at": "2026-09-07T13:00:00Z",
@@ -84,12 +84,12 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         <a class="profile-link" href="#">Profile</a>
         <div class="tools">
           <button class="chip" data-filter="__all__">All</button>
-          <button class="chip" data-filter="ai">AI</button>
+          <button class="chip" data-filter="quantum-computing" data-topic-id="quantum">Quantum Computing</button>
         </div>
         <p id="reader-status"></p><button id="load-more">Load more</button>
         <p id="updates-status" hidden><button id="show-updates"></button></p>
-        <main id="sections"><section class="topic-section" data-section="ai">
-          <h2>AI</h2><div class="grid"></div>
+        <main id="sections"><section class="topic-section" data-section="quantum-computing" data-topic-id="quantum">
+          <h2>Quantum Computing</h2><div class="grid"></div>
         </section></main><div class="spacer"></div>
         <script>
         window.__tab = "__all__";
@@ -136,7 +136,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             payload: object = {
                 "publication_seq": sequence,
                 "finalized_at": "2026-09-07T12:00:00Z",
-                "topics": [{"topic_id": "ai", "name": "AI"}],
+                "topics": [{"topic_id": "quantum", "name": "Quantum Computing"}],
                 "initial_history_cursor": None,
                 "poll_seconds": 30,
             }
@@ -146,6 +146,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             elif body["p_topic_id"] is None:
                 payload = [_story(index) for index in range(1, 21)]
             else:
+                assert body["p_topic_id"] == "quantum"
                 counts["category"] += 1
                 payload = (
                     [_story(index) for index in range(1, 21)]
@@ -161,6 +162,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "revision": counts["state"],
             }
         elif request.url.endswith("/set_story_interest"):
+            assert body["p_topic_id"] == "quantum"
             counts["interest"] += 1
             payload = {"status": "updated", "signal": "more_like", "revision": 1}
         elif request.url.endswith("/updates_since"):
@@ -177,7 +179,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
             page.locator("article.card", has_text="Controller story 20").wait_for()
-            page.locator('.chip[data-filter="ai"]').click()
+            page.locator('.chip[data-filter="quantum-computing"]').click()
 
             first = page.locator("article.card").first
             first.locator(".accordion-toggle").evaluate(

@@ -707,6 +707,7 @@ def _render_card(
     all_rank: int,
     timezone_name: str = DISPLAY_TIMEZONE,
     require_summary: bool = True,
+    topic_ids_by_slug: dict[str, str] | None = None,
 ) -> str | None:
     """One story as one headline-first accordion row.
 
@@ -776,7 +777,8 @@ def _render_card(
             '<button type="button" class="state-action save-action" '
             'aria-pressed="false">Save</button>',
             f'<button type="button" class="state-action interest-action" '
-            f'data-topic-id="{_e(card.best[1])}" aria-pressed="false">More like this</button>',
+            f'data-topic-id="{_e((topic_ids_by_slug or {}).get(card.best[1], card.best[1]))}" '
+            'aria-pressed="false">More like this</button>',
         )
     )
     acts.append('<button type="button" class="shut">Close</button>')
@@ -798,6 +800,10 @@ def _render_card(
     )
 
     topics = " ".join(sorted(card.ranks, key=lambda s: card.ranks[s]))
+    api_topics = " ".join(
+        (topic_ids_by_slug or {}).get(slug, slug)
+        for slug in sorted(card.ranks, key=lambda s: card.ranks[s])
+    )
     rank_attrs = "".join(f' data-rank-{slug}="{rank}"' for slug, rank in sorted(card.ranks.items()))
     # `data-image` stays on the article even though M1 no longer renders an
     # <img>: the deploy workflow counts source image coverage with one cheap
@@ -814,7 +820,8 @@ def _render_card(
     story_id = story_id_for_item(item)
     return (
         f'<article class="card" data-story-id="{_e(story_id)}" '
-        f'data-topic-ids="{_e(topics)}" data-topics="{_e(topics)}" data-rank-all="{all_rank}" '
+        f'data-topic-ids="{_e(topics)}" data-topic-api-ids="{_e(api_topics)}" '
+        f'data-topics="{_e(topics)}" data-rank-all="{all_rank}" '
         f'data-summary-chars="{len(summary)}"'
         f"{rank_attrs}{image_attr}{newsletter_attr}>"
         f'<h2 class="story-heading"><button type="button" class="accordion-toggle" aria-expanded="false" '
@@ -878,6 +885,7 @@ def render_html(
     built_at: datetime | None = None,
     timezone_name: str = DISPLAY_TIMEZONE,
     require_summaries: bool = True,
+    topic_ids_by_name: dict[str, str] | None = None,
 ) -> str:
     built = built_at or now
     stamp = _display_time(built, timezone_name)
@@ -895,6 +903,9 @@ def render_html(
 
     _all_cards, names = _collect_cards(ranked)
     cards = publishable_cards(ranked, require_summaries=require_summaries)
+    topic_ids_by_slug = {
+        slug: (topic_ids_by_name or {}).get(name, slug) for slug, name in names.items()
+    }
     hues = _accent_hues(list(names))
 
     chips = [
@@ -903,7 +914,9 @@ def render_html(
     ]
     for slug, name in names.items():
         chips.append(
-            f'<button class="chip" data-filter="{_e(slug)}" aria-pressed="false">{_e(name)}</button>'
+            f'<button class="chip" data-filter="{_e(slug)}" '
+            f'data-topic-id="{_e(topic_ids_by_slug[slug])}" '
+            f'aria-pressed="false">{_e(name)}</button>'
         )
 
     rendered: dict[str, list[str]] = {slug: [] for slug in names}
@@ -917,6 +930,7 @@ def render_html(
             position,
             timezone_name=timezone_name,
             require_summary=require_summaries,
+            topic_ids_by_slug=topic_ids_by_slug,
         )
         if markup is not None:
             rendered[card.best[1]].append(markup)
@@ -928,7 +942,8 @@ def render_html(
         if not rows:
             continue
         sections.append(
-            f'<section class="topic-section" data-section="{_e(slug)}">'
+            f'<section class="topic-section" data-section="{_e(slug)}" '
+            f'data-topic-id="{_e(topic_ids_by_slug[slug])}">'
             f'<h2 class="section-title">{_e(name)}</h2>'
             f'<div class="grid">{"".join(rows)}</div></section>'
         )
@@ -1059,6 +1074,7 @@ def render_site(
     timezone_name: str = DISPLAY_TIMEZONE,
     cname_source: Path | None = None,
     require_summaries: bool = True,
+    topic_ids_by_name: dict[str, str] | None = None,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
@@ -1070,6 +1086,7 @@ def render_site(
         repo_url=repo_url,
         timezone_name=timezone_name,
         require_summaries=require_summaries,
+        topic_ids_by_name=topic_ids_by_name,
     )
 
     # Write via a temp file in the same directory, then replace, so an
