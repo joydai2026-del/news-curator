@@ -82,6 +82,18 @@ def test_preference_rank_archive_is_public_safe_without_changing_position(now):
     )
 
 
+@pytest.mark.parametrize("interest_scores", [{}, {"story:" + "0" * 64: 1.0}])
+def test_candidate_uses_baseline_mode_when_no_interest_signal_is_effective(now, interest_scores):
+    item = make_item("Baseline", url="https://example.com/baseline")
+    item.description = "Publisher summary"
+    candidate = build_archive_candidate(
+        {"AI": [item]}, categories=[Category(name="AI", id="ai")], ranking={},
+        now=now, build_nonce="baseline-mode", commit_sha="a" * 40,
+        site_sha256=SITE_SHA256, require_summaries=True, interest_scores=interest_scores,
+    )
+    assert candidate["entries"][0]["ordering_mode"] == "weighted_total"
+
+
 def test_candidate_carries_every_snapshot_topic_rank_on_each_story_entry(now):
     shared = make_item("Shared", url="https://example.com/shared")
     other = make_item("Other", url="https://example.com/other")

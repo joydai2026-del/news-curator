@@ -32,7 +32,7 @@ from .models import CoverageMention, Item, TierResult
 from .newsletter.sanitize import sanitize as sanitize_newsletter_url
 from .normalize import canonical_url as normalize_canonical_url
 from .normalize import fold_text
-from .rank import rank_items, score_components
+from .rank import has_effective_interest_scores, rank_items, score_components
 from .render import render_site
 from .summaries import (
     SUMMARY_CACHE_FILE,
@@ -428,6 +428,9 @@ def build_ranked_language(
     newsletter_cap = int(cfg.newsletter.get("max_items", 50) or 50)
     ranked: dict[str, list[Item]] = {}
     for category in categories:
+        preference_mode = has_effective_interest_scores(
+            buckets[category.name], interest_scores
+        )
         for item in buckets[category.name]:
             preference_score = float((interest_scores or {}).get(story_id_for_item(item), 0.0))
             components = score_components(
@@ -438,7 +441,7 @@ def build_ranked_language(
                 interest_score=preference_score,
             )
             item.score_components_by_topic[category.name] = components
-            if interest_scores is not None:
+            if preference_mode:
                 item.ranking_mode_by_topic[category.name] = "preference_then_freshness"
                 item.ranking_key_by_topic[category.name] = {
                     "preference_score": preference_score,
