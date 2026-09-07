@@ -63,7 +63,15 @@ def test_version_one_load_preserves_legacy_hashes_for_transition(tmp_path):
 
 def test_advance_deduplicates_and_prunes_oldest_first(tmp_path):
     path = tmp_path / "newsletter_state.json"
-    st = state_module.NewsletterState(watermark=NOW, salt="deadbeef", hashes=[f"{i:064d}" for i in range(10)])
+    legacy_hashes = [
+        f"{i:064x}" for i in range(state_module.MAX_HASHES + 1)
+    ]
+    st = state_module.NewsletterState(
+        watermark=NOW,
+        salt="deadbeef",
+        hashes=[f"{i:064d}" for i in range(10)],
+        legacy_hashes=legacy_hashes,
+    )
     written = state_module.advance(
         path, st, watermark=NOW, new_hashes=[f"{i:064d}" for i in range(8, 14)], max_hashes=8
     )
@@ -71,6 +79,7 @@ def test_advance_deduplicates_and_prunes_oldest_first(tmp_path):
     assert written.hashes[-1] == f"{13:064d}"
     assert f"{0:064d}" not in written.hashes, "oldest entries fall off the front"
     assert len(set(written.hashes)) == len(written.hashes)
+    assert written.legacy_hashes == legacy_hashes[-state_module.MAX_HASHES:]
 
 
 def test_plan_window_overlaps_the_watermark(tmp_path):

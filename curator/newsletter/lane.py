@@ -392,7 +392,7 @@ def fetch(
 
     cutoff = now - timedelta(hours=max_age_hours)
     already = state.seen
-    legacy = state.legacy_seen if state.transitioning else set()
+    legacy = state.legacy_seen
     migrated_hashes: list[str] = []
     seen_now: set[str] = set()
     seen_mention_ids: set[str] = set()
@@ -465,8 +465,12 @@ def fetch(
             if digest in already or digest in seen_now:
                 continue
             legacy_digest = state.story_hash(story.title, story.url)
-            if legacy_digest in legacy:
+            # Version 1 gets one complete migration pass. After that, the old
+            # title hash remains safe only when a public publisher URL made it
+            # collision-resistant; linkless stories use their v2 identity.
+            if (state.transitioning or record["url"]) and legacy_digest in legacy:
                 migrated_hashes.append(digest)
+                seen_now.add(digest)
                 continue
             seen_now.add(digest)
             records.append(record)

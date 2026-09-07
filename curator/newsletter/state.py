@@ -9,7 +9,9 @@ design constraint. Version 2 holds five keys and nothing else:
 No message ids, no subjects, no addresses, no titles in the clear. `hashes`
 contains salted collision-safe story identities. `legacy_hashes` preserves the
 version 1 salted title-and-URL hashes so the migration is recoverable and does
-not replay the current overlap window.
+not replay a linked story that resurfaces after the first migration window.
+After version 2 is written, linkless stories never consult this ambiguous
+legacy title hash.
 
 **Honest limit of the salt.** It sits in the same public file as the hashes, so
 it does not hide the hashed values from anyone determined to check a guess. It

@@ -309,6 +309,76 @@ def test_version_one_production_state_migrates_without_replay_and_keeps_new_coll
     assert run([message], st=committed).items == []
 
 
+def test_version_two_keeps_legacy_link_suppression_beyond_the_first_window(tmp_path):
+    linked_html = """<html><body>
+      <p><strong><a href="https://publisher.example/stable-linked-story">
+        Stable linked story
+      </a></strong></p>
+      <p>A complete publisher summary explains the linked story and why it matters.</p>
+    </body></html>"""
+    linked_message = parsed("tldr", html=linked_html, sent=NOW - timedelta(hours=1))
+    probe_state = fresh_state()
+    linked_probe = run([linked_message], st=probe_state)
+    assert len(linked_probe.items) == 1
+    linked_item = linked_probe.items[0]
+    assert field(linked_item, "url") == "https://publisher.example/stable-linked-story"
+
+    legacy_state = state_module.NewsletterState(
+        watermark=NOW - timedelta(hours=6),
+        salt=probe_state.salt,
+        hashes=[],
+        legacy_hashes=[
+            probe_state.story_hash(field(linked_item, "title"), field(linked_item, "url")),
+            probe_state.story_hash("Quick hits generic AI update", ""),
+        ],
+        version=state_module.LEGACY_STATE_VERSION,
+    )
+    state_path = tmp_path / "newsletter_state.json"
+
+    initial_window = run([], st=legacy_state)
+    assert initial_window.items == []
+    migrated = state_module.advance(
+        state_path,
+        legacy_state,
+        watermark=initial_window.watermark,
+        new_hashes=initial_window.hashes,
+    )
+    assert migrated.version == state_module.STATE_VERSION
+    assert migrated.hashes == []
+    assert migrated.legacy_hashes == legacy_state.legacy_hashes
+
+    delayed_resend = run([linked_message], st=migrated)
+    assert delayed_resend.items == []
+    assert delayed_resend.hashes == [
+        migrated.story_identity_hash(field(linked_item, "canonical_url"))
+    ]
+    learned = state_module.advance(
+        state_path,
+        migrated,
+        watermark=delayed_resend.watermark,
+        new_hashes=delayed_resend.hashes,
+    )
+    assert learned.hashes == delayed_resend.hashes
+    assert learned.legacy_hashes == migrated.legacy_hashes
+    assert not state_path.with_name(state_path.name + ".tmp").exists()
+    assert run([linked_message], st=learned).items == []
+
+    linkless_html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/DelayedFirstOpaqueToken123">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/DelayedSecondOpaqueToken456">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+    </body></html>"""
+    linkless_message = parsed("tldr", html=linkless_html, sent=NOW - timedelta(hours=1))
+    distinct_linkless = run([linkless_message], st=learned)
+    assert len(distinct_linkless.items) == 2
+    assert all(field(item, "url") == "" for item in distinct_linkless.items)
+
+
 def test_the_watermark_returned_is_the_run_time_and_the_caller_commits_it(tmp_path):
     path = tmp_path / "newsletter_state.json"
     st = state_module.load(path, now=NOW)
