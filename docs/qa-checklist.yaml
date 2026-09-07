@@ -3,7 +3,7 @@ status: dormant_historical_evidence
 snapshot_date: 2026-09-01
 planning_authority: none
 current_plan: https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2
-note: "Recorded code-adjacent QA evidence only. These checks and statuses do not define current milestones, order, or done tests."
+note: "Historical results below remain evidence snapshots. Pending and blocked reading/history checks record the approved acceptance contract without replacing Notion as the planning authority."
 historical_source: docs/plans/2026-08-29-news-curator-v3-backend-platform.md
 generated_for_historical_snapshot: News Curator v3 backend platform
 state_ladder:
@@ -13,6 +13,7 @@ state_ladder:
   - ai_calibrated
   - live_proven
 status_legend:
+  PENDING: "Approved acceptance check exists but has not yet been attempted on the implementation."
   GREEN: "Implemented and proven by the named fresh local receipt."
   PARTIAL: "Implemented with narrower local proof, or a broader local matrix is still pending."
   RED: "Required local implementation or proof is missing."
@@ -288,6 +289,193 @@ criteria:
       - "No live provider run or human-labeled evaluation exists."
       - "No alert destination has been selected by JJ."
       - "Cloud-linked Supabase and Google activation are not complete."
+  - id: NCV3-20
+    group: locally_provable
+    description: Every rendered link, including feed cards, authentication, privacy, and footer navigation, opens in a new tab and carries rel="noopener noreferrer". Unsafe URL schemes remain rejected.
+    check_type: render_security_contract
+    code_audit_target:
+      - "curator/render.py"
+      - "static/auth/"
+      - "tests/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_render.py tests/test_render_security.py tests/test_static_auth_pages.py"
+    comparison_mode: "every rendered anchor has target=_blank and rel tokens noopener plus noreferrer; unsafe schemes never render as navigable links"
+    side_effects: "Uses local render fixtures only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-21
+    group: locally_provable
+    description: One canonical story identity is used across original and translated items, archive rows, coverage evidence, read state, saved state, and More like this actions. Equivalent canonical URLs never create duplicate identities.
+    check_type: identity_contract_test
+    code_audit_target:
+      - "curator/dedup.py"
+      - "curator/models.py"
+      - "curator/translation/"
+      - "curator/personalization/"
+      - "supabase/migrations/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_dedup.py tests/test_localized_pipeline.py tests/test_reading_history_identity.py"
+    comparison_mode: "all projections and persistence calls for one canonical URL use exactly one stable story id"
+    side_effects: "Uses local fixtures and fake persistence only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-22
+    group: locally_provable
+    description: Explicit newsletter mentions are retained as structured coverage evidence before seen-item filtering, sender caps, topic caps, and central dedupe. Coverage remains attached to the surviving canonical story without exposing private newsletter content.
+    check_type: privacy_and_coverage_contract
+    code_audit_target:
+      - "curator/newsletter/"
+      - "curator/dedup.py"
+      - "curator/pipeline.py"
+      - "curator/models.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_newsletter_privacy.py tests/test_newsletter_wiring.py tests/test_newsletter_coverage.py tests/test_dedup.py"
+    comparison_mode: "coverage survives each filter and cap path, merges onto the canonical survivor, and captured public artifacts contain no private newsletter body, sender address, or subject beyond approved coverage labels"
+    side_effects: "Uses synthetic private newsletter fixtures only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-23
+    group: locally_provable
+    description: Read, saved, and explicit More like this state belongs to auth.uid. Anonymous, expired-token, cross-user, altered-id, and direct-table requests are denied by row-level security (RLS), while the owner can create, read, update, and remove only their own state.
+    check_type: local_database_security_test
+    code_audit_target:
+      - "supabase/migrations/"
+      - "curator/personalization/"
+      - "tests/_personalization_local_harness.py"
+    planned_command: "supabase db reset && eval \"$(supabase status -o env)\" && NEWS_CURATOR_LOCAL_SUPABASE_URL=\"$API_URL\" NEWS_CURATOR_LOCAL_SUPABASE_ANON_KEY=\"$ANON_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_SERVICE_ROLE_KEY=\"$SERVICE_ROLE_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_JWT_SECRET=\"$JWT_SECRET\" uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_local_db.py"
+    comparison_mode: "owner operations succeed and every anonymous, expired-token, cross-user, altered-id, and direct-table bypass attempt is denied"
+    side_effects: "Resets only the local Supabase development database. Never run against a cloud project."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-24
+    group: locally_provable
+    description: The latest-edition response identifies one successfully published edition and returns all configured topics from that edition, including topics with zero stories.
+    check_type: archive_api_contract
+    code_audit_target:
+      - "curator/archive/"
+      - "scripts/"
+      - "supabase/migrations/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_archive_store.py tests/test_archive_api.py"
+    comparison_mode: "one published edition id is returned and its topic set exactly equals the configured topic set"
+    side_effects: "Uses local fixtures and fake persistence only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-25
+    group: locally_provable
+    description: Archive policy initially admits no more than five days of real published editions, applies a rolling 30-day retention window, and never manufactures placeholder editions or stories.
+    check_type: retention_policy_test
+    code_audit_target:
+      - "curator/config.py"
+      - "curator/archive/"
+      - "scripts/"
+      - "supabase/migrations/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_archive_retention.py tests/test_archive_store.py"
+    comparison_mode: "fake-clock boundary tests retain only policy-eligible real records, initial backfill is bounded to five days, and steady-state pruning retains at most 30 days"
+    side_effects: "Uses fake-clock records in local fixtures only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-26
+    group: locally_provable
+    description: Archive pagination is server-backed and keyset-based. Each topic owns an independent cursor, each page returns at most 20 rows, repeated requests do not duplicate rows, and one topic's pagination does not advance another topic.
+    check_type: pagination_contract_test
+    code_audit_target:
+      - "curator/archive/"
+      - "static/"
+      - "supabase/migrations/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_archive_pagination.py tests/test_reading_history_browser_contract.py"
+    comparison_mode: "each response contains 0 through 20 unique rows after its exclusive keyset cursor and cursor state is isolated per topic"
+    side_effects: "Uses deterministic local fixtures and a fake API only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-27
+    group: locally_provable
+    description: Read, save, More like this, and per-topic Load more actions update only the intended controls or append rows. They do not reorder, replace, scroll, or jump the already visible document object model (DOM).
+    check_type: browser_dom_contract
+    code_audit_target:
+      - "static/"
+      - "curator/render.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_browser_contract.py"
+    comparison_mode: "pre-action visible story-id order and scroll position remain equal after state actions; pagination preserves the prefix and appends only unique rows to the selected topic"
+    side_effects: "Uses a local DOM harness and fake API only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-28
+    group: locally_provable
+    description: Refresh checks do not silently mutate the visible edition. When a newer published edition exists, a banner appears; only the user's explicit refresh action replaces the current edition.
+    check_type: browser_refresh_contract
+    code_audit_target:
+      - "static/"
+      - "curator/render.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_browser_contract.py tests/test_archive_api.py"
+    comparison_mode: "unchanged edition yields no banner; newer edition yields one banner; visible edition id changes only after the explicit banner action"
+    side_effects: "Uses a fake clock and fake API only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-29
+    group: locally_provable
+    description: Why-this-appeared text is derived from persisted weighted score components. Ranking applies 100 percent preference priority, uses freshness only as the tiebreaker, and every explanation matches the actual components used for that item's rank.
+    check_type: ranking_explanation_contract
+    code_audit_target:
+      - "curator/rank.py"
+      - "curator/render.py"
+      - "curator/models.py"
+      - "supabase/migrations/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_rank.py tests/test_rank_explanations.py tests/test_archive_store.py"
+    comparison_mode: "100 percent preference-priority ordering is exact, freshness is the deterministic tiebreaker, and rendered explanations equal recomputed persisted weighted contributions"
+    side_effects: "Uses deterministic local fixtures only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-30
+    group: locally_provable
+    description: Marking a story read or saved is rank-neutral. Only the explicit More like this action records a positive interest signal, and replaying the same action is idempotent.
+    check_type: personalization_semantics_test
+    code_audit_target:
+      - "curator/personalization/"
+      - "curator/rank.py"
+      - "supabase/migrations/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_personalization_rank_semantics.py tests/test_reading_history_identity.py"
+    comparison_mode: "read and save actions produce zero preference-weight change; More like this changes only the intended interest signal; replay produces no additional change"
+    side_effects: "Uses fake persistence and deterministic ranking fixtures only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-31
+    group: locally_provable
+    description: An edition becomes archive-visible only after a successful GitHub Pages deployment for the same immutable build identity. Failed, cancelled, skipped, stale, or mismatched deployments leave the edition unpublished, and replay is idempotent.
+    check_type: workflow_state_machine_test
+    code_audit_target:
+      - ".github/workflows/curate.yml"
+      - "scripts/"
+      - "curator/archive/"
+      - "supabase/migrations/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_workflow_contract.py tests/test_archive_publication.py"
+    comparison_mode: "only the success transition after Pages deployment finalizes the matching edition; every non-success or mismatched transition leaves it unpublished; replay creates no duplicate"
+    side_effects: "Parses workflow YAML and uses fake deployment and persistence adapters only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-32
+    group: locally_provable
+    description: Every reading/history operation available in the human interface has an authenticated agent-callable API equivalent with the same authorization, validation, pagination, idempotency, and response semantics.
+    check_type: human_agent_parity_audit
+    code_audit_target:
+      - "static/"
+      - "curator/"
+      - "supabase/migrations/"
+      - "docs/contracts/"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_api_parity.py tests/test_reading_history_browser_contract.py"
+    comparison_mode: "the UI-to-operation inventory has no unmatched operation and shared contract fixtures produce equivalent outcomes through browser and API paths"
+    side_effects: "Uses local browser and API fakes only."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-33
+    group: locally_provable
+    description: The newsletter job verifies the Gmail users.getProfile identity against a protected expected-value digest, fails closed on absence or mismatch, and never exposes the mailbox address, digest, OAuth tokens, or profile payload in logs or artifacts.
+    check_type: credential_identity_guard_test
+    code_audit_target:
+      - ".github/workflows/curate.yml"
+      - "curator/newsletter/"
+      - "tests/test_secret_leaks.py"
+    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_newsletter_profile_guard.py tests/test_secret_leaks.py tests/test_workflow_contract.py"
+    comparison_mode: "match continues, absent or mismatch fails before mailbox data use, and injected address, digest, token, and profile sentinels are absent from captured logs and artifacts"
+    side_effects: "Uses a fake Gmail profile response and synthetic secrets only."
+    current_status: PENDING
+    blockers: []
 cloud_linked_gates:
   - id: NCV3-CLOUD-01
     description: Supabase project is linked, Google Auth is enabled, exact authorized origins and redirects are configured, and the real cloud RLS contract passes.
@@ -309,6 +497,14 @@ cloud_linked_gates:
     blockers:
       - "No Google Cloud Translation credential, project variable, or billing activation is currently present."
       - "JJ has not authorized credential, billing, secret, dispatch, or deployment actions."
+  - id: NCV3-CLOUD-03
+    description: The deployed Supabase schema enforces owner-only reading state and interest state, serves one latest published edition with all topics, and provides independent keyset pagination capped at 20 rows per topic.
+    check_type: live_cloud_security_and_api_contract
+    planned_command: "Run the cloud reading/history contract suite against the approved Supabase project using two real test users and a service-only setup identity."
+    comparison_mode: "owner requests succeed; anonymous, expired-token, cross-user, altered-id, and direct-table requests fail; edition, topic, and pagination results match the approved contract"
+    side_effects: "Creates and removes bounded test records in the approved cloud Supabase project. Run once after reviewed migration deployment."
+    current_status: PENDING
+    blockers: []
 live_proven_gates:
   - id: NCV3-LIVE-01
     description: The protected scheduled translation path and public static page work on the same reviewed build. Public news remains readable without an account and falls back to originals under translation failure.
@@ -320,3 +516,46 @@ live_proven_gates:
     blockers:
       - "Implementation, cloud activation, review, and calibration gates must pass first."
       - "JJ has not authorized workflow dispatch or deployment."
+  - id: NCV3-LIVE-02
+    description: "The reviewed production build passes a real desktop and mobile-width reading/history walkthrough: all links open safely in a new tab, state persists after reload, topic pagination appends without duplicates or jumps, and a newer-edition banner appears without silent replacement."
+    check_type: production_browser_run
+    planned_command: "Run the approved production browser checklist at desktop and mobile viewport sizes against the deployed commit, recording build identity and screenshots without private account data."
+    comparison_mode: "every named interaction passes on the same deployed build and no private identity, token, or state appears in the public artifact or receipt"
+    side_effects: "Writes bounded state only to the authorized test user's read, saved, and interest rows."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-LIVE-03
+    description: The protected newsletter workflow verifies its bound Gmail profile before ingestion and publishes only a generic pass or fail receipt. No mailbox address, expected digest, OAuth token, or raw profile response is exposed.
+    check_type: protected_workflow_identity_run
+    planned_command: "Run the protected main-only newsletter job on the reviewed commit and inspect the redacted Actions log plus generated artifact leak scan."
+    comparison_mode: "generic identity-verified receipt exists before ingestion; protected values are absent from logs and artifacts; mismatch path fails closed in a controlled rehearsal"
+    side_effects: "Reads the configured mailbox profile and may perform normal bounded newsletter ingestion. It must not send email."
+    current_status: PENDING
+    blockers: []
+  - id: NCV3-LIVE-04
+    description: The first production archive contains up to five days of real successfully published editions that are actually available. Missing days stay missing and are never replaced with mock or inferred records.
+    check_type: time_gated_production_data_check
+    planned_command: "Query the production latest-edition and per-topic archive APIs after deployment, then compare every returned edition identity with a successful Pages deployment receipt."
+    comparison_mode: "all returned records have matching successful deployment receipts, observed span is no greater than five days, and no synthetic records exist"
+    side_effects: "Read-only production API and GitHub Actions receipt inspection."
+    current_status: BLOCKED
+    blockers:
+      - "Real archive rows do not exist until the reviewed archive implementation is deployed and successful Pages publications are recorded."
+  - id: NCV3-LIVE-05
+    description: Production proves retrieval of at least one real successfully published edition older than five days while retaining no edition older than the rolling 30-day boundary.
+    check_type: time_gated_production_data_check
+    planned_command: "After enough successful daily publications accumulate, query the production archive across the five-day and 30-day boundaries and reconcile returned edition identities to Pages deployment receipts."
+    comparison_mode: "at least one receipt-backed edition older than five days is retrievable and every returned edition falls within the rolling 30-day boundary"
+    side_effects: "Read-only production API and GitHub Actions receipt inspection."
+    current_status: BLOCKED
+    blockers:
+      - "This requires more than five days of real successfully published edition history after archive deployment. Time cannot be replaced with fixtures for a live-proven gate."
+  - id: NCV3-LIVE-06
+    description: Production proves the full rolling 30-day retention window using only real successfully published editions, with boundary-day inclusion and older-record pruning verified against deployment receipts.
+    check_type: time_gated_production_data_check
+    planned_command: "After 30 days of successful archive-aware publications accumulate, query the production archive at both retention boundaries and reconcile all edition identities to Pages deployment receipts."
+    comparison_mode: "the complete available 30-day window is receipt-backed, the boundary day follows configured policy, and no older edition is returned"
+    side_effects: "Read-only production API and GitHub Actions receipt inspection."
+    current_status: BLOCKED
+    blockers:
+      - "Thirty days of real archive-aware successful publication data has not yet accumulated. This live gate must remain blocked until it does."
