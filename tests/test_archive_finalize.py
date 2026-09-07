@@ -57,6 +57,7 @@ def _prune(**changes) -> dict:
         "topics_pruned": 2,
         "runs_pruned": 1,
         "saved_canonical_stories_preserved": 4,
+        "receipts_pruned": 2,
     }
     result.update(changes)
     return result

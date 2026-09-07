@@ -16,8 +16,7 @@ from .identity import story_id_for_item
 from .models import CoverageMention, Item
 from .newsletter.sanitize import sanitize as sanitize_newsletter_url
 from .normalize import canonical_url, safe_url
-from .personalization.ranking import story_key
-from .rank import score_components
+from .rank import public_ranking_explanation, score_components
 from .render import publishable_cards
 
 SCHEMA_VERSION = 1
@@ -79,7 +78,6 @@ def build_archive_candidate(
     story_ids = {story_id_for_item(card.item) for card in cards}
     by_id = {story_id_for_item(card.item): card for card in cards}
     topic_by_name = {category.name: category for category in categories}
-    scores = interest_scores or {}
 
     mentions: dict[str, dict] = {}
     for story_id, card in by_id.items():
@@ -118,6 +116,8 @@ def build_archive_candidate(
                 "summary": card.description[:8_000],
                 "language": item.language,
                 "published_at": item.published_at.isoformat(),
+                "source_name": (item.newsletter_sender or item.source_name)[:200],
+                "source_kind": "newsletter" if item.is_newsletter else "outlet",
                 "distinct_coverage_source_count": counts[story_id],
             }
         )
@@ -135,16 +135,16 @@ def build_archive_candidate(
             story_id = story_id_for_item(item)
             if story_id not in story_ids:
                 continue
-            preference_score = float(scores.get(story_key(item), 0.0))
             components = score_components(
-                item, topic, now, ranking, interest_score=preference_score
+                item, topic, now, ranking, interest_score=0.0
+            )
+            components.pop("interest", None)
+            components["final_score"] = sum(
+                value for key, value in components.items() if key != "final_score"
             )
             if interest_scores is not None:
                 ordering_mode = "preference_then_freshness"
-                ordering_key = {
-                    "preference_score": preference_score,
-                    "published_at": item.published_at.timestamp(),
-                }
+                ordering_key = {"published_at": item.published_at.timestamp()}
             elif topic.id == "trending" and item.native_rank is not None:
                 ordering_mode = "native_rank_then_freshness"
                 ordering_key = {
@@ -162,8 +162,19 @@ def build_archive_candidate(
                     "score_components": components,
                     "ordering_mode": ordering_mode,
                     "ordering_key": ordering_key,
+                    "source_name": (item.newsletter_sender or item.source_name)[:200],
+                    "source_kind": "newsletter" if item.is_newsletter else "outlet",
+                    "ranking_explanation": public_ranking_explanation(
+                        ordering_mode, components
+                    ),
                 }
             )
+
+    topic_ranks: dict[str, dict[str, int]] = {}
+    for entry in entries:
+        topic_ranks.setdefault(entry["story_id"], {})[entry["topic_id"]] = entry["position"]
+    for entry in entries:
+        entry["topic_ranks"] = topic_ranks[entry["story_id"]]
 
     candidate = {
         "schema_version": SCHEMA_VERSION,
@@ -202,6 +213,43 @@ def validate_archive_candidate(candidate: dict) -> None:
     ):
         if not isinstance(candidate[key], list) or len(candidate[key]) > maximum:
             raise ValueError(f"archive candidate {key} is invalid")
+    for story in candidate["stories"]:
+        if (
+            not isinstance(story, dict)
+            or story.get("source_kind") not in {"outlet", "newsletter"}
+            or not isinstance(story.get("source_name"), str)
+            or not story["source_name"]
+            or len(story["source_name"]) > 200
+            or len(story["source_name"].encode("utf-8")) > 1_000
+        ):
+            raise ValueError("archive candidate story provenance is invalid")
+    for entry in candidate["entries"]:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("score_components"), dict)
+            or not isinstance(entry.get("ordering_key"), dict)
+            or "interest" in entry["score_components"]
+            or "preference_score" in entry["ordering_key"]
+            or entry.get("source_kind") not in {"outlet", "newsletter"}
+            or not isinstance(entry.get("source_name"), str)
+            or not entry["source_name"]
+            or len(entry["source_name"]) > 200
+            or len(entry["source_name"].encode("utf-8")) > 1_000
+            or not isinstance(entry.get("ranking_explanation"), str)
+            or not entry["ranking_explanation"]
+            or len(entry["ranking_explanation"].encode("utf-8")) > 2_000
+            or not isinstance(entry.get("topic_ranks"), dict)
+            or len(entry["topic_ranks"]) > 100
+            or any(
+                not isinstance(topic, str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", topic)
+                or not isinstance(position, int)
+                or isinstance(position, bool)
+                or position < 1
+                for topic, position in entry["topic_ranks"].items()
+            )
+        ):
+            raise ValueError("archive candidate ranking metadata is not public-safe")
     encoded = json.dumps(candidate, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(encoded) > MAX_BYTES:
         raise ValueError("archive candidate is too large")

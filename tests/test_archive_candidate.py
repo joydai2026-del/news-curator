@@ -4,6 +4,8 @@ import hashlib
 import json
 from datetime import timedelta
 
+import pytest
+
 from curator.archive_candidate import (
     build_archive_candidate,
     stamp_archive_candidate_site,
@@ -41,14 +43,74 @@ def test_candidate_contains_exactly_publishable_rows_with_real_scores(now):
     )
 
     assert [story["title"] for story in candidate["stories"]] == ["Visible"]
-    assert candidate["entries"][0]["score_components"] == score_components(
-        visible, topic, now, ranking
-    )
+    expected = score_components(visible, topic, now, ranking)
+    expected.pop("interest")
+    expected["final_score"] = sum(value for key, value in expected.items() if key != "final_score")
+    assert candidate["entries"][0]["score_components"] == expected
     assert candidate["entries"][0]["ordering_mode"] == "weighted_total"
     assert candidate["entries"][0]["ordering_key"] == {
         "weighted_total": candidate["entries"][0]["score_components"]["final_score"]
     }
+    assert candidate["entries"][0]["topic_ranks"] == {"ai": 1}
+    assert candidate["entries"][0]["source_kind"] == "outlet"
+    assert candidate["entries"][0]["source_name"] == visible.source_name
+    assert candidate["entries"][0]["ranking_explanation"].startswith("Weighted using")
     validate_archive_candidate(candidate)
+
+
+def test_preference_rank_archive_is_public_safe_without_changing_position(now):
+    first = make_item("First", url="https://example.com/first")
+    second = make_item("Second", url="https://example.com/second")
+    for item in (first, second):
+        item.description = "Publisher summary"
+    candidate = build_archive_candidate(
+        {"AI": [first, second]}, categories=[Category(name="AI", id="ai")], ranking={},
+        now=now, build_nonce="private-safe", commit_sha="a" * 40,
+        site_sha256=SITE_SHA256, require_summaries=True,
+        interest_scores={story_id_for_item(first): 0.9375},
+    )
+
+    assert [entry["position"] for entry in candidate["entries"]] == [1, 2]
+    encoded = json.dumps(candidate, sort_keys=True)
+    assert '"interest"' not in encoded
+    assert "preference_score" not in encoded
+    assert "0.9375" not in encoded
+    assert candidate["entries"][0]["ordering_mode"] == "preference_then_freshness"
+    assert set(candidate["entries"][0]["ordering_key"]) == {"published_at"}
+    assert candidate["entries"][0]["ranking_explanation"] == (
+        "Saved interests were considered first, then freshness."
+    )
+
+
+def test_candidate_carries_every_snapshot_topic_rank_on_each_story_entry(now):
+    shared = make_item("Shared", url="https://example.com/shared")
+    other = make_item("Other", url="https://example.com/other")
+    for item in (shared, other):
+        item.description = "Publisher summary"
+    candidate = build_archive_candidate(
+        {"AI": [other, shared], "Crypto": [shared]},
+        categories=[Category(name="AI", id="ai"), Category(name="Crypto", id="crypto")],
+        ranking={}, now=now, build_nonce="topic-ranks", commit_sha="a" * 40,
+        site_sha256=SITE_SHA256, require_summaries=True,
+    )
+
+    shared_rows = [row for row in candidate["entries"] if row["story_id"] == story_id_for_item(shared)]
+    assert [row["topic_ranks"] for row in shared_rows] == [
+        {"ai": 2, "crypto": 1}, {"ai": 2, "crypto": 1}
+    ]
+
+
+def test_candidate_validator_rejects_private_ranking_metadata(now):
+    item = make_item("Visible", url="https://example.com/visible")
+    item.description = "Publisher summary"
+    candidate = build_archive_candidate(
+        {"AI": [item]}, categories=[Category(name="AI", id="ai")], ranking={},
+        now=now, build_nonce="reject-private", commit_sha="a" * 40,
+        site_sha256=SITE_SHA256, require_summaries=True,
+    )
+    candidate["entries"][0]["ordering_key"]["preference_score"] = 0.5
+    with pytest.raises(ValueError, match="public-safe"):
+        validate_archive_candidate(candidate)
 
 
 def test_candidate_keeps_safe_named_coverage_and_distinct_source_count(now):

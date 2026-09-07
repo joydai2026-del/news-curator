@@ -17,6 +17,8 @@ def test_migration_has_policy_archive_and_private_state_contracts():
         "refresh_poll_seconds integer not null default 300",
         "physical_purge_grace_days integer not null default 7",
         "more_like_topic_weight numeric not null default 0.8",
+        "receipt_retention_days integer not null default 30",
+        "receipt_max_per_user integer not null default 1000",
         "create table public.canonical_stories",
         "canonical_url_hash char(64) generated always as (",
         "create table public.story_aliases",
@@ -69,3 +71,13 @@ def test_feed_contract_is_keyset_paginated_and_saved_rows_survive_window():
     assert "fp.initial_window_days" in text
     assert "pr.finalized_at is not null" in text
     assert "public.feed_page(text, text, integer, text, timestamptz, text, integer)" in text
+
+
+def test_public_ranking_storage_rejects_private_preference_values():
+    text = sql()
+    assert "not (score_components ? 'interest')" in text
+    assert "not (ordering_key ? 'preference_score')" in text
+    assert "topic_ranks jsonb not null" in text
+    assert "ranking_explanation text not null" in text
+    assert "source_kind text not null" in text
+    assert "private ranking metadata is not archivable" in text

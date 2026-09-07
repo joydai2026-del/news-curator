@@ -45,6 +45,7 @@ _PRUNE_KEYS = {
     "topics_pruned",
     "runs_pruned",
     "saved_canonical_stories_preserved",
+    "receipts_pruned",
 }
 _FINALIZE_KEYS = {
     "publication_seq",

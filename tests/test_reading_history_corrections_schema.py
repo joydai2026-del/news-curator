@@ -64,7 +64,8 @@ def test_desired_state_digest_bound_finalizer_and_retention_are_service_only():
     assert "story alias ownership mismatch" in text
     assert "array(select key from jsonb_object_keys(p_candidate)" in text
     assert "create or replace function public.prune_publication_history()" in text
-    assert "us.saved_at is not null" in text
+    assert "receipts_pruned" in text
+    assert "user_action_receipts_created_idx" in text
     assert "grant execute on function public.prune_publication_history() to service_role" in text
     assert "grant execute on function public.prune_publication_history() to authenticated" not in text
 
@@ -103,7 +104,8 @@ def test_saved_cards_and_lossless_updates_have_complete_keysets():
     text = sql()
     saved = text[text.index("create or replace function public.saved_page"):text.index("create or replace function public.updates_since")]
     updates = text[text.index("create or replace function public.updates_since"):text.index("create or replace function public.set_story_state")]
-    for field in ("'topic_ids'", "'coverage_mentions'", "'score_components'", "'ordering_mode'",
+    for field in ("'topic_ids'", "'topic_ranks'", "'source_name'", "'source_kind'",
+                  "'ranking_explanation'", "'coverage_mentions'", "'score_components'", "'ordering_mode'",
                   "'ordering_key'", "'publication_seq'", "'language'", "'position'",
                   "'page_order_mode'", "'next_cursor'", "'interests'"):
         assert field in saved
@@ -113,6 +115,9 @@ def test_saved_cards_and_lossless_updates_have_complete_keysets():
     assert "'publication_seq', coalesce(card.publication_seq, 0)" in saved
     assert "'position', coalesce(card.position, 0)" in saved
     assert "'ordering_mode', coalesce(card.ordering_mode, 'weighted_total')" in saved
+    assert "'topic_ranks', coalesce(card.topic_ranks, '{}'::jsonb)" in saved
+    assert "'source_kind', coalesce(card.source_kind, s.source_kind)" in saved
+    assert "'source_name', coalesce(card.source_name, s.source_name)" in saved
     assert "from public.story_topics st where st.story_id = s.story_id" in saved
     assert "limit 20" in saved
     assert "p_after_publication_seq bigint" in updates
@@ -120,7 +125,8 @@ def test_saved_cards_and_lossless_updates_have_complete_keysets():
     assert "p_after_story_id text" in updates
     prune = text[text.index("create or replace function public.prune_publication_history"):
                  text.index("revoke all on table public.feed_policy")]
-    assert "us.story_id = pe.story_id and us.saved_at is not null" in prune
+    assert "us.story_id = pe.story_id and us.saved_at is not null" not in prune
+    assert "delete from public.user_action_receipts where created_at < receipt_cutoff" in prune
 
 
 def test_save_requires_retained_topic_identity_for_fallback_cards():
@@ -130,3 +136,17 @@ def test_save_requires_retained_topic_identity_for_fallback_cards():
     assert "if p_saved and not exists (" in state
     assert "select 1 from public.story_topics where story_id = p_story_id" in state
     assert "raise exception 'story is not saveable'" in state
+
+
+def test_writes_validate_resources_and_bound_new_receipts_after_replay():
+    text = sql()
+    state = text[text.index("create or replace function public.set_story_state"):
+                 text.index("create or replace function public.set_story_interest")]
+    interest = text[text.index("create or replace function public.set_story_interest"):
+                    text.index("create or replace function public.finalize_archive")]
+    assert "from public.canonical_stories where story_id = p_story_id" in state
+    assert "where story_id = p_story_id and topic_id = p_topic_id" in interest
+    for body in (state, interest):
+        assert body.index("if answer is not null then") < body.index("receipt limit reached")
+        assert "':receipt-cap'" in body
+        assert "receipt_max_per_user" in body

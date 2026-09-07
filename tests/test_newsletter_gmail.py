@@ -80,6 +80,19 @@ class FakeSession:
         self.closed = True
 
 
+class RedirectSession(FakeSession):
+    def __init__(self, status_code: int, redirect_stage: str):
+        super().__init__(
+            token=FakeResponse(status_code, {}) if redirect_stage == "oauth" else None,
+            profile=FakeResponse(status_code, {}) if redirect_stage == "gmail" else None,
+        )
+        self.request_kwargs = []
+
+    def request(self, method, url, timeout=None, **kwargs):
+        self.request_kwargs.append((url, kwargs))
+        return super().request(method, url, timeout=timeout, **kwargs)
+
+
 def raw_response(name: str) -> FakeResponse:
     return FakeResponse(200, {"raw": as_raw(build_message(name))})
 
@@ -115,6 +128,23 @@ def test_profile_guard_runs_after_token_and_before_message_listing():
         gmail.API_ROOT,
         f"{gmail.API_ROOT}/messages",
     ]
+
+
+@pytest.mark.parametrize("status_code", [301, 302, 303, 307, 308])
+@pytest.mark.parametrize("redirect_stage", ["oauth", "gmail"])
+def test_oauth_and_gmail_redirects_fail_closed_without_forwarding_credentials(
+    status_code, redirect_stage
+):
+    session = RedirectSession(status_code, redirect_stage)
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
+
+    assert (result.ok, result.reason) == (False, gmail.API_ERROR)
+    assert all(kwargs.get("allow_redirects") is False for _url, kwargs in session.request_kwargs)
+    expected_calls = 1 if redirect_stage == "oauth" else 2
+    assert len(session.request_kwargs) == expected_calls
+    assert {url for url, _kwargs in session.request_kwargs} <= {gmail.TOKEN_URL, gmail.API_ROOT}
+    if redirect_stage == "gmail":
+        assert session.request_kwargs[-1][1]["headers"]["Authorization"] == "Bearer fixture-access"
 
 
 @pytest.mark.parametrize("expected", ["", "A" * 64, "0" * 63, "g" * 64])
