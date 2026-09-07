@@ -147,6 +147,12 @@ async function main() {
     delete malformed.state_revision;
     reader.validateFeedPage([malformed]);
   }, /feed response/);
+  assert.equal(reader.validateFeedPage([story({
+    interests: [{ topic_id: "ai", signal: "less_like", revision: 2 }],
+  })])[0].interests[0].signal, "less_like");
+  assert.throws(() => reader.validateFeedPage([story({
+    interests: [{ topic_id: "ai", signal: "unknown", revision: 2 }],
+  })]), /feed response/);
   assert.deepEqual(reader.nextFeedCursor([], latest.initial_history_cursor), {
     order_mode: "history_freshness",
     ...latest.initial_history_cursor,

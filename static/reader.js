@@ -119,7 +119,8 @@
     value.coverage_mentions.forEach(validateCoverageMention);
     value.interests.forEach((interest) => {
       if (!exactFields(interest, ["revision", "signal", "topic_id"]) || !TOPIC_ID.test(interest.topic_id) ||
-          interest.signal !== "more_like" || !Number.isSafeInteger(interest.revision) || interest.revision < 0) {
+          !["more_like", "less_like"].includes(interest.signal) ||
+          !Number.isSafeInteger(interest.revision) || interest.revision < 0) {
         fail("The feed response was invalid.");
       }
     });
