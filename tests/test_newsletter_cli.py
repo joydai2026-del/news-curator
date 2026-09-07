@@ -47,7 +47,9 @@ def test_the_artifact_carries_what_the_run_did_not_see():
     assert payload["unauthenticated_messages"] == 0
     assert payload["unauthenticated_missing"] == 0
     assert payload["display_candidates"] == payload["items"]
-    assert len(payload["mentions"]) >= len(payload["display_candidates"])
+    # Two linkless fixture rows have the same bounded public mention shape,
+    # even though their private story discriminators keep both cards.
+    assert len(payload["mentions"]) == len(payload["display_candidates"]) - 1
 
 
 def test_a_clean_run_says_nothing_was_missed():

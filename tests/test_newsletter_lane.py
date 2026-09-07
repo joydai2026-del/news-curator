@@ -121,9 +121,9 @@ def test_an_empty_adapter_list_is_a_configuration_error_not_a_silent_run():
 def test_a_full_run_produces_items_from_every_adapter():
     result = run()
     assert result.ok and not result.dark
-    # One fewer than the sum of the fixtures: The Rundown runs the same
-    # headline twice in an issue and the lane dedups it.
-    assert len(result.items) == sum(EXPECTED_STORIES.values()) - 1
+    # The Rundown repeats one headline, but the two extracted stories carry
+    # distinct private discriminators and must not erase each other.
+    assert len(result.items) == sum(EXPECTED_STORIES.values())
     senders = {field(i, "newsletter_sender") for i in result.items}
     assert senders == {a.name for a in lane.adapters_module.ADAPTERS}
 
@@ -225,6 +225,35 @@ def test_a_second_run_after_advancing_the_cursor_publishes_nothing_new(tmp_path)
     assert second.status["tldr"].extracted == EXPECTED_STORIES["tldr"], (
         "the stories were still seen and counted"
     )
+
+
+def test_run_level_suppression_uses_collision_safe_linkless_identity():
+    html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/FirstOpaqueToken123456789">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/SecondOpaqueToken987654321">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+    </body></html>"""
+    message = parsed("tldr", html=html, sent=NOW - timedelta(hours=1))
+
+    first = run([message], st=fresh_state())
+    matching = [
+        item for item in first.items
+        if field(item, "title") == "Quick hits generic AI update"
+    ]
+    assert len(matching) == 2
+    assert all(field(item, "url") == "" for item in matching)
+    assert len(first.hashes) == 2
+
+    committed = state_module.NewsletterState(
+        watermark=first.watermark, salt="fixture-salt", hashes=first.hashes
+    )
+    replay = run([message], st=committed)
+    assert replay.items == []
 
 
 def test_the_watermark_returned_is_the_run_time_and_the_caller_commits_it(tmp_path):

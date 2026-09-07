@@ -69,6 +69,9 @@ class NewsletterState:
     def story_hash(self, title: str, url: str) -> str:
         return story_hash(self.salt, title, url)
 
+    def story_identity_hash(self, stable_identity: str) -> str:
+        return story_identity_hash(self.salt, stable_identity)
+
     def to_dict(self) -> dict:
         return {
             "version": int(self.version),
@@ -88,6 +91,13 @@ def story_hash(salt: str, title: str, url: str) -> str:
     identifies it.
     """
     material = "\x1f".join((salt, fold_text(title or ""), (url or "").strip()))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def story_identity_hash(salt: str, stable_identity: str) -> str:
+    """Salt the canonical identity used by render, archive, and reader state."""
+
+    material = "\x1f".join((salt, (stable_identity or "").strip()))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 

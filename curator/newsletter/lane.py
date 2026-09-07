@@ -459,7 +459,7 @@ def fetch(
             if mention["mention_id"] not in seen_mention_ids:
                 mentions.append(mention)
                 seen_mention_ids.add(mention["mention_id"])
-            digest = state.story_hash(story.title, story.url)
+            digest = state.story_identity_hash(record["canonical_url"])
             if digest in already or digest in seen_now:
                 continue
             seen_now.add(digest)
@@ -475,7 +475,9 @@ def fetch(
     # overlap usually gives and the retention window eventually takes away.
     # That is a bounded loss of a STORY, and it is a different thing from
     # losing a MESSAGE, which is what the watermark below is about.
-    published_hashes = [state.story_hash(r["title"], r["url"]) for r in records]
+    published_hashes = [
+        state.story_identity_hash(r["canonical_url"]) for r in records
+    ]
 
     # The cursor. Two cases, and the difference between them is the whole
     # no-skip contract:
