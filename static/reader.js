@@ -548,6 +548,8 @@
     let pollTimer = null;
     let updateCursor = null;
     let nextHistoryAllRank = HISTORY_RANK_OFFSET;
+    const authoritativeAllHistoryOrder = [];
+    const authoritativeAllHistoryIds = new Set();
     const pendingUpdates = new Map();
 
     function announce(message) { status.textContent = message; }
@@ -618,6 +620,39 @@
       document.getElementById("sections").append(section);
       return section;
     }
+    function reconcileAllHistoryRanks(rows) {
+      rows.forEach((row) => {
+        if (row.page_order_mode !== "history_freshness" ||
+            authoritativeAllHistoryIds.has(row.story_id)) return;
+        const card = cards.get(row.story_id);
+        const currentRank = Number(card && card.getAttribute("data-rank-all"));
+        // A current-edition card can also appear in history. Its static edition
+        // rank remains authoritative and must never be moved behind the fold.
+        if (Number.isSafeInteger(currentRank) && currentRank <= HISTORY_RANK_OFFSET) return;
+        authoritativeAllHistoryIds.add(row.story_id);
+        authoritativeAllHistoryOrder.push(row.story_id);
+      });
+      const provisional = [...cards.values()]
+        .filter((card) => {
+          const rank = Number(card.getAttribute("data-rank-all"));
+          return Number.isSafeInteger(rank) && rank > HISTORY_RANK_OFFSET &&
+            !authoritativeAllHistoryIds.has(card.dataset.storyId);
+        })
+        .sort((left, right) => {
+          const rankDelta = Number(left.getAttribute("data-rank-all")) -
+            Number(right.getAttribute("data-rank-all"));
+          return rankDelta || left.dataset.storyId.localeCompare(right.dataset.storyId);
+        });
+      let rank = HISTORY_RANK_OFFSET;
+      authoritativeAllHistoryOrder.forEach((storyId) => {
+        const card = cards.get(storyId);
+        if (card) card.setAttribute("data-rank-all", String(++rank));
+      });
+      provisional.forEach((card) => {
+        card.setAttribute("data-rank-all", String(++rank));
+      });
+      nextHistoryAllRank = rank;
+    }
     function mergeRows(rows, appendNew, hydratedTopic = selectedTopic()) {
       rows.forEach((row) => {
         const existing = cards.get(row.story_id);
@@ -647,6 +682,7 @@
         section.querySelector(".grid").append(card);
         view.addCard(card);
       });
+      if (hydratedTopic === "__all__") reconcileAllHistoryRanks(rows);
       view.apply();
       refreshStateControls();
     }
