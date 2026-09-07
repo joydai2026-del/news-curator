@@ -24,14 +24,15 @@ def test_unreadable_file_starts_a_fresh_window(tmp_path):
     assert st.hashes == []
 
 
-def test_written_file_has_exactly_the_four_allowed_keys(tmp_path):
+def test_written_file_has_exactly_the_version_two_allowed_keys(tmp_path):
     path = tmp_path / "newsletter_state.json"
     st = state_module.load(path, now=NOW)
     state_module.advance(path, st, watermark=NOW, new_hashes=["a" * 64])
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert set(payload) == set(state_module.ALLOWED_KEYS)
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     assert payload["hashes"] == ["a" * 64]
+    assert payload["legacy_hashes"] == []
 
 
 def test_round_trip_preserves_watermark_salt_and_hashes(tmp_path):
@@ -42,6 +43,22 @@ def test_round_trip_preserves_watermark_salt_and_hashes(tmp_path):
     assert second.salt == first.salt
     assert second.watermark == NOW
     assert second.hashes == ["b" * 64, "c" * 64]
+
+
+def test_version_one_load_preserves_legacy_hashes_for_transition(tmp_path):
+    path = tmp_path / "newsletter_state.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "watermark": NOW.isoformat(),
+        "salt": "legacy-salt",
+        "hashes": ["a" * 64, "b" * 64],
+    }), encoding="utf-8")
+
+    loaded = state_module.load(path, now=NOW)
+
+    assert loaded.transitioning is True
+    assert loaded.hashes == []
+    assert loaded.legacy_hashes == ["a" * 64, "b" * 64]
 
 
 def test_advance_deduplicates_and_prunes_oldest_first(tmp_path):
@@ -93,7 +110,7 @@ def test_advance_is_atomic_and_leaves_no_temp_file(tmp_path):
 
 
 def test_state_file_never_contains_identifying_material(tmp_path):
-    """The file is committed to a public repo. Only the four keys go in it."""
+    """The file is committed to a public repo. Only bounded hashes go in it."""
     path = tmp_path / "newsletter_state.json"
     st = state_module.load(path, now=NOW)
     digest = st.story_hash("Regulators publish guidance", "https://newsroom.example/a")

@@ -392,6 +392,8 @@ def fetch(
 
     cutoff = now - timedelta(hours=max_age_hours)
     already = state.seen
+    legacy = state.legacy_seen if state.transitioning else set()
+    migrated_hashes: list[str] = []
     seen_now: set[str] = set()
     seen_mention_ids: set[str] = set()
     records: list[dict] = []
@@ -462,6 +464,10 @@ def fetch(
             digest = state.story_identity_hash(record["canonical_url"])
             if digest in already or digest in seen_now:
                 continue
+            legacy_digest = state.story_hash(story.title, story.url)
+            if legacy_digest in legacy:
+                migrated_hashes.append(digest)
+                continue
             seen_now.add(digest)
             records.append(record)
 
@@ -475,7 +481,7 @@ def fetch(
     # overlap usually gives and the retention window eventually takes away.
     # That is a bounded loss of a STORY, and it is a different thing from
     # losing a MESSAGE, which is what the watermark below is about.
-    published_hashes = [
+    published_hashes = migrated_hashes + [
         state.story_identity_hash(r["canonical_url"]) for r in records
     ]
 

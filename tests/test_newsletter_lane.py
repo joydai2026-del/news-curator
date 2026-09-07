@@ -256,6 +256,59 @@ def test_run_level_suppression_uses_collision_safe_linkless_identity():
     assert replay.items == []
 
 
+def test_version_one_production_state_migrates_without_replay_and_keeps_new_collisions(
+    tmp_path,
+):
+    first_state = fresh_state()
+    production_items = run(st=first_state)
+    assert len(production_items.items) == 36
+    legacy_hashes = [
+        first_state.story_hash(field(item, "title"), field(item, "url"))
+        for item in production_items.items
+    ]
+    state_path = tmp_path / "newsletter_state.json"
+    state_path.write_text(json.dumps({
+        "version": 1,
+        "watermark": NOW.isoformat(),
+        "salt": first_state.salt,
+        "hashes": legacy_hashes,
+    }), encoding="utf-8")
+    legacy_state = state_module.load(state_path, now=NOW)
+
+    transition = run(st=legacy_state)
+    assert transition.items == []
+    assert len(set(transition.hashes)) == 36
+    migrated = state_module.advance(
+        state_path,
+        legacy_state,
+        watermark=transition.watermark,
+        new_hashes=transition.hashes,
+    )
+    assert migrated.version == 2
+    assert migrated.legacy_hashes == legacy_hashes[-state_module.MAX_HASHES:]
+
+    html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/NewOpaqueToken123456789">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/OtherOpaqueToken987654321">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+    </body></html>"""
+    message = parsed("tldr", html=html, sent=NOW - timedelta(hours=1))
+    distinct = run([message], st=migrated)
+    assert len(distinct.items) == 2
+    committed = state_module.advance(
+        state_path,
+        migrated,
+        watermark=distinct.watermark,
+        new_hashes=distinct.hashes,
+    )
+    assert run([message], st=committed).items == []
+
+
 def test_the_watermark_returned_is_the_run_time_and_the_caller_commits_it(tmp_path):
     path = tmp_path / "newsletter_state.json"
     st = state_module.load(path, now=NOW)

@@ -1,13 +1,15 @@
 """The durable cursor: how the lane remembers what it already published.
 
 The file is committed to a PUBLIC repository, so its contents are the whole
-design constraint. It holds four keys and nothing else:
+design constraint. Version 2 holds five keys and nothing else:
 
-    {"version": 1, "watermark": "<iso8601>", "salt": "<hex>", "hashes": [...]}
+    {"version": 2, "watermark": "<iso8601>", "salt": "<hex>",
+     "hashes": [...], "legacy_hashes": [...]}
 
-No message ids, no subjects, no addresses, no titles in the clear. A hash is
-sha256 over `salt + extracted story title + publisher URL`, which is enough to
-recognize a story we already showed and useless for reconstructing anything.
+No message ids, no subjects, no addresses, no titles in the clear. `hashes`
+contains salted collision-safe story identities. `legacy_hashes` preserves the
+version 1 salted title-and-URL hashes so the migration is recoverable and does
+not replay the current overlap window.
 
 **Honest limit of the salt.** It sits in the same public file as the hashes, so
 it does not hide the hashed values from anyone determined to check a guess. It
@@ -43,10 +45,11 @@ from ..normalize import fold_text
 
 log = logging.getLogger(__name__)
 
-STATE_VERSION = 1
+LEGACY_STATE_VERSION = 1
+STATE_VERSION = 2
 STATE_FILENAME = "newsletter_state.json"
 
-ALLOWED_KEYS = ("version", "watermark", "salt", "hashes")
+ALLOWED_KEYS = ("version", "watermark", "salt", "hashes", "legacy_hashes")
 
 DEFAULT_OVERLAP_HOURS = 6.0
 DEFAULT_LOOKBACK_HOURS = 48.0
@@ -55,16 +58,25 @@ MAX_HASHES = 2000
 
 @dataclass
 class NewsletterState:
-    """Exactly the four fields that are allowed on disk."""
+    """Versioned public-safe hashes and the cursor they protect."""
 
     watermark: datetime
     salt: str
     hashes: list[str] = field(default_factory=list)
+    legacy_hashes: list[str] = field(default_factory=list)
     version: int = STATE_VERSION
 
     @property
     def seen(self) -> set[str]:
         return set(self.hashes)
+
+    @property
+    def legacy_seen(self) -> set[str]:
+        return set(self.legacy_hashes)
+
+    @property
+    def transitioning(self) -> bool:
+        return self.version == LEGACY_STATE_VERSION
 
     def story_hash(self, title: str, url: str) -> str:
         return story_hash(self.salt, title, url)
@@ -78,6 +90,7 @@ class NewsletterState:
             "watermark": _iso(self.watermark),
             "salt": self.salt,
             "hashes": list(self.hashes),
+            "legacy_hashes": list(self.legacy_hashes),
         }
 
 
@@ -150,14 +163,26 @@ def load(path: Path, *, now: datetime, lookback_hours: float = DEFAULT_LOOKBACK_
     salt = raw.get("salt")
     if not isinstance(salt, str) or not salt.strip():
         salt = secrets.token_hex(16)
+    version = raw.get("version")
+    version = int(version) if isinstance(version, int) else LEGACY_STATE_VERSION
     hashes_raw = raw.get("hashes")
     hashes = [h for h in hashes_raw if isinstance(h, str) and h] if isinstance(hashes_raw, list) else []
-    version = raw.get("version")
+    legacy_raw = raw.get("legacy_hashes")
+    legacy_hashes = (
+        [h for h in legacy_raw if isinstance(h, str) and h]
+        if isinstance(legacy_raw, list) else []
+    )
+    if version == LEGACY_STATE_VERSION:
+        legacy_hashes = hashes
+        hashes = []
+    elif version != STATE_VERSION:
+        return new_state(now, lookback_hours=lookback_hours)
     return NewsletterState(
         watermark=watermark,
         salt=salt.strip(),
         hashes=hashes[-MAX_HASHES:],
-        version=int(version) if isinstance(version, int) else STATE_VERSION,
+        legacy_hashes=legacy_hashes[-MAX_HASHES:],
+        version=version,
     )
 
 
@@ -204,7 +229,18 @@ def advance(
             known.add(value)
     merged = merged[-max_hashes:]
 
-    written = NewsletterState(watermark=watermark, salt=state.salt, hashes=merged, version=STATE_VERSION)
+    legacy = list(state.legacy_hashes)
+    if state.version == LEGACY_STATE_VERSION:
+        for value in state.hashes:
+            if value and value not in legacy:
+                legacy.append(value)
+    written = NewsletterState(
+        watermark=watermark,
+        salt=state.salt,
+        hashes=merged,
+        legacy_hashes=legacy[-MAX_HASHES:],
+        version=STATE_VERSION,
+    )
     _write_atomic(Path(path), written.to_dict())
     log.info("newsletter cursor advanced, %d hashes retained", len(merged))
     return written
