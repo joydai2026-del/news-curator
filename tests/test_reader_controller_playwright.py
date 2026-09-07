@@ -97,6 +97,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         <div class="tools">
           <button class="chip" data-filter="__all__">All</button>
           <button class="chip" data-filter="__saved__">Saved</button>
+          <button class="chip" data-filter="ai" data-topic-id="ai">AI</button>
           <button class="chip" data-filter="quantum-computing" data-topic-id="quantum">Quantum Computing</button>
         </div>
         <p id="reader-status"></p><button id="load-more">Load more</button>
@@ -150,6 +151,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     counts = {"latest": 0, "category": 0, "state": 0, "interest": 0, "updates": 0}
+    interest_writes: list[tuple[str, int]] = []
     fail_next_state = {"value": False}
 
     def fulfill(route: object) -> None:
@@ -161,7 +163,10 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             payload: object = {
                 "publication_seq": sequence,
                 "finalized_at": "2026-09-07T12:00:00Z",
-                "topics": [{"topic_id": "quantum", "name": "Quantum Computing"}],
+                "topics": [
+                    {"topic_id": "ai", "name": "AI"},
+                    {"topic_id": "quantum", "name": "Quantum Computing"},
+                ],
                 "initial_history_cursor": None,
                 "poll_seconds": 30,
                 "page_size": 3,
@@ -172,6 +177,14 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 payload = [_story(900)]
             elif body["p_topic_id"] is None:
                 payload = []
+            elif body["p_topic_id"] == "ai":
+                row = _story(1)
+                row["saved_at"] = "2026-09-07T12:02:00Z"
+                row["state_revision"] = counts["state"]
+                row["interests"] = [
+                    {"topic_id": "quantum", "signal": "more_like", "revision": 1}
+                ]
+                payload = [row]
             else:
                 assert body["p_topic_id"] == "quantum"
                 counts["category"] += 1
@@ -210,8 +223,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "revision": counts["state"],
             }
         elif request.url.endswith("/set_story_interest"):
-            assert body["p_topic_id"] == "quantum"
+            assert body["p_topic_id"] in {"ai", "quantum"}
             counts["interest"] += 1
+            interest_writes.append((body["p_topic_id"], body["p_expected_revision"]))
             payload = {"status": "updated", "signal": "more_like", "revision": 1}
         elif request.url.endswith("/updates_since"):
             assert body["p_limit"] == 3
@@ -255,7 +269,33 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 assert page.evaluate("window.scrollY") == before_scroll
             assert first.locator(".interest-action").get_attribute("data-topic-id") == "quantum"
 
+            with page.expect_response(
+                lambda response: response.url.endswith("/feed_page")
+            ):
+                page.locator('.chip[data-filter="ai"]').click()
+            interest_button = first.locator(".interest-action")
+            assert interest_button.get_attribute("data-topic-id") == "ai"
+            assert interest_button.get_attribute("aria-pressed") == "false"
+            assert not first.evaluate("card => card.classList.contains('is-more-like')")
+            interest_button.evaluate("button => button.click()")
+            page.wait_for_function(
+                "card => card.classList.contains('is-more-like') && "
+                "card.querySelector('.interest-action').dataset.topicId === 'ai'",
+                arg=first.element_handle(),
+            )
+            assert interest_writes == [("quantum", 0), ("ai", 0)]
+
+            page.locator('.chip[data-filter="quantum-computing"]').click()
+            assert interest_button.get_attribute("data-topic-id") == "quantum"
+            assert interest_button.get_attribute("aria-pressed") == "true"
+            assert first.evaluate("card => card.classList.contains('is-more-like')")
+            assert first.get_attribute("data-interest-revision") == "1"
+
+            page.locator('.chip[data-filter="__all__"]').click()
+            assert interest_button.get_attribute("data-topic-id") == "ai"
+            assert interest_button.get_attribute("aria-pressed") == "true"
             page.locator('.chip[data-filter="__saved__"]').click()
+            assert interest_button.get_attribute("data-topic-id") == "ai"
             assert _visible_story_ids(page) == [first.get_attribute("data-story-id")]
             save_button = first.locator(".save-action")
             save_button.focus()

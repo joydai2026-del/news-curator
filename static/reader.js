@@ -316,27 +316,46 @@
   function loadedStatus(count) {
     return count === 1 ? "1 older story loaded." : `${count} older stories loaded.`;
   }
-  function applyServerState(card, state) {
+  function interestStates(card) {
+    if (!(card.newsCuratorInterestStates instanceof Map)) {
+      card.newsCuratorInterestStates = new Map();
+    }
+    return card.newsCuratorInterestStates;
+  }
+  function applyInterestTopic(card, topicId) {
+    const interestButton = card.querySelector(".interest-action");
+    if (!interestButton || !TOPIC_ID.test(topicId || "")) return;
+    const state = interestStates(card).get(topicId) || { signal: null, revision: 0 };
+    const interested = state.signal === "more_like";
+    interestButton.dataset.topicId = topicId;
+    interestButton.textContent = interested ? "More like this added" : "More like this";
+    interestButton.setAttribute("aria-pressed", String(interested));
+    card.classList.toggle("is-more-like", interested);
+    card.dataset.interestRevision = String(state.revision);
+  }
+  function applyServerState(card, state, interestTopicId = null) {
     const hasRead = Object.prototype.hasOwnProperty.call(state, "read_at");
     const hasSaved = Object.prototype.hasOwnProperty.call(state, "saved_at");
     const interestButton = card.querySelector(".interest-action");
-    const topicId = interestButton && interestButton.dataset && interestButton.dataset.topicId;
-    const matchingInterest = Array.isArray(state.interests)
-      ? state.interests.find((interest) => interest.topic_id === topicId)
-      : null;
-    const hasInterest = Array.isArray(state.interests) ||
-      Object.prototype.hasOwnProperty.call(state, "interest_signal");
-    const interestSignal = matchingInterest ? matchingInterest.signal : state.interest_signal;
-    const interestRevision = matchingInterest ? matchingInterest.revision : state.interest_revision;
+    const states = interestStates(card);
+    if (Array.isArray(state.interests)) {
+      states.clear();
+      state.interests.forEach((interest) => {
+        states.set(interest.topic_id, { signal: interest.signal, revision: interest.revision });
+      });
+    }
+    if (Object.prototype.hasOwnProperty.call(state, "interest_signal") &&
+        TOPIC_ID.test(interestTopicId || "") && Number.isSafeInteger(state.interest_revision)) {
+      states.set(interestTopicId, {
+        signal: state.interest_signal,
+        revision: state.interest_revision,
+      });
+    }
     const read = hasRead && Boolean(state.read_at);
     const saved = hasSaved && Boolean(state.saved_at);
-    const interested = hasInterest && interestSignal === "more_like";
     if (hasRead) card.classList.toggle("is-read", read);
     if (hasSaved) card.classList.toggle("is-saved", saved);
-    if (hasInterest) card.classList.toggle("is-more-like", interested);
     if (Number.isSafeInteger(state.state_revision)) card.dataset.stateRevision = String(state.state_revision);
-    if (Number.isSafeInteger(interestRevision)) card.dataset.interestRevision = String(interestRevision);
-    else if (Array.isArray(state.interests)) card.dataset.interestRevision = "0";
     const readButton = card.querySelector(".read-action");
     const saveButton = card.querySelector(".save-action");
     if (readButton && hasRead) readButton.textContent = read ? "Mark unread" : "Mark read";
@@ -344,9 +363,8 @@
       saveButton.textContent = saved ? "Unsave" : "Save";
       saveButton.setAttribute("aria-pressed", String(saved));
     }
-    if (interestButton && hasInterest) {
-      interestButton.textContent = interested ? "More like this added" : "More like this";
-      interestButton.setAttribute("aria-pressed", String(interested));
+    if (interestButton && interestButton.dataset.topicId) {
+      applyInterestTopic(card, interestButton.dataset.topicId);
     }
   }
   function idempotencyKey() {
@@ -438,6 +456,7 @@
     save.setAttribute("aria-pressed", "false");
     interest.setAttribute("aria-pressed", "false");
     interest.dataset.topicId = effectiveTopic(row.topic_ids, selectedTopicId);
+    interest.dataset.fallbackTopicId = interest.dataset.topicId;
     const close = element("button", "shut", "Close");
     close.type = "button";
     actions.append(read, save, interest, close);
@@ -486,7 +505,7 @@
   }
 
   const contract = {
-    actionTopic, applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
+    actionTopic, applyInterestTopic, applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
     rankingReason, run, safeDestination,
     validateFeedPage, validateLatestPublication, validateUpdates,
   };
@@ -513,7 +532,13 @@
       button.disabled = false;
     });
     const cards = new Map();
-    document.querySelectorAll(".card[data-story-id]").forEach((card) => cards.set(card.dataset.storyId, card));
+    document.querySelectorAll(".card[data-story-id]").forEach((card) => {
+      const interestButton = card.querySelector(".interest-action");
+      if (interestButton && !interestButton.dataset.fallbackTopicId) {
+        interestButton.dataset.fallbackTopicId = interestButton.dataset.topicId;
+      }
+      cards.set(card.dataset.storyId, card);
+    });
     const cursors = new Map();
     const exhausted = new Set();
     const hydrated = new Set();
@@ -541,6 +566,21 @@
     function topicSlugForId(topicId) {
       const chip = document.querySelector(`.chip[data-topic-id="${CSS.escape(topicId)}"]`);
       return chip && chip.dataset.filter ? chip.dataset.filter : topicId;
+    }
+    function refreshInterestControls() {
+      const topic = selectedTopic();
+      cards.forEach((card) => {
+        const button = card.querySelector(".interest-action");
+        if (!button) return;
+        const topicIds = (card.dataset.topicApiIds || "").split(/\s+/).filter(Boolean);
+        const topicId = actionTopic(
+          topicIds,
+          topic,
+          topicIdForSlug(topic),
+          button.dataset.fallbackTopicId || button.dataset.topicId,
+        );
+        applyInterestTopic(card, topicId);
+      });
     }
     function sectionFor(topicId) {
       const slug = topicSlugForId(topicId);
@@ -640,8 +680,6 @@
         read_at: card.classList.contains("is-read") ? "local" : null,
         saved_at: card.classList.contains("is-saved") ? "local" : null,
         state_revision: Number(card.dataset.stateRevision || 0),
-        interest_revision: Number(card.dataset.interestRevision || 0),
-        interest_signal: card.classList.contains("is-more-like") ? "more_like" : null,
       };
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
@@ -667,18 +705,23 @@
         void mutateState(card, !card.classList.contains("is-read"), card.classList.contains("is-saved"));
       } else if (target.classList.contains("save-action") && requireSignIn()) {
         void mutateState(card, card.classList.contains("is-read"), !card.classList.contains("is-saved"));
-      } else if (target.classList.contains("interest-action") && requireSignIn() &&
-                 !card.classList.contains("is-more-like")) {
-        const revision = Number(card.dataset.interestRevision || 0);
-        target.disabled = true;
+      } else if (target.classList.contains("interest-action") && requireSignIn()) {
         const topicIds = (card.dataset.topicApiIds || "").split(/\s+/).filter(Boolean);
         const topic = selectedTopic();
-        const topicId = actionTopic(topicIds, topic, topicIdForSlug(topic), target.dataset.topicId);
-        target.dataset.topicId = topicId;
+        const topicId = actionTopic(
+          topicIds,
+          topic,
+          topicIdForSlug(topic),
+          target.dataset.fallbackTopicId || target.dataset.topicId,
+        );
+        applyInterestTopic(card, topicId);
+        if (card.classList.contains("is-more-like")) return;
+        const revision = Number(card.dataset.interestRevision || 0);
+        target.disabled = true;
         api.setStoryInterest(card.dataset.storyId, topicId, revision, idempotencyKey())
           .then((result) => {
             if (result.status === "conflict") fail("Story interest changed in another session.");
-            applyServerState(card, result);
+            applyServerState(card, result, topicId);
             announce("More like this was saved for future rankings.");
           })
           .catch(() => { announce("More like this could not be saved. Try again."); })
@@ -687,6 +730,7 @@
     });
     document.querySelectorAll(".chip").forEach((chip) => {
       chip.addEventListener("click", () => {
+        refreshInterestControls();
         void hydrate().catch(() => { announce("This section could not be synced. Try again."); });
       });
     });

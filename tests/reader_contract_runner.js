@@ -369,6 +369,38 @@ async function main() {
   assert.equal(fakeCard.classList.values.has("is-read"), true);
   assert.equal(fakeCard.controls[".read-action"].textContent, "Mark unread");
   assert.equal(fakeCard.classList.values.has("is-more-like"), true);
+
+  const multiTopicCard = {
+    dataset: {},
+    classList: {
+      values: new Set(),
+      toggle(name, on) { if (on) this.values.add(name); else this.values.delete(name); },
+      contains(name) { return this.values.has(name); },
+    },
+    interest: {
+      textContent: "", dataset: { topicId: "quantum" }, attrs: {},
+      setAttribute(k, v) { this.attrs[k] = v; },
+    },
+    querySelector(selector) { return selector === ".interest-action" ? this.interest : null; },
+  };
+  reader.applyServerState(multiTopicCard, {
+    interests: [{ topic_id: "quantum", signal: "more_like", revision: 4 }],
+  });
+  assert.equal(multiTopicCard.classList.contains("is-more-like"), true);
+  assert.equal(multiTopicCard.dataset.interestRevision, "4");
+  reader.applyInterestTopic(multiTopicCard, "ai");
+  assert.equal(multiTopicCard.classList.contains("is-more-like"), false);
+  assert.equal(multiTopicCard.dataset.interestRevision, "0");
+  reader.applyServerState(
+    multiTopicCard,
+    { status: "updated", interest_signal: "more_like", interest_revision: 1 },
+    "ai",
+  );
+  assert.equal(multiTopicCard.classList.contains("is-more-like"), true);
+  assert.equal(multiTopicCard.dataset.interestRevision, "1");
+  reader.applyInterestTopic(multiTopicCard, "quantum");
+  assert.equal(multiTopicCard.classList.contains("is-more-like"), true);
+  assert.equal(multiTopicCard.dataset.interestRevision, "4");
   assert.equal(reader.safeDestination("https://publisher.example/a"), "https://publisher.example/a");
   assert.equal(reader.safeDestination("javascript:alert(1)"), null);
   assert.equal(
