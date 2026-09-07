@@ -92,6 +92,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         <a class="profile-link" href="#">Profile</a>
         <div class="tools">
           <button class="chip" data-filter="__all__">All</button>
+          <button class="chip" data-filter="__saved__">Saved</button>
           <button class="chip" data-filter="quantum-computing" data-topic-id="quantum">Quantum Computing</button>
         </div>
         <p id="reader-status"></p><button id="load-more">Load more</button>
@@ -122,8 +123,10 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
           addCard: () => {},
           apply: () => {
             document.querySelectorAll("article.card").forEach(card => {
-              card.hidden = window.__tab !== "__all__" &&
-                !(card.dataset.topicIds || "").split(" ").includes(window.__tab);
+              card.hidden = window.__tab === "__saved__"
+                ? !card.classList.contains("is-saved")
+                : window.__tab !== "__all__" &&
+                  !(card.dataset.topicIds || "").split(" ").includes(window.__tab);
             });
           }
         };
@@ -142,6 +145,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     counts = {"latest": 0, "category": 0, "state": 0, "interest": 0, "updates": 0}
+    fail_next_state = {"value": False}
 
     def fulfill(route: object) -> None:
         request = route.request
@@ -175,7 +179,24 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                     payload = [_story(1, "history_freshness"),
                                _story(2, "history_freshness"),
                                _story(3, "history_freshness")]
+        elif request.url.endswith("/saved_page"):
+            payload = [{
+                **_story(1, "saved_at"),
+                "saved_at": "2026-09-07T12:02:00Z",
+                "next_cursor": {
+                    "before_saved_at": "2026-09-07T12:02:00Z",
+                    "before_story_id": "story:" + f"{1:064x}",
+                },
+            }]
         elif request.url.endswith("/set_story_state"):
+            if fail_next_state["value"]:
+                fail_next_state["value"] = False
+                route.fulfill(
+                    status=500,
+                    content_type="application/json",
+                    body=json.dumps({"error": "controlled failure"}),
+                )
+                return
             counts["state"] += 1
             payload = {
                 "status": "updated",
@@ -226,6 +247,31 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 assert _visible_story_ids(page) == before_ids
                 assert page.evaluate("window.scrollY") == before_scroll
             assert first.locator(".interest-action").get_attribute("data-topic-id") == "quantum"
+
+            page.locator('.chip[data-filter="__saved__"]').click()
+            assert _visible_story_ids(page) == [first.get_attribute("data-story-id")]
+            save_button = first.locator(".save-action")
+            save_button.focus()
+            page.evaluate("window.scrollTo(0, 240)")
+            rollback_scroll = page.evaluate("window.scrollY")
+            fail_next_state["value"] = True
+            save_button.evaluate("button => button.click()")
+            page.locator("#reader-status").get_by_text(
+                "Reading state could not be saved. Try again."
+            ).wait_for()
+            assert first.is_visible()
+            assert first.evaluate("card => card.classList.contains('is-saved')")
+            assert page.evaluate("document.activeElement.classList.contains('save-action')")
+            assert page.evaluate("window.scrollY") == rollback_scroll
+
+            save_button.evaluate("button => button.click()")
+            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            assert first.is_hidden()
+            assert page.evaluate(
+                "document.activeElement.matches('.chip[data-filter=\"__saved__\"]')"
+            )
+            assert page.evaluate("window.scrollY") == rollback_scroll
+            page.locator('.chip[data-filter="quantum-computing"]').click()
 
             before_page = _visible_story_ids(page)
             page.locator("#load-more").evaluate("button => button.click()")

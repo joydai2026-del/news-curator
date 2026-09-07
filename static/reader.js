@@ -610,6 +610,20 @@
         announce("Older stories could not be loaded. Try again.");
       } finally { loadButton.disabled = false; }
     }
+    function reapplyCurrentMembership(card) {
+      const focused = document.activeElement;
+      const cardHadFocus = Boolean(focused && card.contains(focused));
+      const scrollX = window.scrollX;
+      const scrollY = window.scrollY;
+      view.apply();
+      if (cardHadFocus && card.hidden) {
+        const nextAction = document.querySelector(".card:not([hidden]) .save-action");
+        const savedTab = document.querySelector('.chip[data-filter="__saved__"]');
+        const target = nextAction || savedTab;
+        if (target) target.focus({ preventScroll: true });
+      }
+      window.scrollTo(scrollX, scrollY);
+    }
     async function mutateState(card, read, saved) {
       const previous = {
         read_at: card.classList.contains("is-read") ? "local" : null,
@@ -623,9 +637,11 @@
         const result = await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, idempotencyKey());
         if (result.status === "conflict") fail("Story state changed in another session.");
         applyServerState(card, { ...previous, ...result });
+        reapplyCurrentMembership(card);
         announce("Reading state saved.");
       } catch (_) {
         applyServerState(card, previous);
+        reapplyCurrentMembership(card);
         announce("Reading state could not be saved. Try again.");
       }
     }
