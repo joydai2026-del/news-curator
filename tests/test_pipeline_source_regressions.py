@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +10,7 @@ from curator.config import load_config
 from curator.identity import story_id_for_item
 from curator.localization import write_translation_artifact
 from curator.models import Item, TierResult, TranslationRecord
+from curator.newsletter.lane import linkless_story_canonical
 from curator.personalization.ranking import (
     InterestProfile,
     build_interest_artifact,
@@ -412,6 +414,102 @@ def test_malicious_newsletter_urls_cannot_enter_public_projection(
     archived_stories = {story["title"]: story for story in archive["stories"]}
     assert archived_stories["AI newsletter opaque tracker"]["canonical_url"] == ""
     assert archived_stories["AI newsletter opaque tracker"]["source_kind"] == "newsletter"
+
+
+def test_linkless_newsletter_identity_survives_pipeline_sanitization_without_exposure(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "topics.yaml").write_text(
+        "categories:\n  - id: ai\n    name: AI\n    keywords: [AI]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "sources.yaml").write_text(
+        "settings: {max_age_hours: 48}\n"
+        "sources: []\n"
+        "hackernews: {enabled: false}\n"
+        "images: {enabled: false}\n",
+        encoding="utf-8",
+    )
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cfg = load_config(tmp_path)
+    snapshot_path = tmp_path / "source-snapshot.json"
+    write_source_snapshot(
+        (TierResult("sources", [], True),),
+        snapshot_path,
+        generated_at=now,
+        configuration_digest=snapshot_config_digest(cfg),
+    )
+    title = "AI newsletter linkless report"
+    description = (
+        "The newsletter reports a concrete AI development and explains why it matters. "
+        "It supplies enough public context for the story card while its delivery link is unsafe. "
+        "The source also identifies the next expected step for readers."
+    )
+    discriminator = hashlib.sha256(b"private-message-and-story-key").hexdigest()
+    private_identity = linkless_story_canonical(
+        source_id="newsletter:test", title=title, description=description,
+        stable_discriminator=discriminator,
+    )
+    newsletter_path = tmp_path / "newsletter.json"
+    monkeypatch.setattr(
+        "curator.pipeline.enrich",
+        lambda *_args, **_kwargs: {
+            "total": 0, "from_feed": 0, "from_cache": 0, "fetched": 0,
+            "no_image": 0, "errors": 0, "capped": 0, "budget_hit": 0,
+            "newsletter_skipped": 0,
+        },
+    )
+
+    story_ids = []
+    for run, published_at in enumerate((now - timedelta(hours=1), now), start=1):
+        newsletter_path.write_text(
+            json.dumps({
+                "dark": False,
+                "ok": True,
+                "watermark": None,
+                "hashes": [],
+                "status": {},
+                "items": [{
+                    "title": title,
+                    "url": "https://link.mail.beehiiv.com/ss/c/AbCdEf0123456789XyZq",
+                    "canonical_url": "newsletter:" + "f" * 64,
+                    "source_id": "newsletter:test",
+                    "source_name": "Test Newsletter",
+                    "published_at": published_at.isoformat(),
+                    "description": description,
+                    "newsletter_discriminator": discriminator,
+                    "image_url": "",
+                }],
+            }),
+            encoding="utf-8",
+        )
+        out = tmp_path / f"site-{run}"
+        archive_path = tmp_path / f"archive-{run}.json"
+        assert main([
+            "--root", str(tmp_path),
+            "--out", str(out),
+            "--source-snapshot", str(snapshot_path),
+            "--newsletter-artifact", str(newsletter_path),
+            "--archive-candidate", str(archive_path),
+            "--build-nonce", f"linkless-stable-{run}",
+            "--commit-sha", "a" * 40,
+        ]) == 0
+
+        archive = json.loads(archive_path.read_text(encoding="utf-8"))
+        (story,) = archive["stories"]
+        story_ids.append(story["story_id"])
+        assert story["story_id"] == "story:" + hashlib.sha256(
+            private_identity.encode("utf-8")
+        ).hexdigest()
+        assert story["canonical_url"] == ""
+        for public_path in (
+            out / "index.html", out / "data/news-en.json", archive_path,
+        ):
+            assert private_identity not in public_path.read_text(encoding="utf-8")
+            assert discriminator not in public_path.read_text(encoding="utf-8")
+            assert "newsletter_discriminator" not in public_path.read_text(encoding="utf-8")
+
+    assert story_ids[0] == story_ids[1]
 
 
 def test_non_trending_feed_position_cannot_replace_hackernews_trending_rank(

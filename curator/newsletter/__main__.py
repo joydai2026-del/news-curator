@@ -69,6 +69,7 @@ def serialize(result: lane.LaneResult) -> dict:
             "published_at": published.isoformat() if isinstance(published, datetime) else str(published or ""),
             "description": _field(record, "description"),
             "newsletter_sender": _field(record, "newsletter_sender"),
+            "newsletter_discriminator": _field(record, "newsletter_discriminator"),
         })
     mentions = []
     for mention in result.mentions:

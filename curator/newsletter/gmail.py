@@ -341,7 +341,11 @@ def _get_message(session, token: str, message_id: str, timeout: float) -> Messag
         raw = str((response.json() or {}).get("raw") or "")
     except ValueError:
         return None
-    return decode_raw(raw)
+    message = decode_raw(raw)
+    if message is not None:
+        material = b"news-curator:gmail-message\0" + message_id.encode("utf-8")
+        message._news_curator_message_discriminator = hashlib.sha256(material).hexdigest()
+    return message
 
 
 def decode_raw(raw: str) -> Message | None:

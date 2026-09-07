@@ -50,6 +50,7 @@ rate stays a per-run OUTPUT, not a promise made here. Senders redesign.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from email.message import Message
@@ -183,6 +184,7 @@ class Story:
     url_raw: str
     blurb: str = ""
     url: str = ""  # sanitized publisher URL, empty when none could be recovered
+    private_discriminator: str = ""  # SHA-256 only; raw delivery URL stays here
 
 
 @dataclass
@@ -844,6 +846,9 @@ class Adapter:
         kept: list[Story] = []
         for story in self.parse(msg):
             report.stories_found += 1
+            if story.url_raw:
+                material = b"news-curator:newsletter-link\0" + story.url_raw.encode("utf-8")
+                story.private_discriminator = hashlib.sha256(material).hexdigest()
             clean = sanitize(story.url_raw) if story.url_raw else None
             if clean:
                 story.url = clean

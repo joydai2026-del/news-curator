@@ -135,6 +135,11 @@ class Item:
     # cached).
     is_newsletter: bool = False
     newsletter_sender: str = ""
+    # Private, non-URL identity for a newsletter story whose delivery link was
+    # removed. It is used only to derive story_id and is never rendered or
+    # written to a public archive.
+    newsletter_identity: str = ""
+    newsletter_discriminator: str = ""
 
     # Filled in downstream.
     echo_platforms: set[str] = field(default_factory=set)

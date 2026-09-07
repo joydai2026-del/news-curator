@@ -275,6 +275,21 @@ def test_a_clean_full_batch_reports_itself_complete():
     assert result.complete and not result.truncated and result.fetch_failures == 0
 
 
+def test_message_identity_is_hashed_before_it_leaves_the_gmail_adapter():
+    session = FakeSession(
+        listing=FakeResponse(200, {"messages": [{"id": "private-gmail-id"}]}),
+        messages={"private-gmail-id": raw_response("tldr")},
+    )
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
+
+    (message,) = result.messages
+    discriminator = getattr(message, "_news_curator_message_discriminator")
+    assert discriminator == hashlib.sha256(
+        b"news-curator:gmail-message\0private-gmail-id"
+    ).hexdigest()
+    assert "private-gmail-id" not in discriminator
+
+
 def test_more_mail_than_the_cap_is_reported_as_truncated():
     """The M4 shape: 40 waiting, 30 taken, and nobody told."""
     listing = FakeResponse(200, {"messages": [{"id": f"m{i}"} for i in range(40)]})

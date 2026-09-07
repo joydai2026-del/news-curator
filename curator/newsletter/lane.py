@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from dataclasses import dataclass, field, fields as dataclass_fields
 from datetime import datetime, timedelta, timezone
 from email.message import Message
@@ -156,18 +157,19 @@ def enabled(env: dict | None = None, *, flag: bool = False, client=gmail_module)
 # item construction
 # --------------------------------------------------------------------------
 
-def linkless_story_canonical(*, source_id: str, title: str, description: str) -> str:
+def linkless_story_canonical(
+    *, source_id: str, title: str, description: str, stable_discriminator: str = ""
+) -> str:
     """Identity for a story whose link had to be dropped.
 
-    The opaque digest uses only public-safe story fields. Source identity
-    prevents cross-newsletter collisions, while the bounded description
-    separates repeated generic headlines inside one source. Publication time
-    is deliberately excluded so a date correction keeps the same story.
+    The opaque digest uses bounded public-safe fields plus an optional private
+    discriminator already reduced to a SHA-256 digest. Publication time is
+    deliberately excluded so a date correction keeps the same story.
     """
     material = "\x1f".join(
-        (source_id, fold_text(title), fold_text(description))
+        (source_id, fold_text(title), fold_text(description), stable_discriminator)
     )
-    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
     return f"newsletter:{digest}"
 
 
@@ -179,6 +181,7 @@ def build_record(
     adapter_id: str,
     display_name: str,
     published_at: datetime,
+    stable_discriminator: str = "",
 ) -> dict:
     """One newsletter story as a plain dict.
 
@@ -194,6 +197,7 @@ def build_record(
         source_id=source_id,
         title=clean,
         description=description,
+        stable_discriminator=stable_discriminator,
     )
     return {
         "title": clean,
@@ -206,6 +210,7 @@ def build_record(
         "description": description,
         "is_newsletter": True,
         "newsletter_sender": display_name,
+        "newsletter_discriminator": stable_discriminator,
         "image_url": "",  # PRIVACY RULE: newsletter items never carry an image
     }
 
@@ -267,6 +272,11 @@ def to_items(records: list[dict]) -> list:
                 description=record["description"],
                 is_newsletter=True,
                 newsletter_sender=record["newsletter_sender"],
+                newsletter_identity=(
+                    record["canonical_url"]
+                    if str(record["canonical_url"]).startswith("newsletter:") else ""
+                ),
+                newsletter_discriminator=str(record.get("newsletter_discriminator") or ""),
             )
         )
     return out
@@ -426,7 +436,16 @@ def fetch(
 
         if sent < cutoff:
             continue
-        for story in parsed.stories:
+        message_discriminator = str(
+            getattr(msg, "_news_curator_message_discriminator", "") or ""
+        )
+        for story_index, story in enumerate(parsed.stories):
+            stable_discriminator = ""
+            if re.fullmatch(r"[0-9a-f]{64}", story.private_discriminator):
+                stable_discriminator = story.private_discriminator
+            elif re.fullmatch(r"[0-9a-f]{64}", message_discriminator):
+                material = f"{message_discriminator}\x1f{story_index}".encode("utf-8")
+                stable_discriminator = hashlib.sha256(material).hexdigest()
             record = build_record(
                 title=story.title,
                 url=story.url,
@@ -434,6 +453,7 @@ def fetch(
                 adapter_id=adapter.id,
                 display_name=adapter.name,
                 published_at=sent,
+                stable_discriminator=stable_discriminator,
             )
             mention = build_mention(record)
             if mention["mention_id"] not in seen_mention_ids:

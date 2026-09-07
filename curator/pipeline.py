@@ -222,9 +222,20 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
         # URL becomes an unlinked headline, while a bad or missing canonical
         # value can be safely rebuilt from a valid display URL. If neither is
         # safe, a recomputed opaque key supports dedup but is never published.
-        title = str(record.get("title") or "")
+        title = fold_text(str(record.get("title") or ""))
         source_id = str(record.get("source_id") or "newsletter")
-        description = str(record.get("description") or "")
+        description = fold_text(str(record.get("description") or ""))
+        if (
+            not title
+            or len(title) > 2_000
+            or not source_id.startswith("newsletter:")
+            or len(source_id) > 512
+            or len(description) > 8_000
+        ):
+            continue
+        discriminator = str(record.get("newsletter_discriminator") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", discriminator):
+            discriminator = ""
         article_url = sanitize_newsletter_url(str(record.get("url") or "")) or ""
         artifact_canonical_url = sanitize_newsletter_url(
             str(record.get("canonical_url") or "")
@@ -239,7 +250,12 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
                 source_id=source_id,
                 title=title,
                 description=description,
+                stable_discriminator=discriminator,
             )
+        )
+        private_identity = (
+            article_canonical_url
+            if article_canonical_url.startswith("newsletter:") else ""
         )
         items.append(
             Item(
@@ -254,6 +270,8 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
                 is_newsletter=True,
                 is_aggregator=True,
                 newsletter_sender=str(record.get("newsletter_sender") or ""),
+                newsletter_identity=private_identity,
+                newsletter_discriminator=discriminator,
                 image_url="",  # PRIVACY RULE: never an image, whatever the artifact says
                 native_categories={NEWSLETTER_CATEGORY_ID},
             )

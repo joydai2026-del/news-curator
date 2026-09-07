@@ -572,6 +572,22 @@ def test_repeated_linkless_generic_headline_uses_story_content_discriminator():
     assert first["canonical_url"] != repeated["canonical_url"]
 
 
+def test_repeated_identical_linkless_rows_use_private_story_discriminator():
+    first = lane.build_record(
+        title="Quick hits", url="", blurb="The same public summary.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW, stable_discriminator="a" * 64,
+    )
+    repeated = lane.build_record(
+        title="Quick hits", url="", blurb="The same public summary.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW, stable_discriminator="b" * 64,
+    )
+
+    assert first["canonical_url"] != repeated["canonical_url"]
+    assert story_id_for_item(lane.to_items([first])[0]) != story_id_for_item(
+        lane.to_items([repeated])[0]
+    )
+
+
 def test_linkless_story_id_survives_publisher_date_correction():
     first = lane.build_record(
         title="Quick hits", url="", blurb="A public summary about chips.", adapter_id="tldr",
