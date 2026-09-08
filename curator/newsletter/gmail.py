@@ -49,6 +49,8 @@ from email.message import Message
 
 import requests
 
+from .identity import key_from_env, opaque_discriminator
+
 log = logging.getLogger(__name__)
 
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
@@ -323,7 +325,9 @@ def _list_message_ids(
             return ids[:budget], True
 
 
-def _get_message(session, token: str, message_id: str, timeout: float) -> Message | None:
+def _get_message(
+    session, token: str, message_id: str, timeout: float, *, identity_key: bytes | None
+) -> Message | None:
     response = _request(
         session,
         "GET",
@@ -342,9 +346,10 @@ def _get_message(session, token: str, message_id: str, timeout: float) -> Messag
     except ValueError:
         return None
     message = decode_raw(raw)
-    if message is not None:
-        material = b"news-curator:gmail-message\0" + message_id.encode("utf-8")
-        message._news_curator_message_discriminator = hashlib.sha256(material).hexdigest()
+    if message is not None and identity_key is not None:
+        message._news_curator_message_discriminator = opaque_discriminator(
+            identity_key, "gmail-message", message_id
+        )
     return message
 
 
@@ -392,6 +397,7 @@ def fetch(
     if not has_credentials(source):
         return GmailResult(ok=False, reason=MISSING_CREDENTIALS)
     expected_digest = _expected_profile_digest(source)
+    identity_key = key_from_env(source)
     if expected_digest is None:
         return GmailResult(ok=False, reason=PROFILE_GUARD_INVALID)
     if not [s for s in senders if s and s.strip()]:
@@ -414,7 +420,9 @@ def fetch(
         taken = oldest_first[: max(0, int(limit))]
         messages: list[Message] = []
         for message_id in taken:
-            parsed = _get_message(client, token, message_id, timeout)
+            parsed = _get_message(
+                client, token, message_id, timeout, identity_key=identity_key
+            )
             if parsed is not None:
                 messages.append(parsed)
         truncated = budget_hit or len(taken) < len(ids)

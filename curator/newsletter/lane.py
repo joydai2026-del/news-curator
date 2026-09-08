@@ -38,8 +38,10 @@ Three properties the rest of the codebase depends on:
 Privacy, restated because this is where items are born: `image_url` is always
 empty (no og:image fetch, no image-cache entry, ever), `url` is either a
 sanitized publisher URL or the empty string, and the raw newsletter link never
-makes it into a record. The lane reports counts and adapter slugs. It never
-reports addresses or subjects.
+makes it into a record. Linkless identities use only a dedicated-key HMAC of
+the private delivery discriminator. The key and raw verifier stay inside the
+secret-bearing job. The lane reports counts and adapter slugs. It never reports
+addresses or subjects.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ from ..normalize import canonical_url, clean_title, fold_text
 from . import adapters as adapters_module
 from . import gmail as gmail_module
 from . import state as state_module
+from .identity import key_from_env, opaque_discriminator
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +70,7 @@ DEFAULT_OVERLAP_HOURS = 6.0
 
 DISABLED = "disabled"
 NO_ADAPTERS = "no_adapters_enabled"
+IDENTITY_KEY_MISSING = "identity_key_missing"
 
 
 @dataclass
@@ -163,7 +167,7 @@ def linkless_story_canonical(
     """Identity for a story whose link had to be dropped.
 
     The opaque digest uses bounded public-safe fields plus an optional private
-    discriminator already reduced to a SHA-256 digest. Publication time is
+    discriminator already reduced to a keyed HMAC digest. Publication time is
     deliberately excluded so a date correction keeps the same story.
     """
     material = "\x1f".join(
@@ -343,6 +347,7 @@ def fetch(
     """
     cfg = dict(cfg or {})
     source_env = os.environ if env is None else env
+    identity_key = key_from_env(source_env)
     want = bool(cfg.get("enabled", False)) if flag is None else bool(flag)
 
     if not want:
@@ -432,7 +437,7 @@ def fetch(
         entry = status[adapter.id]
         entry.seen += 1
 
-        parsed = adapter.extract(msg)
+        parsed = adapter.extract(msg, identity_key=identity_key)
         entry.extracted += parsed.report.stories_found
         entry.dropped_links += parsed.report.links_dropped
 
@@ -445,9 +450,20 @@ def fetch(
             stable_discriminator = ""
             if re.fullmatch(r"[0-9a-f]{64}", story.private_discriminator):
                 stable_discriminator = story.private_discriminator
-            elif re.fullmatch(r"[0-9a-f]{64}", message_discriminator):
-                material = f"{message_discriminator}\x1f{story_index}".encode("utf-8")
-                stable_discriminator = hashlib.sha256(material).hexdigest()
+            elif (
+                identity_key is not None
+                and re.fullmatch(r"[0-9a-f]{64}", message_discriminator)
+            ):
+                stable_discriminator = opaque_discriminator(
+                    identity_key,
+                    "newsletter-message-story",
+                    f"{message_discriminator}\x1f{story_index}",
+                )
+            if not story.url and not stable_discriminator:
+                return LaneResult(
+                    items=[], status=status, ok=False, dark=True,
+                    reason=IDENTITY_KEY_MISSING, watermark=state.watermark,
+                )
             record = build_record(
                 title=story.title,
                 url=story.url,

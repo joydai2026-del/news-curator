@@ -50,7 +50,6 @@ rate stays a per-run OUTPUT, not a promise made here. Senders redesign.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, field
 from email.message import Message
@@ -58,6 +57,7 @@ from html.parser import HTMLParser
 from typing import Callable
 
 from ..normalize import clean_title
+from .identity import opaque_discriminator
 from .sanitize import sanitize
 
 MAX_BLURB_CHARS = 600
@@ -184,7 +184,7 @@ class Story:
     url_raw: str
     blurb: str = ""
     url: str = ""  # sanitized publisher URL, empty when none could be recovered
-    private_discriminator: str = ""  # SHA-256 only; raw delivery URL stays here
+    private_discriminator: str = ""  # keyed HMAC only; raw delivery URL stays here
 
 
 @dataclass
@@ -840,15 +840,16 @@ class Adapter:
                 return True
         return False
 
-    def extract(self, msg: Message) -> ParseResult:
+    def extract(self, msg: Message, *, identity_key: bytes | None = None) -> ParseResult:
         """Parse, then sanitize every link. The only public entry point."""
         report = HitReport()
         kept: list[Story] = []
         for story in self.parse(msg):
             report.stories_found += 1
-            if story.url_raw:
-                material = b"news-curator:newsletter-link\0" + story.url_raw.encode("utf-8")
-                story.private_discriminator = hashlib.sha256(material).hexdigest()
+            if story.url_raw and identity_key is not None:
+                story.private_discriminator = opaque_discriminator(
+                    identity_key, "newsletter-delivery-url", story.url_raw
+                )
             clean = sanitize(story.url_raw) if story.url_raw else None
             if clean:
                 story.url = clean

@@ -158,17 +158,21 @@ def test_newsletter_profile_guard_secret_is_scoped_to_the_newsletter_step() -> N
     jobs = _jobs()
     step = _step_named(jobs["newsletter"], "Fetch the newsletter lane")
     expected = "${{ secrets.GMAIL_EXPECTED_PROFILE_SHA256 }}"
+    identity_key = "${{ secrets.NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY }}"
     assert step["env"]["GMAIL_EXPECTED_PROFILE_SHA256"] == expected
+    assert step["env"]["NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"] == identity_key
     assert step["env"].keys() == {
         "GMAIL_CLIENT_ID",
         "GMAIL_CLIENT_SECRET",
         "GMAIL_REFRESH_TOKEN",
         "GMAIL_EXPECTED_PROFILE_SHA256",
+        "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY",
     }
     for job_name, job in jobs.items():
         if job_name == "newsletter":
             continue
         assert expected not in yaml.safe_dump(job, sort_keys=True)
+        assert identity_key not in yaml.safe_dump(job, sort_keys=True)
 
 
 def test_translation_is_dark_without_exact_enable_variable() -> None:

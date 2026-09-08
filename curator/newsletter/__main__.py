@@ -12,9 +12,10 @@ writes everything the build needs into one artifact file:
   * the watermark and hashes the build job passes to `state.advance()` AFTER
     the page is written.
 
-The artifact is safe to expose as a public Actions artifact: every field in it
-either already appears on the public page or is the committed state file's own
-content.
+The artifact is safe to expose as a public Actions artifact: its only private
+identity material is an opaque HMAC output made with the ingestion-only key.
+Neither that key nor the raw delivery verifier is serialized. All other fields
+either appear on the public page or are the committed state file's own content.
 
 Failure model matches the lane's: this process exits 0 no matter what. A dark
 lane is a fact the page reports, never a reason the six healthy tabs miss an
@@ -45,6 +46,7 @@ CONFIG_ERROR = "config_error"
 WARN_REASONS = {"auth_revoked", "auth_failed", "missing_credentials",
                 "api_error", "network_error", "no_adapters_enabled",
                 "profile_guard_invalid", "profile_invalid", "profile_mismatch",
+                "identity_key_missing",
                 CONFIG_ERROR}
 
 

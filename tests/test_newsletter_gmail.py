@@ -8,6 +8,7 @@ token above all, can be exercised deterministically.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 from datetime import datetime, timezone
 
@@ -33,6 +34,7 @@ ENV = {
     "GMAIL_CLIENT_SECRET": "fixture-client-secret",
     "GMAIL_REFRESH_TOKEN": "fixture-refresh-token",
     "GMAIL_EXPECTED_PROFILE_SHA256": PROFILE_DIGEST,
+    "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY": "11" * 32,
 }
 
 
@@ -275,7 +277,7 @@ def test_a_clean_full_batch_reports_itself_complete():
     assert result.complete and not result.truncated and result.fetch_failures == 0
 
 
-def test_message_identity_is_hashed_before_it_leaves_the_gmail_adapter():
+def test_message_identity_is_keyed_before_it_leaves_the_gmail_adapter():
     session = FakeSession(
         listing=FakeResponse(200, {"messages": [{"id": "private-gmail-id"}]}),
         messages={"private-gmail-id": raw_response("tldr")},
@@ -284,9 +286,13 @@ def test_message_identity_is_hashed_before_it_leaves_the_gmail_adapter():
 
     (message,) = result.messages
     discriminator = getattr(message, "_news_curator_message_discriminator")
-    assert discriminator == hashlib.sha256(
-        b"news-curator:gmail-message\0private-gmail-id"
+    material = b"news-curator:gmail-message\0private-gmail-id"
+    assert discriminator == hmac.new(
+        bytes.fromhex(ENV["NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"]),
+        material,
+        hashlib.sha256,
     ).hexdigest()
+    assert discriminator != hashlib.sha256(material).hexdigest()
     assert "private-gmail-id" not in discriminator
 
 

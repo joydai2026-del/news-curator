@@ -13,6 +13,7 @@ import pytest
 
 from curator.identity import story_id_for_item
 from curator.newsletter import gmail, lane, state as state_module
+from curator.newsletter.identity import key_from_env, opaque_discriminator
 from tests.test_newsletter_fixtures import (
     EXPECTED_STORIES,
     SENDERS,
@@ -27,6 +28,7 @@ ENV = {
     "GMAIL_CLIENT_ID": "fixture-client-id",
     "GMAIL_CLIENT_SECRET": "fixture-client-secret",
     "GMAIL_REFRESH_TOKEN": "fixture-refresh-token",
+    "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY": "11" * 32,
 }
 
 CFG = {"enabled": True, "max_items": 50, "max_age_hours": 48, "max_messages": 30}
@@ -54,6 +56,17 @@ class FakeGmail:
               id_budget=gmail.DEFAULT_ID_BUDGET):
         self.calls.append((list(senders), after, limit))
         self.budgets.append(id_budget)
+        identity_key = key_from_env(env or {})
+        for index, message in enumerate(self.result.messages):
+            if identity_key is None:
+                if hasattr(message, "_news_curator_message_discriminator"):
+                    delattr(message, "_news_curator_message_discriminator")
+                continue
+            message._news_curator_message_discriminator = opaque_discriminator(
+                identity_key,
+                "gmail-message",
+                f"fixture-message-{index}",
+            )
         return self.result
 
 
@@ -98,6 +111,43 @@ def test_missing_credentials_returns_dark_without_listing_mail():
     result = lane.fetch(CFG, fresh_state(), NOW, env={}, client=client)
     assert result.dark and result.reason == gmail.MISSING_CREDENTIALS
     assert client.calls == []
+
+
+@pytest.mark.parametrize("identity_key", [None, "", "a" * 63, "g" * 64])
+def test_missing_or_invalid_identity_key_darkens_only_when_a_linkless_story_needs_it(
+    identity_key,
+):
+    html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/PrivateDeliveryToken123456789">
+        Linkless AI update
+      </a></strong></p>
+      <p>A complete public summary explains the AI update and why it matters.</p>
+    </body></html>"""
+    without_key = {key: value for key, value in ENV.items()
+                   if key != "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"}
+    if identity_key is not None:
+        without_key["NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"] = identity_key
+
+    result = run([parsed("tldr", html=html, sent=NOW - timedelta(hours=1))], env=without_key)
+
+    assert result.dark and not result.ok
+    assert result.reason == lane.IDENTITY_KEY_MISSING
+    assert result.items == [] and result.hashes == []
+
+
+def test_linked_public_story_does_not_require_the_private_identity_key():
+    html = """<html><body>
+      <p><strong><a href="https://publisher.example/public-ai-story">Public AI update</a></strong></p>
+      <p>A complete public summary explains the AI update and why it matters.</p>
+    </body></html>"""
+    without_key = {key: value for key, value in ENV.items()
+                   if key != "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"}
+
+    result = run([parsed("tldr", html=html, sent=NOW - timedelta(hours=1))], env=without_key)
+
+    assert result.ok and not result.dark
+    assert len(result.items) == 1
+    assert field(result.items[0], "url") == "https://publisher.example/public-ai-story"
 
 
 def test_a_revoked_token_darkens_the_lane_and_keeps_the_watermark():
