@@ -134,6 +134,7 @@ async function main() {
   const verifier = browser.storage.get("news-curator.auth.verifier");
   assert.equal(authorize.origin, "https://example.supabase.co");
   assert.equal(authorize.pathname, "/auth/v1/authorize");
+  assert.equal(authorize.searchParams.get("provider"), "google");
   assert.equal(authorize.searchParams.get("redirect_to"), `https://news.example/auth/callback/?client_state=${state}`);
   assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
 
@@ -197,60 +198,27 @@ async function main() {
   assert.equal(browser.storage.has("news-curator.auth.verifier"), false);
 
   const authConfig = { url: "https://example.supabase.co", key: "sb_publishable_test" };
-  const otpCalls = [];
-  await client.requestEmailCode("jj@example.com", async (url, options) => {
-    otpCalls.push({ url, options });
-    return response(200, {}, url);
-  });
-  assert.equal(otpCalls[0].url, "https://example.supabase.co/auth/v1/otp");
-  assert.deepEqual(JSON.parse(otpCalls[0].options.body), {
-    email: "jj@example.com",
-    create_user: false,
-    data: {},
-  });
-  assert.equal(otpCalls[0].options.headers.apikey, "sb_publishable_test");
-  assertFailClosedFetch(otpCalls[0]);
-  await client.requestEmailCode("jj@example.com", async (url) =>
-    response(200, { message: "Confirmation email sent" }, url)
-  );
-  await assert.rejects(
-    client.requestEmailCode("jj@example.com", async (url) => response(200, { user: "unexpected" }, url)),
-    /authentication response/
-  );
-  assert.throws(() => client.validateEmail(" jj@example.com"), /email address/);
-  assert.throws(() => client.validateEmail("not-an-email"), /email address/);
-
-  let parsedOtpRedirectBody = false;
-  await assert.rejects(
-    client.requestEmailCode("jj@example.com", async (url) => response(200, {}, `${url}/moved`, {
-      redirected: true,
-      text: async () => { parsedOtpRedirectBody = true; return "{}"; },
-    })),
-    /redirected unexpectedly/
-  );
-  assert.equal(parsedOtpRedirectBody, false);
-
-  const verifyCalls = [];
-  const verified = await client.verifyEmailCode("jj@example.com", "123456", async (url, options) => {
-    verifyCalls.push({ url, options });
-    return response(200, rawSession(), url);
-  });
-  assert.equal(verified.access_token, projected.access_token);
-  assert.equal(verified.refresh_token, projected.refresh_token);
-  assert.equal(verified.user_id, projected.user_id);
-  assert.ok(verified.expires_at >= now + 3599 && verified.expires_at <= now + 3601);
-  assert.deepEqual(JSON.parse(verifyCalls[0].options.body), {
-    email: "jj@example.com",
-    token: "123456",
-    type: "email",
-  });
-  assert.equal(verifyCalls[0].url, "https://example.supabase.co/auth/v1/verify");
-  assertFailClosedFetch(verifyCalls[0]);
-  assert.deepEqual(JSON.parse(browser.storage.get("news-curator.auth.session")), verified);
-  await assert.rejects(
-    client.verifyEmailCode("jj@example.com", "123456", async (url) => response(401, { error: "bad token" }, url)),
-    /^Error: Sign in failed\.$/
-  );
+  for (const extra of ["&code=duplicate", "&client_state=duplicate"]) {
+    await client.beginSignIn();
+    const currentState = browser.storage.get("news-curator.auth.state");
+    await assert.rejects(client.finishCallback(
+      new URL(`https://news.example/auth/callback/?code=x&client_state=${currentState}${extra}`),
+      async () => { throw new Error("fetch must not run"); }
+    ), /could not be verified/);
+  }
+  assert.equal(client.requestEmailCode, undefined);
+  assert.equal(client.verifyEmailCode, undefined);
+  for (const suffix of [
+    "#error=access_denied&error_description=private-detail",
+    "#access_token=private-token&refresh_token=private-refresh",
+  ]) {
+    await client.beginSignIn();
+    await assert.rejects(client.finishCallback(new URL(`https://news.example/auth/callback/${suffix}`), async () => {
+      throw new Error("fetch must not run");
+    }), /^Error: Sign in failed\.$/);
+    assert.equal(browser.storage.has("news-curator.auth.state"), false);
+    assert.equal(browser.storage.has("news-curator.auth.verifier"), false);
+  }
 
   const calls = [];
   const getFetch = async (url, options) => {

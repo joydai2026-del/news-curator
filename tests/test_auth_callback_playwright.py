@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 import pytest
 
@@ -19,6 +22,19 @@ playwright_api = pytest.importorskip("playwright.sync_api")
 
 ROOT = Path(__file__).resolve().parents[1]
 SUPABASE_ORIGIN = "https://project-ref.supabase.co"
+
+
+def _google_callback_location(authorize_url: str) -> tuple[str, dict[str, list[str]]]:
+    query = parse_qs(urlsplit(authorize_url).query)
+    assert query["provider"] == ["google"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert len(query["code_challenge"][0]) == 43
+    callback = urlsplit(query["redirect_to"][0])
+    assert callback.path == "/auth/callback/"
+    params = parse_qs(callback.query)
+    assert len(params["client_state"][0]) == 43
+    params["code"] = ["authorization-code"]
+    return urlunsplit(callback._replace(query=urlencode(params, doseq=True))), query
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
@@ -257,6 +273,125 @@ def test_back_to_digest_keeps_session_without_broadcast_channel(tmp_path: Path) 
         thread.join(timeout=5)
 
 
+@pytest.mark.parametrize("returning_user", [False, True])
+def test_google_button_pkce_login_and_reload_for_new_and_returning_users(
+    tmp_path: Path, returning_user: bool
+) -> None:
+    """Local OAuth contract. Real Google consent is a separate production gate."""
+    site = tmp_path / "site"
+    materialize_callback(
+        supabase_url=SUPABASE_ORIGIN,
+        publishable_key="sb_publishable_test",
+        output=site / "auth/callback/index.html",
+    )
+    for asset in ("client.js", "styles.css"):
+        (site / "auth" / asset).write_bytes((ROOT / "static/auth" / asset).read_bytes())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(site)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    authorize_query: dict[str, list[str]] = {}
+    exchanges = 0
+
+    def fulfill(route: object) -> None:
+        nonlocal authorize_query, exchanges
+        request = route.request
+        if "/auth/v1/authorize?" in request.url:
+            location, authorize_query = _google_callback_location(request.url)
+            assert urlsplit(location).netloc == f"127.0.0.1:{server.server_port}"
+            route.fulfill(status=302, headers={"location": location}, body="")
+            return
+        if "/auth/v1/token?grant_type=pkce" in request.url:
+            exchanges += 1
+            body = request.post_data_json
+            assert body["auth_code"] == "authorization-code"
+            digest = hashlib.sha256(body["code_verifier"].encode()).digest()
+            assert base64.urlsafe_b64encode(digest).rstrip(b"=").decode() == authorize_query["code_challenge"][0]
+            payload: object = {
+                "access_token": _jwt({"sub": "user-a"}), "refresh_token": "refresh-token",
+                "expires_in": 3600, "user": {"id": "user-a"},
+                "provider_token": "do-not-retain-provider-token",
+            }
+        elif "/rest/v1/user_preferences" in request.url:
+            payload = [{
+                "user_id": "user-a", "revision": 1, "locale": "en",
+                "interests": ["agents"], "saved_searches": [],
+                "created_at": "2026-09-07T12:00:00Z", "updated_at": "2026-09-07T12:00:00Z",
+            }] if returning_user else []
+        else:
+            raise AssertionError("Unexpected auth contract endpoint")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 390, "height": 844})
+                page.route(f"{SUPABASE_ORIGIN}/**", fulfill)
+                page.goto(f"http://127.0.0.1:{server.server_port}/auth/callback/", wait_until="networkidle")
+                assert page.locator('input[type="email"], #send-code, #verify-code').count() == 0
+                google = page.get_by_role("button", name="Sign in with Google", exact=True)
+                google.focus()
+                page.keyboard.press("Enter")
+                page.locator("#preferences-panel").wait_for(state="visible")
+                assert page.url == f"http://127.0.0.1:{server.server_port}/auth/callback/"
+                assert page.locator("#interests").input_value() == ("agents" if returning_user else "")
+                assert exchanges == 1
+                assert page.evaluate("Object.keys(JSON.parse(sessionStorage.getItem('news-curator.auth.session'))).sort()") == [
+                    "access_token", "expires_at", "refresh_token", "user_id",
+                ]
+                page.reload(wait_until="networkidle")
+                page.locator("#preferences-panel").wait_for(state="visible")
+                assert page.locator("#interests").input_value() == ("agents" if returning_user else "")
+                assert exchanges == 1
+                assert page.locator("#google-sign-in").is_hidden()
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("callback_suffix", [
+    "?error=access_denied&error_description=private-provider-detail",
+    "#error=access_denied&error_description=private-provider-detail",
+    "#access_token=private-provider-token&refresh_token=private-provider-refresh",
+])
+def test_google_callback_errors_are_scrubbed_and_retryable(tmp_path: Path, callback_suffix: str) -> None:
+    site = tmp_path / "site"
+    materialize_callback(
+        supabase_url=SUPABASE_ORIGIN, publishable_key="sb_publishable_test",
+        output=site / "auth/callback/index.html",
+    )
+    for asset in ("client.js", "styles.css"):
+        (site / "auth" / asset).write_bytes((ROOT / "static/auth" / asset).read_bytes())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(site)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                calls = []
+                page.route(f"{SUPABASE_ORIGIN}/**", lambda route: (calls.append(True), route.abort()))
+                base = f"http://127.0.0.1:{server.server_port}/auth/callback/"
+                page.goto(base + callback_suffix, wait_until="networkidle")
+                assert page.url == base
+                assert page.locator("#status").inner_text() == "Sign in failed. Try again."
+                assert page.get_by_role("button", name="Sign in with Google", exact=True).is_enabled()
+                assert "private-provider" not in page.locator("body").inner_text()
+                assert calls == []
+                assert page.evaluate("sessionStorage.getItem('news-curator.auth.session')") is None
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 @pytest.mark.parametrize("logout_failure", [None, "500", "redirect", "network"])
 def test_profile_logout_always_clears_private_digest_state_across_tabs(
     tmp_path: Path, now: object, logout_failure: str | None
@@ -351,9 +486,11 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 "interests": [{"topic_id": "ai", "signal": "more_like", "revision": 2}],
             })
             payload = [saved]
-        elif request.url.endswith("/auth/v1/otp"):
-            payload = {}
-        elif request.url.endswith("/auth/v1/verify"):
+        elif "/auth/v1/authorize?" in request.url:
+            location, _query = _google_callback_location(request.url)
+            route.fulfill(status=302, headers={"location": location}, body="")
+            return
+        elif request.url.endswith("/auth/v1/token?grant_type=pkce"):
             payload = {
                 "access_token": _jwt({"sub": "user-a"}),
                 "refresh_token": "refresh-token",
@@ -400,11 +537,7 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 digest.locator(".profile-link").click()
             profile = profile_info.value
             profile.wait_for_load_state("networkidle")
-            profile.locator("#email").fill("jj@example.com")
-            profile.locator("#send-code").click()
-            profile.locator("#code-panel").wait_for(state="visible")
-            profile.locator("#code").fill("123456")
-            profile.locator("#verify-code").click()
+            profile.get_by_role("button", name="Sign in with Google", exact=True).click()
             profile.locator("#preferences-panel").wait_for(state="visible")
             digest.wait_for_function(
                 "() => sessionStorage.getItem('news-curator.auth.session') !== null"

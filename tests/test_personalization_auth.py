@@ -627,8 +627,10 @@ def test_static_interest_settings_page_has_restrictive_csp_and_accessible_contro
     assert "history.replaceState(null, \"\", CALLBACK_PATH)" in js
     callback_source = js[js.index("async function finishCallback"):js.index("async function signOut")]
     assert callback_source.index("history.replaceState") < callback_source.index("await fetch")
-    assert 'type="email"' in html
-    assert 'autocomplete="one-time-code"' in html
+    assert 'type="email"' not in html
+    assert 'autocomplete="one-time-code"' not in html
+    assert 'id="send-code"' not in html
+    assert 'id="verify-code"' not in html
     assert 'id="interests"' in html
     assert 'id="save-interests"' in html
     assert 'id="google-sign-in"' in html
@@ -641,18 +643,16 @@ def test_static_interest_settings_page_has_restrictive_csp_and_accessible_contro
     assert "Sign in with Google" in html
     assert "sessionStorage" in js
     assert "code_verifier" in js
-    assert '`${url}/auth/v1/otp`' in js
-    assert '`${url}/auth/v1/verify`' in js
-    assert "create_user: false" in js
-    assert "create_user: true" not in js
+    assert "/auth/v1/otp" not in js
+    assert "/auth/v1/verify" not in js
+    assert "requestEmailCode" not in js
+    assert "verifyEmailCode" not in js
     assert "Keep the list to 20 interests or fewer." in js
     assert "Your interests were saved." in js
     assert "Your interests changed in another session." in js
     assert "Your interests could not be saved." in js
     assert "Signed in, but your interests could not be loaded. Refresh the page to try again." in js
-    verify_handler = js[js.index('document.getElementById("verify-code")'):js.index('document.getElementById("reload-interests")')]
-    assert "showPreferences(null)" not in verify_handler
-    assert verify_handler.index("await loadPreferences()") < verify_handler.index("Signed in. Your interests are ready.")
+    assert "showPreferences(null)" not in js
     assert "saved_searches: currentPreference.saved_searches" in js
     assert "const safeSession = projectSession(rawSession)" in js
     assert "sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession))" in js
