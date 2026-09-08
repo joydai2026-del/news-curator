@@ -25,23 +25,28 @@ google_signin_correction:
   auth_implementation: fe371afecfa5cd20b954947d9b8854609b504b4d
   reviewed_implementation: 71718db5301e344cd75c0701aad6f39989110a6e
   product_merge_and_served_build: 4258aeee715e6ce33517a865e8101a1f72b22dd8
+  google_verified_served_build: 7b840ef346f8429d6abe3c55debd44b99c34e10f
   implementation_ci: https://github.com/joydai2026-del/news-curator/actions/runs/34253051862
   production_workflow: https://github.com/joydai2026-del/news-curator/actions/runs/34253278365
+  google_verification_workflow: https://github.com/joydai2026-del/news-curator/actions/runs/34257040399
   google_only_local_contract: GREEN
   google_only_ui_production: GREEN
-  google_provider_production: BLOCKED
-  google_new_user_signup_production: BLOCKED
-  real_google_consent_and_callback: BLOCKED
+  google_provider_production: GREEN
+  google_new_user_signup_production: GREEN
+  real_google_consent_and_callback: GREEN
+  real_google_returning_session_and_state: GREEN
+  real_google_cross_tab_logout: GREEN
+  test_preferences_and_story_flags_restored: GREEN
   email_signin_removed_from_client: GREEN
-  email_provider_disabled_production: PENDING
+  email_provider_disabled_production: GREEN
   reader_open_gray_feedback_local: GREEN
   reader_open_gray_feedback: GREEN
   correction_deployment: GREEN
   post_merge_clock_contract_fix: 0bb412e
-  post_merge_clock_contract_ci: PENDING
-  m1_acceptance: REOPENED
+  post_merge_clock_contract_ci: https://github.com/joydai2026-del/news-curator/actions/runs/34254863210
+  m1_acceptance: READY_FOR_OWNER_TEST
   product_owner_acceptance: OPEN
-  note: "The reader correction and Google-only UI are live. The real Google button still returns provider-disabled HTTP 400. Public settings report Google disabled, email enabled, signup disabled. Local routed tests and admin-created sessions never satisfy the real Google gate."
+  note: "Real first and returning Google sign-in, preference/read/save/unread persistence, and cross-tab logout pass on the exact served build. Public settings confirm Google enabled, signup open, email disabled. Initial test flags/preferences were restored. Product-owner acceptance and elapsed production history remain open. Local routed tests and admin-created sessions do not substitute for the recorded real Google proof."
 historical_source: docs/plans/2026-08-29-news-curator-v3-backend-platform.md
 generated_for_historical_snapshot: News Curator v3 backend platform
 state_ladder:
@@ -535,10 +540,10 @@ cloud_linked_gates:
     planned_command: "supabase link --project-ref <JJ-approved-project-ref> && supabase db push && uv run pytest -q tests/test_personalization_cloud.py"
     comparison_mode: "real anon and cross-user requests are denied; real owner authorization-code PKCE flow completes with approved redirects only"
     side_effects: "Mutates only a JJ-approved cloud Supabase project. Requires separate action-time authorization."
-    current_status: PARTIAL
-    evidence: docs/evidence/2026-09-08-m1-release.md
-    blockers:
-      - "Project linking, approved migrations, owner/cross-user API boundaries, and authenticated reading passed in production. This release used disposable admin-created sessions and did not exercise email-code delivery or the Google authorization-code flow."
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-google-signin-reading-feedback.md
+    blockers: []
+    note: "The earlier M1 receipt retains production migration and owner/cross-user isolation proof. The Google correction receipt adds dedicated provider configuration and real first/returning Google authorization-code flows. Email/code sign-in is superseded and disabled."
   - id: NCV3-CLOUD-02
     description: Google Cloud Translation credentials, billing, origin-bound bearer authentication, rotation, revocation, and protected workflow environment are activated and verified.
     check_type: live_cloud_contract

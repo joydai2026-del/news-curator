@@ -1,24 +1,43 @@
 # Google sign-in and reading feedback correction
 
-Date: September 8, 2026. This corrects the earlier M1 test-ready receipt. M1 acceptance is reopened and remains incomplete because real Google sign-in is blocked. Notion remains read-only planning authority.
+Date: September 8, 2026. The Google sign-in blocker is resolved by production configuration and real-user verification. The corrected Google-only and reading flows are ready for JJ to test. Product-owner M1 acceptance remains open. Notion remains read-only planning authority.
 
 Evidence grades: A means production proof, B means source or local executable proof, C means not verified.
 
 ## Current acceptance
 
-Google sign-in is not ready in production. The user-reported failure was reproduced by clicking the deployed Google button: the request ended at Supabase with HTTP 400, `validation_failed`, and `Unsupported provider: provider is not enabled`. No Google account page was reached. A first harness used a mismatched button label; that assertion is not counted as reproduction evidence.
+Google sign-in now works in production. The original failure was reproduced at the real button as a provider-disabled HTTP 400. After the approved dedicated Web client and scoped Supabase activation, the real button reaches Google, actual consent completes, and new/returning sessions preserve preferences and reading state. No routed response or admin-created session substitutes for this proof.
 
 | Gate | State and evidence |
 | --- | --- |
 | Google-only entry | A: deployed at the real callback; email/code controls and client endpoints removed; Google PKCE remains the only browser sign-in path |
-| New and returning users | B: local browser tests start at the actual Google button, bind the generated challenge to the exchanged verifier, and preserve the resulting session and preferences on reload |
+| New and returning users | A: first real Google consent plus two returning Google sign-ins completed through the deployed callback; preferences and reading state survived reload and reauthentication |
 | Callback errors | B: query and fragment errors are scrubbed; implicit token fragments and duplicate code/state parameters are rejected; the retry button remains usable |
-| Real provider availability | A, failing: live `/auth/v1/settings` reports Google disabled, email enabled, and signup disabled |
-| Dedicated Google web client | C: provider activation is blocked pending dedicated web credentials and public-audience verification; newsletter-ingestion credentials must not be reused |
-| Actual Google consent and callback | C: not exercised. Routed test responses and admin-created sessions do not prove this gate |
-| Reader gray/read feedback | A: desktop, phone, and delayed reader-script startup pass on the deployed build. Signed hydration, conflict rollback, stale revision rejection, and cross-context persistence remain B, local contract proof |
+| Real provider availability | A: live public settings report Google enabled, signup open, email disabled; the actual button returns HTTP 302 to Google with the exact Supabase callback |
+| Dedicated Google web client | A: dedicated Web client, exact origin/redirect, External/In production audience, and only OpenID/email/profile scopes; no newsletter or unrelated client reused |
+| Actual Google consent and callback | A: Google account choice and consent returned to the query-scrubbed callback and signed-in interests panel |
+| Reader gray/read feedback | A: desktop, phone, delayed startup, and real signed-in read/save/unread persistence pass. Conflict rollback and stale revision rejection retain separate B local-contract evidence |
 | Deployment of this correction | A: merged and deployed by successful Curate run 34253278365, including archive finalization |
-| Product-owner acceptance | OPEN. Google configuration and real consent/callback proof are still required |
+| Product-owner acceptance | OPEN. Functional Google and reading gates pass; this is not a claim that JJ has accepted all M1 behavior |
+
+## Google activation and current live build
+
+| Item | Production evidence |
+| --- | --- |
+| Current served source | `7b840ef346f8429d6abe3c55debd44b99c34e10f`, from successful unattended [scheduled run 34257040399](https://github.com/joydai2026-del/news-curator/actions/runs/34257040399) |
+| Current chain | Source snapshot, newsletter, build, state persistence, deploy, and archive finalization succeeded. The Google configuration change required no new publication |
+| Exact served bytes | Live HTML matches that run's archive candidate; reader/auth scripts, privacy page, configured callback, inline reader and CSS match reviewed product source |
+| Cache preservation | Docs branch starts after cache-only commit `5377fdb`; its differences from the served source are confined to the three existing cache/cursor files |
+| Completed test-only follow-up | [PR 14](https://github.com/joydai2026-del/news-curator/pull/14) merged as the current served source. [PR CI 34254650751](https://github.com/joydai2026-del/news-curator/actions/runs/34254650751) and [main CI 34254863210](https://github.com/joydai2026-del/news-curator/actions/runs/34254863210) passed all three checks |
+| Final deterministic floor | 2,128 passed, seven optional-environment skips, eleven socket-marked cases deselected; targeted auth 56 passed. The unchanged reader browser module remains 13 passed |
+| Dedicated identity setup | Basic identity scopes only; External audience in production, not a test-user allowlist. Homepage/privacy/domain branding saved. Billing independently verified disabled; no paid workload created |
+| Scoped auth activation | One PATCH contained only Google enable/client/secret, signup opening, and email disabling. Site URL and redirect allowlist still match exactly. No unrelated credential reused |
+| Readback limitation | The management API returns a stable opaque secret representation, not the submitted plaintext. Strict helper comparison failed and is not counted as a full verifier pass. No retry or automatic rollback occurred. Actual Google code exchange proves the credential works |
+| Rollback preparation | After independent review, a GET-only operation securely bound the observed five-field state while preserving the original previous and intended records. Later drift must refuse rollback. Seventeen optimized-Python boundary cases passed; no production rollback rehearsal occurred |
+
+The real-user browser run exercised first consent and two returning Google sign-ins. A saved preference survived reload. Opening a real story immediately grayed it; Save persisted after feed reload and appeared in Saved. Mark unread kept the story open and persisted as unread while saved. Signing out in one tab changed the other tab to signed-out public mode. The temporary preference and story flags were restored to their initial empty/unread/unsaved state, then a final real Google sign-in and reload verified that restoration. The real user account was retained. Private account, preference, story, token, and credential values are omitted.
+
+Google consent can still show the Supabase authentication host until optional Google brand verification. This did not block sign-in. Real Google cancellation was not separately exercised; scrubbing, rejection, and retry behavior retain their B local browser proof. Product-owner acceptance and elapsed five-/thirty-day history remain open as described in the M1 receipt.
 
 ## Exact release and live proof
 
@@ -35,7 +54,7 @@ Google sign-in is not ready in production. The user-reported failure was reprodu
 
 The coordinating reviewer exercised the real [live feed](https://news.joydong.org/) at desktop width 1440 and phone width 390, plus desktop with the actual deferred reader script held until after the first accordion click. All three passed: opening immediately turns the headline gray, Mark unread restores the unread color while leaving the story open, focus returns to the accordion, reopening marks read again, and collapse retains read state. The read color was `rgb(120, 129, 124)` versus black for unread. Closed card height did not shift. All three screenshots were visually inspected. These anonymous checks created no account and wrote no backend state.
 
-The deployed [callback](https://news.joydong.org/auth/callback/) was independently rendered and visually inspected at widths 1440 and 390. It contains one Google sign-in action, no email field, and no horizontal overflow. Its full configured HTML and static assets match the release source. Clicking that real button still ends at the same provider-disabled HTTP 400 rather than Google. The production readback remains `google=false`, `email=true`, and `disable_signup=true`. No production auth configuration was changed in this correction.
+The deployed [callback](https://news.joydong.org/auth/callback/) was independently rendered and visually inspected at widths 1440 and 390. It contains one Google sign-in action, no email field, and no horizontal overflow. Its full configured HTML and static assets match the release source. The initial correction deployment still returned provider-disabled HTTP 400; that historical blocker was subsequently resolved by the separately approved activation above.
 
 ## Local auth results
 
@@ -69,14 +88,8 @@ Before calling Google sign-in ready, record all of the following on the exact se
 
 The implementation follows the [Supabase Google sign-in guide](https://supabase.com/docs/guides/auth/social-login/auth-google) and its [PKCE session flow](https://supabase.com/docs/guides/auth/sessions/pkce-flow). Existing deployment, database, and previous isolated-account cleanup proof remains in the earlier M1 receipt; it is not relabeled as Google sign-in proof.
 
-## Durable Google setup handoff
+## Operational handoff
 
-The remaining external blocker is approval to create the dedicated Google Web client. Do not reuse a desktop client, newsletter OAuth credentials, or an unrelated project client. No credential values belong in this repository or receipt.
+The dedicated client, public audience, scoped activation, and real first/returning sign-in gates are complete. Credential and rollback records remain outside the repository in owner-only storage. Their locations and independent helper reviews are held in the private activation receipt. No secret values belong in this public document, commits, or workflow logs. Do not reuse this basic-identity client for newsletter ingestion or unrelated APIs.
 
-| Next action | Required proof |
-| --- | --- |
-| Create the dedicated Google Web application client after approval | Basic sign-in identity scopes only; exact authorized Supabase redirect `https://odurwknvigshekaprjvj.supabase.co/auth/v1/callback`; intended public External audience in production, not a test-user-only allowlist |
-| Apply scoped Supabase provider configuration through a secure channel | Google enabled with the dedicated client, `disable_signup=false`, and `external_email_enabled=false`. Preserve other provider settings and the current callback allowlist |
-| Read back the public auth settings and click the real deployed Google button | Google enabled, email disabled, signup open, and actual navigation to `accounts.google.com`. This is provider availability, not completed sign-in |
-| Complete actual new and returning Google user flows | Consent returns through the deployed callback, PKCE code exchange succeeds, and preference/reading state persists. Test cancellation and retry. Request interactive user login if no safely authorized real login is available |
-| Close acceptance only after that live proof | Keep M1 and product-owner acceptance open until the real Google flow is verified; routed responses or admin-created sessions never substitute |
+The original previous/intended record and separately observed five-field record must remain together. A rollback is a separately authorized production change and must first match every current scoped field to the observed record. The management secret representation is intentionally treated as opaque. Do not bypass drift checks or restore the entire auth configuration.
