@@ -363,6 +363,7 @@ def test_quarantine_and_pre_send_post_send_failures_keep_retry_rules_distinct() 
     assert blocked["reservation"]["state"] == "charge_unknown"
 
 
+@pytest.mark.allow_socket
 def test_python_supabase_client_matches_local_rpc_happy_path() -> None:
     origin, service_role_key = _local_rest_identity()
     client = SupabaseTranslationStore(
