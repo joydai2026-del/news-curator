@@ -161,13 +161,13 @@ def test_a_dropped_link_is_dropped_not_downgraded(run):
 # 2. the state file
 # --------------------------------------------------------------------------
 
-def test_the_state_file_round_trips_with_only_the_four_allowed_keys(run, tmp_path):
+def test_the_state_file_round_trips_with_only_the_allowed_keys(run, tmp_path):
     result, st = run.result, run.state
     path = tmp_path / "newsletter_state.json"
     written = state_module.advance(path, st, watermark=result.watermark, new_hashes=result.hashes)
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert set(payload) == {"version", "watermark", "salt", "hashes"}
+    assert set(payload) == {"version", "watermark", "salt", "hashes", "legacy_hashes"}
     assert payload["hashes"] == written.hashes
     assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in payload["hashes"])
 
@@ -283,7 +283,7 @@ def e2e_render():
     from curator.pipeline import NEWSLETTER_CATEGORY_NAME, load_newsletter_artifact
     from curator.render import render_html
     from tests.test_newsletter_fixtures import as_raw, build_message
-    from tests.test_newsletter_gmail import FakeResponse, FakeSession
+    from tests.test_newsletter_gmail import ENV as GMAIL_ENV, FakeResponse, FakeSession
 
     # 1. through the REAL Gmail client, so the base64 + MIME decode is in the
     #    chain too. Only the HTTP session is faked.
@@ -302,12 +302,12 @@ def e2e_render():
         def fetch(self, senders, after, *, env=None, limit=30, timeout=20.0,
                   id_budget=gmail_module.DEFAULT_ID_BUDGET):
             return gmail_module.fetch(
-                senders, after, env=ENV, session=session, limit=limit, timeout=timeout,
+                senders, after, env=GMAIL_ENV, session=session, limit=limit, timeout=timeout,
                 id_budget=id_budget,
             )
 
     st = state_module.NewsletterState(watermark=NOW - timedelta(hours=6), salt="fixture-salt")
-    result = lane.fetch(CFG, st, NOW, env=ENV, client=RealClientOverFakeSession())
+    result = lane.fetch(CFG, st, NOW, env=GMAIL_ENV, client=RealClientOverFakeSession())
 
     # 2. serialize -> a real JSON file -> reconstruct
     with TemporaryDirectory() as tmp:

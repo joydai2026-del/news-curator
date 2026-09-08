@@ -9,6 +9,8 @@ these tests are what stop one of them slipping back into quiet mode.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -46,6 +48,10 @@ def test_the_artifact_carries_what_the_run_did_not_see():
     assert payload["unreadable_messages"] == 3
     assert payload["unauthenticated_messages"] == 0
     assert payload["unauthenticated_missing"] == 0
+    assert payload["display_candidates"] == payload["items"]
+    # Two linkless fixture rows have the same bounded public mention shape,
+    # even though their private story discriminators keep both cards.
+    assert len(payload["mentions"]) == len(payload["display_candidates"]) - 1
 
 
 def test_a_clean_run_says_nothing_was_missed():
@@ -57,3 +63,34 @@ def test_the_artifact_still_carries_no_address_or_subject():
     blob = json.dumps(serialize(lane_result(truncated=True)))
     assert "@" not in blob
     assert "fixture-reader" not in blob
+
+
+def test_uploaded_artifact_uses_an_opaque_keyed_delivery_discriminator():
+    delivery_url = "https://link.mail.beehiiv.com/ss/c/OfflineVerifierToken123456789"
+    html = f"""<html><body>
+      <p><strong><a href="{delivery_url}">Private delivery AI update</a></strong></p>
+      <p>A complete public summary explains the AI update and why it matters.</p>
+    </body></html>"""
+    result = lane.fetch(
+        {"enabled": True},
+        state_module.NewsletterState(
+            watermark=NOW - timedelta(hours=6), salt="fixture-salt"
+        ),
+        NOW,
+        env=ENV,
+        client=FakeGmail([parsed("tldr", html=html, sent=NOW - timedelta(hours=1))]),
+    )
+
+    payload = serialize(result)
+    blob = json.dumps(payload)
+    material = b"news-curator:newsletter-delivery-url\0" + delivery_url.encode()
+    keyed = hmac.new(
+        bytes.fromhex(ENV["NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"]),
+        material,
+        hashlib.sha256,
+    ).hexdigest()
+    unkeyed = hashlib.sha256(material).hexdigest()
+    assert result.ok and not result.dark
+    assert payload["items"][0]["newsletter_discriminator"] == keyed
+    assert delivery_url not in blob
+    assert unkeyed not in blob

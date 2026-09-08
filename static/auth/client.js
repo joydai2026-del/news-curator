@@ -5,6 +5,7 @@
   const STATE_KEY = "news-curator.auth.state";
   const VERIFIER_KEY = "news-curator.auth.verifier";
   const SESSION_KEY = "news-curator.auth.session";
+  const CHANNEL_NAME = "news-curator.auth.v1";
   const SESSION_FIELDS = ["access_token", "expires_at", "refresh_token", "user_id"];
   const MAX_TOKEN_CHARS = 16384;
   const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -219,6 +220,40 @@
     }
   }
 
+  function acceptSession(value, nowSeconds = Date.now() / 1000) {
+    const session = validateStoredSession(value, nowSeconds);
+    const identity = decodePayload(session.access_token);
+    if (!identity || identity.sub !== session.user_id) fail("The shared session was invalid.");
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    return session;
+  }
+
+  function clearSession() {
+    sessionStorage.removeItem(SESSION_KEY);
+  }
+
+  function broadcastSession(session) {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(CHANNEL_NAME);
+    try {
+      channel.postMessage({ type: "session", session: validateStoredSession(session) });
+    } finally {
+      channel.close();
+    }
+  }
+
+  function broadcastLogout() {
+    if (typeof BroadcastChannel === "undefined") return;
+    let channel;
+    try {
+      channel = new BroadcastChannel(CHANNEL_NAME);
+      channel.postMessage({ type: "logout" });
+    } catch (_) {
+      // Server sign-out and local token clearing already succeeded. A browser
+      // that blocks channel delivery must not be shown a false sign-out error.
+    } finally { if (channel) channel.close(); }
+  }
+
   function boundedText(value, maxChars, maxBytes) {
     return typeof value === "string" && value === value.trim() && value.length >= 1 &&
       value.length <= maxChars && encoder.encode(value).length <= maxBytes;
@@ -357,6 +392,7 @@
     const rawSession = await boundedJson(response, "The authentication response was invalid.");
     const safeSession = projectSession(rawSession);
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+    broadcastSession(safeSession);
     return safeSession;
   }
 
@@ -396,6 +432,26 @@
     return session.expires_at > nowSeconds
       ? session
       : refreshSession(authConfig, session, fetchImpl, nowSeconds);
+  }
+
+  let readerRefreshInFlight = null;
+  function hasSessionCandidate() {
+    try {
+      loadSessionCandidate();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  async function readerSessionForRequest(fetchImpl = fetch, nowSeconds = Date.now() / 1000) {
+    if (!sessionStorage.getItem(SESSION_KEY)) return null;
+    const candidate = loadSessionCandidate();
+    if (candidate.expires_at > nowSeconds) return candidate;
+    if (!readerRefreshInFlight) {
+      readerRefreshInFlight = sessionForRequest(config(), candidate, fetchImpl, nowSeconds)
+        .finally(() => { readerRefreshInFlight = null; });
+    }
+    return readerRefreshInFlight;
   }
 
   function preferenceHeaders(authConfig, session, representation = false) {
@@ -531,26 +587,33 @@
     const rawSession = await boundedJson(response, "The authentication response was invalid.");
     const safeSession = projectSession(rawSession);
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+    broadcastSession(safeSession);
     return true;
   }
 
   async function signOut(fetchImpl = fetch) {
-    let session;
+    let accessToken = null;
+    try { accessToken = loadSessionCandidate().access_token; } catch (_) {}
+    // Privacy and recoverability win over remote certainty: honor the user's
+    // logout locally first, and never restore tokens if revocation cannot be confirmed.
+    clearSession();
+    broadcastLogout();
+    if (!accessToken) return false;
     try {
-      session = loadSessionCandidate();
-    } finally {
-      sessionStorage.removeItem(SESSION_KEY);
+      const { url, key } = config();
+      const logoutUrl = `${url}/auth/v1/logout`;
+      const response = await fetchImpl(logoutUrl, {
+        method: "POST",
+        headers: { apikey: key, authorization: `Bearer ${accessToken}` },
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        redirect: "error",
+      });
+      requireExactResponse(response, logoutUrl, "The authentication endpoint redirected unexpectedly.");
+      return response.ok;
+    } catch (_) {
+      return false;
     }
-    const { url, key } = config();
-    const logoutUrl = `${url}/auth/v1/logout`;
-    const response = await fetchImpl(logoutUrl, {
-      method: "POST",
-      headers: { apikey: key, authorization: `Bearer ${session.access_token}` },
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      redirect: "error",
-    });
-    requireExactResponse(response, logoutUrl, "The authentication endpoint redirected unexpectedly.");
   }
 
   const contract = {
@@ -560,9 +623,11 @@
     getPreferences,
     isPublishableKey,
     loadSession,
+    hasSessionCandidate,
     projectSession,
     projectRefreshedSession,
     refreshSession,
+    readerSessionForRequest,
     requestEmailCode,
     setPreferences,
     signOut,
@@ -571,6 +636,10 @@
     validatePreferenceRecord,
     validateStoredSession,
     verifyEmailCode,
+    acceptSession,
+    clearSession,
+    broadcastSession,
+    broadcastLogout,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -582,9 +651,18 @@
     get: () => getPreferences(config(), loadSessionCandidate()),
     set: (input) => setPreferences(config(), loadSessionCandidate(), input),
   });
+  window.NewsCuratorAuth = Object.freeze({
+    acceptSession,
+    clearSession,
+    channelName: CHANNEL_NAME,
+    config,
+    hasSessionCandidate,
+    sessionForRequest: readerSessionForRequest,
+  });
 
   async function run() {
     const status = document.getElementById("status");
+    if (!status) return;
     const loginPanel = document.getElementById("login-panel");
     const codePanel = document.getElementById("code-panel");
     const preferencesPanel = document.getElementById("preferences-panel");
@@ -593,6 +671,9 @@
     const interests = document.getElementById("interests");
     const interestCount = document.getElementById("interest-count");
     const buttons = [...document.querySelectorAll("button")];
+    const callback = new URL(window.location.href);
+    const hasCallback = ["code", "client_state", "error"].some((name) =>
+      callback.searchParams.has(name));
     let currentSession = null;
     let currentPreference = null;
 
@@ -655,6 +736,15 @@
         setBusy(false);
       }
     });
+    document.getElementById("google-sign-in").addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        await beginSignIn();
+      } catch (_) {
+        announce("Google sign in could not start. Try again.");
+        setBusy(false);
+      }
+    });
     document.getElementById("verify-code").addEventListener("click", async () => {
       setBusy(true);
       try {
@@ -712,24 +802,24 @@
     });
     document.getElementById("sign-out").addEventListener("click", async () => {
       setBusy(true);
-      try {
-        await signOut();
-        announce("Signed out.");
-      } catch (_) {
-        announce("Signed out on this device.");
-      } finally {
-        showSignedOut();
-        setBusy(false);
-      }
+      const remoteSignOut = signOut();
+      currentSession = null;
+      showSignedOut();
+      const remoteConfirmed = await remoteSignOut;
+      announce(remoteConfirmed
+        ? "Signed out."
+        : "Signed out locally. Remote sign-out could not be confirmed.");
+      setBusy(false);
     });
 
     try {
+      if (hasCallback) await finishCallback(callback);
       currentSession = loadSessionCandidate();
       await loadPreferences();
-      announce("Your interests are ready.");
+      announce(hasCallback ? "Signed in. Your interests are ready." : "Your interests are ready.");
     } catch (_) {
       showSignedOut();
-      announce("Sign in to personalize your feed.");
+      announce(hasCallback ? "Sign in failed. Try again." : "Sign in to personalize your feed.");
     }
   }
 

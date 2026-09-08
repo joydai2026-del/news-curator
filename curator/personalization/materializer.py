@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
+import math
+import re
 import urllib.parse
 from dataclasses import dataclass, field
 from uuid import UUID
@@ -123,7 +125,65 @@ def fetch_interest_profile(
         )
     except (KeyError, ValueError) as exc:
         raise MaterializationError("Saved interests could not be materialized.") from exc
+    try:
+        signal_status, signal_payload = client.request(
+            "POST",
+            f"{config.supabase_url}/rest/v1/rpc/materialize_user_interest_signals",
+            headers={**headers, "content-type": "application/json"},
+            body={"p_user_id": config.owner_user_id},
+        )
+    except (AuthError, OSError, TimeoutError) as exc:
+        raise MaterializationError("Saved interests could not be materialized.") from exc
+    if (
+        signal_status != 200
+        or not isinstance(signal_payload, dict)
+        or set(signal_payload) != {
+            "revision",
+            "topic_adjustments",
+            "more_like_topic_weight",
+            "topic_signal_limit",
+        }
+    ):
+        raise MaterializationError("Saved interests could not be materialized.")
+    signal_revision = signal_payload["revision"]
+    topic_signal_limit = signal_payload["topic_signal_limit"]
+    signal_rows = signal_payload["topic_adjustments"]
+    if (
+        isinstance(signal_revision, bool)
+        or not isinstance(signal_revision, int)
+        or signal_revision < 0
+        or isinstance(topic_signal_limit, bool)
+        or not isinstance(topic_signal_limit, int)
+        or not 1 <= topic_signal_limit <= 100
+        or not isinstance(signal_rows, list)
+        or len(signal_rows) > topic_signal_limit
+    ):
+        raise MaterializationError("Saved interests could not be materialized.")
+    topic_adjustments: list[tuple[str, float]] = []
+    for signal_row in signal_rows:
+        if not isinstance(signal_row, dict) or set(signal_row) != {"topic_id", "adjustment"}:
+            raise MaterializationError("Saved interests could not be materialized.")
+        topic_id = signal_row["topic_id"]
+        adjustment = signal_row["adjustment"]
+        if (
+            not isinstance(topic_id, str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", topic_id)
+            or isinstance(adjustment, bool)
+            or not isinstance(adjustment, (int, float))
+            or not math.isfinite(float(adjustment))
+            or adjustment == 0
+        ):
+            raise MaterializationError("Saved interests could not be materialized.")
+        topic_adjustments.append((topic_id, float(adjustment)))
+    weight = signal_payload["more_like_topic_weight"]
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+        raise MaterializationError("Saved interests could not be materialized.")
+    weight = float(weight)
+    if not math.isfinite(weight) or not 0 <= weight <= 10:
+        raise MaterializationError("Saved interests could not be materialized.")
     return InterestProfile(
-        revision=revision,
+        revision=max(revision, signal_revision),
         interests=validated.interests,
+        topic_adjustments=tuple(topic_adjustments),
+        more_like_topic_weight=weight,
     )

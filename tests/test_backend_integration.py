@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from curator.config import Category, Config, load_config
+from curator.identity import story_id_for_item
 from curator.localization import (
     build_localized_view,
-    story_id_for_item,
     write_localized_projection,
 )
 from curator.models import Item, TranslationRecord

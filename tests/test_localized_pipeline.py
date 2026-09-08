@@ -6,7 +6,8 @@ import copy
 from datetime import datetime, timedelta, timezone
 
 from curator.config import Category, Config
-from curator.localization import build_localized_view, story_id_for_item
+from curator.identity import story_id_for_item
+from curator.localization import build_localized_view
 from curator.models import Item, TierResult, TranslationRecord
 from curator.pipeline import build_ranked_language
 from curator.translation import TranslationInput

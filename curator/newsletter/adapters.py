@@ -57,6 +57,7 @@ from html.parser import HTMLParser
 from typing import Callable
 
 from ..normalize import clean_title
+from .identity import opaque_discriminator
 from .sanitize import sanitize
 
 MAX_BLURB_CHARS = 600
@@ -183,6 +184,7 @@ class Story:
     url_raw: str
     blurb: str = ""
     url: str = ""  # sanitized publisher URL, empty when none could be recovered
+    private_discriminator: str = ""  # keyed HMAC only; raw delivery URL stays here
 
 
 @dataclass
@@ -838,12 +840,16 @@ class Adapter:
                 return True
         return False
 
-    def extract(self, msg: Message) -> ParseResult:
+    def extract(self, msg: Message, *, identity_key: bytes | None = None) -> ParseResult:
         """Parse, then sanitize every link. The only public entry point."""
         report = HitReport()
         kept: list[Story] = []
         for story in self.parse(msg):
             report.stories_found += 1
+            if story.url_raw and identity_key is not None:
+                story.private_discriminator = opaque_discriminator(
+                    identity_key, "newsletter-delivery-url", story.url_raw
+                )
             clean = sanitize(story.url_raw) if story.url_raw else None
             if clean:
                 story.url = clean

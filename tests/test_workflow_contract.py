@@ -130,7 +130,7 @@ def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
         for name, job in jobs.items()
         if "${{ secrets." in yaml.safe_dump(job, sort_keys=True)
     }
-    assert secret_jobs == {"newsletter", "build", "translation"}
+    assert secret_jobs == {"newsletter", "build", "translation", "finalize-archive"}
     for name in ("newsletter", "translation"):
         job = jobs[name]
         condition = str(job.get("if", ""))
@@ -144,11 +144,35 @@ def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
     build = jobs["build"]
     assert build["permissions"] == {"contents": "read"}
     assert _environment_name(build) == "personalization"
+    finalizer = jobs["finalize-archive"]
+    assert finalizer["permissions"] == {"contents": "read"}
+    assert _environment_name(finalizer) == "personalization"
     materialize = _step_named(build, "Materialize saved-interest ranking")
     assert materialize["if"] == (
         "${{ github.ref == 'refs/heads/main' && "
         "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}"
     )
+
+
+def test_newsletter_profile_guard_secret_is_scoped_to_the_newsletter_step() -> None:
+    jobs = _jobs()
+    step = _step_named(jobs["newsletter"], "Fetch the newsletter lane")
+    expected = "${{ secrets.GMAIL_EXPECTED_PROFILE_SHA256 }}"
+    identity_key = "${{ secrets.NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY }}"
+    assert step["env"]["GMAIL_EXPECTED_PROFILE_SHA256"] == expected
+    assert step["env"]["NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"] == identity_key
+    assert step["env"].keys() == {
+        "GMAIL_CLIENT_ID",
+        "GMAIL_CLIENT_SECRET",
+        "GMAIL_REFRESH_TOKEN",
+        "GMAIL_EXPECTED_PROFILE_SHA256",
+        "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY",
+    }
+    for job_name, job in jobs.items():
+        if job_name == "newsletter":
+            continue
+        assert expected not in yaml.safe_dump(job, sort_keys=True)
+        assert identity_key not in yaml.safe_dump(job, sort_keys=True)
 
 
 def test_translation_is_dark_without_exact_enable_variable() -> None:
@@ -161,10 +185,10 @@ def test_translation_is_dark_without_exact_enable_variable() -> None:
 
 def test_secret_job_checkouts_never_persist_credentials() -> None:
     jobs = _jobs()
-    for name in ("newsletter", "build", "translation"):
+    for name in ("newsletter", "build", "translation", "finalize-archive"):
         checkouts = _action_steps(jobs[name], "actions/checkout")
         assert len(checkouts) == 1
-        assert checkouts[0].get("with") == {"persist-credentials": False}
+        assert checkouts[0].get("with", {}).get("persist-credentials") is False
 
 
 def test_permissions_are_bound_to_the_exact_jobs() -> None:
@@ -172,6 +196,7 @@ def test_permissions_are_bound_to_the_exact_jobs() -> None:
     assert jobs["newsletter"]["permissions"] == {"contents": "read"}
     assert jobs["translation"]["permissions"] == {"contents": "read", "id-token": "write"}
     assert jobs["build"]["permissions"] == {"contents": "read"}
+    assert jobs["finalize-archive"]["permissions"] == {"contents": "read"}
     assert jobs["persist-state"]["permissions"] == {"contents": "write"}
     assert jobs["deploy"]["permissions"] == {"pages": "write", "id-token": "write"}
     id_token_jobs = {
@@ -336,7 +361,18 @@ def test_personalization_scores_never_leave_the_build_job() -> None:
     command = str(step["run"])
     assert "python scripts/build_interest_ranking.py build" in command
     assert '--source-snapshot "$RUNNER_TEMP/source-snapshot.json"' in command
+    assert "--newsletter-artifact ./newsletter_artifact.json" in command
     assert '--output "$RUNNER_TEMP/interest-ranking.json"' in command
+    steps = _jobs()["build"]["steps"]
+    newsletter_download = next(
+        index for index, candidate in enumerate(steps)
+        if candidate.get("with", {}).get("name") == "newsletter-artifact"
+    )
+    materialize = next(
+        index for index, candidate in enumerate(steps)
+        if candidate.get("name") == "Materialize saved-interest ranking"
+    )
+    assert newsletter_download < materialize
     assert step["if"] == (
         "${{ github.ref == 'refs/heads/main' && "
         "vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}"
@@ -355,6 +391,7 @@ def test_enabled_main_build_requires_the_interest_ranking_file() -> None:
     }
     command = str(step["run"])
     assert "python scripts/build_interest_ranking.py validate" in command
+    assert "--newsletter-artifact ./newsletter_artifact.json" in command
     assert 'if [ "$REQUIRE_PERSONALIZATION" = "true" ]' in command
     assert "saved-interest ranking artifact is required on main" in command
 

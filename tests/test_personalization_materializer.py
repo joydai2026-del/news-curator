@@ -22,6 +22,28 @@ def test_materializer_emits_exact_origin_csp_and_public_config(tmp_path: Path) -
     assert "sb_secret_" not in rendered
 
 
+def test_materializer_configures_main_reader_and_keeps_tokens_out_of_html(tmp_path: Path) -> None:
+    site_index = tmp_path / "index.html"
+    site_index.write_text(
+        '<meta http-equiv="Content-Security-Policy" content="connect-src \'self\';">'
+        '<meta name="supabase-url" content="">'
+        '<meta name="supabase-publishable-key" content="">'
+        '<div><!-- personalization-link --></div>'
+    )
+
+    activate_personalization_link(
+        site_index,
+        supabase_url="https://project-ref.supabase.co",
+        publishable_key="sb_publishable_example",
+    )
+
+    rendered = site_index.read_text()
+    assert "connect-src 'self' https://project-ref.supabase.co;" in rendered
+    assert '<meta name="supabase-url" content="https://project-ref.supabase.co">' in rendered
+    assert '<meta name="supabase-publishable-key" content="sb_publishable_example">' in rendered
+    assert "access_token" not in rendered and "refresh_token" not in rendered
+
+
 def test_checked_in_template_remains_fail_closed() -> None:
     template = TEMPLATE.read_text()
     assert '<meta name="supabase-url" content="">' in template
@@ -56,7 +78,8 @@ def test_activate_personalization_link_uses_a_repository_path_safe_relative_url(
     activate_personalization_link(index)
 
     assert index.read_text() == (
-        '<header><a class="profile-link" href="auth/callback/">Tune my interests</a></header>'
+        '<header><a class="profile-link" href="auth/callback/" target="_blank" '
+        'rel="noopener noreferrer">Sign in / Interests</a></header>'
     )
 
 

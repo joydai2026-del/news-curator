@@ -14,19 +14,22 @@ from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from ..models import Item
 from ..normalize import fold_text
+from ..identity import story_id_for_item
 
 if TYPE_CHECKING:
-    from ..config import Config
+    from ..config import Category, Config
 
 
 MAX_ARTIFACT_BYTES = 2_000_000
 MAX_SCORE_ROWS = 20_000
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_STORY_ID = re.compile(r"^story:[0-9a-f]{64}$")
 _TIMESTAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 _ARTIFACT_FIELDS = {
     "schema_version",
     "generated_at",
     "source_snapshot_digest",
+    "newsletter_input_digest",
     "configuration_digest",
     "preference_revision",
     "interest_count",
@@ -43,12 +46,16 @@ class InterestArtifactError(ValueError):
 class InterestProfile:
     revision: int
     interests: tuple[str, ...]
+    topic_signals: tuple[tuple[str, str], ...] = ()
+    topic_adjustments: tuple[tuple[str, float], ...] = ()
+    more_like_topic_weight: float = 0.8
 
 
 @dataclass(frozen=True)
 class InterestArtifact:
     generated_at: str
     source_snapshot_digest: str
+    newsletter_input_digest: str
     configuration_digest: str
     preference_revision: int
     interest_count: int
@@ -56,12 +63,37 @@ class InterestArtifact:
     scores: Mapping[str, float]
 
 
-def story_key(item: Item) -> str:
-    """Bind a score to the exact source headline that will receive it."""
+EMPTY_NEWSLETTER_INPUT_DIGEST = hashlib.sha256(b"[]").hexdigest()
 
-    identity = item.canonical_url or item.url
-    headline = fold_text(item.title).casefold()
-    return hashlib.sha256(f"{identity}\0{headline}".encode("utf-8")).hexdigest()
+
+def newsletter_input_digest(items: Iterable[Item]) -> str:
+    """Bind scores to the exact public-safe newsletter inputs used to build them."""
+
+    rows = sorted(
+        (
+            {
+                "story_id": story_key(item),
+                "title": item.title,
+                "language": item.language,
+                "native_categories": sorted(item.native_categories),
+            }
+            for item in items
+            if item.is_newsletter
+        ),
+        key=lambda row: (
+            row["story_id"], row["title"], row["language"], row["native_categories"]
+        ),
+    )
+    encoded = json.dumps(
+        rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def story_key(item: Item) -> str:
+    """Return the same stable story identity used by translations and storage."""
+
+    return story_id_for_item(item)
 
 
 def ranking_config_digest(cfg: "Config") -> str:
@@ -70,6 +102,15 @@ def ranking_config_digest(cfg: "Config") -> str:
     payload = {
         "algorithm_version": 1,
         "ranking": cfg.ranking,
+        "categories": [
+            {
+                "id": category.id,
+                "terms": category.all_terms,
+                "keywords_by_language": category.keywords_by_language,
+                "exclude": category.exclude,
+            }
+            for category in cfg.categories
+        ],
     }
     encoded = json.dumps(
         payload,
@@ -157,7 +198,9 @@ def build_interest_artifact(
     *,
     source_snapshot_digest: str,
     configuration_digest: str,
+    newsletter_digest: str = EMPTY_NEWSLETTER_INPUT_DIGEST,
     generated_at: datetime | None = None,
+    categories: Sequence["Category"] = (),
 ) -> dict[str, object]:
     """Build a score-only artifact. Raw interests and user identity never leave the job."""
 
@@ -165,8 +208,22 @@ def build_interest_artifact(
     if when.tzinfo is None:
         raise ValueError("generated_at must be timezone-aware")
     scores: dict[str, float] = {}
+    topic_adjustments: dict[str, float] = {}
+    for topic_id, signal in profile.topic_signals:
+        direction = 1.0 if signal == "more_like" else -1.0
+        topic_adjustments[topic_id] = topic_adjustments.get(topic_id, 0.0) + direction
+    for topic_id, adjustment in profile.topic_adjustments:
+        topic_adjustments[topic_id] = topic_adjustments.get(topic_id, 0.0) + adjustment
     for item in items:
         score = interest_score(item, profile.interests)
+        for category in categories:
+            if category.id not in topic_adjustments:
+                continue
+            from ..filter import topic_match
+
+            if topic_match(item, category) is not None:
+                score += profile.more_like_topic_weight * topic_adjustments[category.id]
+        score = max(0.0, min(1.0, score))
         if score <= 0:
             continue
         key = story_key(item)
@@ -175,9 +232,14 @@ def build_interest_artifact(
         "schema_version": 1,
         "generated_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_snapshot_digest": source_snapshot_digest,
+        "newsletter_input_digest": newsletter_digest,
         "configuration_digest": configuration_digest,
         "preference_revision": profile.revision,
-        "interest_count": len(profile.interests),
+        "interest_count": (
+            len(profile.interests)
+            + len(profile.topic_signals)
+            + len(profile.topic_adjustments)
+        ),
         "matched_story_count": len(scores),
         "scores": dict(sorted(scores.items())),
     }
@@ -194,6 +256,7 @@ def load_interest_artifact(
     *,
     expected_source_snapshot_digest: str,
     expected_configuration_digest: str,
+    expected_newsletter_digest: str = EMPTY_NEWSLETTER_INPUT_DIGEST,
     allowed_story_keys: set[str] | None = None,
 ) -> InterestArtifact:
     """Load an exact, bounded artifact and bind it to this build's snapshot."""
@@ -215,20 +278,27 @@ def load_interest_artifact(
 
     generated_at = payload["generated_at"]
     source_digest = payload["source_snapshot_digest"]
+    newsletter_digest = payload["newsletter_input_digest"]
     config_digest = payload["configuration_digest"]
     if not isinstance(generated_at, str) or not _TIMESTAMP.fullmatch(generated_at):
         raise InterestArtifactError("interest ranking artifact is invalid")
     if not isinstance(source_digest, str) or not _DIGEST.fullmatch(source_digest):
         raise InterestArtifactError("interest ranking artifact is invalid")
+    if not isinstance(newsletter_digest, str) or not _DIGEST.fullmatch(newsletter_digest):
+        raise InterestArtifactError("interest ranking artifact is invalid")
     if not isinstance(config_digest, str) or not _DIGEST.fullmatch(config_digest):
         raise InterestArtifactError("interest ranking artifact is invalid")
-    if source_digest != expected_source_snapshot_digest or config_digest != expected_configuration_digest:
+    if (
+        source_digest != expected_source_snapshot_digest
+        or newsletter_digest != expected_newsletter_digest
+        or config_digest != expected_configuration_digest
+    ):
         raise InterestArtifactError("interest ranking artifact does not belong to this build")
 
     revision = _nonnegative_int(payload["preference_revision"])
     interest_count = _nonnegative_int(payload["interest_count"])
     matched_count = _nonnegative_int(payload["matched_story_count"])
-    if not 0 <= interest_count <= 20:
+    if not 0 <= interest_count <= 220:
         raise InterestArtifactError("interest ranking artifact is invalid")
     scores = payload["scores"]
     if not isinstance(scores, dict) or len(scores) > MAX_SCORE_ROWS or matched_count != len(scores):
@@ -239,7 +309,7 @@ def load_interest_artifact(
     for key, value in scores.items():
         if (
             not isinstance(key, str)
-            or not _DIGEST.fullmatch(key)
+            or not _STORY_ID.fullmatch(key)
             or isinstance(value, bool)
             or not isinstance(value, (int, float))
         ):
@@ -256,6 +326,7 @@ def load_interest_artifact(
     return InterestArtifact(
         generated_at=generated_at,
         source_snapshot_digest=source_digest,
+        newsletter_input_digest=newsletter_digest,
         configuration_digest=config_digest,
         preference_revision=revision,
         interest_count=interest_count,

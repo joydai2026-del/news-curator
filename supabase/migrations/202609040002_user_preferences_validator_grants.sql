@@ -6,8 +6,24 @@ revoke all on schema personalization_private from public, anon, authenticated;
 -- Preserve the CHECK-constraint function identities while moving them out of
 -- PostgREST's exposed public schema. Authenticated owners need EXECUTE to have
 -- PostgreSQL evaluate the checks during their first direct insert.
-alter function public.valid_interests(text[]) set schema personalization_private;
-alter function public.valid_saved_searches(jsonb) set schema personalization_private;
+-- An earlier production repair already moved these same function identities.
+-- Reconcile that state without changing the migration ledger by hand. If both
+-- schemas contain a validator, ALTER fails atomically instead of choosing one.
+do $$
+begin
+  if to_regprocedure('public.valid_interests(text[])') is not null then
+    execute 'alter function public.valid_interests(text[]) set schema personalization_private';
+  elsif to_regprocedure('personalization_private.valid_interests(text[])') is null then
+    raise exception 'valid_interests validator is missing';
+  end if;
+
+  if to_regprocedure('public.valid_saved_searches(jsonb)') is not null then
+    execute 'alter function public.valid_saved_searches(jsonb) set schema personalization_private';
+  elsif to_regprocedure('personalization_private.valid_saved_searches(jsonb)') is null then
+    raise exception 'valid_saved_searches validator is missing';
+  end if;
+end;
+$$;
 
 grant usage on schema personalization_private to authenticated;
 grant execute on function personalization_private.valid_interests(text[]) to authenticated;

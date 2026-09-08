@@ -62,6 +62,48 @@ _VERSION_ID = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _MODEL_RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 
 
+@dataclass(frozen=True)
+class CoverageMention:
+    """Public-safe evidence that one named source mentioned a story."""
+
+    mention_id: str
+    source_kind: str
+    source_id: str
+    source_name: str
+    url: str
+    headline: str
+    mentioned_at: datetime
+    canonical_url: str = ""
+    story_id: str = ""
+
+    @classmethod
+    def from_item(
+        cls,
+        item: "Item",
+        *,
+        mentioned_at: datetime | None = None,
+    ) -> "CoverageMention":
+        from .identity import coverage_mention_id, story_id_for_item
+        from .normalize import canonical_url
+
+        moment = mentioned_at or item.published_at
+        source_kind = "newsletter" if item.is_newsletter else "outlet"
+        return cls(
+            mention_id=coverage_mention_id(
+                source_kind=source_kind, source_id=item.source_id, mentioned_at=moment,
+                url=item.canonical_url or item.url, headline=item.title,
+            ),
+            source_kind=source_kind,
+            source_id=item.source_id,
+            source_name=item.newsletter_sender or item.source_name,
+            url=item.url,
+            headline=item.title,
+            mentioned_at=moment,
+            canonical_url=canonical_url(item.canonical_url or item.url) or "",
+            story_id=story_id_for_item(item),
+        )
+
+
 @dataclass
 class Item:
     title: str  # display-faithful, as the publisher wrote it
@@ -93,6 +135,11 @@ class Item:
     # cached).
     is_newsletter: bool = False
     newsletter_sender: str = ""
+    # Private, non-URL identity for a newsletter story whose delivery link was
+    # removed. It is used only to derive story_id and is never rendered or
+    # written to a public archive.
+    newsletter_identity: str = ""
+    newsletter_discriminator: str = ""
 
     # Filled in downstream.
     echo_platforms: set[str] = field(default_factory=set)
@@ -101,12 +148,22 @@ class Item:
     # Alternate addresses for this same story, one dict per merged-away copy:
     # {"source_name": ..., "url": ...}. Grown only by dedup, bounded there.
     cluster: list[dict] = field(default_factory=list)
+    coverage_mentions: list[CoverageMention] = field(default_factory=list)
+    score_components_by_topic: dict[str, dict[str, float]] = field(default_factory=dict)
+    ranking_mode_by_topic: dict[str, str] = field(default_factory=dict)
+    ranking_key_by_topic: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.platform:
             self.platform = self.source_id
         if not self.echo_platforms and self.echo_eligible:
             self.echo_platforms = {self.platform}
+        if not self.coverage_mentions:
+            self.coverage_mentions = [CoverageMention.from_item(self)]
+
+    @property
+    def distinct_coverage_source_count(self) -> int:
+        return len({(m.source_kind, m.source_id) for m in self.coverage_mentions})
 
     def age_hours(self, now: datetime) -> float:
         return max(0.0, (now - self.published_at).total_seconds() / 3600.0)
@@ -220,6 +277,7 @@ class TierResult:
     ok: bool = True
     note: str = ""
     source_health: list[SourceHealth] = field(default_factory=list)
+    coverage_mentions: list[CoverageMention] = field(default_factory=list)
 
     @property
     def degraded(self) -> bool:

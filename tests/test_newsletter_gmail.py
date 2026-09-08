@@ -7,6 +7,8 @@ token above all, can be exercised deterministically.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 from datetime import datetime, timezone
 
@@ -24,11 +26,15 @@ from tests.test_newsletter_fixtures import (
 )
 
 WINDOW = datetime(2026, 8, 28, 6, 0, 0, tzinfo=timezone.utc)
+PROFILE_ADDRESS = " Fixture.Reader@Example.INVALID "
+PROFILE_DIGEST = hashlib.sha256(PROFILE_ADDRESS.strip().lower().encode("utf-8")).hexdigest()
 
 ENV = {
     "GMAIL_CLIENT_ID": "fixture-client-id.apps.googleusercontent.invalid",
     "GMAIL_CLIENT_SECRET": "fixture-client-secret",
     "GMAIL_REFRESH_TOKEN": "fixture-refresh-token",
+    "GMAIL_EXPECTED_PROFILE_SHA256": PROFILE_DIGEST,
+    "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY": "11" * 32,
 }
 
 
@@ -47,8 +53,11 @@ class FakeResponse:
 class FakeSession:
     """Answers by URL prefix and records what was asked, never why."""
 
-    def __init__(self, token=None, listing=None, messages=None, raise_on=None):
+    def __init__(self, token=None, profile=None, listing=None, messages=None, raise_on=None):
         self.token = token if token is not None else FakeResponse(200, {"access_token": "fixture-access"})
+        self.profile = profile if profile is not None else FakeResponse(
+            200, {"emailAddress": PROFILE_ADDRESS}
+        )
         self.listing = listing if listing is not None else FakeResponse(200, {"messages": []})
         self.messages = messages or {}
         self.raise_on = raise_on or ()
@@ -62,6 +71,8 @@ class FakeSession:
                 raise requests.ConnectionError("fixture connection failure")
         if url.startswith(gmail.TOKEN_URL):
             return self.token
+        if url == gmail.PROFILE_URL:
+            return self.profile
         if url.endswith("/messages"):
             return self.listing
         message_id = url.rsplit("/", 1)[-1]
@@ -69,6 +80,19 @@ class FakeSession:
 
     def close(self):
         self.closed = True
+
+
+class RedirectSession(FakeSession):
+    def __init__(self, status_code: int, redirect_stage: str):
+        super().__init__(
+            token=FakeResponse(status_code, {}) if redirect_stage == "oauth" else None,
+            profile=FakeResponse(status_code, {}) if redirect_stage == "gmail" else None,
+        )
+        self.request_kwargs = []
+
+    def request(self, method, url, timeout=None, **kwargs):
+        self.request_kwargs.append((url, kwargs))
+        return super().request(method, url, timeout=timeout, **kwargs)
 
 
 def raw_response(name: str) -> FakeResponse:
@@ -79,7 +103,7 @@ def raw_response(name: str) -> FakeResponse:
 # credentials and query
 # --------------------------------------------------------------------------
 
-def test_has_credentials_requires_all_three():
+def test_has_credentials_requires_all_oauth_values():
     assert gmail.has_credentials(ENV)
     for missing in gmail.REQUIRED_ENV:
         partial = dict(ENV)
@@ -95,6 +119,88 @@ def test_build_query_uses_an_epoch_and_the_sender_allowlist():
 
 def test_the_declared_scope_is_read_only():
     assert gmail.SCOPE == "https://www.googleapis.com/auth/gmail.readonly"
+
+
+def test_profile_guard_runs_after_token_and_before_message_listing():
+    session = FakeSession()
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
+    assert result.ok
+    assert [url for _method, url in session.calls[:3]] == [
+        gmail.TOKEN_URL,
+        gmail.PROFILE_URL,
+        f"{gmail.API_ROOT}/messages",
+    ]
+
+
+@pytest.mark.parametrize("status_code", [301, 302, 303, 307, 308])
+@pytest.mark.parametrize("redirect_stage", ["oauth", "gmail"])
+def test_oauth_and_gmail_redirects_fail_closed_without_forwarding_credentials(
+    status_code, redirect_stage
+):
+    session = RedirectSession(status_code, redirect_stage)
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
+
+    assert (result.ok, result.reason) == (False, gmail.API_ERROR)
+    assert all(kwargs.get("allow_redirects") is False for _url, kwargs in session.request_kwargs)
+    expected_calls = 1 if redirect_stage == "oauth" else 2
+    assert len(session.request_kwargs) == expected_calls
+    assert {url for url, _kwargs in session.request_kwargs} <= {gmail.TOKEN_URL, gmail.PROFILE_URL}
+    if redirect_stage == "gmail":
+        assert session.request_kwargs[-1][1]["headers"]["Authorization"] == "Bearer fixture-access"
+
+
+@pytest.mark.parametrize("expected", ["", "A" * 64, "0" * 63, "g" * 64])
+def test_missing_or_invalid_expected_profile_digest_fails_before_any_request(expected):
+    env = dict(ENV, GMAIL_EXPECTED_PROFILE_SHA256=expected)
+    session = FakeSession()
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=env, session=session)
+    assert (result.ok, result.reason) == (False, gmail.PROFILE_GUARD_INVALID)
+    assert session.calls == []
+
+
+def test_profile_mismatch_fails_before_listing_message_ids():
+    env = dict(
+        ENV,
+        GMAIL_EXPECTED_PROFILE_SHA256=hashlib.sha256(b"different@example.invalid").hexdigest(),
+    )
+    session = FakeSession()
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=env, session=session)
+    assert (result.ok, result.reason) == (False, gmail.PROFILE_MISMATCH)
+    assert [url for _method, url in session.calls] == [gmail.TOKEN_URL, gmail.PROFILE_URL]
+
+
+def test_profile_guard_result_and_logs_do_not_expose_protected_values(caplog):
+    raw_address = "PROFILE-SENTINEL@Example.INVALID"
+    expected = hashlib.sha256(b"different@example.invalid").hexdigest()
+    session = FakeSession(profile=FakeResponse(200, {"emailAddress": raw_address}))
+    with caplog.at_level(logging.DEBUG, logger="curator.newsletter.gmail"):
+        result = gmail.fetch(
+            ["tldrnewsletter.com"], WINDOW,
+            env=dict(ENV, GMAIL_EXPECTED_PROFILE_SHA256=expected),
+            session=session,
+        )
+    surface = repr(result) + "\n" + "\n".join(record.getMessage() for record in caplog.records)
+    assert result.reason == gmail.PROFILE_MISMATCH
+    assert raw_address not in surface
+    assert raw_address.lower() not in surface
+    assert expected not in surface
+    assert "fixture-access" not in surface
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        FakeResponse(200, {}),
+        FakeResponse(200, {"emailAddress": "   "}),
+        FakeResponse(200, ["not", "a", "profile"]),
+        FakeResponse(200, bad_json=True),
+    ],
+)
+def test_malformed_profile_fails_closed_before_listing_message_ids(profile):
+    session = FakeSession(profile=profile)
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
+    assert (result.ok, result.reason) == (False, gmail.PROFILE_INVALID)
+    assert [url for _method, url in session.calls] == [gmail.TOKEN_URL, gmail.PROFILE_URL]
 
 
 # --------------------------------------------------------------------------
@@ -169,6 +275,25 @@ def test_a_clean_full_batch_reports_itself_complete():
     )
     result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
     assert result.complete and not result.truncated and result.fetch_failures == 0
+
+
+def test_message_identity_is_keyed_before_it_leaves_the_gmail_adapter():
+    session = FakeSession(
+        listing=FakeResponse(200, {"messages": [{"id": "private-gmail-id"}]}),
+        messages={"private-gmail-id": raw_response("tldr")},
+    )
+    result = gmail.fetch(["tldrnewsletter.com"], WINDOW, env=ENV, session=session)
+
+    (message,) = result.messages
+    discriminator = getattr(message, "_news_curator_message_discriminator")
+    material = b"news-curator:gmail-message\0private-gmail-id"
+    assert discriminator == hmac.new(
+        bytes.fromhex(ENV["NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"]),
+        material,
+        hashlib.sha256,
+    ).hexdigest()
+    assert discriminator != hashlib.sha256(material).hexdigest()
+    assert "private-gmail-id" not in discriminator
 
 
 def test_more_mail_than_the_cap_is_reported_as_truncated():
@@ -303,6 +428,9 @@ def test_decode_raw_rejects_junk():
 # --------------------------------------------------------------------------
 
 FORBIDDEN_IN_LOGS = (
+    PROFILE_ADDRESS,
+    PROFILE_ADDRESS.strip(),
+    PROFILE_DIGEST,
     FAKE_READER,
     SENDERS["tldr"],
     SUBJECTS["tldr"],

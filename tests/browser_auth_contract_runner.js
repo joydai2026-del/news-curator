@@ -59,6 +59,12 @@ function preference(revision = 0) {
 
 function installBrowserMocks() {
   const storage = new Map();
+  const broadcasts = [];
+  global.BroadcastChannel = class {
+    constructor(name) { this.name = name; }
+    postMessage(value) { broadcasts.push({ name: this.name, value }); }
+    close() {}
+  };
   const metas = {
     'meta[name="supabase-url"]': "https://example.supabase.co",
     'meta[name="supabase-publishable-key"]': "sb_publishable_test",
@@ -79,7 +85,7 @@ function installBrowserMocks() {
   };
   const historyCalls = [];
   global.history = { replaceState: (...args) => historyCalls.push(args) };
-  return { assigned, historyCalls, metas, storage };
+  return { assigned, broadcasts, historyCalls, metas, storage };
 }
 
 function assertFailClosedFetch(call) {
@@ -138,6 +144,8 @@ async function main() {
   };
   const callback = new URL(`https://news.example/auth/callback/?code=auth-code&client_state=${state}`);
   assert.equal(await client.finishCallback(callback, lifecycleFetch), true);
+  assert.equal(browser.broadcasts[0].name, "news-curator.auth.v1");
+  assert.deepEqual(browser.broadcasts[0].value, { type: "session", session: projected });
   assert.deepEqual(browser.historyCalls[0], [null, "", "/auth/callback/"]);
   assert.equal(browser.storage.has("news-curator.auth.state"), false);
   assert.equal(browser.storage.has("news-curator.auth.verifier"), false);
@@ -282,6 +290,51 @@ async function main() {
   );
 
   browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
+  assert.equal(client.hasSessionCandidate(), true);
+  let releaseRefresh;
+  let readerRefreshCalls = 0;
+  const readerRefreshFetch = async (url, options) => {
+    readerRefreshCalls += 1;
+    assertFailClosedFetch({ url, options });
+    await new Promise((resolve) => { releaseRefresh = resolve; });
+    return response(200, refreshedSession(), url);
+  };
+  const readerSessionOne = client.readerSessionForRequest(readerRefreshFetch, now);
+  const readerSessionTwo = client.readerSessionForRequest(readerRefreshFetch, now);
+  await Promise.resolve();
+  releaseRefresh();
+  const [readerOne, readerTwo] = await Promise.all([readerSessionOne, readerSessionTwo]);
+  assert.equal(readerRefreshCalls, 1);
+  assert.equal(readerOne.access_token, refreshedProjection.access_token);
+  assert.deepEqual(readerTwo, readerOne);
+  assert.equal(
+    JSON.parse(browser.storage.get("news-curator.auth.session")).access_token,
+    refreshedProjection.access_token,
+  );
+
+  browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
+  await assert.rejects(
+    client.readerSessionForRequest(
+      async (url, options) => {
+        assertFailClosedFetch({ url, options });
+        return response(401, { error: "invalid_grant" }, url);
+      },
+      now,
+    ),
+    /Session refresh failed/,
+  );
+  assert.equal(browser.storage.has("news-curator.auth.session"), false);
+  assert.equal(client.hasSessionCandidate(), false);
+  let postFailureRefreshCalled = false;
+  assert.equal(
+    await client.readerSessionForRequest(async () => { postFailureRefreshCalled = true; }, now),
+    null,
+  );
+  assert.equal(postFailureRefreshCalled, false);
+  assert.equal(JSON.stringify([...browser.storage.values()]).includes(expired.access_token), false);
+  assert.equal(JSON.stringify([...browser.storage.values()]).includes(expired.refresh_token), false);
+
+  browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
   await assert.rejects(
     client.getPreferences(authConfig, expired, async (url) => response(401, { error: "invalid_grant" }, url)),
     /Session refresh failed/
@@ -389,22 +442,40 @@ async function main() {
   assert.equal(browser.storage.has("news-curator.auth.session"), false);
 
   browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
+  const failedLogoutCases = [
+    async (url) => response(500, { error: "unavailable" }, url),
+    async (url) => response(204, null, `${url}/moved`, { redirected: true }),
+    async () => { throw new TypeError("offline with sensitive detail"); },
+  ];
+  for (const failedLogout of failedLogoutCases) {
+    browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
+    const broadcastsBeforeFailedLogout = browser.broadcasts.length;
+    assert.equal(await client.signOut(failedLogout), false);
+    assert.equal(browser.storage.has("news-curator.auth.session"), false);
+    assert.equal(browser.broadcasts.length, broadcastsBeforeFailedLogout + 1);
+    assert.deepEqual(browser.broadcasts.at(-1), {
+      name: "news-curator.auth.v1",
+      value: { type: "logout" },
+    });
+    assert.equal(JSON.stringify(browser.broadcasts.at(-1)).includes(projected.access_token), false);
+    assert.equal(JSON.stringify(browser.broadcasts.at(-1)).includes(projected.refresh_token), false);
+  }
+
   const logoutCalls = [];
-  await client.signOut(async (url, options) => {
+  browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
+  assert.equal(await client.signOut(async (url, options) => {
     logoutCalls.push({ url, options });
     return response(204, null, url);
-  });
+  }), true);
   assert.equal(browser.storage.has("news-curator.auth.session"), false);
+  assert.deepEqual(browser.broadcasts.at(-1), {
+    name: "news-curator.auth.v1",
+    value: { type: "logout" },
+  });
+  assert.equal(JSON.stringify(browser.broadcasts.at(-1)).includes(projected.access_token), false);
+  assert.equal(JSON.stringify(browser.broadcasts.at(-1)).includes(projected.refresh_token), false);
   assert.equal(logoutCalls[0].options.headers.authorization, `Bearer ${projected.access_token}`);
   assertFailClosedFetch(logoutCalls[0]);
-
-  browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
-  await assert.rejects(
-    client.signOut(async (url) => response(204, null, `${url}/moved`, { redirected: true })),
-    /redirected unexpectedly/
-  );
-  assert.equal(browser.storage.has("news-curator.auth.session"), false);
-
   assert.throws(
     () => client.validatePreferenceInput({ ...update, saved_searches: [{ id: "x", query: "q", enabled: true, extra: 1 }] }),
     /preference input/

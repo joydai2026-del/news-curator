@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from html.parser import HTMLParser
+from pathlib import Path
 
 import re
 
+from curator.identity import story_id_for_item
 from curator.models import TierResult
 from curator.render import human_age, render_html, render_site
 from tests.conftest import make_item, make_newsletter_item
@@ -44,6 +47,22 @@ def card_with(html: str, needle: str) -> str:
     return matches[0]
 
 
+class AnchorParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchors: list[dict[str, str | None]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            self.anchors.append(dict(attrs))
+
+
+def anchors(html: str) -> list[dict[str, str | None]]:
+    parser = AnchorParser()
+    parser.feed(html)
+    return parser.anchors
+
+
 def render(ranked, results=None, now=None, *, fill_summaries=True, **kw):
     from tests.conftest import NOW
 
@@ -78,6 +97,51 @@ class TestContent:
     def test_empty_topic_says_so(self, now):
         assert "Nothing matched" in render({"T": []}, now=now)
 
+    def test_category_id_is_carried_separately_from_display_slug(self, now):
+        page = render(
+            {"Quantum Computing": [make_item("Quantum milestone")]},
+            now=now,
+            topic_ids_by_name={"Quantum Computing": "quantum"},
+        )
+        card = card_with(page, "Quantum milestone")
+        assert (
+            'data-filter="quantum-computing" data-topic-id="quantum"'
+            in page
+        )
+        assert (
+            'data-section="quantum-computing" data-topic-id="quantum"'
+            in page
+        )
+        assert 'data-topic-api-ids="quantum"' in card
+        assert (
+            'class="state-action interest-action" hidden disabled '
+            'data-topic-id="quantum"' in card
+        )
+
+    def test_every_generated_anchor_opens_a_safe_new_tab(self, now):
+        item = make_item("Real headline", "https://example.com/a")
+        item.cluster = [{"source_name": "Other source", "url": "https://other.example/a"}]
+        page = render(
+            {"T": [item]},
+            now=now,
+            repo_url="https://github.com/example/news-curator",
+        )
+
+        rendered_anchors = anchors(page)
+        assert rendered_anchors
+        for anchor in rendered_anchors:
+            assert anchor["target"] == "_blank"
+            rel = set((anchor["rel"] or "").split())
+            assert {"noopener", "noreferrer"} <= rel
+
+        publisher_anchors = [
+            anchor
+            for anchor in rendered_anchors
+            if anchor["href"] in {"https://example.com/a", "https://other.example/a"}
+        ]
+        assert len(publisher_anchors) == 2
+        assert all("nofollow" in set((anchor["rel"] or "").split()) for anchor in publisher_anchors)
+
     def test_no_topics_still_renders(self, now):
         html = render({}, now=now)
         assert "<html" in html and "</html>" in html
@@ -101,7 +165,7 @@ class TestContent:
     def test_the_page_loads_no_third_party_code(self, now):
         # The accordion edition loads no third-party code or media.
         html = render({"T": [make_item("a")]}, now=now)
-        for marker in ("<script src", "fonts.googleapis", "<link rel=\"stylesheet\""):
+        for marker in ('<script src="http', "fonts.googleapis", '<link rel="stylesheet" href="http'):
             assert marker not in html
 
     def test_schedule_wording_is_not_a_promise(self, now):
@@ -184,6 +248,12 @@ class TestRenderSite:
         path = render_site({"T": [make_item("a")]}, [], now, tmp_path)
         assert path.exists() and (tmp_path / ".nojekyll").exists()
         assert "<html" in path.read_text(encoding="utf-8")
+        assert (tmp_path / "reader.js").read_text(encoding="utf-8") == (
+            Path(__file__).resolve().parents[1] / "static/reader.js"
+        ).read_text(encoding="utf-8")
+        assert (tmp_path / "auth/client.js").read_text(encoding="utf-8") == (
+            Path(__file__).resolve().parents[1] / "static/auth/client.js"
+        ).read_text(encoding="utf-8")
 
     def test_leaves_no_temp_file_behind(self, tmp_path, now):
         render_site({"T": [make_item("a")]}, [], now, tmp_path)
@@ -546,12 +616,16 @@ class TestAccordionReadingCompanion:
     def test_expansion_has_summary_provenance_and_reason(self, now):
         item = make_item("A story", source_name="The Verge", description="Publisher summary.")
         item.matched_keywords = ["AI"]
+        item.score_components_by_topic["AI"] = {
+            "interest": 0.0, "recency": 1.0, "topic_fit": 0.6,
+            "source": 0.2, "coverage": 0.0, "final_score": 1.8,
+        }
         card = card_with(render({"AI": [item]}, now=now), "A story")
         assert '<div class="provenance" aria-label="Story provenance">' in card
         assert '<span class="provenance-chip">AI</span>' in card
         assert '<p class="full">Publisher summary.</p>' in card
         assert '<aside class="signal"><b>Why this appeared</b>' in card
-        assert "freshness" in card.casefold() and "topic" in card.casefold()
+        assert "Weighted using freshness, topic fit, source." in card
 
     def test_touch_targets_and_mobile_overflow_are_guarded(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
@@ -569,9 +643,9 @@ class TestAccordionReadingCompanion:
             "AI": [make_item("AI story", "https://example.com/ai")],
             "Crypto": [make_item("Crypto story", "https://example.com/crypto")],
         }, now=now)
-        assert '<section class="topic-section" data-section="ai">' in page
+        assert '<section class="topic-section" data-section="ai" data-topic-id="ai">' in page
         assert '<h2 class="section-title">AI</h2>' in page
-        assert '<section class="topic-section" data-section="crypto">' in page
+        assert '<section class="topic-section" data-section="crypto" data-topic-id="crypto">' in page
         assert '<h2 class="section-title">Crypto</h2>' in page
 
     def test_filtered_view_has_one_dynamic_topic_heading(self, now):
@@ -607,9 +681,49 @@ class TestAccordionReadingCompanion:
         assert "</button></h2>" in card
 
     def test_ranking_explanation_names_signals_without_overclaiming_causation(self, now):
-        page = render({"AI": [make_item("A story")]}, now=now)
-        assert "Visible signals include" in page
-        assert "Ranked #1 in AI from" not in page
+        item = make_item("A story")
+        item.score_components_by_topic["AI"] = {
+            "interest": 0.4, "recency": 0.9, "topic_fit": 0.3,
+            "source": 0.2, "coverage": 0.0, "final_score": 1.8,
+        }
+        page = render({"AI": [item]}, now=now)
+        assert "Weighted using freshness, topic fit, source." in page
+        assert "Preference match" not in page
+        assert "0.400" not in page
+        assert "Best rank" not in page
+
+    def test_ranking_explanation_matches_recomputed_components(self, now):
+        from curator.config import Category
+        from curator.rank import score_components
+
+        item = make_item("AI story", hours_ago=3)
+        item.matched_keywords = ["AI"]
+        topic = Category(name="AI", id="ai", keywords=["AI"])
+        components = score_components(item, topic, now, {}, interest_score=0.5)
+        item.score_components_by_topic["AI"] = components
+
+        page = render({"AI": [item]}, now=now)
+
+        assert "Weighted using freshness, topic fit, source." in page
+        assert f"{components['interest']:.3f}" not in page
+
+    def test_preference_explanation_names_the_real_sort_key_and_context(self, now):
+        item = make_item("Preferred story")
+        item.score_components_by_topic["AI"] = {
+            "interest": 0.4, "recency": 0.9, "topic_fit": 0.3,
+            "source": 0.2, "coverage": 0.0, "final_score": 1.8,
+        }
+        item.ranking_mode_by_topic["AI"] = "preference_then_freshness"
+        item.ranking_key_by_topic["AI"] = {
+            "preference_score": 0.5, "published_at": item.published_at.timestamp()
+        }
+
+        page = render({"AI": [item]}, now=now)
+
+        assert "Saved interests were considered first, then freshness." in page
+        assert "0.500" not in page
+        assert "Preference match" not in page
+        assert "Order: Weighted total" not in page
 
     def test_shared_story_labels_its_best_rank_instead_of_the_active_topic(self, now):
         shared = make_item("Shared story", "https://example.com/shared")
@@ -618,15 +732,15 @@ class TestAccordionReadingCompanion:
             render({"AI": [filler, shared], "Crypto": [shared]}, now=now),
             "Shared story",
         )
-        assert "Best rank #1 in Crypto" in card
+        assert "Best rank" not in card
+        assert "Score components were not supplied" in card
 
     def test_older_native_source_story_does_not_claim_freshness(self, now):
         item = make_item("Native story", hours_ago=30)
         item.native_categories = {"energy"}
         card = card_with(render({"Energy": [item]}, now=now), "Native story")
         reason = card[card.index("Why this appeared"):]
-        assert "coverage from a configured topic source" in reason
-        assert "freshness" not in reason.casefold()
+        assert "Score components were not supplied" in reason
 
     def test_missing_summary_never_reaches_searchable_story_content(self, now):
         page = render(
@@ -650,7 +764,7 @@ class TestAccordionReadingCompanion:
 
     def test_primary_controls_have_a_visible_keyboard_focus_style(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        assert ".profile-link:focus-visible,.accordion-toggle:focus-visible" in page
+        assert ".profile-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible" in page
 
     def test_footer_only_claims_personalization_when_a_profile_is_present(self, now):
         page = flat(render({"AI": [make_item("A story")]}, now=now))
@@ -661,17 +775,49 @@ class TestAccordionReadingCompanion:
         assert '<meta name="description" content="An hourly reading companion with grounded news summaries.">' in page
         assert '<meta name="description" content="A personalized' not in page
 
-    def test_future_milestone_controls_are_not_shown(self, now):
+    def test_synced_reading_controls_and_saved_filter_are_rendered(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        for label in (
-            "Ask AI",
-            "Save insight",
-            "More like this",
-            "Less like this",
-            "Already knew this",
-            "Surprise me",
-        ):
-            assert label not in page
+        assert (
+            'data-filter="__saved__" aria-pressed="false" hidden disabled>'
+            'Saved</button>'
+        ) in page
+        assert 'class="state-action read-action" hidden disabled' in page
+        assert '>Mark read</button>' in page
+        assert (
+            'class="state-action save-action" hidden disabled '
+            'aria-pressed="false">Save</button>' in page
+        )
+        assert 'class="state-action interest-action" hidden disabled' in page
+        assert 'aria-pressed="false">More like this</button>' in page
+        assert '>More like this</button>' in page
+        assert ".state-action[hidden]{display:none}" in page
+        assert 'id="load-more"' in page and '>Load more</button>' in page
+        assert 'Load 20 more' not in page
+        assert 'id="updates-status" role="status" aria-live="polite"' in page
+
+    def test_dynamic_cards_have_a_symmetric_view_index_lifecycle(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "function addCard(card)" in page
+        assert "function removeCard(card)" in page
+        assert "index.splice(position,1)" in page
+        assert "{addCard:addCard,removeCard:removeCard,apply:apply" in page
+
+    def test_card_exposes_canonical_story_and_topic_ids(self, now):
+        item = make_item("A story")
+        card = card_with(render({"AI News": [item]}, now=now), "A story")
+        assert f'data-story-id="{story_id_for_item(item)}"' in card
+        assert 'data-topic-ids="ai-news"' in card
+        assert 'data-topic-id="ai-news"' in card
+
+    def test_main_page_has_strict_csp_and_external_reader_assets(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "default-src 'none'" in page
+        assert "script-src 'self' 'sha256-" in page
+        assert "connect-src 'self';" in page
+        assert '<meta name="supabase-url" content="">' in page
+        assert '<meta name="supabase-publishable-key" content="">' in page
+        assert '<script src="auth/client.js" defer></script>' in page
+        assert '<script src="reader.js" defer></script>' in page
 
     def test_page_identifies_the_reading_companion(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
@@ -680,12 +826,27 @@ class TestAccordionReadingCompanion:
 
 
 class TestClusterLinks:
+    def test_fuzzy_merge_does_not_render_an_unsupported_source_count(self, now):
+        from curator.dedup import dedupe
+
+        keeper = make_item(
+            "AI systems ship today", "https://publisher.example/story",
+            source_id="publisher", source_name="Publisher", weight=2.0,
+        )
+        other = make_item(
+            "AI systems ship today!", "https://other.example/report",
+            source_id="other", source_name="Other Outlet",
+        )
+        card = card_with(render({"AI": dedupe([keeper, other])}, now=now), keeper.title)
+
+        assert "2 sources" not in card
+
     def test_merged_away_outlets_are_named_and_linked(self, now):
         item = make_item("A story")
         item.cluster = [{"source_name": "The Register", "url": "https://theregister.com/x"}]
         card = card_with(render({"T": [item]}, now=now), "A story")
         assert "<b>Also covered by</b>" in card
-        assert '<a href="https://theregister.com/x" rel="noopener noreferrer nofollow">The Register</a>' in card
+        assert '<a href="https://theregister.com/x" target="_blank" rel="noopener noreferrer nofollow">The Register</a>' in card
 
     def test_an_unsafe_cluster_url_never_becomes_a_link(self, now):
         # The deduper collected these from sources we do not control, so the
@@ -735,8 +896,8 @@ class TestCategoryTabs:
         html = render({"AI": [make_item("a", "https://e.com/1")],
                        "Crypto": [make_item("b", "https://e.com/2")]}, now=now)
         assert '<button class="chip" data-filter="__all__"' in html
-        assert 'data-filter="ai" aria-pressed="false">AI</button>' in html
-        assert 'data-filter="crypto" aria-pressed="false">Crypto</button>' in html
+        assert 'data-filter="ai" data-topic-id="ai" aria-pressed="false">AI</button>' in html
+        assert 'data-filter="crypto" data-topic-id="crypto" aria-pressed="false">Crypto</button>' in html
 
     def test_switching_a_tab_reorders_by_that_tabs_rank(self, now):
         html = render({"AI": [make_item("a")]}, now=now)
@@ -785,7 +946,7 @@ class TestNewsletterCards:
     def test_a_linkable_newsletter_story_still_links(self, now):
         item = make_newsletter_item("Linkable story", "https://publisher.com/story")
         card = card_with(render({"T": [item]}, now=now), "Linkable story")
-        assert '<a href="https://publisher.com/story" rel="noopener noreferrer nofollow">Read original</a>' in card
+        assert '<a href="https://publisher.com/story" target="_blank" rel="noopener noreferrer nofollow">Read original</a>' in card
 
     def test_a_newsletter_canonical_key_does_not_break_uniqueness(self, now):
         one = make_newsletter_item("Same story", "")

@@ -145,10 +145,8 @@ def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     """Fold `drop` into `keep`.
 
     `count_echo` is False for fuzzy merges, so a guess can never inflate the
-    corroboration badge. Category membership rides the same rule and for the
-    same reason: filing a story under a section because two headlines LOOKED
-    alike would put it there on a guess. Same link is certain; same-ish title is
-    not.
+    corroboration badge or copy named coverage mentions. Same link is certain;
+    same-ish title is not.
 
     An image is inherited either way. It is a picture, not a claim about the
     story, and taking the surviving row's own image first keeps the publisher's
@@ -165,6 +163,11 @@ def _merge(keep: Item, drop: Item, *, count_echo: bool) -> None:
     """
     if count_echo:
         keep.echo_platforms |= drop.echo_platforms
+        known_mentions = {mention.mention_id for mention in keep.coverage_mentions}
+        for mention in drop.coverage_mentions:
+            if mention.mention_id not in known_mentions:
+                keep.coverage_mentions.append(mention)
+                known_mentions.add(mention.mention_id)
     # Both passes. What the merged-away row leaves behind is its ADDRESS, which
     # is a fact either way, unlike the badge, which is a claim.
     _collect_cluster(keep, drop)

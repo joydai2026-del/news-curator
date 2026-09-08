@@ -38,8 +38,10 @@ Three properties the rest of the codebase depends on:
 Privacy, restated because this is where items are born: `image_url` is always
 empty (no og:image fetch, no image-cache entry, ever), `url` is either a
 sanitized publisher URL or the empty string, and the raw newsletter link never
-makes it into a record. The lane reports counts and adapter slugs. It never
-reports addresses or subjects.
+makes it into a record. Linkless identities use only a dedicated-key HMAC of
+the private delivery discriminator. The key and raw verifier stay inside the
+secret-bearing job. The lane reports counts and adapter slugs. It never reports
+addresses or subjects.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from dataclasses import dataclass, field, fields as dataclass_fields
 from datetime import datetime, timedelta, timezone
 from email.message import Message
@@ -56,6 +59,7 @@ from ..normalize import canonical_url, clean_title, fold_text
 from . import adapters as adapters_module
 from . import gmail as gmail_module
 from . import state as state_module
+from .identity import key_from_env, opaque_discriminator
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +70,7 @@ DEFAULT_OVERLAP_HOURS = 6.0
 
 DISABLED = "disabled"
 NO_ADAPTERS = "no_adapters_enabled"
+IDENTITY_KEY_MISSING = "identity_key_missing"
 
 
 @dataclass
@@ -96,6 +101,7 @@ class AdapterStatus:
 @dataclass
 class LaneResult:
     items: list = field(default_factory=list)
+    mentions: list[dict] = field(default_factory=list)
     status: dict[str, AdapterStatus] = field(default_factory=dict)
     ok: bool = True
     dark: bool = False
@@ -155,15 +161,19 @@ def enabled(env: dict | None = None, *, flag: bool = False, client=gmail_module)
 # item construction
 # --------------------------------------------------------------------------
 
-def _fallback_canonical(title: str) -> str:
+def linkless_story_canonical(
+    *, source_id: str, title: str, description: str, stable_discriminator: str = ""
+) -> str:
     """Identity for a story whose link had to be dropped.
 
-    Unsalted on purpose: it is derived from a public headline, it must stay
-    stable across runs so the story dedupes against itself, and it carries
-    nothing about the subscriber. The salted hash in the state file is a
-    different mechanism for a different job.
+    The opaque digest uses bounded public-safe fields plus an optional private
+    discriminator already reduced to a keyed HMAC digest. Publication time is
+    deliberately excluded so a date correction keeps the same story.
     """
-    digest = hashlib.sha256(fold_text(title).encode("utf-8")).hexdigest()[:16]
+    material = "\x1f".join(
+        (source_id, fold_text(title), fold_text(description), stable_discriminator)
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
     return f"newsletter:{digest}"
 
 
@@ -175,6 +185,7 @@ def build_record(
     adapter_id: str,
     display_name: str,
     published_at: datetime,
+    stable_discriminator: str = "",
 ) -> dict:
     """One newsletter story as a plain dict.
 
@@ -183,20 +194,50 @@ def build_record(
     (`image_url` empty, `url` sanitized-or-empty) live in ONE place.
     """
     clean = clean_title(title)
+    description = clean_title(blurb)[:adapters_module.MAX_BLURB_CHARS]
+    source_id = f"newsletter:{adapter_id}"
     safe = url or ""
-    canonical = (canonical_url(safe) if safe else None) or _fallback_canonical(clean)
+    canonical = (canonical_url(safe) if safe else None) or linkless_story_canonical(
+        source_id=source_id,
+        title=clean,
+        description=description,
+        stable_discriminator=stable_discriminator,
+    )
     return {
         "title": clean,
         "url": safe,
         "canonical_url": canonical,
-        "source_id": f"newsletter:{adapter_id}",
+        "source_id": source_id,
         "source_name": display_name,
         "platform": f"newsletter:{adapter_id}",
         "published_at": published_at,
-        "description": clean_title(blurb)[:adapters_module.MAX_BLURB_CHARS],
+        "description": description,
         "is_newsletter": True,
         "newsletter_sender": display_name,
+        "newsletter_discriminator": stable_discriminator,
         "image_url": "",  # PRIVACY RULE: newsletter items never carry an image
+    }
+
+
+def build_mention(record: dict) -> dict:
+    """Project one parsed row into the exact public-safe coverage shape."""
+
+    from ..identity import coverage_mention_id
+
+    published_at = record["published_at"]
+    return {
+        "mention_id": coverage_mention_id(
+            source_kind="newsletter", source_id=str(record["source_id"]),
+            mentioned_at=published_at, url=str(record["canonical_url"]),
+            headline=str(record["title"]),
+        ),
+        "source_kind": "newsletter",
+        "source_id": record["source_id"],
+        "source_name": record["newsletter_sender"],
+        "url": record["url"],
+        "headline": record["title"],
+        "canonical_url": record["canonical_url"],
+        "mentioned_at": published_at,
     }
 
 
@@ -235,6 +276,11 @@ def to_items(records: list[dict]) -> list:
                 description=record["description"],
                 is_newsletter=True,
                 newsletter_sender=record["newsletter_sender"],
+                newsletter_identity=(
+                    record["canonical_url"]
+                    if str(record["canonical_url"]).startswith("newsletter:") else ""
+                ),
+                newsletter_discriminator=str(record.get("newsletter_discriminator") or ""),
             )
         )
     return out
@@ -301,6 +347,7 @@ def fetch(
     """
     cfg = dict(cfg or {})
     source_env = os.environ if env is None else env
+    identity_key = key_from_env(source_env)
     want = bool(cfg.get("enabled", False)) if flag is None else bool(flag)
 
     if not want:
@@ -350,8 +397,12 @@ def fetch(
 
     cutoff = now - timedelta(hours=max_age_hours)
     already = state.seen
+    legacy = state.legacy_seen
+    migrated_hashes: list[str] = []
     seen_now: set[str] = set()
+    seen_mention_ids: set[str] = set()
     records: list[dict] = []
+    mentions: list[dict] = []
     unmatched = 0
     unauthenticated = 0
     unauthenticated_missing = 0
@@ -386,27 +437,59 @@ def fetch(
         entry = status[adapter.id]
         entry.seen += 1
 
-        parsed = adapter.extract(msg)
+        parsed = adapter.extract(msg, identity_key=identity_key)
         entry.extracted += parsed.report.stories_found
         entry.dropped_links += parsed.report.links_dropped
 
         if sent < cutoff:
             continue
-        for story in parsed.stories:
-            digest = state.story_hash(story.title, story.url)
+        message_discriminator = str(
+            getattr(msg, "_news_curator_message_discriminator", "") or ""
+        )
+        for story_index, story in enumerate(parsed.stories):
+            stable_discriminator = ""
+            if re.fullmatch(r"[0-9a-f]{64}", story.private_discriminator):
+                stable_discriminator = story.private_discriminator
+            elif (
+                identity_key is not None
+                and re.fullmatch(r"[0-9a-f]{64}", message_discriminator)
+            ):
+                stable_discriminator = opaque_discriminator(
+                    identity_key,
+                    "newsletter-message-story",
+                    f"{message_discriminator}\x1f{story_index}",
+                )
+            if not story.url and not stable_discriminator:
+                return LaneResult(
+                    items=[], status=status, ok=False, dark=True,
+                    reason=IDENTITY_KEY_MISSING, watermark=state.watermark,
+                )
+            record = build_record(
+                title=story.title,
+                url=story.url,
+                blurb=story.blurb,
+                adapter_id=adapter.id,
+                display_name=adapter.name,
+                published_at=sent,
+                stable_discriminator=stable_discriminator,
+            )
+            mention = build_mention(record)
+            if mention["mention_id"] not in seen_mention_ids:
+                mentions.append(mention)
+                seen_mention_ids.add(mention["mention_id"])
+            digest = state.story_identity_hash(record["canonical_url"])
             if digest in already or digest in seen_now:
                 continue
+            legacy_digest = state.story_hash(story.title, story.url)
+            # Version 1 gets one complete migration pass. After that, the old
+            # title hash remains safe only when a public publisher URL made it
+            # collision-resistant; linkless stories use their v2 identity.
+            if (state.transitioning or record["url"]) and legacy_digest in legacy:
+                migrated_hashes.append(digest)
+                seen_now.add(digest)
+                continue
             seen_now.add(digest)
-            records.append(
-                build_record(
-                    title=story.title,
-                    url=story.url,
-                    blurb=story.blurb,
-                    adapter_id=adapter.id,
-                    display_name=adapter.name,
-                    published_at=sent,
-                )
-            )
+            records.append(record)
 
     records = fair_cap(records, max(0, max_items))
     for record in records:
@@ -418,7 +501,9 @@ def fetch(
     # overlap usually gives and the retention window eventually takes away.
     # That is a bounded loss of a STORY, and it is a different thing from
     # losing a MESSAGE, which is what the watermark below is about.
-    published_hashes = [state.story_hash(r["title"], r["url"]) for r in records]
+    published_hashes = migrated_hashes + [
+        state.story_identity_hash(r["canonical_url"]) for r in records
+    ]
 
     # The cursor. Two cases, and the difference between them is the whole
     # no-skip contract:
@@ -471,6 +556,7 @@ def fetch(
 
     return LaneResult(
         items=to_items(records),
+        mentions=mentions,
         status=status,
         ok=True,
         dark=False,

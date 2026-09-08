@@ -130,7 +130,8 @@ def test_local_supabase_enforces_owner_rls_and_column_grants() -> None:
         status, _ = supabase.rest(
             owner,
             "PATCH",
-            "/rest/v1/user_preferences",
+            "/rest/v1/user_preferences?user_id=eq."
+            + urllib.parse.quote(owner.user_id, safe=""),
             body={"revision": 99},
             prefer="return=representation",
         )

@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,11 +27,13 @@ from .config import Category, Config, ConfigError, RssSource, load_config
 from .dedup import dedupe
 from .filter import assign_categories
 from .images import ImageCache, enrich
-from .models import Item, TierResult
+from .identity import story_id_for_item
+from .models import CoverageMention, Item, TierResult
+from .newsletter.lane import linkless_story_canonical
 from .newsletter.sanitize import sanitize as sanitize_newsletter_url
 from .normalize import canonical_url as normalize_canonical_url
 from .normalize import fold_text
-from .rank import rank_items
+from .rank import has_effective_interest_scores, rank_items, score_components
 from .render import render_site
 from .summaries import (
     SUMMARY_CACHE_FILE,
@@ -49,13 +52,6 @@ IMAGE_CACHE_FILE = "image_cache.json"
 # lane stamps on its items, so it can never be empty while the lane is lit.
 NEWSLETTER_CATEGORY_ID = "newsletters"
 NEWSLETTER_CATEGORY_NAME = "Newsletters"
-
-
-def _newsletter_fallback_canonical(title: str) -> str:
-    """Generate a non-link identity without trusting an artifact value."""
-
-    digest = hashlib.sha256(fold_text(title).encode("utf-8")).hexdigest()[:16]
-    return f"newsletter:{digest}"
 
 
 def _feed_source_row(source: RssSource, cfg: Config) -> dict:
@@ -213,7 +209,8 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
     items: list[Item] = []
-    for record in raw.get("items", []):
+    records = raw.get("display_candidates", raw.get("items", []))
+    for record in records:
         try:
             published = datetime.fromisoformat(record["published_at"])
         except (KeyError, ValueError):
@@ -225,7 +222,20 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
         # URL becomes an unlinked headline, while a bad or missing canonical
         # value can be safely rebuilt from a valid display URL. If neither is
         # safe, a recomputed opaque key supports dedup but is never published.
-        title = str(record.get("title") or "")
+        title = fold_text(str(record.get("title") or ""))
+        source_id = str(record.get("source_id") or "newsletter")
+        description = fold_text(str(record.get("description") or ""))
+        if (
+            not title
+            or len(title) > 2_000
+            or not source_id.startswith("newsletter:")
+            or len(source_id) > 512
+            or len(description) > 8_000
+        ):
+            continue
+        discriminator = str(record.get("newsletter_discriminator") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", discriminator):
+            discriminator = ""
         article_url = sanitize_newsletter_url(str(record.get("url") or "")) or ""
         artifact_canonical_url = sanitize_newsletter_url(
             str(record.get("canonical_url") or "")
@@ -236,25 +246,87 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
             # An unlinked newsletter story still needs a stable internal key
             # for dedup. Recompute it from public title text rather than
             # accepting an artifact-provided non-HTTP scheme.
-            or _newsletter_fallback_canonical(title)
+            or linkless_story_canonical(
+                source_id=source_id,
+                title=title,
+                description=description,
+                stable_discriminator=discriminator,
+            )
+        )
+        private_identity = (
+            article_canonical_url
+            if article_canonical_url.startswith("newsletter:") else ""
         )
         items.append(
             Item(
                 title=title,
                 url=article_url,
                 canonical_url=article_canonical_url,
-                source_id=str(record.get("source_id") or "newsletter"),
+                source_id=source_id,
                 source_name=str(record.get("source_name") or "Newsletter"),
                 platform=str(record.get("platform") or "newsletter"),
                 published_at=published,
-                description=str(record.get("description") or ""),
+                description=description,
                 is_newsletter=True,
                 is_aggregator=True,
                 newsletter_sender=str(record.get("newsletter_sender") or ""),
+                newsletter_identity=private_identity,
+                newsletter_discriminator=discriminator,
                 image_url="",  # PRIVACY RULE: never an image, whatever the artifact says
                 native_categories={NEWSLETTER_CATEGORY_ID},
             )
         )
+
+    mentions: list[CoverageMention] = []
+    mention_ids: set[str] = set()
+    for record in raw.get("mentions", []):
+        if not isinstance(record, dict):
+            continue
+        mention_id = str(record.get("mention_id") or "")
+        source_id = str(record.get("source_id") or "")
+        source_name = str(record.get("source_name") or "")
+        if (
+            not re.fullmatch(r"mention:[0-9a-f]{64}", mention_id)
+            or mention_id in mention_ids
+            or record.get("source_kind") != "newsletter"
+            or not source_id.startswith("newsletter:")
+            or not source_name
+            or len(source_name) > 200
+        ):
+            continue
+        try:
+            mentioned_at = datetime.fromisoformat(str(record.get("mentioned_at") or ""))
+        except ValueError:
+            continue
+        if mentioned_at.tzinfo is None:
+            continue
+        url = sanitize_newsletter_url(str(record.get("url") or "")) or ""
+        canonical = normalize_canonical_url(url) if url else None
+        supplied = sanitize_newsletter_url(str(record.get("canonical_url") or "")) or ""
+        canonical = normalize_canonical_url(supplied) or canonical
+        if not canonical:
+            continue
+        headline = fold_text(str(record.get("headline") or ""))
+        if not headline or len(headline) > 2_000:
+            continue
+        mention = CoverageMention(
+            mention_id=mention_id,
+            source_kind="newsletter",
+            source_id=source_id,
+            source_name=source_name,
+            url=url,
+            headline=headline,
+            mentioned_at=mentioned_at,
+            canonical_url=canonical,
+            story_id="story:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        )
+        mentions.append(mention)
+        mention_ids.add(mention_id)
+        for item in items:
+            if story_id_for_item(item) == mention.story_id and all(
+                current.mention_id != mention_id for current in item.coverage_mentions
+            ):
+                item.coverage_mentions.append(mention)
 
     dark = bool(raw.get("dark", True))
     ok = bool(raw.get("ok", False)) and not dark
@@ -289,13 +361,20 @@ def load_newsletter_artifact(path: Path) -> tuple[list[Item], TierResult, dict]:
     if rejected:
         bits.append(f"{rejected} messages failed sender authentication")
     note = str(raw.get("note") or "") if dark else "; ".join(bits)
-    tier = TierResult(tier="newsletters", items=items, ok=ok, note=note)
+    tier = TierResult(
+        tier="newsletters",
+        items=items,
+        ok=ok,
+        note=note,
+        coverage_mentions=mentions,
+    )
 
     meta = {
         "dark": dark,
         "ok": bool(raw.get("ok", False)),
         "watermark": raw.get("watermark"),
         "hashes": list(raw.get("hashes") or []),
+        "mentions": mentions,
     }
     return items, tier, meta
 
@@ -367,6 +446,34 @@ def build_ranked_language(
     newsletter_cap = int(cfg.newsletter.get("max_items", 50) or 50)
     ranked: dict[str, list[Item]] = {}
     for category in categories:
+        preference_mode = has_effective_interest_scores(
+            buckets[category.name], interest_scores
+        )
+        for item in buckets[category.name]:
+            preference_score = float((interest_scores or {}).get(story_id_for_item(item), 0.0))
+            components = score_components(
+                item,
+                category,
+                now,
+                cfg.ranking,
+                interest_score=preference_score,
+            )
+            item.score_components_by_topic[category.name] = components
+            if preference_mode:
+                item.ranking_mode_by_topic[category.name] = "preference_then_freshness"
+                item.ranking_key_by_topic[category.name] = {
+                    "preference_score": preference_score,
+                    "published_at": item.published_at.timestamp(),
+                }
+            elif category.id == "trending" and item.native_rank is not None:
+                item.ranking_mode_by_topic[category.name] = "native_rank_then_freshness"
+                item.ranking_key_by_topic[category.name] = {
+                    "native_rank": float(item.native_rank),
+                    "published_at": item.published_at.timestamp(),
+                }
+            else:
+                item.ranking_mode_by_topic[category.name] = "weighted_total"
+                item.ranking_key_by_topic[category.name] = {"weighted_total": components["final_score"]}
         items = rank_items(
             buckets[category.name],
             category,
@@ -511,6 +618,14 @@ def main(argv: list[str] | None = None) -> int:
         help="write safe structured per-source freshness JSON",
     )
     parser.add_argument(
+        "--archive-candidate",
+        type=Path,
+        default=None,
+        help="write the bounded post-deploy archive payload from rendered rows",
+    )
+    parser.add_argument("--build-nonce", default=None, help="unique publication build id")
+    parser.add_argument("--commit-sha", default=None, help="source commit for the publication")
+    parser.add_argument(
         "--allow-empty",
         action="store_true",
         help="write the page even if no story matched (used by the render smoke test)",
@@ -558,7 +673,25 @@ def main(argv: list[str] | None = None) -> int:
     else:
         results = collect(cfg, offline=args.offline)
 
-    interest_scores: Mapping[str, float] = {}
+    # Reconstruct the privacy-sanitized newsletter rows before validating the
+    # private score artifact. The score producer and renderer must agree on the
+    # exact story-id set and newsletter input digest.
+    newsletter_meta: dict = {"dark": True, "ok": False}
+    newsletter_items: list[Item] = []
+    if args.newsletter_artifact and args.newsletter_artifact.is_file():
+        try:
+            newsletter_items, nl_tier, newsletter_meta = load_newsletter_artifact(
+                args.newsletter_artifact
+            )
+        except (ValueError, OSError):
+            log.warning("newsletter artifact unreadable; lane dark this run")
+        else:
+            results.append(nl_tier)
+            log.info("newsletter lane: %d items (%s)", len(newsletter_items), nl_tier.note or "ok")
+    elif args.newsletter_artifact:
+        log.warning("newsletter artifact %s missing; lane dark this run", args.newsletter_artifact)
+
+    interest_scores: Mapping[str, float] | None = None
     interest_meta = None
     if args.interest_ranking_artifact:
         if snapshot is None or snapshot_configuration_digest is None:
@@ -568,40 +701,32 @@ def main(argv: list[str] | None = None) -> int:
             InterestArtifactError,
             load_interest_artifact,
             ranking_config_digest,
+            newsletter_input_digest,
             story_key,
         )
 
+        ranking_newsletter_items = (
+            newsletter_items if not newsletter_meta.get("dark", True) else []
+        )
         allowed_story_keys = {
             story_key(item)
-            for result in snapshot.results
-            for item in result.items
+            for item in [
+                *(item for result in snapshot.results for item in result.items),
+                *ranking_newsletter_items,
+            ]
         }
         try:
             interest_meta = load_interest_artifact(
                 args.interest_ranking_artifact,
                 expected_source_snapshot_digest=snapshot.content_digest,
                 expected_configuration_digest=ranking_config_digest(cfg),
+                expected_newsletter_digest=newsletter_input_digest(ranking_newsletter_items),
                 allowed_story_keys=allowed_story_keys,
             )
         except InterestArtifactError:
             log.error("saved-interest ranking artifact invalid; refusing an unpersonalized build")
             return 2
         interest_scores = interest_meta.scores
-
-    # The newsletter lane arrives pre-fetched as an artifact from its own
-    # secrets-scoped job. A missing or unreadable artifact is a dark lane and
-    # a note in the log, never a failed build of the six healthy tabs.
-    newsletter_meta: dict = {"dark": True, "ok": False}
-    if args.newsletter_artifact and args.newsletter_artifact.is_file():
-        try:
-            nl_items, nl_tier, newsletter_meta = load_newsletter_artifact(args.newsletter_artifact)
-        except (ValueError, OSError):
-            log.warning("newsletter artifact unreadable; lane dark this run")
-        else:
-            results.append(nl_tier)
-            log.info("newsletter lane: %d items (%s)", len(nl_items), nl_tier.note or "ok")
-    elif args.newsletter_artifact:
-        log.warning("newsletter artifact %s missing; lane dark this run", args.newsletter_artifact)
 
     if args.health_report:
         from .health import write_report
@@ -651,7 +776,6 @@ def main(argv: list[str] | None = None) -> int:
     originals = _ranked_originals(ranked, ranked_zh)
     translation_input_digests: dict[tuple[str, str], str] = {}
     if args.translation_artifact:
-        from .localization import story_id_for_item
         from .translation import TranslationInput
 
         for item in originals:
@@ -827,6 +951,7 @@ def main(argv: list[str] | None = None) -> int:
         timezone_name=cfg.display_timezone,
         cname_source=args.root / "CNAME",
         require_summaries=summary_policy_enabled,
+        topic_ids_by_name={category.name: category.id for category in en_categories},
     )
     log.info(
         "wrote %s (%d rows across %d topics)",
@@ -834,6 +959,27 @@ def main(argv: list[str] | None = None) -> int:
         rendered_visible,
         len(rendered_ranked),
     )
+
+    if args.archive_candidate:
+        if not args.build_nonce or not args.commit_sha:
+            log.error("--archive-candidate requires --build-nonce and --commit-sha")
+            return 2
+        from .archive_candidate import build_archive_candidate, write_archive_candidate
+
+        candidate = build_archive_candidate(
+            rendered_ranked,
+            categories=cfg.categories,
+            ranking=cfg.ranking,
+            now=now,
+            build_nonce=args.build_nonce,
+            commit_sha=args.commit_sha,
+            site_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            require_summaries=summary_policy_enabled,
+            interest_scores=interest_scores,
+            coverage_mentions=[mention for result in results for mention in result.coverage_mentions],
+        )
+        write_archive_candidate(args.archive_candidate, candidate)
+        log.info("wrote archive candidate to %s", args.archive_candidate)
 
     # The cursor moves ONLY here, after the page is on disk and the publish
     # guard passed. A run that fetched mail and then died re-reads that mail

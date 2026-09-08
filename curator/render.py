@@ -4,8 +4,8 @@ Design intent (M1 Reading Companion): headline-only accordion rows. A headline
 is the entire collapsed surface. Opening it reveals the source-provided summary,
 provenance, a deterministic explanation of why it appeared, and the original
 link. The page uses the approved warm-paper visual direction, remains useful on
-a phone, and does not pretend that future Ask, Save, feedback, or lane controls
-already work.
+a phone, and exposes authenticated reading controls through the external reader
+client while retaining a useful signed-out edition.
 
 Four corrections from review are load-bearing here, and three of them predate
 this layout:
@@ -49,6 +49,8 @@ reader's browser to fetch that address.
 from __future__ import annotations
 
 import html
+import base64
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +58,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from .models import Item, TierResult
+from .identity import story_id_for_item
 from .normalize import safe_url
 
 CSS = """
@@ -268,7 +271,7 @@ body{overflow-x:hidden;background:
 .profile-slot{min-height:44px;display:flex;align-items:center}
 .profile-link{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);border-radius:999px;padding:.5rem .9rem;color:var(--accent);font-size:.78rem;font-weight:650;text-decoration:none;background:var(--card)}
 .profile-link:hover{background:var(--accent-soft)}
-.profile-link:focus-visible,.accordion-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.profile-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible,.load-more:focus-visible,.updates-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .intro{border:1px solid var(--line);background:color-mix(in srgb,var(--card) 92%,transparent);border-radius:1.5rem;padding:1.75rem 1.9rem;box-shadow:var(--shadow)}
 .intro .eyebrow{font-size:.625rem;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
 .intro h1{margin:.5rem 0 .45rem;font:600 clamp(2rem,4vw,3rem)/1.04 var(--serif);letter-spacing:-.04em;max-width:16ch}
@@ -297,6 +300,8 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .card+.card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
 .card:hover,.card.open{border-color:transparent;transform:none;box-shadow:none}
 .card[hidden]{display:none}
+.card.is-read .headline{color:var(--faint);font-weight:500}
+.card.is-read{background:color-mix(in srgb,var(--line) 16%,transparent)}
 .story-heading{margin:0;font:inherit}
 .accordion-toggle{width:100%;min-height:58px;border:0;background:transparent;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:.65rem;align-items:center;padding:1.05rem 1.15rem;cursor:pointer}
 .accordion-toggle:hover{background:color-mix(in srgb,var(--accent-soft) 38%,transparent)}
@@ -315,8 +320,16 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .signal{border:1px solid var(--line);background:var(--card);border-radius:.8rem;padding:.75rem}
 .signal b{display:block;font-size:.625rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.25rem}
 .signal span{display:block;font-size:.72rem;line-height:1.45;color:var(--muted)}
-.acts{margin-top:1rem}
+.acts{margin-top:1rem;display:flex;flex-wrap:wrap;gap:.5rem}
 .acts a,.acts button{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:.5rem .9rem;color:var(--accent);background:var(--card);font-size:.78rem;font-weight:650}
+.state-action[hidden]{display:none}
+.state-action,.load-more,.updates-button{border:1px solid var(--line);cursor:pointer}
+.state-action[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.reader-status{min-height:1.5rem;color:var(--muted);font-size:.78rem}
+.updates-status{position:sticky;top:5.2rem;z-index:29;text-align:center;margin:.5rem 0}
+.updates-button{min-height:44px;border-radius:999px;padding:.55rem 1rem;background:var(--accent);color:var(--accent-fg);font-weight:700}
+.history-tools{display:flex;justify-content:center;margin:1.25rem 0}
+.load-more{min-height:44px;border-radius:999px;padding:.65rem 1rem;background:var(--card);color:var(--accent);font-weight:700}
 .empty{margin:1.5rem 0}
 footer{margin-top:2rem;padding:1.25rem .25rem 0}
 .shot,.pad>.eyebrow,.hl,.desc,.meta{display:none!important}
@@ -380,7 +393,8 @@ JS = """
     var attr=(tab==='__all__')?'data-rank-all':'data-rank-'+tab;
     var shown=0;
     index.forEach(function(e){
-      var on=(tab==='__all__'||e.topics.indexOf(' '+tab+' ')>=0)&&(!q||e.text.indexOf(q)>=0);
+      var belongs=tab==='__all__'||(tab==='__saved__'&&e.el.classList.contains('is-saved'))||e.topics.indexOf(' '+tab+' ')>=0;
+      var on=belongs&&(!q||e.text.indexOf(q)>=0);
       e.el.hidden=!on;
       if(on){
         // CSS order does the per-tab reordering. One DOM node per story, exact
@@ -415,6 +429,21 @@ JS = """
     apply();
   }
 
+  function addCard(card){
+    if(!card){return;}
+    var h=card.querySelector('.headline'), d=card.querySelector('.full');
+    var entry=index.find(function(e){return e.el===card;});
+    if(!entry){entry={el:card};index.push(entry);}
+    entry.topics=' '+(card.getAttribute('data-topics')||'')+' ';
+    entry.text=((h?h.textContent:'')+' '+(d?d.textContent:'')).toLowerCase();
+    apply();
+  }
+
+  function removeCard(card){
+    var position=index.findIndex(function(e){return e.el===card;});
+    if(position>=0){index.splice(position,1);}
+  }
+
   chips.forEach(function(c){c.addEventListener('click',function(){setTab(c.dataset.filter);});});
   if(box){box.addEventListener('input',apply);}
 
@@ -437,6 +466,7 @@ JS = """
   var saved='__all__';
   try{saved=localStorage.getItem('nc-tab')||'__all__';}catch(e){}
   setTab(chips.some(function(c){return c.dataset.filter===saved;})?saved:'__all__');
+  window.NewsCuratorView=Object.freeze({addCard:addCard,removeCard:removeCard,apply:apply,currentTab:function(){return tab;}});
 
   // Staleness is a property of WHEN YOU LOOK, so it is measured here rather
   // than baked in at build time (where it would always read as zero).
@@ -588,7 +618,12 @@ def _collect_cards(ranked: dict[str, list[Item]]) -> tuple[list[_Card], dict[str
         for position, item in enumerate(items):
             key = item.canonical_url or item.url
             if not key:
-                continue
+                if not item.is_newsletter:
+                    continue
+                # The newsletter privacy gate may remove both public URLs.
+                # Keep those rows addressable internally without restoring a
+                # tracking URL or weakening the article-link requirement.
+                key = f"story-id:{story_id_for_item(item)}"
             card = cards.get(key)
             if card is None:
                 card = _Card(item=item, image=item.image_url, description=item.description)
@@ -602,12 +637,28 @@ def _collect_cards(ranked: dict[str, list[Item]]) -> tuple[list[_Card], dict[str
             # picture or a summary supplies it for all of them.
             card.image = card.image or item.image_url
             card.description = card.description or item.description
+            card.item.score_components_by_topic.update(item.score_components_by_topic)
+            card.item.ranking_mode_by_topic.update(item.ranking_mode_by_topic)
+            card.item.ranking_key_by_topic.update(item.ranking_key_by_topic)
             for keyword in item.matched_keywords:
                 if keyword not in card.keywords:
                     card.keywords.append(keyword)
 
     order.sort(key=lambda c: (c.best[0], -c.item.published_at.timestamp(), c.item.title))
     return order, names
+
+
+def publishable_cards(
+    ranked: dict[str, list[Item]], *, require_summaries: bool = True
+) -> list[_Card]:
+    """Return exactly the story cards the public renderer is allowed to emit."""
+    cards, _names = _collect_cards(ranked)
+    return [
+        card
+        for card in cards
+        if (safe_url(card.item.url) is not None or card.item.is_newsletter)
+        and (not require_summaries or bool(card.description))
+    ]
 
 
 def _cluster_links(card: _Card) -> str:
@@ -638,7 +689,8 @@ def _cluster_links(card: _Card) -> str:
             continue
         name = str(entry.get("source_name") or "") or (urlsplit(href).hostname or "the source")
         links.append(
-            f'<a href="{_e(href)}" rel="noopener noreferrer nofollow">{_e(name)}</a>'
+            f'<a href="{_e(href)}" target="_blank" '
+            f'rel="noopener noreferrer nofollow">{_e(name)}</a>'
         )
     if not links:
         return ""
@@ -646,34 +698,16 @@ def _cluster_links(card: _Card) -> str:
 
 
 def _why_this_appeared(card: _Card, now: datetime) -> str:
-    """Explain the deterministic signals visible to this renderer.
+    """Explain only the exact weighted score components used for this topic."""
+    _ = now
+    components = card.item.score_components_by_topic.get(card.label)
+    if not components:
+        return "Score components were not supplied for this precomputed row."
+    mode = card.item.ranking_mode_by_topic.get(card.label, "weighted_total")
+    from .rank import public_ranking_explanation
 
-    The renderer does not receive private preference values or raw scores, so
-    it names only evidence it can prove from the ranked item. The published
-    order still reflects saved-interest ranking when the build supplies it.
-    """
-    rank, _slug_key = card.best
-    signals: list[str] = []
-    if card.keywords:
-        signals.append("topic fit")
-    if card.item.age_hours(now) <= 24:
-        signals.append("freshness")
-    source_count = len(card.item.echo_platforms)
-    if source_count > 1:
-        signals.append(f"coverage from {source_count} sources")
-    if card.item.is_newsletter:
-        signals.append("newsletter coverage")
-    elif card.item.is_aggregator:
-        signals.append(f"a discovery signal from {card.item.source_name}")
-    elif card.item.native_categories:
-        signals.append("coverage from a configured topic source")
-    if not signals:
-        signals.append("topic ranking")
-    if len(signals) == 1:
-        reason = signals[0]
-    else:
-        reason = ", ".join(signals[:-1]) + f", and {signals[-1]}"
-    return f"Best rank #{rank + 1} in {card.label}. Visible signals include {reason}."
+    public_components = {key: value for key, value in components.items() if key != "interest"}
+    return public_ranking_explanation(mode, public_components)
 
 
 def _render_card(
@@ -684,6 +718,7 @@ def _render_card(
     all_rank: int,
     timezone_name: str = DISPLAY_TIMEZONE,
     require_summary: bool = True,
+    topic_ids_by_slug: dict[str, str] | None = None,
 ) -> str | None:
     """One story as one headline-first accordion row.
 
@@ -739,13 +774,25 @@ def _render_card(
     acts = []
     if href:
         acts.append(
-            f'<a href="{_e(href)}" rel="noopener noreferrer nofollow">Read original</a>'
+            f'<a href="{_e(href)}" target="_blank" '
+            'rel="noopener noreferrer nofollow">Read original</a>'
         )
     else:
         rows.append(
             '<div class="row"><b>No link</b><span>This item arrived with a link we could '
             "not clean of subscriber identifiers, so it is shown without one.</span></div>"
         )
+    acts.extend(
+        (
+            '<button type="button" class="state-action read-action" hidden disabled>Mark read</button>',
+            '<button type="button" class="state-action save-action" hidden disabled '
+            'aria-pressed="false">Save</button>',
+            f'<button type="button" class="state-action interest-action" '
+            'hidden disabled '
+            f'data-topic-id="{_e((topic_ids_by_slug or {}).get(card.best[1], card.best[1]))}" '
+            'aria-pressed="false">More like this</button>',
+        )
+    )
     acts.append('<button type="button" class="shut">Close</button>')
     provenance = [
         f'<span class="provenance-chip">{_e(card.label)}</span>',
@@ -765,6 +812,10 @@ def _render_card(
     )
 
     topics = " ".join(sorted(card.ranks, key=lambda s: card.ranks[s]))
+    api_topics = " ".join(
+        (topic_ids_by_slug or {}).get(slug, slug)
+        for slug in sorted(card.ranks, key=lambda s: card.ranks[s])
+    )
     rank_attrs = "".join(f' data-rank-{slug}="{rank}"' for slug, rank in sorted(card.ranks.items()))
     # `data-image` stays on the article even though M1 no longer renders an
     # <img>: the deploy workflow counts source image coverage with one cheap
@@ -778,8 +829,11 @@ def _render_card(
     # grep. Without it that check could never fire, which is worse than not
     # having it.
     newsletter_attr = ' data-newsletter=""' if item.is_newsletter else ""
+    story_id = story_id_for_item(item)
     return (
-        f'<article class="card" data-topics="{_e(topics)}" data-rank-all="{all_rank}" '
+        f'<article class="card" data-story-id="{_e(story_id)}" '
+        f'data-topic-ids="{_e(topics)}" data-topic-api-ids="{_e(api_topics)}" '
+        f'data-topics="{_e(topics)}" data-rank-all="{all_rank}" '
         f'data-summary-chars="{len(summary)}"'
         f"{rank_attrs}{image_attr}{newsletter_attr}>"
         f'<h2 class="story-heading"><button type="button" class="accordion-toggle" aria-expanded="false" '
@@ -843,9 +897,11 @@ def render_html(
     built_at: datetime | None = None,
     timezone_name: str = DISPLAY_TIMEZONE,
     require_summaries: bool = True,
+    topic_ids_by_name: dict[str, str] | None = None,
 ) -> str:
     built = built_at or now
     stamp = _display_time(built, timezone_name)
+    script_hash = base64.b64encode(hashlib.sha256(JS.encode("utf-8")).digest()).decode("ascii")
 
     # Staleness is computed in the READER's browser, not here. The build always
     # renders itself as zero seconds old, so a server-side check could never
@@ -857,13 +913,23 @@ def render_html(
         f'data-after="{STALE_AFTER_HOURS}" hidden></span>'
     )
 
-    cards, names = _collect_cards(ranked)
+    _all_cards, names = _collect_cards(ranked)
+    cards = publishable_cards(ranked, require_summaries=require_summaries)
+    topic_ids_by_slug = {
+        slug: (topic_ids_by_name or {}).get(name, slug) for slug, name in names.items()
+    }
     hues = _accent_hues(list(names))
 
-    chips = ['<button class="chip" data-filter="__all__" aria-pressed="true">All</button>']
+    chips = [
+        '<button class="chip" data-filter="__all__" aria-pressed="true">All</button>',
+        '<button class="chip" data-filter="__saved__" aria-pressed="false" '
+        'hidden disabled>Saved</button>',
+    ]
     for slug, name in names.items():
         chips.append(
-            f'<button class="chip" data-filter="{_e(slug)}" aria-pressed="false">{_e(name)}</button>'
+            f'<button class="chip" data-filter="{_e(slug)}" '
+            f'data-topic-id="{_e(topic_ids_by_slug[slug])}" '
+            f'aria-pressed="false">{_e(name)}</button>'
         )
 
     rendered: dict[str, list[str]] = {slug: [] for slug in names}
@@ -877,6 +943,7 @@ def render_html(
             position,
             timezone_name=timezone_name,
             require_summary=require_summaries,
+            topic_ids_by_slug=topic_ids_by_slug,
         )
         if markup is not None:
             rendered[card.best[1]].append(markup)
@@ -888,7 +955,8 @@ def render_html(
         if not rows:
             continue
         sections.append(
-            f'<section class="topic-section" data-section="{_e(slug)}">'
+            f'<section class="topic-section" data-section="{_e(slug)}" '
+            f'data-topic-id="{_e(topic_ids_by_slug[slug])}">'
             f'<h2 class="section-title">{_e(name)}</h2>'
             f'<div class="grid">{"".join(rows)}</div></section>'
         )
@@ -906,7 +974,8 @@ def render_html(
         # thing anyone needs to change what this page collects, so that is the
         # link, pointed straight at the file rather than at the repo.
         add_line = (
-            f'<p><a class="add-topic" href="{_e(edit_url)}">Add a topic or keyword</a> '
+            f'<p><a class="add-topic" href="{_e(edit_url)}" target="_blank" '
+            'rel="noopener noreferrer">Add a topic or keyword</a> '
             "- edit <code>topics.yaml</code> on GitHub. If you can commit to this "
             "repository, saving rebuilds the page. Otherwise GitHub opens a pull request "
             "for the owner to merge, and it appears after they do.</p>"
@@ -918,7 +987,8 @@ def render_html(
         )
 
     repo_line = (
-        f'<p><a href="{_e(safe_repo)}">Open source on GitHub</a>. Fork it, edit '
+        f'<p><a href="{_e(safe_repo)}" target="_blank" '
+        'rel="noopener noreferrer">Open source on GitHub</a>. Fork it, edit '
         f"<code>topics.yaml</code>, and it becomes yours.</p>"
         if safe_repo
         else "<p>Open source. Fork it, edit <code>topics.yaml</code>, and it becomes yours.</p>"
@@ -934,6 +1004,9 @@ def render_html(
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-{script_hash}'; connect-src 'self'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<meta name="supabase-url" content="">
+<meta name="supabase-publishable-key" content="">
 <style>{CSS}</style>
 </head>
 <body>
@@ -965,11 +1038,16 @@ def render_html(
                aria-label="Search these stories" autocomplete="off" spellcheck="false">
       </div>
     </div>
+    <div class="updates-status" id="updates-status" role="status" aria-live="polite" hidden>
+      <button class="updates-button" id="show-updates" type="button"></button>
+    </div>
     <p class="countline"><span class="count" id="count" role="status" aria-live="polite"></span></p>
     <main>
       <h2 class="active-topic" id="active-topic" hidden></h2>
       <div class="sections" id="sections">{''.join(sections)}</div>
       <p class="empty" id="empty"{empty_hidden}>Nothing matched in this window.</p>
+      <div class="history-tools"><button class="load-more" id="load-more" type="button">Load more</button></div>
+      <p class="reader-status" id="reader-status" role="status" aria-live="polite"></p>
     </main>
     <footer>
       <p>This edition combines Hacker News, RSS feeds, news sitemaps, and eligible newsletter items,
@@ -991,6 +1069,8 @@ def render_html(
 </div>
 </div>
 <script>{JS}</script>
+<script src="auth/client.js" defer></script>
+<script src="reader.js" defer></script>
 </body>
 </html>
 """
@@ -1007,6 +1087,7 @@ def render_site(
     timezone_name: str = DISPLAY_TIMEZONE,
     cname_source: Path | None = None,
     require_summaries: bool = True,
+    topic_ids_by_name: dict[str, str] | None = None,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
@@ -1018,6 +1099,7 @@ def render_site(
         repo_url=repo_url,
         timezone_name=timezone_name,
         require_summaries=require_summaries,
+        topic_ids_by_name=topic_ids_by_name,
     )
 
     # Write via a temp file in the same directory, then replace, so an
@@ -1027,6 +1109,16 @@ def render_site(
     tmp.replace(path)
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
+    static_dir = Path(__file__).resolve().parents[1] / "static"
+    for relative_path in (Path("reader.js"), Path("auth/client.js")):
+        source = static_dir / relative_path
+        if not source.is_file():
+            continue
+        destination = out_dir / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        asset_tmp = destination.with_suffix(destination.suffix + ".tmp")
+        asset_tmp.write_bytes(source.read_bytes())
+        asset_tmp.replace(destination)
 
     # A CNAME committed at the repo root has to be copied into the published
     # output or a custom domain silently resets on every deploy. The README

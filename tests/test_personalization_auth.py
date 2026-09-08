@@ -631,10 +631,14 @@ def test_static_interest_settings_page_has_restrictive_csp_and_accessible_contro
     assert 'autocomplete="one-time-code"' in html
     assert 'id="interests"' in html
     assert 'id="save-interests"' in html
+    assert 'id="google-sign-in"' in html
     assert 'role="status"' in html
     assert '<a class="back-link" href="../../">Back to the digest</a>' in html
+    assert 'class="back-link" href="../../" target="_blank"' not in html
+    privacy = (ROOT / "static/privacy.html").read_text()
+    assert '<a href="/" target="_blank" rel="noopener noreferrer">main page</a>' in privacy
     assert ".back-link:focus-visible" in (ROOT / "static/auth/styles.css").read_text()
-    assert "Sign in with Google" not in html
+    assert "Sign in with Google" in html
     assert "sessionStorage" in js
     assert "code_verifier" in js
     assert '`${url}/auth/v1/otp`' in js
@@ -652,6 +656,8 @@ def test_static_interest_settings_page_has_restrictive_csp_and_accessible_contro
     assert "saved_searches: currentPreference.saved_searches" in js
     assert "const safeSession = projectSession(rawSession)" in js
     assert "sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession))" in js
+    assert "BroadcastChannel" in js
+    assert "broadcastSession(safeSession)" in js
     assert "JSON.stringify(rawSession)" not in js
     assert "provider_token" not in js
     assert "provider_refresh_token" not in js

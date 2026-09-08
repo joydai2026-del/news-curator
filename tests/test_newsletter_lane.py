@@ -7,10 +7,13 @@ exercise routing, extraction, dedup and reporting without a socket in sight.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
+from curator.identity import story_id_for_item
 from curator.newsletter import gmail, lane, state as state_module
+from curator.newsletter.identity import key_from_env, opaque_discriminator
 from tests.test_newsletter_fixtures import (
     EXPECTED_STORIES,
     SENDERS,
@@ -25,6 +28,7 @@ ENV = {
     "GMAIL_CLIENT_ID": "fixture-client-id",
     "GMAIL_CLIENT_SECRET": "fixture-client-secret",
     "GMAIL_REFRESH_TOKEN": "fixture-refresh-token",
+    "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY": "11" * 32,
 }
 
 CFG = {"enabled": True, "max_items": 50, "max_age_hours": 48, "max_messages": 30}
@@ -52,6 +56,17 @@ class FakeGmail:
               id_budget=gmail.DEFAULT_ID_BUDGET):
         self.calls.append((list(senders), after, limit))
         self.budgets.append(id_budget)
+        identity_key = key_from_env(env or {})
+        for index, message in enumerate(self.result.messages):
+            if identity_key is None:
+                if hasattr(message, "_news_curator_message_discriminator"):
+                    delattr(message, "_news_curator_message_discriminator")
+                continue
+            message._news_curator_message_discriminator = opaque_discriminator(
+                identity_key,
+                "gmail-message",
+                f"fixture-message-{index}",
+            )
         return self.result
 
 
@@ -98,6 +113,43 @@ def test_missing_credentials_returns_dark_without_listing_mail():
     assert client.calls == []
 
 
+@pytest.mark.parametrize("identity_key", [None, "", "a" * 63, "g" * 64])
+def test_missing_or_invalid_identity_key_darkens_only_when_a_linkless_story_needs_it(
+    identity_key,
+):
+    html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/PrivateDeliveryToken123456789">
+        Linkless AI update
+      </a></strong></p>
+      <p>A complete public summary explains the AI update and why it matters.</p>
+    </body></html>"""
+    without_key = {key: value for key, value in ENV.items()
+                   if key != "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"}
+    if identity_key is not None:
+        without_key["NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"] = identity_key
+
+    result = run([parsed("tldr", html=html, sent=NOW - timedelta(hours=1))], env=without_key)
+
+    assert result.dark and not result.ok
+    assert result.reason == lane.IDENTITY_KEY_MISSING
+    assert result.items == [] and result.hashes == []
+
+
+def test_linked_public_story_does_not_require_the_private_identity_key():
+    html = """<html><body>
+      <p><strong><a href="https://publisher.example/public-ai-story">Public AI update</a></strong></p>
+      <p>A complete public summary explains the AI update and why it matters.</p>
+    </body></html>"""
+    without_key = {key: value for key, value in ENV.items()
+                   if key != "NEWS_CURATOR_NEWSLETTER_IDENTITY_KEY"}
+
+    result = run([parsed("tldr", html=html, sent=NOW - timedelta(hours=1))], env=without_key)
+
+    assert result.ok and not result.dark
+    assert len(result.items) == 1
+    assert field(result.items[0], "url") == "https://publisher.example/public-ai-story"
+
+
 def test_a_revoked_token_darkens_the_lane_and_keeps_the_watermark():
     st = fresh_state()
     client = FakeGmail(ok=False, reason=gmail.AUTH_REVOKED)
@@ -119,9 +171,9 @@ def test_an_empty_adapter_list_is_a_configuration_error_not_a_silent_run():
 def test_a_full_run_produces_items_from_every_adapter():
     result = run()
     assert result.ok and not result.dark
-    # One fewer than the sum of the fixtures: The Rundown runs the same
-    # headline twice in an issue and the lane dedups it.
-    assert len(result.items) == sum(EXPECTED_STORIES.values()) - 1
+    # The Rundown repeats one headline, but the two extracted stories carry
+    # distinct private discriminators and must not erase each other.
+    assert len(result.items) == sum(EXPECTED_STORIES.values())
     senders = {field(i, "newsletter_sender") for i in result.items}
     assert senders == {a.name for a in lane.adapters_module.ADAPTERS}
 
@@ -199,6 +251,17 @@ def test_only_published_stories_are_remembered():
     assert len(result.hashes) == 4, "a story cut by the cap must be eligible again next run"
 
 
+def test_safe_mentions_are_not_cut_by_display_dedup_or_cap():
+    result = run(cfg={"enabled": True, "max_items": 1})
+
+    assert len(result.items) == 1
+    assert len(result.mentions) > len(result.items)
+    assert {mention["source_id"] for mention in result.mentions} == {
+        f"newsletter:{adapter_id}" for adapter_id in EXPECTED_STORIES
+    }
+    assert all("@" not in json.dumps(mention, default=str) for mention in result.mentions)
+
+
 def test_a_second_run_after_advancing_the_cursor_publishes_nothing_new(tmp_path):
     path = tmp_path / "newsletter_state.json"
     first = state_module.load(path, now=NOW)
@@ -208,9 +271,162 @@ def test_a_second_run_after_advancing_the_cursor_publishes_nothing_new(tmp_path)
 
     second = run(st=committed)
     assert second.items == [], "the salted hashes must suppress the overlap re-read"
+    assert second.mentions, "coverage survives display suppression in the overlap window"
     assert second.status["tldr"].extracted == EXPECTED_STORIES["tldr"], (
         "the stories were still seen and counted"
     )
+
+
+def test_run_level_suppression_uses_collision_safe_linkless_identity():
+    html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/FirstOpaqueToken123456789">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/SecondOpaqueToken987654321">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+    </body></html>"""
+    message = parsed("tldr", html=html, sent=NOW - timedelta(hours=1))
+
+    first = run([message], st=fresh_state())
+    matching = [
+        item for item in first.items
+        if field(item, "title") == "Quick hits generic AI update"
+    ]
+    assert len(matching) == 2
+    assert all(field(item, "url") == "" for item in matching)
+    assert len(first.hashes) == 2
+
+    committed = state_module.NewsletterState(
+        watermark=first.watermark, salt="fixture-salt", hashes=first.hashes
+    )
+    replay = run([message], st=committed)
+    assert replay.items == []
+
+
+def test_version_one_production_state_migrates_without_replay_and_keeps_new_collisions(
+    tmp_path,
+):
+    first_state = fresh_state()
+    production_items = run(st=first_state)
+    assert len(production_items.items) == 36
+    legacy_hashes = [
+        first_state.story_hash(field(item, "title"), field(item, "url"))
+        for item in production_items.items
+    ]
+    state_path = tmp_path / "newsletter_state.json"
+    state_path.write_text(json.dumps({
+        "version": 1,
+        "watermark": NOW.isoformat(),
+        "salt": first_state.salt,
+        "hashes": legacy_hashes,
+    }), encoding="utf-8")
+    legacy_state = state_module.load(state_path, now=NOW)
+
+    transition = run(st=legacy_state)
+    assert transition.items == []
+    assert len(set(transition.hashes)) == 36
+    migrated = state_module.advance(
+        state_path,
+        legacy_state,
+        watermark=transition.watermark,
+        new_hashes=transition.hashes,
+    )
+    assert migrated.version == 2
+    assert migrated.legacy_hashes == legacy_hashes[-state_module.MAX_HASHES:]
+
+    html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/NewOpaqueToken123456789">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/OtherOpaqueToken987654321">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+    </body></html>"""
+    message = parsed("tldr", html=html, sent=NOW - timedelta(hours=1))
+    distinct = run([message], st=migrated)
+    assert len(distinct.items) == 2
+    committed = state_module.advance(
+        state_path,
+        migrated,
+        watermark=distinct.watermark,
+        new_hashes=distinct.hashes,
+    )
+    assert run([message], st=committed).items == []
+
+
+def test_version_two_keeps_legacy_link_suppression_beyond_the_first_window(tmp_path):
+    linked_html = """<html><body>
+      <p><strong><a href="https://publisher.example/stable-linked-story">
+        Stable linked story
+      </a></strong></p>
+      <p>A complete publisher summary explains the linked story and why it matters.</p>
+    </body></html>"""
+    linked_message = parsed("tldr", html=linked_html, sent=NOW - timedelta(hours=1))
+    probe_state = fresh_state()
+    linked_probe = run([linked_message], st=probe_state)
+    assert len(linked_probe.items) == 1
+    linked_item = linked_probe.items[0]
+    assert field(linked_item, "url") == "https://publisher.example/stable-linked-story"
+
+    legacy_state = state_module.NewsletterState(
+        watermark=NOW - timedelta(hours=6),
+        salt=probe_state.salt,
+        hashes=[],
+        legacy_hashes=[
+            probe_state.story_hash(field(linked_item, "title"), field(linked_item, "url")),
+            probe_state.story_hash("Quick hits generic AI update", ""),
+        ],
+        version=state_module.LEGACY_STATE_VERSION,
+    )
+    state_path = tmp_path / "newsletter_state.json"
+
+    initial_window = run([], st=legacy_state)
+    assert initial_window.items == []
+    migrated = state_module.advance(
+        state_path,
+        legacy_state,
+        watermark=initial_window.watermark,
+        new_hashes=initial_window.hashes,
+    )
+    assert migrated.version == state_module.STATE_VERSION
+    assert migrated.hashes == []
+    assert migrated.legacy_hashes == legacy_state.legacy_hashes
+
+    delayed_resend = run([linked_message], st=migrated)
+    assert delayed_resend.items == []
+    assert delayed_resend.hashes == [
+        migrated.story_identity_hash(field(linked_item, "canonical_url"))
+    ]
+    learned = state_module.advance(
+        state_path,
+        migrated,
+        watermark=delayed_resend.watermark,
+        new_hashes=delayed_resend.hashes,
+    )
+    assert learned.hashes == delayed_resend.hashes
+    assert learned.legacy_hashes == migrated.legacy_hashes
+    assert not state_path.with_name(state_path.name + ".tmp").exists()
+    assert run([linked_message], st=learned).items == []
+
+    linkless_html = """<html><body>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/DelayedFirstOpaqueToken123">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+      <p><strong><a href="https://link.mail.beehiiv.com/ss/c/DelayedSecondOpaqueToken456">
+        Quick hits generic AI update
+      </a></strong></p>
+      <p>The same exact public summary explains the AI update and why it matters today.</p>
+    </body></html>"""
+    linkless_message = parsed("tldr", html=linkless_html, sent=NOW - timedelta(hours=1))
+    distinct_linkless = run([linkless_message], st=learned)
+    assert len(distinct_linkless.items) == 2
+    assert all(field(item, "url") == "" for item in distinct_linkless.items)
 
 
 def test_the_watermark_returned_is_the_run_time_and_the_caller_commits_it(tmp_path):
@@ -530,6 +746,63 @@ def test_build_record_falls_back_to_a_stable_content_identity():
     )
     assert a["canonical_url"] == b["canonical_url"] != ""
     assert a["canonical_url"].startswith("newsletter:")
+
+
+def test_linkless_same_headline_from_different_sources_has_distinct_identity():
+    first = lane.build_record(
+        title="Today's update", url="", blurb="One public summary.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+    other_source = lane.build_record(
+        title="Today's update", url="", blurb="One public summary.", adapter_id="theneuron",
+        display_name="The Neuron", published_at=NOW,
+    )
+
+    assert first["canonical_url"] != other_source["canonical_url"]
+
+
+def test_repeated_linkless_generic_headline_uses_story_content_discriminator():
+    first = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about chips.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+    repeated = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about robotics.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+
+    assert first["canonical_url"] != repeated["canonical_url"]
+
+
+def test_repeated_identical_linkless_rows_use_private_story_discriminator():
+    first = lane.build_record(
+        title="Quick hits", url="", blurb="The same public summary.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW, stable_discriminator="a" * 64,
+    )
+    repeated = lane.build_record(
+        title="Quick hits", url="", blurb="The same public summary.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW, stable_discriminator="b" * 64,
+    )
+
+    assert first["canonical_url"] != repeated["canonical_url"]
+    assert story_id_for_item(lane.to_items([first])[0]) != story_id_for_item(
+        lane.to_items([repeated])[0]
+    )
+
+
+def test_linkless_story_id_survives_publisher_date_correction():
+    first = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about chips.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW,
+    )
+    corrected = lane.build_record(
+        title="Quick hits", url="", blurb="A public summary about chips.", adapter_id="tldr",
+        display_name="TLDR", published_at=NOW + timedelta(days=1),
+    )
+
+    assert story_id_for_item(lane.to_items([first])[0]) == story_id_for_item(
+        lane.to_items([corrected])[0]
+    )
 
 
 def test_records_convert_to_items_only_when_the_model_supports_them():
