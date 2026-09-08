@@ -788,7 +788,8 @@ class TestAccordionReadingCompanion:
         assert 'aria-pressed="false">More like this</button>' in page
         assert '>More like this</button>' in page
         assert ".state-action[hidden]{display:none}" in page
-        assert 'id="load-more"' in page and '>Load 20 more</button>' in page
+        assert 'id="load-more"' in page and '>Load more</button>' in page
+        assert 'Load 20 more' not in page
         assert 'id="updates-status" role="status" aria-live="polite"' in page
 
     def test_card_exposes_canonical_story_and_topic_ids(self, now):

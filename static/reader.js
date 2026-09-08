@@ -942,6 +942,7 @@
         announce("No published edition is available yet.");
         return;
       }
+      loadButton.textContent = `Load ${latest.page_size} more`;
       publicationSeq = latest.publication_seq;
       const poll = async () => {
         try {

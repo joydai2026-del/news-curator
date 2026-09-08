@@ -1040,7 +1040,7 @@ def render_html(
       <h2 class="active-topic" id="active-topic" hidden></h2>
       <div class="sections" id="sections">{''.join(sections)}</div>
       <p class="empty" id="empty"{empty_hidden}>Nothing matched in this window.</p>
-      <div class="history-tools"><button class="load-more" id="load-more" type="button">Load 20 more</button></div>
+      <div class="history-tools"><button class="load-more" id="load-more" type="button">Load more</button></div>
       <p class="reader-status" id="reader-status" role="status" aria-live="polite"></p>
     </main>
     <footer>

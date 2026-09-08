@@ -525,7 +525,9 @@ async function main() {
     getElementById: (id) => controls.get(id) || null,
     querySelectorAll: (selector) => selector === ".state-action" ? unavailableActions : [],
   };
+  controls.get("load-more").textContent = "Load more";
   await reader.run();
+  assert.equal(controls.get("load-more").textContent, "Load more");
   assert.equal(unavailableActions.every((button) => button.hidden && button.disabled), true);
   delete global.document;
   delete global.window;
@@ -542,6 +544,7 @@ async function main() {
     ["updates-status", new FakeElement()], ["show-updates", new FakeElement("button")],
     ["sections", sections],
   ]);
+  liveControls.get("load-more").textContent = "Load more";
   const addedCards = [];
   const configuredActions = [new FakeElement("button"), new FakeElement("button"), new FakeElement("button")];
   configuredActions.forEach((button) => { button.hidden = true; button.disabled = true; });
@@ -613,6 +616,7 @@ async function main() {
     })], url);
   };
   await reader.run();
+  assert.equal(liveControls.get("load-more").textContent, "Load 7 more");
   assert.equal(configuredActions.every((button) => !button.hidden && button.disabled), true);
   assert.equal(controllerCalls, 2);
   assert.equal(controllerHeaders[1].authorization, "Bearer refreshed-reader-token");
