@@ -764,7 +764,13 @@ class TestAccordionReadingCompanion:
 
     def test_primary_controls_have_a_visible_keyboard_focus_style(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        assert ".profile-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible" in page
+        for selector in (
+            ".profile-link:focus-visible",
+            ".dashboard-link:focus-visible",
+            ".accordion-toggle:focus-visible",
+            ".state-action:focus-visible",
+        ):
+            assert selector in page
 
     def test_footer_only_claims_personalization_when_a_profile_is_present(self, now):
         page = flat(render({"AI": [make_item("A story")]}, now=now))

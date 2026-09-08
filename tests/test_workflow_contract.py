@@ -117,6 +117,18 @@ def test_rendered_reading_companion_contract_is_enforced():
     assert "length < 180" not in run
 
 
+def test_rendered_dashboard_shell_and_configuration_are_enforced() -> None:
+    run = str(_step_named(_jobs()["build"], "Verify the rendered page has real content")["run"])
+    for locked in (
+        'Path("site/dashboard/index.html")',
+        '"Your News Curator dashboard"',
+        '"dashboard.js"',
+        'class="dashboard-link"',
+        "configured dashboard remained fail-closed",
+    ):
+        assert locked in run
+
+
 def test_summary_cache_is_persisted_with_other_bounded_state() -> None:
     workflow = CURATE_PATH.read_text(encoding="utf-8")
     assert "image_cache.json newsletter_state.json summary_cache.json" in workflow

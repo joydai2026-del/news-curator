@@ -567,6 +567,20 @@
   const commonJs = typeof module !== "undefined" && module.exports;
   if (commonJs) {
     module.exports = contract;
+  } else {
+    window.NewsCuratorReaderApi = Object.freeze({
+      create: () => {
+        const api = createApi(
+          window.NewsCuratorAuth.config(),
+          () => window.NewsCuratorAuth.sessionForRequest(),
+        );
+        return Object.freeze({
+          latestPublication: api.latestPublication,
+          savedPage: api.savedPage,
+          setStoryState: api.setStoryState,
+        });
+      },
+    });
   }
 
   async function run() {

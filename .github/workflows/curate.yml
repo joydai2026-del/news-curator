@@ -480,6 +480,17 @@ jobs:
               sys.exit("FAIL: site/index.html was not written")
 
           html = page.read_text(encoding="utf-8")
+          dashboard_page = Path("site/dashboard/index.html")
+          if not dashboard_page.is_file():
+              sys.exit("FAIL: dashboard shell was not written")
+          dashboard_html = dashboard_page.read_text(encoding="utf-8")
+          if "Your News Curator dashboard" not in dashboard_html or "dashboard.js" not in dashboard_html:
+              sys.exit("FAIL: dashboard shell is incomplete")
+          if 'class="dashboard-link"' in html and (
+              '<meta name="supabase-url" content="">' in dashboard_html
+              or "connect-src 'self';" in dashboard_html
+          ):
+              sys.exit("FAIL: configured dashboard remained fail-closed")
           summary_config = load_config(Path(".")).summaries
           summary_required = bool(summary_config.get("enabled", False))
           summary_minimum = int(

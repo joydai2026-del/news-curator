@@ -1,7 +1,11 @@
 import base64
 import json
+import socket
 import subprocess
 import sys
+import threading
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -673,6 +677,198 @@ def test_cli_has_no_token_output_command_or_plaintext_fallback() -> None:
     assert "SERVICE_ROLE" not in cli
     assert "access_token" not in cli
     assert "refresh_token" not in cli
+
+
+def test_cli_opens_google_login_in_background_without_shell_or_url_output(
+    monkeypatch, capsys
+) -> None:
+    from scripts import personalization_cli as cli
+
+    sentinel_url = "https://example.supabase.co/auth/v1/authorize?client_state=private-state"
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    cli._open_authorize_url(sentinel_url)
+
+    assert calls == [
+        (
+            ["/usr/bin/open", "-g", sentinel_url],
+            {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "timeout": 10,
+                "check": False,
+            },
+        )
+    ]
+    output = capsys.readouterr()
+    assert sentinel_url not in output.out
+    assert sentinel_url not in output.err
+
+
+def test_cli_nonmac_login_keeps_nonforeground_browser_support(monkeypatch) -> None:
+    from scripts import personalization_cli as cli
+
+    calls = []
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(
+        cli.webbrowser,
+        "open",
+        lambda url, **kwargs: calls.append((url, kwargs)) or True,
+    )
+
+    cli._open_authorize_url("https://example.supabase.co/auth/v1/authorize")
+
+    assert calls == [
+        (
+            "https://example.supabase.co/auth/v1/authorize",
+            {"new": 2, "autoraise": False},
+        )
+    ]
+
+
+@pytest.mark.allow_socket
+def test_cli_callback_rejects_invalid_request_then_accepts_exact_callback(
+    monkeypatch,
+) -> None:
+    from scripts import personalization_cli as cli
+
+    auth, _store, transport = auth_with([])
+    sender: threading.Thread | None = None
+    accepted_callback: str | None = None
+    errors: list[BaseException] = []
+    rejected_count = 0
+
+    def launch(authorize_url):
+        nonlocal sender, accepted_callback
+        redirect = parse_qs(urlsplit(authorize_url).query)["redirect_to"][0]
+        parsed = urlsplit(redirect)
+        callback_base = f"http://{parsed.netloc}{parsed.path}"
+        state = parse_qs(parsed.query)["client_state"][0]
+        accepted_callback = f"{callback_base}?code=code-valid&client_state={state}"
+        invalid_callbacks = (
+            f"{callback_base}?client_state={state}",
+            f"{callback_base}?code=one&code=two&client_state={state}",
+            f"{callback_base}?code=one&client_state=wrong-state",
+            f"{callback_base}?code=one&client_state=%E2%98%83",
+            f"{callback_base}?error=%E2%98%83&client_state={state}",
+        )
+
+        def send_requests() -> None:
+            nonlocal rejected_count
+            try:
+                for candidate in invalid_callbacks:
+                    try:
+                        urllib.request.urlopen(candidate, timeout=2)
+                    except urllib.error.HTTPError as exc:
+                        assert exc.code == 400
+                        rejected_count += 1
+                    else:
+                        raise AssertionError("invalid callback was accepted")
+                response = urllib.request.urlopen(accepted_callback, timeout=2)
+                assert response.status == 200
+            except BaseException as exc:
+                errors.append(exc)
+
+        sender = threading.Thread(target=send_requests)
+        sender.start()
+
+    monkeypatch.setattr(cli, "_open_authorize_url", launch)
+    try:
+        attempt, callback_url = cli._receive_callback(auth, 2)
+    except AuthError as exc:
+        if sender is not None:
+            sender.join(timeout=2)
+        raise AssertionError(
+            f"callback loop ended early after {rejected_count} rejections; "
+            f"sender error types: {[type(error).__name__ for error in errors]}"
+        ) from exc
+    assert sender is not None
+    sender.join(timeout=2)
+    assert not sender.is_alive()
+    assert errors == []
+    assert callback_url == accepted_callback
+    assert transport.calls == []
+
+    transport.responses.append((200, login_payload()))
+    auth.finish_login(attempt, callback_url)
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.allow_socket
+def test_cli_callback_timeout_survives_an_idle_partial_request(
+    monkeypatch, capsys
+) -> None:
+    from scripts import personalization_cli as cli
+
+    class FakeAuth:
+        redirect: str
+
+        def begin_login(self, redirect):
+            self.redirect = redirect
+            return FakeAttempt(), "https://example.supabase.co/auth/v1/authorize"
+
+    class FakeAttempt:
+        def consume_callback(self, _callback_url):
+            return "code-two"
+
+    auth = FakeAuth()
+    release_idle = threading.Event()
+    idle_client: socket.socket | None = None
+    valid_sender: threading.Thread | None = None
+    idle_closer: threading.Thread | None = None
+    errors: list[BaseException] = []
+
+    def launch(_url):
+        nonlocal idle_client, valid_sender, idle_closer
+        parsed = urlsplit(auth.redirect)
+        idle_client = socket.create_connection(("127.0.0.1", parsed.port), timeout=1)
+        idle_client.sendall(b"GET /callback HTTP/1.1\r\nHost:")
+
+        def send_valid() -> None:
+            try:
+                time.sleep(0.03)
+                response = urllib.request.urlopen(
+                    f"{auth.redirect}?code=code-two&client_state=state-two",
+                    timeout=1,
+                )
+                assert response.status == 200
+            except BaseException as exc:  # captured for the parent test thread
+                errors.append(exc)
+
+        def close_idle_later() -> None:
+            release_idle.wait(1)
+            if idle_client is not None:
+                idle_client.close()
+
+        valid_sender = threading.Thread(target=send_valid)
+        idle_closer = threading.Thread(target=close_idle_later)
+        valid_sender.start()
+        idle_closer.start()
+
+    monkeypatch.setattr(cli, "_open_authorize_url", launch)
+    started = time.monotonic()
+    try:
+        _attempt, callback_url = cli._receive_callback(auth, 0.4)
+    finally:
+        release_idle.set()
+        if valid_sender is not None:
+            valid_sender.join(timeout=2)
+        if idle_closer is not None:
+            idle_closer.join(timeout=2)
+    assert time.monotonic() - started < 0.8
+    assert callback_url == f"{auth.redirect}?code=code-two&client_state=state-two"
+    assert errors == []
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == ""
 
 
 def test_memory_only_rejects_cross_process_commands(capsys) -> None:
