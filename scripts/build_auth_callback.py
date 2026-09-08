@@ -22,7 +22,24 @@ CSP_PLACEHOLDER = "connect-src 'self';"
 INDEX_PLACEHOLDER = "<!-- personalization-link -->"
 PERSONALIZATION_LINK = (
     '<a class="profile-link" href="auth/callback/?start=google">Sign in / Interests</a>'
+    '<a class="dashboard-link" href="dashboard/">Dashboard</a>'
 )
+
+
+def _configure_page(page: str, config: AuthConfig) -> str:
+    if (
+        page.count(URL_PLACEHOLDER) != 1
+        or page.count(KEY_PLACEHOLDER) != 1
+        or page.count(CSP_PLACEHOLDER) != 1
+    ):
+        raise ValueError("The page auth configuration contract changed.")
+    exact_origin = html.escape(config.supabase_url, quote=True)
+    public_key = html.escape(config.publishable_key, quote=True)
+    return (
+        page.replace(URL_PLACEHOLDER, f'<meta name="supabase-url" content="{exact_origin}">')
+        .replace(KEY_PLACEHOLDER, f'<meta name="supabase-publishable-key" content="{public_key}">')
+        .replace(CSP_PLACEHOLDER, f"connect-src 'self' {exact_origin};")
+    )
 
 
 def materialize_callback(*, supabase_url: str, publishable_key: str, output: Path) -> None:
@@ -32,11 +49,7 @@ def materialize_callback(*, supabase_url: str, publishable_key: str, output: Pat
     template = TEMPLATE.read_text(encoding="utf-8")
     if template.count(URL_PLACEHOLDER) != 1 or template.count(KEY_PLACEHOLDER) != 1 or template.count(CSP_PLACEHOLDER) != 1:
         raise ValueError("The auth callback template contract changed.")
-    exact_origin = html.escape(config.supabase_url, quote=True)
-    public_key = html.escape(config.publishable_key, quote=True)
-    rendered = template.replace(URL_PLACEHOLDER, f'<meta name="supabase-url" content="{exact_origin}">')
-    rendered = rendered.replace(KEY_PLACEHOLDER, f'<meta name="supabase-publishable-key" content="{public_key}">')
-    rendered = rendered.replace(CSP_PLACEHOLDER, f"connect-src 'self' {exact_origin};")
+    rendered = _configure_page(template, config)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding="utf-8")
 
@@ -60,11 +73,11 @@ def activate_personalization_link(
             or page.count(CSP_PLACEHOLDER) != 1
         ):
             raise ValueError("The rendered site auth configuration contract changed.")
-        exact_origin = html.escape(config.supabase_url, quote=True)
-        public_key = html.escape(config.publishable_key, quote=True)
-        page = page.replace(URL_PLACEHOLDER, f'<meta name="supabase-url" content="{exact_origin}">')
-        page = page.replace(KEY_PLACEHOLDER, f'<meta name="supabase-publishable-key" content="{public_key}">')
-        page = page.replace(CSP_PLACEHOLDER, f"connect-src 'self' {exact_origin};")
+        page = _configure_page(page, config)
+        dashboard = site_index.parent / "dashboard/index.html"
+        if dashboard.is_file():
+            configured_dashboard = _configure_page(dashboard.read_text(encoding="utf-8"), config)
+            dashboard.write_text(configured_dashboard, encoding="utf-8")
     site_index.write_text(page, encoding="utf-8")
 
 

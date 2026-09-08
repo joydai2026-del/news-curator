@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <meta name="supabase-url" content="">
+  <meta name="supabase-publishable-key" content="">
+  <title>Your News Curator dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="Dashboard navigation">
+      <a class="brand" href="../">News Curator<small>Private dashboard</small></a>
+      <nav>
+        <a href="#saved">Saved</a>
+        <a href="#interests">Interests</a>
+        <a href="#insights">Insights</a>
+        <a href="#your-data">Your data</a>
+      </nav>
+      <a class="main-link" href="../">Back to today's edition</a>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div><p class="eyebrow">News Curator</p><h1>Your dashboard</h1></div>
+        <a class="profile-link" href="../auth/callback/?start=google">Sign in</a>
+      </header>
+      <p class="status" id="dashboard-status" role="status" aria-live="polite">Checking sign-in.</p>
+
+      <section class="signed-out" id="signed-out" aria-labelledby="signed-out-title">
+        <h2 id="signed-out-title">Your dashboard is private</h2>
+        <p>Sign in to see your Saved stories, interests, and current reading state.</p>
+        <a class="button" href="../auth/callback/?start=google">Sign in with Google</a>
+      </section>
+
+      <div id="private-dashboard" hidden>
+        <section class="panel" id="saved" aria-labelledby="saved-title">
+          <div class="section-head"><div><p class="eyebrow">Currently saved</p><h2 id="saved-title">Saved</h2></div>
+            <label class="search">Search loaded stories<input id="saved-search" type="search" autocomplete="off"></label>
+          </div>
+          <div class="saved-list" id="saved-list"></div>
+          <p class="empty" id="saved-empty" hidden>No loaded Saved stories match.</p>
+          <button class="button secondary" id="load-saved" type="button">Load more</button>
+        </section>
+
+        <section class="panel" id="interests" aria-labelledby="interests-title">
+          <p class="eyebrow">Your ranking inputs</p><h2 id="interests-title">Interests</h2>
+          <label for="interest-list">Topics to prioritize</label>
+          <textarea id="interest-list" maxlength="3220" aria-describedby="interest-help"></textarea>
+          <p class="help" id="interest-help">One interest per line, up to 20.</p>
+          <fieldset><legend>Saved searches</legend><div id="saved-searches"></div>
+            <button class="text-button" id="add-search" type="button">Add a saved search</button>
+          </fieldset>
+          <div class="actions"><button class="button" id="save-preferences" type="button">Save changes</button>
+            <button class="button secondary" id="reload-preferences" type="button">Reload</button></div>
+          <div id="topic-signals" class="signals"></div>
+        </section>
+
+        <section class="panel" id="insights" aria-labelledby="insights-title">
+          <p class="eyebrow">Current records</p><h2 id="insights-title">Insights</h2>
+          <p id="insights-time" class="help"></p>
+          <dl class="metrics">
+            <div><dt>Saved</dt><dd id="metric-saved">0</dd></div>
+            <div><dt>Saved and unread</dt><dd id="metric-unread">0</dd></div>
+            <div><dt>Marked read</dt><dd id="metric-read">0</dd></div>
+            <div><dt>Topic feedback</dt><dd id="metric-signals">0</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel" id="your-data" aria-labelledby="data-title">
+          <p class="eyebrow">Partial private snapshot</p><h2 id="data-title">Your data</h2>
+          <p>Includes only the Saved rows loaded in this view. This file leaves News Curator's controls.</p>
+          <button class="button" id="download-view" type="button">Download this view</button>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="../auth/client.js" defer></script>
+  <script src="../reader.js" defer></script>
+  <script src="dashboard.js" defer></script>
+</body>
+</html>

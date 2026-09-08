@@ -474,6 +474,14 @@
     return headers;
   }
 
+  function requireCurrentSession(expected) {
+    const current = validateStoredSession(loadSessionCandidate());
+    if (current.access_token !== expected.access_token || current.user_id !== expected.user_id) {
+      fail("The saved session changed.");
+    }
+    return current;
+  }
+
   async function getPreferences(authConfig, currentSession, fetchImpl = fetch) {
     const checkedConfig = validateAuthConfig(authConfig);
     const session = await sessionForRequest(checkedConfig, currentSession, fetchImpl);
@@ -544,6 +552,7 @@
     }
     if (update.expected_revision !== 0) return { status: "not_found" };
 
+    requireCurrentSession(session);
     const createUrl = `${checkedConfig.url}/rest/v1/user_preferences`;
     const created = await fetchImpl(createUrl, {
       method: "POST",
@@ -562,6 +571,7 @@
     requireExactResponse(created, createUrl, "The preference endpoint redirected unexpectedly.");
     const inserted = await responseJson(created);
     if (created.status === 409) {
+      requireCurrentSession(session);
       const current = await getPreferences(checkedConfig, session, fetchImpl);
       return { status: "conflict", revision: current ? current.revision : null };
     }

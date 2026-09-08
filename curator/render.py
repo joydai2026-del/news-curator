@@ -268,10 +268,10 @@ body{overflow-x:hidden;overflow-x:clip;background:
 .maincol{min-width:0}
 .topbar{display:flex;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1rem}
 .crumb{font-size:.75rem;color:var(--faint)}
-.profile-slot{min-height:44px;display:flex;align-items:center}
-.profile-link{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);border-radius:999px;padding:.5rem .9rem;color:var(--accent);font-size:.78rem;font-weight:650;text-decoration:none;background:var(--card)}
-.profile-link:hover{background:var(--accent-soft)}
-.profile-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible,.load-more:focus-visible,.updates-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.profile-slot{min-height:44px;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}
+.profile-link,.dashboard-link{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);border-radius:999px;padding:.5rem .9rem;color:var(--accent);font-size:.78rem;font-weight:650;text-decoration:none;background:var(--card)}
+.profile-link:hover,.dashboard-link:hover{background:var(--accent-soft)}
+.profile-link:focus-visible,.dashboard-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible,.load-more:focus-visible,.updates-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .intro{border:1px solid var(--line);background:color-mix(in srgb,var(--card) 92%,transparent);border-radius:1.5rem;padding:1.75rem 1.9rem;box-shadow:var(--shadow)}
 .intro .eyebrow{font-size:.625rem;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
 .intro h1{margin:.5rem 0 .45rem;font:600 clamp(2rem,4vw,3rem)/1.04 var(--serif);letter-spacing:-.04em;max-width:16ch}
@@ -1146,7 +1146,13 @@ def render_site(
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
     static_dir = Path(__file__).resolve().parents[1] / "static"
-    for relative_path in (Path("reader.js"), Path("auth/client.js")):
+    for relative_path in (
+        Path("reader.js"),
+        Path("auth/client.js"),
+        Path("dashboard/index.html"),
+        Path("dashboard/dashboard.css"),
+        Path("dashboard/dashboard.js"),
+    ):
         source = static_dir / relative_path
         if not source.is_file():
             continue

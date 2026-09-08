@@ -78,7 +78,8 @@ def test_activate_personalization_link_uses_a_repository_path_safe_relative_url(
     activate_personalization_link(index)
 
     assert index.read_text() == (
-        '<header><a class="profile-link" href="auth/callback/?start=google">Sign in / Interests</a></header>'
+        '<header><a class="profile-link" href="auth/callback/?start=google">Sign in / Interests</a>'
+        '<a class="dashboard-link" href="dashboard/">Dashboard</a></header>'
     )
 
 

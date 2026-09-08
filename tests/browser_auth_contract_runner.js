@@ -407,6 +407,7 @@ async function main() {
   refreshSetCalls.forEach(assertFailClosedFetch);
 
   const createCalls = [];
+  browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
   const createFetch = async (url, options) => {
     createCalls.push({ url, options });
     const payload = createCalls.length === 1 ? { status: "not_found" } : [preference()];
@@ -414,6 +415,36 @@ async function main() {
   };
   assert.equal((await client.setPreferences(authConfig, projected, update, createFetch)).status, "created");
   createCalls.forEach(assertFailClosedFetch);
+
+  browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
+  let finishMissing;
+  const loggedOutCreateCalls = [];
+  const delayedMissing = client.setPreferences(authConfig, projected, update, async (url, options) => {
+    loggedOutCreateCalls.push({ url, options });
+    if (loggedOutCreateCalls.length === 1) {
+      await new Promise((resolve) => { finishMissing = resolve; });
+      return response(200, { status: "not_found" }, url);
+    }
+    return response(201, [preference()], url);
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  client.clearSession();
+  finishMissing();
+  await assert.rejects(delayedMissing, /saved session/);
+  assert.equal(loggedOutCreateCalls.length, 1);
+
+  browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
+  const conflictCreateCalls = [];
+  await assert.rejects(
+    client.setPreferences(authConfig, projected, update, async (url, options) => {
+      conflictCreateCalls.push({ url, options });
+      if (conflictCreateCalls.length === 1) return response(200, { status: "not_found" }, url);
+      client.clearSession();
+      return response(409, {}, url);
+    }),
+    /saved session/
+  );
+  assert.equal(conflictCreateCalls.length, 2);
 
   let parsedRedirectBody = false;
   await assert.rejects(
