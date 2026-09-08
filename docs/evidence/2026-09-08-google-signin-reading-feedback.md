@@ -76,15 +76,15 @@ The product merge's later [main CI run 34253278488](https://github.com/joydai202
 
 Test-only commit `0bb412e` keeps every non-time session field and the broadcast shape exact, and bounds the integer expiry by callback start/end plus the response's one-hour lifetime. A second executable contract case forces the clock boundary without sleeping. The targeted auth group passed 56 tests. This correction changes no production assets and requires no new publication; its independent review and CI are follow-up merge gates, not retroactive claims about the failed run.
 
-## Required production readback
+## Verification checklist
 
-Before calling Google sign-in ready, record all of the following on the exact served build:
+The production checks and local error-path contracts have different evidence grades:
 
-- Public settings report Google enabled, new-user signup open, and email sign-in disabled.
-- The real Google button reaches `accounts.google.com`, not a Supabase provider error.
-- A dedicated Web application client uses the exact Supabase callback and permits the intended public audience, not only a test-user allowlist.
-- Real Google consent returns through the deployed callback, exchanges the code, and preserves reading and preference state for new and returning users.
-- Cancellation and failed callbacks remain scrubbed and retryable.
+- A: public settings report Google enabled, new-user signup open, and email sign-in disabled.
+- A: the real Google button reaches `accounts.google.com`, not a Supabase provider error.
+- A: a dedicated Web application client uses the exact Supabase callback and permits the intended public audience, not only a test-user allowlist.
+- A: real Google consent returns through the deployed callback, exchanges the code, and preserves reading and preference state for new and returning users.
+- B: local callback error cases are scrubbed and retryable. Actual Google cancellation was not separately exercised.
 
 The implementation follows the [Supabase Google sign-in guide](https://supabase.com/docs/guides/auth/social-login/auth-google) and its [PKCE session flow](https://supabase.com/docs/guides/auth/sessions/pkce-flow). Existing deployment, database, and previous isolated-account cleanup proof remains in the earlier M1 receipt; it is not relabeled as Google sign-in proof.
 
