@@ -103,7 +103,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         <a class="profile-link" href="#">Profile</a>
         <div class="tools">
           <button class="chip" data-filter="__all__">All</button>
-          <button class="chip" data-filter="__saved__">Saved</button>
+          <button class="chip" data-filter="__saved__" hidden disabled>Saved</button>
           <button class="chip" data-filter="ai" data-topic-id="ai">AI</button>
           <button class="chip" data-filter="quantum-computing" data-topic-id="quantum">Quantum Computing</button>
         </div>
@@ -282,6 +282,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page = browser.new_page(viewport={"width": 900, "height": 700})
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            page.locator('.chip[data-filter="__saved__"]:visible:enabled').wait_for()
             current_ids = ["story:" + f"{index:064x}" for index in (1, 2)]
             history_ids = ["story:" + f"{index:064x}" for index in (10, 11, 12)]
             assert _visually_ordered_story_ids(page) == current_ids + history_ids[:2]
@@ -976,9 +977,16 @@ def test_unconfigured_page_keeps_articles_readable_without_interactive_state_con
     try:
         with playwright_api.sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            page = browser.new_page()
+            context = browser.new_context()
+            context.add_init_script("localStorage.setItem('nc-tab', '__saved__')")
+            page = context.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
             assert page.get_by_text("Public story", exact=True).is_visible()
+            saved = page.locator('.chip[data-filter="__saved__"]')
+            assert saved.count() == 2
+            assert saved.evaluate_all(
+                "tabs => tabs.every(tab => tab.hidden && tab.disabled)"
+            )
             page.get_by_text("Public story", exact=True).click()
             assert page.locator("a", has_text="Read original").is_visible()
             assert page.locator(".state-action:visible").count() == 0

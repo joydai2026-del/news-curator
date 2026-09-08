@@ -537,18 +537,25 @@ async function main() {
 
   const unavailableActions = [new FakeElement("button"), new FakeElement("button"), new FakeElement("button")];
   unavailableActions.forEach((button) => { button.hidden = true; button.disabled = true; });
+  const unavailableSavedTab = new FakeElement("button");
+  unavailableSavedTab.hidden = true;
+  unavailableSavedTab.disabled = true;
   global.window = {
     NewsCuratorAuth: { config: () => { throw new Error("unconfigured"); } },
-    NewsCuratorView: {},
+    NewsCuratorView: { currentTab: () => "__all__" },
   };
   global.document = {
     getElementById: (id) => controls.get(id) || null,
-    querySelectorAll: (selector) => selector === ".state-action" ? unavailableActions : [],
+    querySelectorAll: (selector) => selector === ".state-action"
+      ? unavailableActions
+      : (selector.includes('__saved__') ? [unavailableSavedTab] : []),
+    querySelector: () => null,
   };
   controls.get("load-more").textContent = "Load more";
   await reader.run();
   assert.equal(controls.get("load-more").textContent, "Load more");
   assert.equal(unavailableActions.every((button) => button.hidden && button.disabled), true);
+  assert.equal(unavailableSavedTab.hidden && unavailableSavedTab.disabled, true);
   delete global.document;
   delete global.window;
 
@@ -568,6 +575,9 @@ async function main() {
   const addedCards = [];
   const configuredActions = [new FakeElement("button"), new FakeElement("button"), new FakeElement("button")];
   configuredActions.forEach((button) => { button.hidden = true; button.disabled = true; });
+  const configuredSavedTab = new FakeElement("button");
+  configuredSavedTab.hidden = true;
+  configuredSavedTab.disabled = true;
   global.BroadcastChannel = undefined;
   global.CSS = { escape: (value) => value };
   global.window = {
@@ -585,7 +595,9 @@ async function main() {
     createElement: (tag) => new FakeElement(tag),
     createTextNode: (value) => ({ textContent: value }),
     getElementById: (id) => liveControls.get(id) || null,
-    querySelectorAll: (selector) => selector === ".state-action" ? configuredActions : [],
+    querySelectorAll: (selector) => selector === ".state-action"
+      ? configuredActions
+      : (selector.includes('__saved__') ? [configuredSavedTab] : []),
     querySelector: (selector) => selector.includes('data-section="ai"') ? aiSection : null,
   };
   const linklessCard = reader.createStoryCard(story({
@@ -638,6 +650,7 @@ async function main() {
   await reader.run();
   assert.equal(liveControls.get("load-more").textContent, "Load 7 more");
   assert.equal(configuredActions.every((button) => !button.hidden && button.disabled), true);
+  assert.equal(configuredSavedTab.hidden || configuredSavedTab.disabled, false);
   assert.equal(controllerCalls, 2);
   assert.equal(controllerHeaders[1].authorization, "Bearer refreshed-reader-token");
   assert.equal(addedCards.length, 1);

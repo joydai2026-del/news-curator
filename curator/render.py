@@ -922,7 +922,8 @@ def render_html(
 
     chips = [
         '<button class="chip" data-filter="__all__" aria-pressed="true">All</button>',
-        '<button class="chip" data-filter="__saved__" aria-pressed="false">Saved</button>',
+        '<button class="chip" data-filter="__saved__" aria-pressed="false" '
+        'hidden disabled>Saved</button>',
     ]
     for slug, name in names.items():
         chips.append(

@@ -777,7 +777,10 @@ class TestAccordionReadingCompanion:
 
     def test_synced_reading_controls_and_saved_filter_are_rendered(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)
-        assert 'data-filter="__saved__" aria-pressed="false">Saved</button>' in page
+        assert (
+            'data-filter="__saved__" aria-pressed="false" hidden disabled>'
+            'Saved</button>'
+        ) in page
         assert 'class="state-action read-action" hidden disabled' in page
         assert '>Mark read</button>' in page
         assert (

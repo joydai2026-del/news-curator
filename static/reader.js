@@ -556,11 +556,19 @@
     const updatesStatus = document.getElementById("updates-status");
     const updatesButton = document.getElementById("show-updates");
     if (!auth || !view || !status || !loadButton || !updatesStatus || !updatesButton) return;
+    const savedTabs = document.querySelectorAll('.chip[data-filter="__saved__"]');
     let api;
     try { api = createApi(auth.config(), () => auth.sessionForRequest()); } catch (_) {
       loadButton.hidden = true;
+      if (view.currentTab() === "__saved__") {
+        document.querySelector('.chip[data-filter="__all__"]')?.click();
+      }
       return;
     }
+    savedTabs.forEach((tab) => {
+      tab.hidden = false;
+      tab.disabled = false;
+    });
     document.querySelectorAll(".state-action").forEach((button) => { button.hidden = false; });
     const cards = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => {
