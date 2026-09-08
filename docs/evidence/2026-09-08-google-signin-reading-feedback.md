@@ -16,7 +16,7 @@ Google sign-in is not ready in production. The user-reported failure was reprodu
 | Real provider availability | A, failing: live `/auth/v1/settings` reports Google disabled, email enabled, and signup disabled |
 | Dedicated Google web client | C: provider activation is blocked pending dedicated web credentials and public-audience verification; newsletter-ingestion credentials must not be reused |
 | Actual Google consent and callback | C: not exercised. Routed test responses and admin-created sessions do not prove this gate |
-| Reader gray/read feedback | Verification pending the parallel reader correction |
+| Reader gray/read feedback | B: real rendered accordion tests prove immediate gray feedback, Mark unread only, early-open intent, delayed hydration, mutation conflict rollback, stale revision rejection, and refresh/cross-context persistence. Production verification remains pending |
 | Deployment of this correction | Not deployed yet |
 
 ## Local auth results
@@ -28,6 +28,8 @@ The broader deterministic pass completed with 2,127 passed, seven optional-envir
 Independent auth/security review passed the exact auth commit `fe371afecfa5cd20b954947d9b8854609b504b4d` and privacy/contract commit `60c3d92da098838e8dcc6056905ac0fb81a19edf`. That reviewer independently passed eight focused installed-Chrome cases and the sanitized JavaScript contract. A separate raw Codex attempt timed out; its exact-commit retry failed when the host ran out of disk space. Neither incomplete raw review is counted as a pass.
 
 The current privacy page now distinguishes anonymous browsing from optional signed-in account, interest, and reading-state storage. The browser auth source stores only its minimal Supabase session in session storage, not Google provider tokens or passwords. No unrelated credentials were passed to the independent review child process.
+
+An independent installed-Chrome pass of the four newly added reader cases passed on the owner's current source. One active-mutation case passed in 8.18 seconds; the anonymous and signed early-open cases plus refresh/cross-context persistence passed in 40.76 seconds. This check made no source edits and did not reproduce the earlier readiness timeout. Its signed cases use a local auth contract, not real Google sign-in.
 
 ## Required production readback
 

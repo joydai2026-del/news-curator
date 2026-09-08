@@ -29,6 +29,7 @@ google_signin_correction:
   real_google_consent_and_callback: BLOCKED
   email_signin_removed_from_client: GREEN
   email_provider_disabled_production: PENDING
+  reader_open_gray_feedback_local: GREEN
   reader_open_gray_feedback: PENDING
   correction_deployment: PENDING
   product_owner_acceptance: OPEN
