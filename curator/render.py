@@ -300,7 +300,7 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .card+.card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
 .card:hover,.card.open{border-color:transparent;transform:none;box-shadow:none}
 .card[hidden]{display:none}
-.card.is-read .headline{color:var(--faint);font-weight:500}
+.card.is-read .headline{color:var(--faint)}
 .card.is-read{background:color-mix(in srgb,var(--line) 16%,transparent)}
 .story-heading{margin:0;font:inherit}
 .accordion-toggle{width:100%;min-height:58px;border:0;background:transparent;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:.65rem;align-items:center;padding:1.05rem 1.15rem;cursor:pointer}
@@ -382,6 +382,23 @@ JS = """
     var d=card.querySelector('.detail'); if(d){d.hidden=false;}
     var b=card.querySelector('.accordion-toggle');
     if(b){b.setAttribute('aria-expanded','true');}
+    if(!card.classList.contains('is-read')){
+      card.newsCuratorReadIntent={read:true,previousRead:false};
+      setReadPresentation(card,true);
+    }
+  }
+  function setReadPresentation(card,read){
+    card.classList.toggle('is-read',read);
+    var button=card.querySelector('.read-action');
+    if(button){
+      if(!read&&document.activeElement===button){
+        var toggle=card.querySelector('.accordion-toggle');
+        if(toggle){toggle.focus({preventScroll:true});}
+      }
+      button.textContent='Mark unread';
+      button.hidden=!read;
+      button.disabled=false;
+    }
   }
   function toggle(card){
     if(card.classList.contains('open')){collapse(card); return;}
@@ -455,6 +472,11 @@ JS = """
       if(t.closest('a')) return;                                  // the outbound link wins
       var card=t.closest('.card');
       if(!card) return;
+      if(t.closest('.read-action')){
+        card.newsCuratorReadIntent={read:false,previousRead:true};
+        setReadPresentation(card,false);
+        return;
+      }
       if(t.closest('.detail')&&!t.closest('.shut')) return;       // let people select the detail text
       toggle(card);
     });
@@ -785,7 +807,7 @@ def _render_card(
         )
     acts.extend(
         (
-            '<button type="button" class="state-action read-action" hidden disabled>Mark read</button>',
+            '<button type="button" class="state-action read-action" hidden disabled>Mark unread</button>',
             '<button type="button" class="state-action save-action" hidden disabled '
             'aria-pressed="false">Save</button>',
             f'<button type="button" class="state-action interest-action" '

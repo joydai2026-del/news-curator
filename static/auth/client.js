@@ -339,63 +339,6 @@
     if (response.redirected !== false || response.url !== requestedUrl) fail(message);
   }
 
-  function validateEmail(value) {
-    if (!boundedString(value, 254) || value !== value.trim() || /\s/.test(value)) {
-      fail("Enter a valid email address.");
-    }
-    const parts = value.split("@");
-    if (parts.length !== 2 || !parts[0] || !parts[1] || !parts[1].includes(".")) {
-      fail("Enter a valid email address.");
-    }
-    return value;
-  }
-
-  function validateEmailCode(value) {
-    if (!boundedString(value, 128) || value !== value.trim() || /\s/.test(value)) {
-      fail("Enter the code from your email.");
-    }
-    return value;
-  }
-
-  async function requestEmailCode(email, fetchImpl = fetch) {
-    const { url, key } = config();
-    const otpUrl = `${url}/auth/v1/otp`;
-    const response = await fetchImpl(otpUrl, {
-      method: "POST",
-      headers: { apikey: key, "content-type": "application/json" },
-      body: JSON.stringify({ email: validateEmail(email), create_user: false, data: {} }),
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      redirect: "error",
-    });
-    requireExactResponse(response, otpUrl, "The authentication endpoint redirected unexpectedly.");
-    const payload = await boundedJson(response, "The authentication response was invalid.");
-    if (!response.ok) fail("Email code could not be sent.");
-    const empty = exactFields(payload, []);
-    const confirmation = exactFields(payload, ["message"]) && boundedString(payload.message, 256);
-    if (!empty && !confirmation) fail("The authentication response was invalid.");
-  }
-
-  async function verifyEmailCode(email, token, fetchImpl = fetch) {
-    const { url, key } = config();
-    const verifyUrl = `${url}/auth/v1/verify`;
-    const response = await fetchImpl(verifyUrl, {
-      method: "POST",
-      headers: { apikey: key, "content-type": "application/json" },
-      body: JSON.stringify({ email: validateEmail(email), token: validateEmailCode(token), type: "email" }),
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      redirect: "error",
-    });
-    requireExactResponse(response, verifyUrl, "The authentication endpoint redirected unexpectedly.");
-    if (!response.ok) fail("Sign in failed.");
-    const rawSession = await boundedJson(response, "The authentication response was invalid.");
-    const safeSession = projectSession(rawSession);
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
-    broadcastSession(safeSession);
-    return safeSession;
-  }
-
   async function refreshSession(authConfig, currentSession, fetchImpl = fetch, nowSeconds = Date.now() / 1000) {
     try {
       const checkedConfig = validateAuthConfig(authConfig);
@@ -560,15 +503,20 @@
   async function finishCallback(callback, fetchImpl = fetch) {
     const code = callback.searchParams.get("code");
     const returnedState = callback.searchParams.get("client_state");
-    const providerError = callback.searchParams.get("error");
+    const fragment = new URLSearchParams(callback.hash.slice(1));
+    const providerError = callback.searchParams.get("error") || fragment.get("error");
     const expectedState = sessionStorage.getItem(STATE_KEY);
     const verifier = sessionStorage.getItem(VERIFIER_KEY);
     sessionStorage.removeItem(STATE_KEY);
     sessionStorage.removeItem(VERIFIER_KEY);
     history.replaceState(null, "", CALLBACK_PATH);
-    if (providerError) fail("Sign in failed.");
+    if (providerError || fragment.has("access_token") || fragment.has("refresh_token")) fail("Sign in failed.");
     if (!code) return false;
-    if (!expectedState || returnedState !== expectedState || !verifier) {
+    if (
+      !boundedString(code, 4096) || callback.searchParams.getAll("code").length !== 1 ||
+      callback.searchParams.getAll("client_state").length !== 1 ||
+      !expectedState || returnedState !== expectedState || !verifier
+    ) {
       fail("The sign-in response could not be verified.");
     }
 
@@ -628,14 +576,11 @@
     projectRefreshedSession,
     refreshSession,
     readerSessionForRequest,
-    requestEmailCode,
     setPreferences,
     signOut,
-    validateEmail,
     validatePreferenceInput,
     validatePreferenceRecord,
     validateStoredSession,
-    verifyEmailCode,
     acceptSession,
     clearSession,
     broadcastSession,
@@ -664,16 +609,14 @@
     const status = document.getElementById("status");
     if (!status) return;
     const loginPanel = document.getElementById("login-panel");
-    const codePanel = document.getElementById("code-panel");
     const preferencesPanel = document.getElementById("preferences-panel");
-    const email = document.getElementById("email");
-    const code = document.getElementById("code");
     const interests = document.getElementById("interests");
     const interestCount = document.getElementById("interest-count");
     const buttons = [...document.querySelectorAll("button")];
     const callback = new URL(window.location.href);
+    const fragment = new URLSearchParams(callback.hash.slice(1));
     const hasCallback = ["code", "client_state", "error"].some((name) =>
-      callback.searchParams.has(name));
+      callback.searchParams.has(name)) || ["error", "access_token", "refresh_token"].some((name) => fragment.has(name));
     let currentSession = null;
     let currentPreference = null;
 
@@ -700,9 +643,7 @@
       currentSession = null;
       currentPreference = null;
       loginPanel.hidden = false;
-      codePanel.hidden = true;
       preferencesPanel.hidden = true;
-      code.value = "";
     }
 
     function showPreferences(preference) {
@@ -710,7 +651,6 @@
       interests.value = currentPreference.interests.join("\n");
       updateCount();
       loginPanel.hidden = true;
-      codePanel.hidden = true;
       preferencesPanel.hidden = false;
     }
 
@@ -721,45 +661,12 @@
     }
 
     interests.addEventListener("input", updateCount);
-    document.getElementById("send-code").addEventListener("click", async () => {
-      setBusy(true);
-      try {
-        const address = email.value.trim();
-        await requestEmailCode(address);
-        email.value = address;
-        codePanel.hidden = false;
-        code.focus();
-        announce("Check your email for the sign-in code.");
-      } catch (_) {
-        announce("We could not send a code. Check the email address and try again.");
-      } finally {
-        setBusy(false);
-      }
-    });
     document.getElementById("google-sign-in").addEventListener("click", async () => {
       setBusy(true);
       try {
         await beginSignIn();
       } catch (_) {
         announce("Google sign in could not start. Try again.");
-        setBusy(false);
-      }
-    });
-    document.getElementById("verify-code").addEventListener("click", async () => {
-      setBusy(true);
-      try {
-        currentSession = await verifyEmailCode(email.value.trim(), code.value.trim());
-      } catch (_) {
-        announce("That code did not work. Request a new code and try again.");
-        setBusy(false);
-        return;
-      }
-      try {
-        await loadPreferences();
-        announce("Signed in. Your interests are ready.");
-      } catch (_) {
-        announce("Signed in, but your interests could not be loaded. Refresh the page to try again.");
-      } finally {
         setBusy(false);
       }
     });
@@ -818,8 +725,11 @@
       await loadPreferences();
       announce(hasCallback ? "Signed in. Your interests are ready." : "Your interests are ready.");
     } catch (_) {
+      const signedIn = currentSession !== null;
       showSignedOut();
-      announce(hasCallback ? "Sign in failed. Try again." : "Sign in to personalize your feed.");
+      announce(signedIn
+        ? "Signed in, but your interests could not be loaded. Refresh the page to try again."
+        : hasCallback ? "Sign in failed. Try again." : "Sign in to personalize your feed.");
     }
   }
 

@@ -344,6 +344,17 @@
     card.classList.toggle("is-more-like", interested);
     card.dataset.interestRevision = String(state.revision);
   }
+  function setReadPresentation(card, read) {
+    card.classList.toggle("is-read", read);
+    const readButton = card.querySelector(".read-action");
+    if (readButton) {
+      if (!read && typeof document !== "undefined" && document.activeElement === readButton) {
+        card.querySelector(".accordion-toggle")?.focus({ preventScroll: true });
+      }
+      readButton.textContent = "Mark unread";
+      readButton.hidden = !read;
+    }
+  }
   function applyServerState(card, state, interestTopicId = null) {
     const hasRead = Object.prototype.hasOwnProperty.call(state, "read_at");
     const hasSaved = Object.prototype.hasOwnProperty.call(state, "saved_at");
@@ -364,12 +375,10 @@
     }
     const read = hasRead && Boolean(state.read_at);
     const saved = hasSaved && Boolean(state.saved_at);
-    if (hasRead) card.classList.toggle("is-read", read);
+    if (hasRead) setReadPresentation(card, read);
     if (hasSaved) card.classList.toggle("is-saved", saved);
     if (Number.isSafeInteger(state.state_revision)) card.dataset.stateRevision = String(state.state_revision);
-    const readButton = card.querySelector(".read-action");
     const saveButton = card.querySelector(".save-action");
-    if (readButton && hasRead) readButton.textContent = read ? "Mark unread" : "Mark read";
     if (saveButton && hasSaved) {
       saveButton.textContent = saved ? "Unsave" : "Save";
       saveButton.setAttribute("aria-pressed", String(saved));
@@ -382,7 +391,9 @@
   function setStoryStateControlsDisabled(card, disabled) {
     const readButton = card.querySelector(".read-action");
     const saveButton = card.querySelector(".save-action");
-    if (readButton) readButton.disabled = disabled;
+    // Read and unread are immediate local presentation actions. Only their
+    // server synchronization is queued, so a visible Mark unread stays usable.
+    if (readButton) readButton.disabled = false;
     if (saveButton) saveButton.disabled = disabled;
   }
 
@@ -483,7 +494,7 @@
       link.rel = "noopener noreferrer nofollow";
       actions.append(link);
     }
-    const read = element("button", "state-action read-action", "Mark read");
+    const read = element("button", "state-action read-action", "Mark unread");
     const save = element("button", "state-action save-action", "Save");
     const interest = element("button", "state-action interest-action", "More like this");
     [read, save, interest].forEach((button) => { button.type = "button"; });
@@ -569,7 +580,7 @@
       tab.hidden = false;
       tab.disabled = false;
     });
-    document.querySelectorAll(".state-action").forEach((button) => { button.hidden = false; });
+    document.querySelectorAll(".state-action:not(.read-action)").forEach((button) => { button.hidden = false; });
     const cards = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => {
       card.newsCuratorStaticCard = true;
@@ -630,6 +641,10 @@
       cards.forEach((card) => {
         const ready = stateReady(card);
         card.querySelectorAll(".state-action").forEach((button) => {
+          if (button.classList.contains("read-action")) {
+            button.disabled = false;
+            return;
+          }
           const stateWrite = button.classList.contains("read-action") || button.classList.contains("save-action");
           button.disabled = !ready || (stateWrite && Boolean(card.newsCuratorStateMutationToken));
         });
@@ -652,6 +667,8 @@
     }
     function clearPrivateCardState(card) {
       delete card.newsCuratorStateMutationToken;
+      delete card.newsCuratorStateMutationPresentation;
+      delete card.newsCuratorStateMutationBaseline;
       card.classList.remove("is-read", "is-saved", "is-more-like", "is-less-like");
       interestStates(card).clear();
       hydratedTopics(card).clear();
@@ -660,7 +677,10 @@
       const readButton = card.querySelector(".read-action");
       const saveButton = card.querySelector(".save-action");
       const interestButton = card.querySelector(".interest-action");
-      if (readButton) readButton.textContent = "Mark read";
+      if (readButton) {
+        readButton.textContent = "Mark unread";
+        readButton.hidden = true;
+      }
       if (saveButton) {
         saveButton.textContent = "Save";
         saveButton.setAttribute("aria-pressed", "false");
@@ -679,6 +699,9 @@
           .forEach((attribute) => card.removeAttribute(attribute.name));
         snapshot.ranks.forEach(([name, value]) => card.setAttribute(name, value));
       }
+      delete card.newsCuratorReadIntent;
+      delete card.newsCuratorPendingReadIntent;
+      delete card.newsCuratorLocalRead;
     }
     async function handleLogout() {
       authEpoch += 1;
@@ -790,10 +813,43 @@
           ? ++nextHistoryAllRank
           : null;
         if (existing) {
+          const pendingRead = existing.newsCuratorPendingReadIntent;
+          const priorRead = existing.classList.contains("is-read");
           mergeTopicMembership(existing, row.topic_ids.map(topicSlugForId));
           existing.dataset.topicApiIds = [...row.topic_ids].sort().join(" ");
           applyServerRank(existing, row, selectedTopic(), topicSlugForId, historyAllRank);
-          applyServerState(existing, row);
+          const currentRevision = Number(existing.dataset.stateRevision || 0);
+          const incomingStale = row.state_revision < currentRevision;
+          if (incomingStale) {
+            // A slower page read may have started before a successful write.
+            // Keep its topic and interest data, but never roll back newer CAS state.
+            applyServerState(existing, { interests: row.interests });
+          } else {
+            applyServerState(existing, row);
+          }
+          const mutationBaseline = existing.newsCuratorStateMutationBaseline;
+          if (mutationBaseline && mutationBaseline.token === existing.newsCuratorStateMutationToken &&
+              row.state_revision >= mutationBaseline.state_revision) {
+            mutationBaseline.read_at = row.read_at;
+            mutationBaseline.saved_at = row.saved_at;
+            mutationBaseline.state_revision = row.state_revision;
+          }
+          const mutationPresentation = existing.newsCuratorStateMutationPresentation;
+          if (mutationPresentation) {
+            applyServerState(existing, {
+              read_at: mutationPresentation.read ? "local" : null,
+              saved_at: mutationPresentation.saved ? "local" : null,
+            });
+          }
+          if (!signedIn() && typeof existing.newsCuratorLocalRead === "boolean") {
+            applyServerState(existing, {
+              read_at: existing.newsCuratorLocalRead ? "local" : null,
+            });
+          }
+          if (pendingRead) {
+            pendingRead.previousRead = incomingStale ? priorRead : Boolean(row.read_at);
+            applyServerState(existing, { read_at: pendingRead.read ? "local" : null });
+          }
           hydratedTopics(existing).add(hydratedTopic);
           view.addCard(existing);
           return;
@@ -814,6 +870,36 @@
       if (hydratedTopic === "__all__") reconcileAllHistoryRanks(rows);
       view.apply();
       refreshStateControls();
+    }
+    function syncReadIntent(card, intent) {
+      if (!intent || typeof intent.read !== "boolean") return;
+      if (!signedIn()) {
+        delete card.newsCuratorPendingReadIntent;
+        card.newsCuratorLocalRead = intent.read;
+        return;
+      }
+      if (card.newsCuratorStateMutationToken) {
+        card.newsCuratorPendingReadIntent = intent;
+        return;
+      }
+      if (!stateReady(card)) {
+        card.newsCuratorPendingReadIntent = intent;
+        setStoryStateControlsDisabled(card, true);
+        return;
+      }
+      delete card.newsCuratorPendingReadIntent;
+      void mutateState(
+        card,
+        intent.read,
+        card.classList.contains("is-saved"),
+        intent.previousRead,
+      );
+    }
+    function flushPendingReadIntents() {
+      cards.forEach((card) => {
+        const intent = card.newsCuratorPendingReadIntent;
+        if (intent && stateReady(card)) syncReadIntent(card, intent);
+      });
     }
     async function hydrate(force = false) {
       const topic = selectedTopic();
@@ -837,6 +923,7 @@
         if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
         hydrated.add(topic);
       }
+      flushPendingReadIntents();
     }
     async function loadMore() {
       const topic = selectedTopic();
@@ -879,34 +966,62 @@
       }
       window.scrollTo(scrollX, scrollY);
     }
-    async function mutateState(card, read, saved) {
+    function reconcilePendingRead(card, confirmedRead) {
+      const pending = card.newsCuratorPendingReadIntent;
+      if (!pending) return;
+      if (pending.read === confirmedRead) {
+        delete card.newsCuratorPendingReadIntent;
+        return;
+      }
+      pending.previousRead = confirmedRead;
+      applyServerState(card, { read_at: pending.read ? "local" : null });
+    }
+    async function mutateState(card, read, saved, previousRead = card.classList.contains("is-read")) {
       const focusedAction = document.activeElement;
       const restoreFocusOnRollback = Boolean(focusedAction && card.contains(focusedAction));
       const mutationToken = beginStateMutation(card);
       if (!mutationToken) return;
       const requestEpoch = authEpoch;
       let rolledBack = false;
+      card.newsCuratorStateMutationPresentation = { token: mutationToken, read, saved };
       const previous = {
-        read_at: card.classList.contains("is-read") ? "local" : null,
+        read_at: previousRead ? "local" : null,
         saved_at: card.classList.contains("is-saved") ? "local" : null,
         state_revision: Number(card.dataset.stateRevision || 0),
       };
+      card.newsCuratorStateMutationBaseline = { token: mutationToken, ...previous };
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
         const result = await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, idempotencyKey());
         if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
         if (result.status === "conflict") fail("Story state changed in another session.");
-        applyServerState(card, { ...previous, ...result });
+        const baseline = card.newsCuratorStateMutationBaseline || previous;
+        const confirmed = Number(result.state_revision) >= Number(baseline.state_revision)
+          ? { ...baseline, ...result }
+          : baseline;
+        applyServerState(card, confirmed);
+        reconcilePendingRead(card, Boolean(confirmed.read_at));
         reapplyCurrentMembership(card, restoreFocusOnRollback ? focusedAction : null);
         announce("Reading state saved.");
       } catch (_) {
         if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
-        applyServerState(card, previous);
+        const baseline = card.newsCuratorStateMutationBaseline || previous;
+        applyServerState(card, baseline);
+        reconcilePendingRead(card, Boolean(baseline.read_at));
         reapplyCurrentMembership(card);
         rolledBack = true;
         announce("Reading state could not be saved. Try again.");
       } finally {
+        if (card.newsCuratorStateMutationPresentation?.token === mutationToken) {
+          delete card.newsCuratorStateMutationPresentation;
+        }
+        if (card.newsCuratorStateMutationBaseline?.token === mutationToken) {
+          delete card.newsCuratorStateMutationBaseline;
+        }
         const unlocked = finishStateMutation(card, mutationToken, stateReady(card));
+        if (unlocked && card.newsCuratorPendingReadIntent) {
+          syncReadIntent(card, card.newsCuratorPendingReadIntent);
+        }
         if (unlocked && rolledBack && restoreFocusOnRollback && focusedAction.isConnected && !card.hidden) {
           focusedAction.focus({ preventScroll: true });
         }
@@ -916,14 +1031,25 @@
       const target = event.target.closest && event.target.closest("button");
       const card = event.target.closest && event.target.closest(".card[data-story-id]");
       if (!target || !card) return;
+      let readIntent = card.newsCuratorReadIntent;
+      if (readIntent) delete card.newsCuratorReadIntent;
+      if (!readIntent && target.classList.contains("accordion-toggle") &&
+          target.getAttribute("aria-expanded") === "true" && !card.classList.contains("is-read")) {
+        readIntent = { read: true, previousRead: false };
+        applyServerState(card, { read_at: "local" });
+      } else if (!readIntent && target.classList.contains("read-action") &&
+          card.classList.contains("is-read")) {
+        readIntent = { read: false, previousRead: true };
+        applyServerState(card, { read_at: null });
+      }
+      if (readIntent && (target.classList.contains("accordion-toggle") ||
+          target.classList.contains("read-action"))) {
+        syncReadIntent(card, readIntent);
+        return;
+      }
       const stateAction = target.classList.contains("state-action");
-      if ((stateAction || target.classList.contains("accordion-toggle")) && !stateReady(card)) return;
-      if (target.classList.contains("accordion-toggle") && target.getAttribute("aria-expanded") === "true" &&
-          !card.classList.contains("is-read") && requireSignIn()) {
-        void mutateState(card, true, card.classList.contains("is-saved"));
-      } else if (target.classList.contains("read-action") && requireSignIn()) {
-        void mutateState(card, !card.classList.contains("is-read"), card.classList.contains("is-saved"));
-      } else if (target.classList.contains("save-action") && requireSignIn()) {
+      if (stateAction && !stateReady(card)) return;
+      if (target.classList.contains("save-action") && requireSignIn()) {
         void mutateState(card, card.classList.contains("is-read"), !card.classList.contains("is-saved"));
       } else if (target.classList.contains("interest-action") && requireSignIn()) {
         const topicIds = (card.dataset.topicApiIds || "").split(/\s+/).filter(Boolean);
@@ -978,6 +1104,14 @@
         }
       });
     }
+    // The inline accordion remains usable while this deferred controller loads.
+    // Adopt any open/unread intent that occurred before our delegated listener.
+    cards.forEach((card) => {
+      const intent = card.newsCuratorReadIntent;
+      if (!intent) return;
+      delete card.newsCuratorReadIntent;
+      syncReadIntent(card, intent);
+    });
     try {
       latest = await api.latestPublication();
       if (!latest) {
