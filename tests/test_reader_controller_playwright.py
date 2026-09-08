@@ -1069,6 +1069,75 @@ def test_unconfigured_page_keeps_articles_readable_without_interactive_state_con
         thread.join(timeout=5)
 
 
+def test_main_navigation_stays_fully_visible_at_real_footer_bottom(
+    tmp_path: Path, now: object
+) -> None:
+    site = tmp_path / "site"
+    ranked = {}
+    topic_ids = {}
+    for topic_index in range(8):
+        name = f"Long topic {topic_index + 1}"
+        topic_ids[name] = f"topic-{topic_index + 1}"
+        ranked[name] = [
+            make_item(
+                f"Story {topic_index + 1}-{story_index + 1}",
+                f"https://publisher.example/{topic_index + 1}/{story_index + 1}",
+            )
+            for story_index in range(6)
+        ]
+    render_site(
+        ranked,
+        [TierResult(tier="rss", items=[], ok=True)],
+        now,
+        site,
+        topic_ids_by_name=topic_ids,
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = _launch_browser(playwright)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            for viewport in (
+                {"width": 1440, "height": 1000},
+                {"width": 1100, "height": 560},
+                {"width": 390, "height": 844},
+            ):
+                page.set_viewport_size(viewport)
+                page.evaluate("scrollTo(0, document.documentElement.scrollHeight)")
+                scroll_before = page.evaluate("scrollY")
+                if viewport["width"] > 800:
+                    container = page.locator("aside.rail")
+                    chips = page.locator(".railnav .chip:visible:not([disabled])")
+                else:
+                    container = page.locator(".tools")
+                    chips = page.locator(".mobiletopics .chip:visible:not([disabled])")
+                chips.first.focus()
+                for _ in range(chips.count() - 1):
+                    page.keyboard.press("Tab")
+                last = chips.last
+                assert last.evaluate("node => document.activeElement === node")
+                box = last.bounding_box()
+                bounds = container.bounding_box()
+                assert box is not None and bounds is not None
+                assert 0 <= bounds["y"]
+                assert bounds["y"] + bounds["height"] <= viewport["height"]
+                assert bounds["x"] <= box["x"]
+                assert box["x"] + box["width"] <= bounds["x"] + bounds["width"]
+                assert bounds["y"] <= box["y"]
+                assert box["y"] + box["height"] <= bounds["y"] + bounds["height"]
+                assert page.evaluate("scrollY") == scroll_before
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 @pytest.mark.parametrize("signed_in", [False, True], ids=["anonymous", "signed-delayed-hydration"])
 def test_real_render_open_marks_read_locally_and_unread_reopens_without_layout_jump(
     tmp_path: Path, now: object, signed_in: bool
