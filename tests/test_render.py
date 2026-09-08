@@ -782,7 +782,8 @@ class TestAccordionReadingCompanion:
             'Saved</button>'
         ) in page
         assert 'class="state-action read-action" hidden disabled' in page
-        assert '>Mark read</button>' in page
+        assert '>Mark unread</button>' in page
+        assert '>Mark read</button>' not in page
         assert (
             'class="state-action save-action" hidden disabled '
             'aria-pressed="false">Save</button>' in page
@@ -794,6 +795,11 @@ class TestAccordionReadingCompanion:
         assert 'id="load-more"' in page and '>Load more</button>' in page
         assert 'Load 20 more' not in page
         assert 'id="updates-status" role="status" aria-live="polite"' in page
+
+    def test_read_style_changes_color_without_changing_headline_weight(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert ".card.is-read .headline{color:var(--faint)}" in page
+        assert ".card.is-read .headline{color:var(--faint);font-weight:" not in page
 
     def test_dynamic_cards_have_a_symmetric_view_index_lifecycle(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)

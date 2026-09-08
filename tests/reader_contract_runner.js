@@ -415,11 +415,11 @@ async function main() {
   assert.equal(fakeCard.controls[".save-action"].textContent, "Save");
   const stateToken = reader.beginStateMutation(fakeCard);
   assert.ok(stateToken);
-  assert.equal(fakeCard.controls[".read-action"].disabled, true);
+  assert.equal(fakeCard.controls[".read-action"].disabled, false);
   assert.equal(fakeCard.controls[".save-action"].disabled, true);
   assert.equal(reader.beginStateMutation(fakeCard), null);
   assert.equal(reader.finishStateMutation(fakeCard, {}, true), false);
-  assert.equal(fakeCard.controls[".read-action"].disabled, true);
+  assert.equal(fakeCard.controls[".read-action"].disabled, false);
   assert.equal(reader.finishStateMutation(fakeCard, stateToken, true), true);
   assert.equal(fakeCard.controls[".read-action"].disabled, false);
   assert.equal(fakeCard.controls[".save-action"].disabled, false);
@@ -595,9 +595,10 @@ async function main() {
     createElement: (tag) => new FakeElement(tag),
     createTextNode: (value) => ({ textContent: value }),
     getElementById: (id) => liveControls.get(id) || null,
-    querySelectorAll: (selector) => selector === ".state-action"
-      ? configuredActions
-      : (selector.includes('__saved__') ? [configuredSavedTab] : []),
+    querySelectorAll: (selector) => selector === ".state-action:not(.read-action)"
+      ? configuredActions.slice(1)
+      : (selector === ".state-action" ? configuredActions
+      : (selector.includes('__saved__') ? [configuredSavedTab] : [])),
     querySelector: (selector) => selector.includes('data-section="ai"') ? aiSection : null,
   };
   const linklessCard = reader.createStoryCard(story({
@@ -649,7 +650,8 @@ async function main() {
   };
   await reader.run();
   assert.equal(liveControls.get("load-more").textContent, "Load 7 more");
-  assert.equal(configuredActions.every((button) => !button.hidden && button.disabled), true);
+  assert.equal(configuredActions[0].hidden && configuredActions[0].disabled, true);
+  assert.equal(configuredActions.slice(1).every((button) => !button.hidden && button.disabled), true);
   assert.equal(configuredSavedTab.hidden || configuredSavedTab.disabled, false);
   assert.equal(controllerCalls, 2);
   assert.equal(controllerHeaders[1].authorization, "Bearer refreshed-reader-token");

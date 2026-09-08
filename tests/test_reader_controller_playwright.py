@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from curator.models import TierResult
+from curator.identity import story_id_for_item
 from curator.render import JS as VIEW_JS, render_site
 from scripts.build_auth_callback import activate_personalization_link
 from tests.conftest import make_item
@@ -18,6 +19,33 @@ playwright_api = pytest.importorskip("playwright.sync_api")
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = "https://project-ref.supabase.co"
+
+
+def _launch_browser(playwright: object) -> object:
+    try:
+        return playwright.chromium.launch(headless=True)
+    except Exception as exc:
+        if "Executable doesn't exist" not in str(exc):
+            raise
+        return playwright.chromium.launch(headless=True, channel="chrome")
+
+
+def _install_signed_auth_stub(site: Path) -> None:
+    (site / "auth-stub.js").write_text(
+        f'''window.NewsCuratorAuth={{
+          config:()=>({{url:"{ORIGIN}",key:"public-key"}}),
+          hasSessionCandidate:()=>true,
+          sessionForRequest:async()=>({{access_token:"reader-token"}}),
+          channelName:"news-curator-auth"
+        }};''',
+        encoding="utf-8",
+    )
+    html = (site / "index.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<script src="auth/client.js" defer></script>',
+        '<script src="auth-stub.js" defer></script>',
+    )
+    (site / "index.html").write_text(html, encoding="utf-8")
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
@@ -116,7 +144,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
               data-topic-ids="ai quantum-computing" data-topic-api-ids="ai quantum"
               data-state-revision="0" data-interest-revision="0" data-rank-all="1">
               <button class="accordion-toggle" aria-expanded="false">Controller story 1</button>
-              <button class="state-action read-action" hidden disabled>Mark read</button>
+              <button class="state-action read-action" hidden disabled>Mark unread</button>
               <button class="state-action save-action" hidden disabled>Save</button>
               <button class="state-action interest-action" data-topic-id="ai" hidden disabled>More like this</button>
             </article>
@@ -124,7 +152,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
               data-topic-ids="quantum-computing" data-topic-api-ids="quantum"
               data-state-revision="0" data-interest-revision="0" data-rank-all="2">
               <button class="accordion-toggle" aria-expanded="false">Controller story 2</button>
-              <button class="state-action read-action" hidden disabled>Mark read</button>
+              <button class="state-action read-action" hidden disabled>Mark unread</button>
               <button class="state-action save-action" hidden disabled>Save</button>
               <button class="state-action interest-action" data-topic-id="quantum" hidden disabled>More like this</button>
             </article>
@@ -173,6 +201,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     interest_writes: list[tuple[str, int]] = []
     state_writes: list[tuple[str, int]] = []
     fail_next_state = {"value": False}
+    fail_state_write_number: dict[str, int | None] = {"value": None}
 
     def fulfill(route: object) -> None:
         request = route.request
@@ -249,8 +278,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             }]
         elif request.url.endswith("/set_story_state"):
             state_writes.append((body["p_story_id"], body["p_expected_revision"]))
-            if fail_next_state["value"]:
+            if fail_next_state["value"] or len(state_writes) == fail_state_write_number["value"]:
                 fail_next_state["value"] = False
+                fail_state_write_number["value"] = None
                 route.fulfill(
                     status=500,
                     content_type="application/json",
@@ -262,7 +292,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "status": "updated",
                 "read_at": "2026-09-07T12:01:00Z" if body["p_read"] else None,
                 "saved_at": "2026-09-07T12:02:00Z" if body["p_saved"] else None,
-                "revision": counts["state"],
+                "revision": body["p_expected_revision"] + 1,
             }
         elif request.url.endswith("/set_story_interest"):
             assert body["p_topic_id"] in {"ai", "quantum"}
@@ -279,7 +309,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
 
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             page = browser.new_page(viewport={"width": 900, "height": 700})
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
@@ -290,10 +320,10 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             page.locator("#load-more").click()
             page.locator("#reader-status").get_by_text("1 older story loaded.").wait_for()
             assert _visually_ordered_story_ids(page) == current_ids + history_ids
-            assert page.locator(".state-action:visible").count() == 6
-            assert page.locator(".state-action:enabled").count() == 12
+            assert page.locator(".state-action:visible").count() == 4
+            assert page.locator(".state-action:enabled").count() == 13
             second = page.locator("article.card", has_text="Controller story 2")
-            assert second.locator(".state-action:enabled").count() == 0
+            assert second.locator(".state-action:enabled").count() == 1
             second.locator(".save-action").evaluate(
                 "button => button.dispatchEvent(new MouseEvent('click', {bubbles: true}))"
             )
@@ -306,15 +336,53 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             assert page.locator("article.card:visible").count() == 2
             assert second.locator(".state-action:enabled").count() == 3
             assert second.get_attribute("data-state-revision") == "7"
-            second.locator(".read-action").click()
-            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            second.locator(".accordion-toggle").evaluate(
+                "button => { button.setAttribute('aria-expanded', 'true'); button.click(); }"
+            )
+            page.wait_for_function(
+                "card => card.dataset.stateRevision === '8'", arg=second.element_handle()
+            )
             assert state_writes[-1] == (second.get_attribute("data-story-id"), 7)
+            assert second.evaluate("card => card.classList.contains('is-read')")
+            assert second.locator(".read-action").is_visible()
 
             first = page.locator("article.card").first
+            first_start_revision = int(first.get_attribute("data-state-revision") or "0")
             first.locator(".accordion-toggle").evaluate(
                 "button => { button.setAttribute('aria-expanded', 'true'); button.click(); }"
             )
-            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            page.wait_for_function(
+                "([card, revision]) => card.dataset.stateRevision === String(revision + 1)",
+                arg=[first.element_handle(), first_start_revision],
+            )
+            first.locator(".read-action").click()
+            page.wait_for_function(
+                "([card, revision]) => card.dataset.stateRevision === String(revision + 2)",
+                arg=[first.element_handle(), first_start_revision],
+            )
+            assert not first.evaluate("card => card.classList.contains('is-read')")
+            rapid_revision = int(first.get_attribute("data-state-revision") or "0")
+            rapid_writes = len(state_writes)
+            fail_state_write_number["value"] = rapid_writes + 2
+            first.evaluate(
+                "card => {"
+                " const toggle = card.querySelector('.accordion-toggle');"
+                " toggle.setAttribute('aria-expanded', 'true');"
+                " toggle.click();"
+                " card.querySelector('.read-action').click();"
+                "}"
+            )
+            page.locator("#reader-status").get_by_text(
+                "Reading state could not be saved. Try again."
+            ).wait_for()
+            assert len(state_writes) == rapid_writes + 2
+            assert state_writes[-2:] == [
+                (first.get_attribute("data-story-id"), rapid_revision),
+                (first.get_attribute("data-story-id"), rapid_revision + 1),
+            ]
+            assert first.evaluate("card => card.classList.contains('is-read')")
+            assert first.get_attribute("data-state-revision") == str(rapid_revision + 1)
+            assert first.locator(".read-action").is_visible()
             double_click_revision = int(first.get_attribute("data-state-revision") or "0")
             writes_before_double_click = len(state_writes)
             first.locator(".save-action").evaluate(
@@ -532,7 +600,7 @@ def test_persisted_topic_history_is_reconciled_by_first_all_page(tmp_path: Path)
 
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             context = browser.new_context()
             context.add_init_script("localStorage.setItem('nc-tab', 'quantum-computing')")
             page = context.new_page()
@@ -654,7 +722,7 @@ def test_saved_only_card_stays_after_current_edition_and_reconciles_on_all(
 
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             context = browser.new_context()
             context.add_init_script("localStorage.setItem('nc-tab', '__saved__')")
             page = context.new_page()
@@ -760,7 +828,7 @@ def test_short_initial_all_page_continues_at_retention_cursor(tmp_path: Path) ->
 
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             page = browser.new_page()
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
@@ -802,7 +870,7 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
               data-topic-api-ids="ai" data-state-revision="0" data-interest-revision="0"
               data-rank-all="1" data-rank-ai="1">
               <button class="accordion-toggle" aria-expanded="false">AI story</button>
-              <button class="state-action read-action" disabled>Mark read</button>
+              <button class="state-action read-action" hidden disabled>Mark unread</button>
               <button class="state-action save-action" disabled>Save</button>
               <button class="state-action interest-action" data-topic-id="ai" disabled>More like this</button>
             </article>
@@ -810,7 +878,7 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
               data-topic-api-ids="quantum" data-state-revision="0" data-interest-revision="0"
               data-rank-all="2" data-rank-quantum-computing="1">
               <button class="accordion-toggle" aria-expanded="false">Quantum story</button>
-              <button class="state-action read-action" disabled>Mark read</button>
+              <button class="state-action read-action" hidden disabled>Mark unread</button>
               <button class="state-action save-action" disabled>Save</button>
               <button class="state-action interest-action" data-topic-id="quantum" disabled>More like this</button>
             </article>
@@ -908,7 +976,7 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
 
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             page = browser.new_page()
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
@@ -929,7 +997,7 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
             )
             assert ai.locator(".read-action").inner_text() == "Mark unread"
             assert ai.locator(".save-action").inner_text() == "Unsave"
-            assert quantum.locator(".state-action:enabled").count() == 0
+            assert quantum.locator(".state-action:enabled").count() == 1
 
             quantum.locator(".save-action").evaluate(
                 "button => button.dispatchEvent(new MouseEvent('click', {bubbles: true}))"
@@ -965,10 +1033,11 @@ def test_unconfigured_page_keeps_articles_readable_without_interactive_state_con
         "It also identifies the next expected step without requiring any synchronized reading features."
     )
     render_site(
-        {"AI": [item]},
+        {"AI": [item], "Quantum Computing": [item]},
         [TierResult(tier="rss", items=[], ok=True)],
         now,
         site,
+        topic_ids_by_name={"AI": "ai", "Quantum Computing": "quantum"},
     )
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
@@ -977,7 +1046,7 @@ def test_unconfigured_page_keeps_articles_readable_without_interactive_state_con
     thread.start()
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             context = browser.new_context()
             context.add_init_script("localStorage.setItem('nc-tab', '__saved__')")
             page = context.new_page()
@@ -990,8 +1059,375 @@ def test_unconfigured_page_keeps_articles_readable_without_interactive_state_con
             )
             page.get_by_text("Public story", exact=True).click()
             assert page.locator("a", has_text="Read original").is_visible()
-            assert page.locator(".state-action:visible").count() == 0
-            assert page.locator(".state-action:enabled").count() == 0
+            assert page.locator(".state-action:visible").count() == 1
+            assert page.get_by_role("button", name="Mark unread").is_enabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("signed_in", [False, True], ids=["anonymous", "signed-delayed-hydration"])
+def test_real_render_open_marks_read_locally_and_unread_reopens_without_layout_jump(
+    tmp_path: Path, now: object, signed_in: bool
+) -> None:
+    site = tmp_path / "site"
+    item = make_item("Automatic read feedback")
+    item.description = (
+        "The publisher supplied a complete summary that exercises the actual rendered "
+        "accordion, local read feedback, and deliberate unread behavior."
+    )
+    story_id = story_id_for_item(item)
+    render_site(
+        {"AI": [item]},
+        [TierResult(tier="rss", items=[], ok=True)],
+        now,
+        site,
+    )
+    activate_personalization_link(
+        site / "index.html",
+        supabase_url=ORIGIN,
+        publishable_key="sb_publishable_test",
+    )
+    if signed_in:
+        _install_signed_auth_stub(site)
+    (site / "pre-reader-open.js").write_text(
+        "document.querySelector('article.card .headline').click();",
+        encoding="utf-8",
+    )
+    html = (site / "index.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<script src="reader.js" defer></script>',
+        '<script src="pre-reader-open.js"></script><script src="reader.js" defer></script>',
+    )
+    (site / "index.html").write_text(html, encoding="utf-8")
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    state_writes: list[tuple[bool, int]] = []
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        body = request.post_data_json
+        if request.url.endswith("/latest_publication"):
+            payload: object = {
+                "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [
+                    {"topic_id": "ai", "name": "AI"},
+                    {"topic_id": "quantum", "name": "Quantum Computing"},
+                ],
+                "initial_history_cursor": None, "poll_seconds": 30, "page_size": 3,
+            }
+        elif request.url.endswith("/feed_page"):
+            payload = [_story(1) | {
+                "story_id": story_id, "title": "Automatic read feedback",
+                "topic_ids": ["ai", "quantum"], "topic_ranks": {"ai": 1, "quantum": 1},
+            }]
+        elif request.url.endswith("/set_story_state"):
+            state_writes.append((body["p_read"], body["p_expected_revision"]))
+            payload = {
+                "status": "updated", "read_at": "2026-09-07T12:01:00Z",
+                "saved_at": None, "revision": 1,
+            }
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = _launch_browser(playwright)
+            context = browser.new_context(viewport={"width": 900, "height": 700})
+            context.add_init_script(
+                """(() => {
+                  const nativeFetch = window.fetch.bind(window);
+                  window.fetch = (...args) => String(args[0]).includes('latest_publication')
+                    ? new Promise((resolve, reject) => {
+                        window.__releaseReaderFetch = () => nativeFetch(...args).then(resolve, reject);
+                      })
+                    : nativeFetch(...args);
+                })();"""
+            )
+            page = context.new_page()
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            card = page.locator("article.card")
+            headline = card.locator(".headline")
+            before_color = card.evaluate(
+                """node => {
+                  node.classList.remove('is-read');
+                  const color = getComputedStyle(node.querySelector('.headline')).color;
+                  node.classList.add('is-read');
+                  return color;
+                }"""
+            )
+            before_weight = headline.evaluate("node => getComputedStyle(node).fontWeight")
+            before_order = _visible_story_ids(page)
+            page.evaluate("window.scrollTo(0, 40)")
+            before_scroll = page.evaluate("window.scrollY")
+            before_headline_box = headline.bounding_box()
+
+            assert card.evaluate("node => node.classList.contains('is-read')")
+            assert headline.evaluate("node => getComputedStyle(node).color") != before_color
+            assert headline.evaluate("node => getComputedStyle(node).fontWeight") == before_weight
+            assert headline.bounding_box() == pytest.approx(before_headline_box, abs=0.5)
+            assert _visible_story_ids(page) == before_order
+            assert page.evaluate("window.scrollY") == before_scroll
+            assert page.get_by_role("button", name="Mark read").count() == 0
+            unread = page.get_by_role("button", name="Mark unread")
+            assert unread.is_visible() and unread.is_enabled()
+            page.locator('.chip[data-filter="ai"]:visible').click()
+            assert card.is_visible()
+            assert unread.is_enabled()
+
+            unread.scroll_into_view_if_needed()
+            before_unread_scroll = page.evaluate("window.scrollY")
+            before_unread_order = _visible_story_ids(page)
+            unread.click()
+            assert card.evaluate("node => !node.classList.contains('is-read')")
+            assert unread.is_hidden()
+            assert page.evaluate("document.activeElement.classList.contains('accordion-toggle')")
+            assert page.evaluate("window.scrollY") == before_unread_scroll
+            assert _visible_story_ids(page) == before_unread_order
+            assert card.locator(".detail").is_visible()
+            card.locator(".shut").click()
+            assert not card.evaluate("node => node.classList.contains('is-read')")
+            headline.click()
+            assert card.evaluate("node => node.classList.contains('is-read')")
+            assert unread.is_visible()
+            with page.expect_response(lambda response: response.url.endswith("/feed_page")):
+                page.evaluate("window.__releaseReaderFetch()")
+            if signed_in:
+                page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+                assert state_writes == [(True, 0)]
+            else:
+                assert state_writes == []
+            assert card.evaluate("node => node.classList.contains('is-read')")
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_active_read_mutation_uses_newest_hydrated_rollback_baseline(
+    tmp_path: Path, now: object
+) -> None:
+    site = tmp_path / "site"
+    item = make_item("Hydration race story")
+    item.description = "The publisher supplied a complete summary for state race coverage."
+    story_id = story_id_for_item(item)
+    render_site(
+        {"AI": [item], "Quantum Computing": [item]},
+        [TierResult(tier="rss", items=[], ok=True)], now, site,
+        topic_ids_by_name={"AI": "ai", "Quantum Computing": "quantum"},
+    )
+    activate_personalization_link(
+        site / "index.html", supabase_url=ORIGIN, publishable_key="sb_publishable_test",
+    )
+    _install_signed_auth_stub(site)
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    state_calls = {"value": 0}
+    feed_calls = {"value": 0}
+
+    def row(revision: int, read: bool, saved: bool) -> dict[str, object]:
+        return _story(1) | {
+            "story_id": story_id, "title": "Hydration race story",
+            "read_at": "2026-09-07T12:01:00Z" if read else None,
+            "saved_at": "2026-09-07T12:02:00Z" if saved else None,
+            "state_revision": revision, "topic_ids": ["ai", "quantum"],
+            "topic_ranks": {"ai": 1, "quantum": 1},
+        }
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        body = request.post_data_json
+        if request.url.endswith("/latest_publication"):
+            payload: object = {
+                "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [
+                    {"topic_id": "ai", "name": "AI"},
+                    {"topic_id": "quantum", "name": "Quantum Computing"},
+                ],
+                "initial_history_cursor": None, "poll_seconds": 30, "page_size": 3,
+            }
+        elif request.url.endswith("/feed_page"):
+            feed_calls["value"] += 1
+            if body["p_topic_id"] == "ai":
+                payload = [row(2, False, True)]
+            elif body["p_topic_id"] == "quantum":
+                payload = [row(1, False, False)]
+            else:
+                payload = [row(0, False, False)]
+        elif request.url.endswith("/set_story_state"):
+            state_calls["value"] += 1
+            if state_calls["value"] == 1:
+                payload = {"status": "conflict", "revision": 2}
+            else:
+                assert body["p_expected_revision"] == 2
+                assert body["p_read"] is True and body["p_saved"] is True
+                payload = {
+                    "status": "updated", "read_at": "2026-09-07T12:03:00Z",
+                    "saved_at": "2026-09-07T12:02:00Z", "revision": 3,
+                }
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = _launch_browser(playwright)
+            context = browser.new_context()
+            context.add_init_script(
+                """(() => {
+                  const nativeFetch = window.fetch.bind(window);
+                  window.fetch = (...args) => String(args[0]).includes('set_story_state')
+                    ? new Promise((resolve, reject) => {
+                        window.__releaseStateFetch = () => nativeFetch(...args).then(resolve, reject);
+                      })
+                    : nativeFetch(...args);
+                })();"""
+            )
+            page = context.new_page()
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            card = page.locator(f'article.card[data-story-id="{story_id}"]')
+            assert page_errors == []
+            page.wait_for_timeout(500)
+            assert feed_calls["value"] == 1
+            assert card.locator(".save-action").is_enabled()
+
+            card.locator(".headline").click()
+            assert card.evaluate("node => node.classList.contains('is-read')")
+            with page.expect_response(lambda response: response.url.endswith("/feed_page")):
+                page.locator('.chip[data-filter="ai"]:visible').click()
+            assert card.evaluate("node => node.classList.contains('is-read')")
+            assert not card.evaluate("node => node.classList.contains('is-saved')")
+            page.evaluate("window.__releaseStateFetch()")
+            page.locator("#reader-status").get_by_text(
+                "Reading state could not be saved. Try again."
+            ).wait_for()
+            assert not card.evaluate("node => node.classList.contains('is-read')")
+            assert card.evaluate("node => node.classList.contains('is-saved')")
+            assert card.get_attribute("data-state-revision") == "2"
+
+            card.locator(".shut").click()
+            card.locator(".headline").click()
+            page.evaluate("window.__releaseStateFetch()")
+            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            assert card.get_attribute("data-state-revision") == "3"
+            with page.expect_response(lambda response: response.url.endswith("/feed_page")):
+                page.locator('.chip[data-filter="quantum-computing"]:visible').click()
+            assert card.evaluate("node => node.classList.contains('is-read')")
+            assert card.evaluate("node => node.classList.contains('is-saved')")
+            assert card.get_attribute("data-state-revision") == "3"
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_signed_open_and_unread_persist_across_refresh_and_browser_context(
+    tmp_path: Path, now: object
+) -> None:
+    site = tmp_path / "site"
+    item = make_item("Signed reading state")
+    item.description = "The publisher supplied a complete summary for signed state synchronization."
+    story_id = story_id_for_item(item)
+    render_site(
+        {"AI": [item]}, [TierResult(tier="rss", items=[], ok=True)], now, site,
+        topic_ids_by_name={"AI": "ai"},
+    )
+    activate_personalization_link(
+        site / "index.html", supabase_url=ORIGIN, publishable_key="sb_publishable_test",
+    )
+    _install_signed_auth_stub(site)
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    state = {"read": False, "revision": 0}
+    writes: list[tuple[bool, int]] = []
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        body = request.post_data_json
+        if request.url.endswith("/latest_publication"):
+            payload: object = {
+                "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [{"topic_id": "ai", "name": "AI"}],
+                "initial_history_cursor": None, "poll_seconds": 30, "page_size": 3,
+            }
+        elif request.url.endswith("/feed_page"):
+            payload = [_story(1, "history_freshness") | {
+                "story_id": story_id,
+                "title": "Signed reading state",
+                "read_at": "2026-09-07T12:01:00Z" if state["read"] else None,
+                "state_revision": state["revision"],
+                "topic_ids": ["ai"], "topic_ranks": {"ai": 1},
+            }]
+        elif request.url.endswith("/set_story_state"):
+            assert body["p_expected_revision"] == state["revision"]
+            writes.append((body["p_read"], body["p_expected_revision"]))
+            state["read"] = body["p_read"]
+            state["revision"] += 1
+            payload = {
+                "status": "updated",
+                "read_at": "2026-09-07T12:01:00Z" if state["read"] else None,
+                "saved_at": None,
+                "revision": state["revision"],
+            }
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = _launch_browser(playwright)
+            first_context = browser.new_context()
+            first = first_context.new_page()
+            first.route(f"{ORIGIN}/**", fulfill)
+            first.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            card = first.locator(f'article.card[data-story-id="{story_id}"]')
+            first.wait_for_function(
+                "card => !card.querySelector('.save-action').disabled",
+                arg=card.element_handle(),
+            )
+            card.locator(".headline").click()
+            first.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            assert writes == [(True, 0)]
+            first.reload(wait_until="networkidle")
+            card = first.locator(f'article.card[data-story-id="{story_id}"]')
+            assert card.evaluate("node => node.classList.contains('is-read')")
+
+            second_context = browser.new_context()
+            second = second_context.new_page()
+            second.route(f"{ORIGIN}/**", fulfill)
+            second.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            second_card = second.locator(f'article.card[data-story-id="{story_id}"]')
+            second.wait_for_function(
+                "card => !card.querySelector('.save-action').disabled",
+                arg=second_card.element_handle(),
+            )
+            assert second_card.evaluate("node => node.classList.contains('is-read')")
+            second_card.locator(".headline").click()
+            second_card.get_by_role("button", name="Mark unread").click()
+            second.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            assert writes[-1] == (False, 1)
+
+            first.reload(wait_until="networkidle")
+            card = first.locator(f'article.card[data-story-id="{story_id}"]')
+            assert not card.evaluate("node => node.classList.contains('is-read')")
+            assert card.locator(".read-action").is_hidden()
             browser.close()
     finally:
         server.shutdown()
@@ -1022,7 +1458,7 @@ def test_logout_removes_dynamic_saved_card_from_dom_and_view_index(tmp_path: Pat
             data-topic-ids="ai" data-topic-api-ids="ai" data-rank-all="1" data-rank-ai="1"
             data-state-revision="0" data-interest-revision="0">
             <button class="headline accordion-toggle">Public story</button><div class="full">Public summary</div>
-            <button class="state-action read-action" disabled>Mark read</button>
+            <button class="state-action read-action" hidden disabled>Mark unread</button>
             <button class="state-action save-action" disabled>Save</button>
             <button class="state-action interest-action" data-topic-id="ai" disabled>More like this</button>
           </article></div>
@@ -1080,7 +1516,7 @@ def test_logout_removes_dynamic_saved_card_from_dom_and_view_index(tmp_path: Pat
 
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             page = browser.new_page()
             page.route(f"{ORIGIN}/**", fulfill)
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
@@ -1192,7 +1628,7 @@ def test_polled_update_banner_is_an_accessible_overlay_until_explicit_refresh(
 
     try:
         with playwright_api.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = _launch_browser(playwright)
             context = browser.new_context(viewport=viewport)
             context.add_init_script(
                 """(() => {
