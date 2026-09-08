@@ -19,6 +19,20 @@ release_verification:
   product_owner_acceptance: OPEN
   email_code_delivery_this_release: NOT_EXERCISED
   historical_notes: "Cloud and translation entries without this release evidence pointer retain their historical snapshot meaning."
+google_signin_correction:
+  date: 2026-09-08
+  evidence: docs/evidence/2026-09-08-google-signin-reading-feedback.md
+  auth_implementation: fe371afecfa5cd20b954947d9b8854609b504b4d
+  google_only_local_contract: GREEN
+  google_provider_production: BLOCKED
+  google_new_user_signup_production: BLOCKED
+  real_google_consent_and_callback: BLOCKED
+  email_signin_removed_from_client: GREEN
+  email_provider_disabled_production: PENDING
+  reader_open_gray_feedback: PENDING
+  correction_deployment: PENDING
+  product_owner_acceptance: OPEN
+  note: "The real Google button currently returns provider-disabled HTTP 400. Public settings report Google disabled, email enabled, signup disabled. Local routed tests and admin-created sessions never satisfy the real Google gate."
 historical_source: docs/plans/2026-08-29-news-curator-v3-backend-platform.md
 generated_for_historical_snapshot: News Curator v3 backend platform
 state_ladder:
