@@ -474,6 +474,18 @@ def test_dashboard_saved_preferences_snapshot_and_logout(tmp_path: Path, now: ob
             assert page.locator(".saved-card").count() == 0
             assert page.locator("#interest-list").input_value() == ""
             assert page.locator("#metric-saved").inner_text() == ""
+
+            hold_write = False
+            hold_preference = False
+            page.evaluate(
+                "sessionStorage.setItem('news-curator.auth.session', JSON.stringify(%s));"
+                "dispatchEvent(new Event('news-curator:auth-changed'));" % json.dumps(session)
+            )
+            page.wait_for_selector("#private-dashboard:not([hidden])")
+            for control_id in (
+                "interest-list", "add-search", "save-preferences", "reload-preferences"
+            ):
+                assert page.locator(f"#{control_id}").is_enabled()
             browser.close()
     finally:
         server.shutdown()

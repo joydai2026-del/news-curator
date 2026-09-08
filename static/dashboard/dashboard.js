@@ -129,7 +129,7 @@
       savedList.replaceChildren(); document.getElementById("interest-list").value = "";
       document.getElementById("saved-searches").replaceChildren(); document.getElementById("topic-signals").replaceChildren();
       ["metric-saved", "metric-unread", "metric-read", "metric-signals", "insights-time"].forEach((id) => { document.getElementById(id).textContent = ""; });
-      search.value = ""; formDirty = false; preferenceBusy = false; savedLoading = false; privateRoot.hidden = true; signedOut.hidden = false; updateDownloadState();
+      search.value = ""; formDirty = false; savedLoading = false; privateRoot.hidden = true; signedOut.hidden = false; setPreferenceBusy(false);
     }
     function shownRows() {
       const query = search.value.trim().toLocaleLowerCase();
