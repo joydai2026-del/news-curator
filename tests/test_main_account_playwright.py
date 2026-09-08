@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from functools import partial
 from http.server import ThreadingHTTPServer
@@ -97,14 +98,22 @@ def test_main_google_account_save_reload_and_tab_boundary(tmp_path: Path, now, e
             origin = f"http://127.0.0.1:{server.server_port}"
             held_scripts = []
             if early_click:
+                client_scripts = re.findall(
+                    r'<script src="(auth/client\.js\?v=[0-9a-f]{16})" defer></script>',
+                    (site / "index.html").read_text(encoding="utf-8"),
+                )
+                assert len(client_scripts) == 1, "Early-login fixture must match the rendered auth client"
+
                 def hold_first_script(route):
                     if not held_scripts:
                         held_scripts.append(route)
                     else:
                         route.continue_()
-                page.route(origin + "/auth/client.js", hold_first_script)
+                page.route(origin + "/" + client_scripts[0], hold_first_script)
             page.goto(origin, wait_until="commit" if early_click else "networkidle")
             page.locator(".profile-link").click()
+            if early_click:
+                assert len(held_scripts) == 1, "Early-login fixture must actually intercept the auth script"
             page.wait_for_function("() => document.querySelector('.profile-link')?.textContent.includes('Signed in')", timeout=5000)
             assert len(context.pages) == 1
             assert page.url == origin + "/"

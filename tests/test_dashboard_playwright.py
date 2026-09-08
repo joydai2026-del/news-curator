@@ -18,6 +18,7 @@ from tests.test_auth_callback_playwright import (
     _QuietHandler,
     _feed_story,
     _jwt,
+    _muted_browser_runtime,  # noqa: F401
     playwright_api,
 )
 

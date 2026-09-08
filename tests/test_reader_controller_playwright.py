@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -42,10 +43,12 @@ def _install_signed_auth_stub(site: Path) -> None:
         encoding="utf-8",
     )
     html = (site / "index.html").read_text(encoding="utf-8")
-    html = html.replace(
-        '<script src="auth/client.js" defer></script>',
+    html, replacements = re.subn(
+        r'<script src="auth/client\.js\?v=[0-9a-f]{16}" defer></script>',
         '<script src="auth-stub.js" defer></script>',
+        html,
     )
+    assert replacements == 1, "Signed fixture must replace the rendered auth client exactly once"
     (site / "index.html").write_text(html, encoding="utf-8")
 
 
@@ -1167,10 +1170,12 @@ def test_real_render_open_marks_read_locally_and_unread_reopens_without_layout_j
         encoding="utf-8",
     )
     html = (site / "index.html").read_text(encoding="utf-8")
-    html = html.replace(
-        '<script src="reader.js" defer></script>',
-        '<script src="pre-reader-open.js"></script><script src="reader.js" defer></script>',
+    html, replacements = re.subn(
+        r'(<script src="reader\.js\?v=[0-9a-f]{16}" defer></script>)',
+        r'<script src="pre-reader-open.js"></script>\1',
+        html,
     )
+    assert replacements == 1, "Early-open fixture must precede the rendered reader exactly once"
     (site / "index.html").write_text(html, encoding="utf-8")
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
