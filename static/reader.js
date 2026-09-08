@@ -281,8 +281,7 @@
     Object.entries(row.topic_ranks || {}).forEach(([topic, position]) => {
       card.setAttribute(`data-rank-${topicSlug(topic)}`, String(position));
     });
-    if (row.page_order_mode === "history_freshness" &&
-        Number.isSafeInteger(historyAllRank) && historyAllRank > HISTORY_RANK_OFFSET &&
+    if (Number.isSafeInteger(historyAllRank) && historyAllRank > HISTORY_RANK_OFFSET &&
         (!card.hasAttribute || !card.hasAttribute("data-rank-all"))) {
       card.setAttribute("data-rank-all", String(historyAllRank));
     }
@@ -753,8 +752,7 @@
     function mergeRows(rows, appendNew, hydratedTopic = selectedTopic()) {
       rows.forEach((row) => {
         const existing = cards.get(row.story_id);
-        const historyAllRank = row.page_order_mode === "history_freshness" &&
-          (!existing || !existing.hasAttribute("data-rank-all"))
+        const historyAllRank = (!existing || !existing.hasAttribute("data-rank-all"))
           ? ++nextHistoryAllRank
           : null;
         if (existing) {
@@ -773,9 +771,9 @@
         );
         cards.set(row.story_id, card);
         hydratedTopics(card).add(hydratedTopic);
-        const section = row.page_order_mode === "history_freshness"
-          ? historySection()
-          : sectionFor(row.topic_ids[0]);
+        const section = row.page_order_mode === "edition_rank"
+          ? sectionFor(row.topic_ids[0])
+          : historySection();
         section.querySelector(".grid").append(card);
         view.addCard(card);
       });

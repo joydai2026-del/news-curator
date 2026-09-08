@@ -376,6 +376,16 @@ async function main() {
     page_order_mode: "history_freshness", publication_seq: 5, position: 1,
   }), "__all__", (value) => value, 1000003);
   assert.equal(nextPageHistoryCard.attrs["data-rank-all"], "1000003");
+  const savedOnlyCard = {
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); },
+  };
+  reader.applyServerRank(savedOnlyCard, story({
+    page_order_mode: "saved_at", position: 0,
+    next_cursor: { before_saved_at: "2026-09-07T12:02:00Z", before_story_id: story().story_id },
+  }), "__saved__", (value) => value, 1000004);
+  assert.equal(savedOnlyCard.attrs["data-rank-all"], "1000004");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "crypto"), "crypto");
   assert.equal(reader.effectiveTopic(["crypto", "ai"], "__all__"), "ai");
   assert.equal(reader.actionTopic(["ai", "quantum"], "quantum-computing", "quantum", "ai"), "quantum");

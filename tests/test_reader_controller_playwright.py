@@ -522,6 +522,133 @@ def test_persisted_topic_history_is_reconciled_by_first_all_page(tmp_path: Path)
         thread.join(timeout=5)
 
 
+def test_saved_only_card_stays_after_current_edition_and_reconciles_on_all(
+    tmp_path: Path,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    current_id = "story:" + f"{1:064x}"
+    site.joinpath("index.html").write_text(
+        f"""<!doctype html><html><head><meta charset="utf-8"><style>
+        .grid{{display:flex;flex-direction:column}}.card{{height:80px}}
+        .topic-section[hidden],.card[hidden]{{display:none}}
+        </style></head><body>
+        <a class="profile-link" href="#">Profile</a>
+        <button class="chip" data-filter="__all__">All</button>
+        <button class="chip" data-filter="__saved__">Saved</button>
+        <p id="reader-status"></p><button id="load-more">Load more</button>
+        <p id="updates-status" hidden><button id="show-updates"></button></p>
+        <main id="sections"><section class="topic-section" data-section="ai" data-topic-id="ai">
+          <div class="grid"><article class="card" data-story-id="{current_id}"
+            data-topic-ids="ai" data-topic-api-ids="ai" data-rank-all="1">
+            <button class="accordion-toggle">Current edition</button>
+          </article></div>
+        </section></main>
+        <script>
+        window.__tab = localStorage.getItem("nc-tab") || "__all__";
+        window.setInterval = () => 1;
+        window.NewsCuratorAuth = {{
+          config: () => ({{url: "{ORIGIN}", key: "public-key"}}),
+          hasSessionCandidate: () => true,
+          sessionForRequest: async () => ({{access_token: "reader-token"}})
+        }};
+        window.NewsCuratorView = {{
+          currentTab: () => window.__tab,
+          addCard: () => {{}},
+          apply: () => {{
+            document.querySelectorAll("article.card").forEach(card => {{
+              card.hidden = window.__tab === "__saved__"
+                ? !card.classList.contains("is-saved")
+                : false;
+              const rank = card.getAttribute("data-rank-all");
+              card.style.order = rank === null ? "0" : rank;
+            }});
+          }}
+        }};
+        document.querySelectorAll(".chip").forEach(chip => chip.addEventListener("click", () => {{
+          window.__tab = chip.dataset.filter;
+          localStorage.setItem("nc-tab", window.__tab);
+          window.NewsCuratorView.apply();
+        }}));
+        window.NewsCuratorView.apply();
+        window.BroadcastChannel = undefined;
+        </script><script src="reader.js"></script></body></html>""",
+        encoding="utf-8",
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    saved_only = _story(40, "saved_at")
+    saved_only.update(
+        {
+            "saved_at": "2026-09-06T12:00:00Z",
+            "topic_ids": ["ai"],
+            "topic_ranks": {"ai": 9},
+            "next_cursor": {
+                "before_saved_at": "2026-09-06T12:00:00Z",
+                "before_story_id": saved_only["story_id"],
+            },
+        }
+    )
+    fresher = _story(30, "history_freshness")
+    fresher.update({"topic_ids": ["ai"], "topic_ranks": {"ai": 8}})
+    saved_history = {**saved_only, "page_order_mode": "history_freshness"}
+    saved_history["next_cursor"] = {
+        "before_published_at": saved_only["published_at"],
+        "before_story_id": saved_only["story_id"],
+    }
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        if request.url.endswith("/latest_publication"):
+            payload: object = {
+                "publication_seq": 7,
+                "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [{"topic_id": "ai", "name": "AI"}],
+                "initial_history_cursor": None,
+                "poll_seconds": 30,
+                "page_size": 2,
+            }
+        elif request.url.endswith("/saved_page"):
+            payload = [saved_only]
+        elif request.url.endswith("/feed_page"):
+            assert request.post_data_json["p_topic_id"] is None
+            payload = [fresher, saved_history]
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context()
+            context.add_init_script("localStorage.setItem('nc-tab', '__saved__')")
+            page = context.new_page()
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            saved_card = page.locator(
+                f'article.card[data-story-id="{saved_only["story_id"]}"]'
+            )
+            saved_card.wait_for()
+            provisional_rank = int(saved_card.get_attribute("data-rank-all") or "0")
+            assert provisional_rank > 1_000_000
+
+            with page.expect_response(lambda response: response.url.endswith("/feed_page")):
+                page.locator('.chip[data-filter="__all__"]').click()
+            assert _visually_ordered_story_ids(page) == [
+                current_id, fresher["story_id"], saved_only["story_id"],
+            ]
+            assert int(saved_card.get_attribute("data-rank-all") or "0") == 1_000_002
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_short_initial_all_page_continues_at_retention_cursor(tmp_path: Path) -> None:
     site = tmp_path / "site"
     site.mkdir()
