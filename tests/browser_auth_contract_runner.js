@@ -442,19 +442,31 @@ async function main() {
   assert.equal(browser.storage.has("news-curator.auth.session"), false);
 
   browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
-  const broadcastsBeforeFailedLogout = browser.broadcasts.length;
-  await assert.rejects(
-    client.signOut(async (url) => response(500, { error: "unavailable" }, url)),
-    /Sign out failed/
-  );
-  assert.equal(browser.storage.has("news-curator.auth.session"), true);
-  assert.equal(browser.broadcasts.length, broadcastsBeforeFailedLogout);
+  const failedLogoutCases = [
+    async (url) => response(500, { error: "unavailable" }, url),
+    async (url) => response(204, null, `${url}/moved`, { redirected: true }),
+    async () => { throw new TypeError("offline with sensitive detail"); },
+  ];
+  for (const failedLogout of failedLogoutCases) {
+    browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
+    const broadcastsBeforeFailedLogout = browser.broadcasts.length;
+    assert.equal(await client.signOut(failedLogout), false);
+    assert.equal(browser.storage.has("news-curator.auth.session"), false);
+    assert.equal(browser.broadcasts.length, broadcastsBeforeFailedLogout + 1);
+    assert.deepEqual(browser.broadcasts.at(-1), {
+      name: "news-curator.auth.v1",
+      value: { type: "logout" },
+    });
+    assert.equal(JSON.stringify(browser.broadcasts.at(-1)).includes(projected.access_token), false);
+    assert.equal(JSON.stringify(browser.broadcasts.at(-1)).includes(projected.refresh_token), false);
+  }
 
   const logoutCalls = [];
-  await client.signOut(async (url, options) => {
+  browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
+  assert.equal(await client.signOut(async (url, options) => {
     logoutCalls.push({ url, options });
     return response(204, null, url);
-  });
+  }), true);
   assert.equal(browser.storage.has("news-curator.auth.session"), false);
   assert.deepEqual(browser.broadcasts.at(-1), {
     name: "news-curator.auth.v1",
@@ -464,14 +476,6 @@ async function main() {
   assert.equal(JSON.stringify(browser.broadcasts.at(-1)).includes(projected.refresh_token), false);
   assert.equal(logoutCalls[0].options.headers.authorization, `Bearer ${projected.access_token}`);
   assertFailClosedFetch(logoutCalls[0]);
-
-  browser.storage.set("news-curator.auth.session", JSON.stringify(projected));
-  await assert.rejects(
-    client.signOut(async (url) => response(204, null, `${url}/moved`, { redirected: true })),
-    /redirected unexpectedly/
-  );
-  assert.equal(browser.storage.has("news-curator.auth.session"), true);
-
   assert.throws(
     () => client.validatePreferenceInput({ ...update, saved_searches: [{ id: "x", query: "q", enabled: true, extra: 1 }] }),
     /preference input/

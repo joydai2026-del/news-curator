@@ -173,8 +173,9 @@ def test_oauth_callback_is_consumed_and_scrubbed_during_page_startup(tmp_path: P
         thread.join(timeout=5)
 
 
-def test_successful_profile_logout_clears_private_digest_state_across_tabs(
-    tmp_path: Path, now: object
+@pytest.mark.parametrize("logout_failure", [None, "500", "redirect", "network"])
+def test_profile_logout_always_clears_private_digest_state_across_tabs(
+    tmp_path: Path, now: object, logout_failure: str | None
 ) -> None:
     site = tmp_path / "site"
     item = make_item("Static public story")
@@ -287,8 +288,18 @@ def test_successful_profile_logout_clears_private_digest_state_across_tabs(
             }]
         elif request.url.endswith("/auth/v1/logout"):
             logged_out = True
-            payload = None
-            status = 204
+            if logout_failure == "network":
+                route.abort("connectionfailed")
+                return
+            if logout_failure == "redirect":
+                route.fulfill(
+                    status=302,
+                    headers={"location": "https://attacker.invalid/capture"},
+                    body="",
+                )
+                return
+            payload = {"error": "sensitive remote detail"} if logout_failure == "500" else None
+            status = 500 if logout_failure == "500" else 204
         else:
             raise AssertionError(f"unexpected request: {request.url}")
         route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
@@ -350,7 +361,12 @@ def test_successful_profile_logout_clears_private_digest_state_across_tabs(
                 """
             )
             profile.locator("#sign-out").click()
-            profile.get_by_text("Signed out.", exact=True).wait_for()
+            profile_status = (
+                "Signed out."
+                if logout_failure is None
+                else "Signed out locally. Remote sign-out could not be confirmed."
+            )
+            profile.get_by_text(profile_status, exact=True).wait_for()
             digest.wait_for_function(
                 "() => sessionStorage.getItem('news-curator.auth.session') === null"
             )
@@ -365,6 +381,10 @@ def test_successful_profile_logout_clears_private_digest_state_across_tabs(
             assert digest.get_by_text("Mark unread", exact=True).count() == 0
             assert digest.get_by_text("More like this added", exact=True).count() == 0
             assert digest.get_by_text("confidential topic", exact=False).count() == 0
+            assert digest.get_by_text(
+                "Remote sign-out could not be confirmed.", exact=False
+            ).count() == 0
+            assert "sensitive remote detail" not in profile.locator("body").inner_text()
 
             writes_before = len([
                 call for call in calls

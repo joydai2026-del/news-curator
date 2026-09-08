@@ -592,20 +592,28 @@
   }
 
   async function signOut(fetchImpl = fetch) {
-    const session = loadSessionCandidate();
-    const { url, key } = config();
-    const logoutUrl = `${url}/auth/v1/logout`;
-    const response = await fetchImpl(logoutUrl, {
-      method: "POST",
-      headers: { apikey: key, authorization: `Bearer ${session.access_token}` },
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      redirect: "error",
-    });
-    requireExactResponse(response, logoutUrl, "The authentication endpoint redirected unexpectedly.");
-    if (!response.ok) fail("Sign out failed. Try again.");
+    let accessToken = null;
+    try { accessToken = loadSessionCandidate().access_token; } catch (_) {}
+    // Privacy and recoverability win over remote certainty: honor the user's
+    // logout locally first, and never restore tokens if revocation cannot be confirmed.
     clearSession();
     broadcastLogout();
+    if (!accessToken) return false;
+    try {
+      const { url, key } = config();
+      const logoutUrl = `${url}/auth/v1/logout`;
+      const response = await fetchImpl(logoutUrl, {
+        method: "POST",
+        headers: { apikey: key, authorization: `Bearer ${accessToken}` },
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        redirect: "error",
+      });
+      requireExactResponse(response, logoutUrl, "The authentication endpoint redirected unexpectedly.");
+      return response.ok;
+    } catch (_) {
+      return false;
+    }
   }
 
   const contract = {
@@ -794,15 +802,14 @@
     });
     document.getElementById("sign-out").addEventListener("click", async () => {
       setBusy(true);
-      try {
-        await signOut();
-        announce("Signed out.");
-        showSignedOut();
-      } catch (_) {
-        announce("Sign out failed. Try again.");
-      } finally {
-        setBusy(false);
-      }
+      const remoteSignOut = signOut();
+      currentSession = null;
+      showSignedOut();
+      const remoteConfirmed = await remoteSignOut;
+      announce(remoteConfirmed
+        ? "Signed out."
+        : "Signed out locally. Remote sign-out could not be confirmed.");
+      setBusy(false);
     });
 
     try {
