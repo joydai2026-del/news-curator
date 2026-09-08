@@ -8,7 +8,10 @@ import http.server
 import json
 import os
 import socket
+import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass
@@ -35,8 +38,66 @@ class _CallbackResult:
     url: str | None = None
 
 
+def _open_authorize_url(authorize_url: str) -> None:
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["/usr/bin/open", "-g", authorize_url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise AuthError("The browser could not be opened.") from exc
+        if result.returncode != 0:
+            raise AuthError("The browser could not be opened.")
+        return
+    if not webbrowser.open(authorize_url, new=2, autoraise=False):
+        raise AuthError("The browser could not be opened.")
+
+
 def _receive_callback(auth: AgentAuth, timeout: float) -> tuple[object, str]:
     result = _CallbackResult()
+
+    class CallbackServer(http.server.ThreadingHTTPServer):
+        daemon_threads = True
+        block_on_close = False
+
+        def __init__(self, *args, **kwargs) -> None:
+            self._active_requests: set[socket.socket] = set()
+            self._active_lock = threading.Lock()
+            super().__init__(*args, **kwargs)
+
+        def process_request(self, request, client_address) -> None:
+            with self._active_lock:
+                self._active_requests.add(request)
+            try:
+                super().process_request(request, client_address)
+            except Exception:
+                with self._active_lock:
+                    self._active_requests.discard(request)
+                raise
+
+        def shutdown_request(self, request) -> None:
+            with self._active_lock:
+                self._active_requests.discard(request)
+            super().shutdown_request(request)
+
+        def handle_error(self, request, client_address) -> None:
+            return
+
+        def close_active_requests(self) -> None:
+            with self._active_lock:
+                requests = tuple(self._active_requests)
+                self._active_requests.clear()
+            for request in requests:
+                try:
+                    request.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                request.close()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -61,15 +122,21 @@ def _receive_callback(auth: AgentAuth, timeout: float) -> tuple[object, str]:
         def log_message(self, format: str, *args: object) -> None:
             return
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    server.timeout = timeout
-    redirect = f"http://127.0.0.1:{server.server_port}/callback"
-    attempt, authorize_url = auth.begin_login(redirect)
-    if not webbrowser.open(authorize_url, new=1, autoraise=True):
+    server = CallbackServer(("127.0.0.1", 0), Handler)
+    try:
+        redirect = f"http://127.0.0.1:{server.server_port}/callback"
+        attempt, authorize_url = auth.begin_login(redirect)
+        _open_authorize_url(authorize_url)
+        deadline = time.monotonic() + timeout
+        while result.url is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            server.timeout = min(remaining, 0.05)
+            server.handle_request()
+    finally:
         server.server_close()
-        raise AuthError("The browser could not be opened.")
-    server.handle_request()
-    server.server_close()
+        server.close_active_requests()
     if result.url is None:
         raise AuthError("Sign in timed out.")
     return attempt, result.url
