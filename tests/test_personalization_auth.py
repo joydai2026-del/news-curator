@@ -740,41 +740,66 @@ def test_cli_callback_rejects_invalid_request_then_accepts_exact_callback(
 ) -> None:
     from scripts import personalization_cli as cli
 
-    class FakeAuth:
-        redirect: str
-
-        def begin_login(self, redirect):
-            self.redirect = redirect
-            return object(), "https://example.supabase.co/auth/v1/authorize"
-
-    auth = FakeAuth()
+    auth, _store, transport = auth_with([])
     sender: threading.Thread | None = None
+    accepted_callback: str | None = None
+    errors: list[BaseException] = []
+    rejected_count = 0
 
-    def launch(_url):
-        nonlocal sender
+    def launch(authorize_url):
+        nonlocal sender, accepted_callback
+        redirect = parse_qs(urlsplit(authorize_url).query)["redirect_to"][0]
+        parsed = urlsplit(redirect)
+        callback_base = f"http://{parsed.netloc}{parsed.path}"
+        state = parse_qs(parsed.query)["client_state"][0]
+        accepted_callback = f"{callback_base}?code=code-valid&client_state={state}"
+        invalid_callbacks = (
+            f"{callback_base}?client_state={state}",
+            f"{callback_base}?code=one&code=two&client_state={state}",
+            f"{callback_base}?code=one&client_state=wrong-state",
+            f"{callback_base}?code=one&client_state=%E2%98%83",
+            f"{callback_base}?error=%E2%98%83&client_state={state}",
+        )
 
         def send_requests() -> None:
-            origin = auth.redirect.removesuffix("/callback")
+            nonlocal rejected_count
             try:
-                urllib.request.urlopen(f"{origin}/not-callback", timeout=2)
-            except urllib.error.HTTPError as exc:
-                assert exc.code == 404
-            response = urllib.request.urlopen(
-                f"{auth.redirect}?code=code-one&client_state=state-one",
-                timeout=2,
-            )
-            assert response.status == 200
+                for candidate in invalid_callbacks:
+                    try:
+                        urllib.request.urlopen(candidate, timeout=2)
+                    except urllib.error.HTTPError as exc:
+                        assert exc.code == 400
+                        rejected_count += 1
+                    else:
+                        raise AssertionError("invalid callback was accepted")
+                response = urllib.request.urlopen(accepted_callback, timeout=2)
+                assert response.status == 200
+            except BaseException as exc:
+                errors.append(exc)
 
         sender = threading.Thread(target=send_requests)
         sender.start()
 
     monkeypatch.setattr(cli, "_open_authorize_url", launch)
-    attempt, callback_url = cli._receive_callback(auth, 2)
-    assert attempt is not None
-    assert callback_url == f"{auth.redirect}?code=code-one&client_state=state-one"
+    try:
+        attempt, callback_url = cli._receive_callback(auth, 2)
+    except AuthError as exc:
+        if sender is not None:
+            sender.join(timeout=2)
+        raise AssertionError(
+            f"callback loop ended early after {rejected_count} rejections; "
+            f"sender error types: {[type(error).__name__ for error in errors]}"
+        ) from exc
     assert sender is not None
     sender.join(timeout=2)
     assert not sender.is_alive()
+    assert errors == []
+    assert callback_url == accepted_callback
+    assert transport.calls == []
+
+    transport.responses.append((200, login_payload()))
+    auth.finish_login(attempt, callback_url)
+    assert len(transport.calls) == 1
 
 
 @pytest.mark.allow_socket
@@ -788,7 +813,11 @@ def test_cli_callback_timeout_survives_an_idle_partial_request(
 
         def begin_login(self, redirect):
             self.redirect = redirect
-            return object(), "https://example.supabase.co/auth/v1/authorize"
+            return FakeAttempt(), "https://example.supabase.co/auth/v1/authorize"
+
+    class FakeAttempt:
+        def consume_callback(self, _callback_url):
+            return "code-two"
 
     auth = FakeAuth()
     release_idle = threading.Event()

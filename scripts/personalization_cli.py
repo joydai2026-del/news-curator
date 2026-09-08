@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import http.server
 import json
 import os
@@ -109,7 +110,13 @@ def _receive_callback(auth: AgentAuth, timeout: float) -> tuple[object, str]:
             if parsed.path != "/callback":
                 self.send_error(404)
                 return
-            result.url = f"http://{expected_host}{self.path}"
+            candidate = f"http://{expected_host}{self.path}"
+            try:
+                copy.copy(attempt).consume_callback(candidate)
+            except (AuthError, TypeError):
+                self.send_error(400)
+                return
+            result.url = candidate
             body = b"Sign in received. You may close this tab."
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
