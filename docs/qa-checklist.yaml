@@ -7,14 +7,22 @@ note: "Historical results remain dated snapshots. The September 8 reading/histor
 main_account_navigation_correction:
   date: 2026-09-08
   evidence: docs/evidence/2026-09-08-main-account-navigation.md
-  user_reported_main_entry_and_identity: REOPENED
+  user_reported_main_entry_and_identity: LIVE_GREEN
   main_google_main_local_contract: GREEN
-  exact_served_main_google_main: PENDING
-  visible_account_save_reload_and_same_tab_interests: PENDING
-  desktop_short_window_and_phone_navigation: LOCAL_GREEN_LIVE_PENDING
-  independent_review: PENDING
+  exact_served_main_google_main: GREEN
+  visible_account_save_reload_and_same_tab_interests: GREEN
+  desktop_short_window_and_phone_navigation: GREEN
+  independent_review: GREEN
+  reviewed_code: 98a064845603e3a6e978e56848dff27d6c69405e
+  merge_and_served_source: 3c0ff50067db72b116fe8cd7441adad799800629
+  pull_request: https://github.com/joydai2026-del/news-curator/pull/16
+  pull_request_ci: https://github.com/joydai2026-del/news-curator/actions/runs/34274092658
+  post_merge_ci: https://github.com/joydai2026-del/news-curator/actions/runs/34274597942
+  deployment: https://github.com/joydai2026-del/news-curator/actions/runs/34274597919
+  latest_verified_edition: https://github.com/joydai2026-del/news-curator/actions/runs/34274877413
+  test_story_restoration: GREEN
   product_owner_acceptance: OPEN
-  note: "The earlier Google callback proof did not verify direct main-page entry or visible account identity. This dated correction has its own gates. Local error paths are B, not real Google proof. Session storage remains per tab; independent new tabs may require sign-in."
+  note: "Real main click through Google automatically returned to the feed with visible account identity. Save/reload, same-tab Interests, logout and returning main login passed. Test-story unread/unsaved flags were restored and reloaded; existing interests remained unchanged. Local error paths remain B. Session storage remains per tab; independent new tabs may require sign-in. Product-owner acceptance remains open."
 release_verification:
   date: 2026-09-08
   evidence: docs/evidence/2026-09-08-m1-release.md
