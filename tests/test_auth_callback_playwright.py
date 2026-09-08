@@ -173,6 +173,90 @@ def test_oauth_callback_is_consumed_and_scrubbed_during_page_startup(tmp_path: P
         thread.join(timeout=5)
 
 
+def test_back_to_digest_keeps_session_without_broadcast_channel(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    callback = site / "auth" / "callback" / "index.html"
+    materialize_callback(
+        supabase_url=SUPABASE_ORIGIN,
+        publishable_key="sb_publishable_test",
+        output=callback,
+    )
+    (site / "auth" / "client.js").write_bytes(
+        (ROOT / "static" / "auth" / "client.js").read_bytes()
+    )
+    (site / "auth" / "styles.css").write_bytes(
+        (ROOT / "static" / "auth" / "styles.css").read_bytes()
+    )
+    (site / "index.html").write_text(
+        """<!doctype html><html><body>
+        <p id="session-available"></p>
+        <script>
+        document.getElementById("session-available").textContent =
+          sessionStorage.getItem("news-curator.auth.session") ? "available" : "missing";
+        </script></body></html>""",
+        encoding="utf-8",
+    )
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        if "/auth/v1/token?grant_type=pkce" in request.url:
+            payload: object = {
+                "access_token": _jwt({"sub": "user-a"}),
+                "refresh_token": "refresh-token",
+                "expires_in": 3600,
+                "user": {"id": "user-a"},
+            }
+        elif "/rest/v1/user_preferences" in request.url:
+            payload = []
+        else:
+            raise AssertionError(f"unexpected request: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context()
+            context.add_init_script(
+                """
+                Object.defineProperty(window, "BroadcastChannel", {
+                  configurable: false, value: undefined
+                });
+                sessionStorage.setItem("news-curator.auth.state", "expected-state");
+                sessionStorage.setItem("news-curator.auth.verifier", "expected-verifier");
+                """
+            )
+            page = context.new_page()
+            page.route(f"{SUPABASE_ORIGIN}/**", fulfill)
+            page.goto(
+                f"http://127.0.0.1:{server.server_port}/auth/callback/"
+                "?code=authorization-code&client_state=expected-state",
+                wait_until="networkidle",
+            )
+            page.locator("#preferences-panel").wait_for(state="visible")
+            assert page.evaluate("typeof BroadcastChannel") == "undefined"
+            assert len(context.pages) == 1
+
+            page.get_by_text("Back to the digest", exact=True).click()
+            page.wait_for_url(f"http://127.0.0.1:{server.server_port}/")
+
+            assert len(context.pages) == 1
+            assert page.locator("#session-available").inner_text() == "available"
+            assert page.evaluate(
+                "sessionStorage.getItem('news-curator.auth.session') !== null"
+            )
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 @pytest.mark.parametrize("logout_failure", [None, "500", "redirect", "network"])
 def test_profile_logout_always_clears_private_digest_state_across_tabs(
     tmp_path: Path, now: object, logout_failure: str | None
