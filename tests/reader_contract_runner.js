@@ -175,7 +175,7 @@ async function main() {
     order_mode: "edition_rank",
     ...story().next_cursor,
   });
-  assert.equal(reader.nextFeedCursor([
+  assert.deepEqual(reader.nextFeedCursor([
     story({
       page_order_mode: "history_freshness",
       next_cursor: {
@@ -183,7 +183,22 @@ async function main() {
         before_story_id: story().story_id,
       },
     }),
-  ], latest.initial_history_cursor, { order_mode: "history_freshness" }, 2), null);
+  ], latest.initial_history_cursor, { order_mode: "history_freshness" }, 2), {
+    order_mode: "history_freshness",
+    ...latest.initial_history_cursor,
+  });
+  assert.equal(reader.nextFeedCursor([
+    story({
+      page_order_mode: "history_freshness",
+      next_cursor: {
+        before_published_at: "2026-09-07T10:00:00Z",
+        before_story_id: story().story_id,
+      },
+    }),
+  ], latest.initial_history_cursor, {
+    order_mode: "history_freshness",
+    ...latest.initial_history_cursor,
+  }, 2), null);
   assert.equal(reader.nextSavedCursor([story({
     page_order_mode: "saved_at",
     saved_at: "2026-09-07T12:02:00Z",

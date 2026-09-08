@@ -522,6 +522,280 @@ def test_persisted_topic_history_is_reconciled_by_first_all_page(tmp_path: Path)
         thread.join(timeout=5)
 
 
+def test_short_initial_all_page_continues_at_retention_cursor(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    current_id = "story:" + f"{1:064x}"
+    site.joinpath("index.html").write_text(
+        f"""<!doctype html><html><head><meta charset="utf-8"><style>
+        .grid{{display:flex;flex-direction:column}}.card{{height:80px}}
+        .topic-section[hidden],.card[hidden]{{display:none}}
+        </style></head><body>
+        <a class="profile-link" href="#">Profile</a>
+        <button class="chip" data-filter="__all__">All</button>
+        <p id="reader-status"></p><button id="load-more">Load more</button>
+        <p id="updates-status" hidden><button id="show-updates"></button></p>
+        <main id="sections"><section class="topic-section" data-section="ai">
+          <div class="grid"><article class="card" data-story-id="{current_id}"
+            data-topic-ids="ai" data-topic-api-ids="ai" data-rank-all="1">
+            <button class="accordion-toggle">Current edition</button>
+          </article></div>
+        </section></main>
+        <script>
+        window.setInterval = () => 1;
+        window.NewsCuratorAuth = {{
+          config: () => ({{url: "{ORIGIN}", key: "public-key"}}),
+          hasSessionCandidate: () => false,
+          sessionForRequest: async () => null
+        }};
+        window.NewsCuratorView = {{
+          currentTab: () => "__all__", addCard: () => {{}},
+          apply: () => {{
+            document.querySelectorAll("article.card").forEach(card => {{
+              card.hidden = false;
+              card.style.order = card.getAttribute("data-rank-all") || "0";
+            }});
+          }}
+        }};
+        window.BroadcastChannel = undefined;
+        </script><script src="reader.js"></script></body></html>""",
+        encoding="utf-8",
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    first_history = _story(30, "history_freshness")
+    older_history = _story(31, "history_freshness")
+    calls: list[dict[str, object]] = []
+    retention_cursor = {
+        "before_published_at": "2026-09-02T12:00:00Z",
+        "before_story_id": "",
+    }
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        body = request.post_data_json
+        if request.url.endswith("/latest_publication"):
+            payload: object = {
+                "publication_seq": 7,
+                "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [{"topic_id": "ai", "name": "AI"}],
+                "initial_history_cursor": retention_cursor,
+                "poll_seconds": 30,
+                "page_size": 2,
+            }
+        elif request.url.endswith("/feed_page"):
+            calls.append(body)
+            if len(calls) == 1:
+                assert body.get("p_before_published_at") is None
+                payload = [first_history]
+            else:
+                assert body["p_before_published_at"] == retention_cursor["before_published_at"]
+                assert body["p_before_story_id"] == retention_cursor["before_story_id"]
+                payload = [older_history]
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            assert _visually_ordered_story_ids(page) == [current_id, first_history["story_id"]]
+            page.locator("#load-more").click()
+            page.locator("#reader-status").get_by_text("1 older story loaded.").wait_for()
+            assert len(calls) == 2
+            assert _visually_ordered_story_ids(page) == [
+                current_id, first_history["story_id"], older_history["story_id"],
+            ]
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
+    tmp_path: Path,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    first_id = "story:" + f"{1:064x}"
+    second_id = "story:" + f"{2:064x}"
+    site.joinpath("index.html").write_text(
+        f"""<!doctype html><html><head><meta charset="utf-8"><style>
+        .grid{{display:flex;flex-direction:column}}.topic-section[hidden],.card[hidden]{{display:none}}
+        </style></head><body>
+        <a class="profile-link" href="#">Profile</a>
+        <button class="chip" data-filter="__all__">All</button>
+        <button class="chip" data-filter="ai" data-topic-id="ai">AI</button>
+        <button class="chip" data-filter="quantum-computing" data-topic-id="quantum">Quantum</button>
+        <p id="reader-status"></p><button id="load-more">Load more</button>
+        <p id="updates-status" hidden><button id="show-updates"></button></p>
+        <main id="sections"><section class="topic-section" data-section="ai">
+          <div class="grid">
+            <article class="card" data-story-id="{first_id}" data-topic-ids="ai"
+              data-topic-api-ids="ai" data-state-revision="0" data-interest-revision="0"
+              data-rank-all="1" data-rank-ai="1">
+              <button class="accordion-toggle" aria-expanded="false">AI story</button>
+              <button class="state-action read-action" disabled>Mark read</button>
+              <button class="state-action save-action" disabled>Save</button>
+              <button class="state-action interest-action" data-topic-id="ai" disabled>More like this</button>
+            </article>
+            <article class="card" data-story-id="{second_id}" data-topic-ids="quantum-computing"
+              data-topic-api-ids="quantum" data-state-revision="0" data-interest-revision="0"
+              data-rank-all="2" data-rank-quantum-computing="1">
+              <button class="accordion-toggle" aria-expanded="false">Quantum story</button>
+              <button class="state-action read-action" disabled>Mark read</button>
+              <button class="state-action save-action" disabled>Save</button>
+              <button class="state-action interest-action" data-topic-id="quantum" disabled>More like this</button>
+            </article>
+          </div>
+        </section></main>
+        <script>
+        window.__tab = "__all__";
+        window.__signedIn = false;
+        window.setInterval = () => 1;
+        window.NewsCuratorAuth = {{
+          config: () => ({{url: "{ORIGIN}", key: "public-key"}}),
+          hasSessionCandidate: () => window.__signedIn,
+          sessionForRequest: async () => window.__signedIn ? ({{access_token: "private-token"}}) : null,
+          acceptSession: () => {{ window.__signedIn = true; }},
+          clearSession: () => {{ window.__signedIn = false; }},
+          channelName: "news-curator-auth"
+        }};
+        window.NewsCuratorView = {{
+          currentTab: () => window.__tab, addCard: () => {{}},
+          apply: () => {{
+            document.querySelectorAll("article.card").forEach(card => {{
+              card.hidden = window.__tab !== "__all__" &&
+                !(card.dataset.topicIds || "").split(" ").includes(window.__tab);
+            }});
+          }}
+        }};
+        document.querySelectorAll(".chip").forEach(chip => chip.addEventListener("click", () => {{
+          window.__tab = chip.dataset.filter;
+          window.NewsCuratorView.apply();
+        }}));
+        window.BroadcastChannel = class {{
+          constructor() {{ window.__authChannel = this; }}
+          addEventListener(_type, listener) {{ this.listener = listener; }}
+          postMessage() {{}}
+        }};
+        </script><script src="reader.js"></script></body></html>""",
+        encoding="utf-8",
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    feed_calls: list[tuple[bool, str | None]] = []
+    state_writes: list[tuple[str, int]] = []
+
+    def state_row(index: int, *, authenticated: bool, topic_id: str | None) -> dict[str, object]:
+        row = _story(index, "history_freshness" if topic_id is None else "edition_rank")
+        row["topic_ids"] = ["ai"] if index == 1 else ["quantum"]
+        row["topic_ranks"] = {row["topic_ids"][0]: 1}
+        if authenticated:
+            row["state_revision"] = 5 if index == 1 else 7
+            row["saved_at"] = "2026-09-07T12:02:00Z"
+            row["read_at"] = "2026-09-07T12:01:00Z"
+        return row
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        body = request.post_data_json
+        authenticated = request.headers.get("authorization") == "Bearer private-token"
+        if request.url.endswith("/latest_publication"):
+            payload: object = {
+                "publication_seq": 7,
+                "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [
+                    {"topic_id": "ai", "name": "AI"},
+                    {"topic_id": "quantum", "name": "Quantum Computing"},
+                ],
+                "initial_history_cursor": None,
+                "poll_seconds": 30,
+                "page_size": 2,
+            }
+        elif request.url.endswith("/feed_page"):
+            topic_id = body["p_topic_id"]
+            feed_calls.append((authenticated, topic_id))
+            if topic_id is None:
+                payload = [
+                    state_row(1, authenticated=authenticated, topic_id=topic_id),
+                    state_row(2, authenticated=authenticated, topic_id=topic_id),
+                ]
+            elif topic_id == "ai":
+                payload = [state_row(1, authenticated=authenticated, topic_id=topic_id)]
+            else:
+                assert topic_id == "quantum"
+                payload = [state_row(2, authenticated=authenticated, topic_id=topic_id)]
+        elif request.url.endswith("/set_story_state"):
+            state_writes.append((body["p_story_id"], body["p_expected_revision"]))
+            payload = {
+                "status": "updated", "read_at": "2026-09-07T12:01:00Z",
+                "saved_at": None, "revision": body["p_expected_revision"] + 1,
+            }
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            quantum = page.locator(f'article.card[data-story-id="{second_id}"]')
+            page.locator('.chip[data-filter="quantum-computing"]').click()
+            page.wait_for_function("() => window.__tab === 'quantum-computing'")
+            page.locator('.chip[data-filter="ai"]').click()
+            page.wait_for_function("() => window.__tab === 'ai'")
+            assert (False, "quantum") in feed_calls
+            assert (False, "ai") in feed_calls
+
+            page.evaluate(
+                "window.__authChannel.listener({data: {type: 'session', session: {token: 'opaque'}}})"
+            )
+            ai = page.locator(f'article.card[data-story-id="{first_id}"]')
+            page.wait_for_function(
+                "card => card.dataset.stateRevision === '5'", arg=ai.element_handle()
+            )
+            assert ai.locator(".read-action").inner_text() == "Mark unread"
+            assert ai.locator(".save-action").inner_text() == "Unsave"
+            assert quantum.locator(".state-action:enabled").count() == 0
+
+            quantum.locator(".save-action").evaluate(
+                "button => button.dispatchEvent(new MouseEvent('click', {bubbles: true}))"
+            )
+            assert state_writes == []
+
+            with page.expect_response(lambda response: response.url.endswith("/feed_page")):
+                page.locator('.chip[data-filter="quantum-computing"]').click()
+            page.wait_for_function(
+                "card => card.dataset.stateRevision === '7'", arg=quantum.element_handle()
+            )
+            assert quantum.locator(".read-action").inner_text() == "Mark unread"
+            assert quantum.locator(".save-action").inner_text() == "Unsave"
+            assert quantum.locator(".state-action:enabled").count() == 3
+            quantum.locator(".save-action").click()
+            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            assert state_writes == [(second_id, 7)]
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_unconfigured_page_keeps_articles_readable_without_interactive_state_controls(
     tmp_path: Path, now: object
 ) -> None:

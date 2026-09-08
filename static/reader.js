@@ -299,7 +299,12 @@
   }
   function nextFeedCursor(rows, initialCursor = null, currentCursor = null, pageSize = MAX_PAGE_SIZE) {
     validatePageSize(pageSize);
+    const initialHistoryProbe = currentCursor && currentCursor.order_mode === "history_freshness" &&
+      !currentCursor.before_published_at;
     if (!rows.length) {
+      if (initialHistoryProbe && initialCursor) {
+        return { order_mode: "history_freshness", ...initialCursor };
+      }
       return currentCursor && currentCursor.order_mode === "history_freshness"
         ? null
         : (initialCursor ? { order_mode: "history_freshness", ...initialCursor } : null);
@@ -308,7 +313,11 @@
     if (last.page_order_mode === "edition_rank" && rows.length < pageSize) {
       return { order_mode: "history_freshness", ...(initialCursor || {}) };
     }
-    if (last.page_order_mode === "history_freshness" && rows.length < pageSize) return null;
+    if (last.page_order_mode === "history_freshness" && rows.length < pageSize) {
+      return initialHistoryProbe && initialCursor
+        ? { order_mode: "history_freshness", ...initialCursor }
+        : null;
+    }
     return { order_mode: last.page_order_mode, ...last.next_cursor };
   }
   function nextSavedCursor(rows, pageSize = MAX_PAGE_SIZE) {
@@ -677,6 +686,16 @@
         announce("Signed out. Public stories could not be synced. Try again.");
       }
     }
+    function invalidateHydrationForSession() {
+      authEpoch += 1;
+      document.querySelectorAll(".state-action").forEach((button) => { button.disabled = true; });
+      cursors.clear();
+      exhausted.clear();
+      hydrated.clear();
+      cards.forEach(clearPrivateCardState);
+      refreshInterestControls();
+      view.apply();
+    }
     function sectionFor(topicId) {
       const slug = topicSlugForId(topicId);
       let section = document.querySelector(`.topic-section[data-section="${CSS.escape(slug)}"]`);
@@ -905,7 +924,7 @@
         if (exactFields(event.data, ["session", "type"]) && event.data.type === "session") {
           try {
             auth.acceptSession(event.data.session);
-            authEpoch += 1;
+            invalidateHydrationForSession();
             void hydrate(true).catch(() => { announce("Signed in, but reading state could not be synced."); });
             announce("Signed in. Reading state is syncing.");
           } catch (_) {}
