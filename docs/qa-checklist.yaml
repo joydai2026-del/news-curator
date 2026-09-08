@@ -548,7 +548,7 @@ live_proven_gates:
     blockers:
       - "Approved production build, deploy, archive finalization, anonymous reading, and unattended hourly publication passed. Translation is intentionally disabled; translation activation and quality calibration are outside this reading-history release."
   - id: NCV3-LIVE-02
-    description: "The reviewed production build passes a real desktop and mobile-width reading/history walkthrough: all links open safely in a new tab, state persists after reload, topic pagination appends without duplicates or jumps, and a newer-edition banner appears without silent replacement."
+    description: "The reviewed production build passes a real desktop and mobile-width reading/history walkthrough: story, external, and settings-entry links open safely in a new tab, state persists after reload, topic pagination appends without duplicates or jumps, and a newer-edition banner appears without silent replacement."
     check_type: production_browser_run
     planned_command: "Run the approved production browser checklist at desktop and mobile viewport sizes against the deployed commit, recording build identity and screenshots without private account data."
     comparison_mode: "every named interaction passes on the same deployed build and no private identity, token, or state appears in the public artifact or receipt"
