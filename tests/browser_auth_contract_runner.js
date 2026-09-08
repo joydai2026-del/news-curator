@@ -353,6 +353,20 @@ async function main() {
   );
   assert.equal(browser.storage.has("news-curator.auth.session"), false);
 
+  for (const replacement of [null, projected]) {
+    browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
+    let finishLateRefresh;
+    const pending = client.refreshSession(authConfig, expired, async (url) => {
+      await new Promise((resolve) => { finishLateRefresh = resolve; });
+      return response(200, refreshedSession(), url);
+    }, now);
+    if (replacement) client.acceptSession(replacement);
+    else client.clearSession();
+    finishLateRefresh();
+    await assert.rejects(pending, /Session refresh failed/);
+    assert.equal(browser.storage.get("news-curator.auth.session"), replacement ? JSON.stringify(replacement) : undefined);
+  }
+
   const update = {
     expected_revision: 0,
     locale: "en",

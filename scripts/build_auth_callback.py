@@ -21,8 +21,7 @@ KEY_PLACEHOLDER = '<meta name="supabase-publishable-key" content="">'
 CSP_PLACEHOLDER = "connect-src 'self';"
 INDEX_PLACEHOLDER = "<!-- personalization-link -->"
 PERSONALIZATION_LINK = (
-    '<a class="profile-link" href="auth/callback/" target="_blank" '
-    'rel="noopener noreferrer">Sign in / Interests</a>'
+    '<a class="profile-link" href="auth/callback/?start=google">Sign in / Interests</a>'
 )
 
 

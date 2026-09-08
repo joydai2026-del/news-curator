@@ -25,7 +25,10 @@ Google handles sign-in, and Supabase stores your account identity, saved interes
 read and saved-story state, and preference signals such as More like this. Signed-in
 readers can access only their own private reading and preference records.</p>
 <p>The browser keeps the minimal Supabase session in session storage, not your Google
-password or Google access tokens. Sign out clears that browser session. Google and
+password or Google access tokens. Sign-in stays in that tab across page navigation
+and reloads; a newly opened independent tab may need to sign in again. The visible
+account label is read from the session, not stored as a separate profile copy.
+Sign out clears that tab and notifies other open News Curator tabs. Google and
 Supabase process authentication requests under their own privacy policies.</p>
 <p>The newsletter section is produced by software that reads one dedicated,
 owner-operated mailbox subscribed to public newsletters, using read-only access.
