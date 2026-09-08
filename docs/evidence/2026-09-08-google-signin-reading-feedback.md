@@ -23,6 +23,10 @@ Google sign-in is not ready in production. The user-reported failure was reprodu
 
 The auth/unit and executable JavaScript contract group passed 55 tests. Headless Chromium passed 11 auth cases, covering Google-button startup, new/returning preference state, reload continuity, same-tab return without cross-tab messaging, four logout outcomes, and three provider-error cases. These are local contracts, not real Google identity-provider proof.
 
+The broader deterministic pass completed with 2,127 passed, seven optional-environment skips, and eleven socket-marked cases deselected. Both unchanged PostgreSQL runtime files and both Playwright modules were explicitly excluded from that command; their evidence is separate. Edge tests passed 159 cases in each of the two CI Node modes. Ruff and JavaScript syntax checks passed. The Google-only auth page and corrected privacy page were rendered and visually inspected at desktop and phone sizes without horizontal overflow.
+
+Independent auth/security review passed the exact auth commit `fe371afecfa5cd20b954947d9b8854609b504b4d` and privacy/contract commit `60c3d92da098838e8dcc6056905ac0fb81a19edf`. That reviewer independently passed eight focused installed-Chrome cases and the sanitized JavaScript contract. A separate raw Codex attempt timed out; its exact-commit retry failed when the host ran out of disk space. Neither incomplete raw review is counted as a pass.
+
 The current privacy page now distinguishes anonymous browsing from optional signed-in account, interest, and reading-state storage. The browser auth source stores only its minimal Supabase session in session storage, not Google provider tokens or passwords. No unrelated credentials were passed to the independent review child process.
 
 ## Required production readback
