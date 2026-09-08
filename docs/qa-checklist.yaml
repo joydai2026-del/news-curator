@@ -342,7 +342,7 @@ criteria:
     planned_command: "supabase db reset && eval \"$(supabase status -o env)\" && NEWS_CURATOR_LOCAL_SUPABASE_URL=\"$API_URL\" NEWS_CURATOR_LOCAL_SUPABASE_ANON_KEY=\"$ANON_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_SERVICE_ROLE_KEY=\"$SERVICE_ROLE_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_JWT_SECRET=\"$JWT_SECRET\" uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_local_db.py"
     comparison_mode: "owner operations succeed and every anonymous, expired-token, cross-user, altered-id, and direct-table bypass attempt is denied"
     side_effects: "Resets only the local Supabase development database. Never run against a cloud project."
-    current_status: PENDING
+    current_status: GREEN
     blockers: []
   - id: NCV3-24
     group: locally_provable
