@@ -61,6 +61,11 @@ from .models import Item, TierResult
 from .identity import story_id_for_item
 from .normalize import safe_url
 
+
+def _content_version(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()[:16]
+
+
 CSS = """
 *,*::before,*::after{box-sizing:border-box}
 :root{
@@ -1127,6 +1132,16 @@ def render_site(
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
+    static_dir = Path(__file__).resolve().parents[1] / "static"
+    versioned_assets = {
+        relative_path: _content_version((static_dir / relative_path).read_bytes())
+        for relative_path in (
+            Path("reader.js"),
+            Path("auth/client.js"),
+            Path("dashboard/dashboard.css"),
+            Path("dashboard/dashboard.js"),
+        )
+    }
     payload = render_html(
         ranked,
         results,
@@ -1137,6 +1152,13 @@ def render_site(
         require_summaries=require_summaries,
         topic_ids_by_name=topic_ids_by_name,
     )
+    payload = payload.replace(
+        '<script src="auth/client.js" defer></script>',
+        f'<script src="auth/client.js?v={versioned_assets[Path("auth/client.js")]}" defer></script>',
+    ).replace(
+        '<script src="reader.js" defer></script>',
+        f'<script src="reader.js?v={versioned_assets[Path("reader.js")]}" defer></script>',
+    )
 
     # Write via a temp file in the same directory, then replace, so an
     # interrupted run can never leave a half-written page published.
@@ -1145,7 +1167,6 @@ def render_site(
     tmp.replace(path)
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
-    static_dir = Path(__file__).resolve().parents[1] / "static"
     for relative_path in (
         Path("reader.js"),
         Path("auth/client.js"),
@@ -1159,7 +1180,24 @@ def render_site(
         destination = out_dir / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         asset_tmp = destination.with_suffix(destination.suffix + ".tmp")
-        asset_tmp.write_bytes(source.read_bytes())
+        content = source.read_bytes()
+        if relative_path == Path("dashboard/index.html"):
+            dashboard = content.decode("utf-8")
+            dashboard = dashboard.replace(
+                'href="dashboard.css"',
+                f'href="dashboard.css?v={versioned_assets[Path("dashboard/dashboard.css")]}"',
+            ).replace(
+                'src="../auth/client.js"',
+                f'src="../auth/client.js?v={versioned_assets[Path("auth/client.js")]}"',
+            ).replace(
+                'src="../reader.js"',
+                f'src="../reader.js?v={versioned_assets[Path("reader.js")]}"',
+            ).replace(
+                'src="dashboard.js"',
+                f'src="dashboard.js?v={versioned_assets[Path("dashboard/dashboard.js")]}"',
+            )
+            content = dashboard.encode("utf-8")
+        asset_tmp.write_bytes(content)
         asset_tmp.replace(destination)
 
     # A CNAME committed at the repo root has to be copied into the published

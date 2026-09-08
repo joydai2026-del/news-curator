@@ -1,3 +1,4 @@
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,18 @@ def test_materializer_emits_exact_origin_csp_and_public_config(tmp_path: Path) -
     assert "connect-src 'self' https://project-ref.supabase.co;" in rendered
     assert "*.supabase.co" not in rendered
     assert "sb_secret_" not in rendered
+
+
+def test_materialized_callback_versions_the_exact_auth_client(tmp_path: Path) -> None:
+    output = tmp_path / "auth/callback/index.html"
+    materialize_callback(
+        supabase_url="https://project-ref.supabase.co",
+        publishable_key="sb_publishable_example",
+        output=output,
+    )
+    client = (TEMPLATE.parents[1] / "client.js").read_bytes()
+    version = hashlib.sha256(client).hexdigest()[:16]
+    assert f'<script src="../client.js?v={version}"></script>' in output.read_text(encoding="utf-8")
 
 
 def test_materializer_configures_main_reader_and_keeps_tokens_out_of_html(tmp_path: Path) -> None:

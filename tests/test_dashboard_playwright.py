@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import threading
 from functools import partial
 from http.server import ThreadingHTTPServer
@@ -47,6 +49,108 @@ def _serve(site: Path) -> tuple[ThreadingHTTPServer, threading.Thread]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
+
+
+class _MutableCachedSiteHandler(_QuietHandler):
+    site: Path
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, directory=str(type(self).site), **kwargs)
+
+    def end_headers(self) -> None:
+        if self.path.split("?", 1)[0].endswith((".js", ".css")):
+            self.send_header("Cache-Control", "public, max-age=3600")
+        else:
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+
+def test_dashboard_upgrade_bypasses_warm_old_reader_cache(tmp_path: Path, now: object) -> None:
+    old_site = tmp_path / "old-site"
+    old_site.mkdir()
+    (old_site / "index.html").write_text('<script src="reader.js"></script>', encoding="utf-8")
+    (old_site / "reader.js").write_text("window.preUpgradeReaderLoaded = true;", encoding="utf-8")
+    new_site = _site(tmp_path / "new", now, configured=False)
+    unversioned_site = tmp_path / "unversioned-site"
+    shutil.copytree(new_site, unversioned_site)
+    dashboard_path = unversioned_site / "dashboard/index.html"
+    dashboard_path.write_text(
+        re.sub(r"\?v=[0-9a-f]{16}", "", dashboard_path.read_text(encoding="utf-8")),
+        encoding="utf-8",
+    )
+    dashboard_script = unversioned_site / "dashboard/dashboard.js"
+    current_script = dashboard_script.read_text(encoding="utf-8")
+    dependency_guard = """    if (!auth || !personalization || !readerFactory) {
+      const status = document.getElementById(\"dashboard-status\");
+      const signedOut = document.getElementById(\"signed-out\");
+      const privateRoot = document.getElementById(\"private-dashboard\");
+      if (status) status.textContent = \"Your dashboard could not be loaded. Refresh the page to try again.\";
+      if (signedOut) signedOut.hidden = false;
+      if (privateRoot) privateRoot.hidden = true;
+      return;
+    }"""
+    assert current_script.count(dependency_guard) == 1
+    dashboard_script.write_text(
+        current_script.replace(dependency_guard, "    if (!auth || !personalization || !readerFactory) return;"),
+        encoding="utf-8",
+    )
+    _MutableCachedSiteHandler.site = old_site
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MutableCachedSiteHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with playwright_api.sync_playwright() as runtime:
+            browser = runtime.chromium.launch(headless=True, channel="chrome", args=["--mute-audio"])
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.add_init_script(
+                "if(window.speechSynthesis) speechSynthesis.speak=()=>{};"
+                "HTMLMediaElement.prototype.play=()=>Promise.resolve();"
+            )
+            origin = f"http://127.0.0.1:{server.server_port}"
+            page.goto(origin, wait_until="networkidle")
+            assert page.evaluate("window.preUpgradeReaderLoaded === true")
+            assert page.evaluate("window.NewsCuratorReaderApi === undefined")
+
+            _MutableCachedSiteHandler.site = unversioned_site
+            page.goto(f"{origin}/dashboard/", wait_until="networkidle")
+            page.wait_for_timeout(250)
+            assert page.locator("#dashboard-status").inner_text() == "Checking sign-in."
+
+            _MutableCachedSiteHandler.site = new_site
+            page.reload(wait_until="networkidle")
+            assert page.locator("#dashboard-status").inner_text() == "Sign in to open your private dashboard."
+            assert page.evaluate("typeof window.NewsCuratorReaderApi?.create === 'function'")
+            assert page.locator("#signed-out").is_visible()
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_dashboard_missing_runtime_dependency_fails_closed(tmp_path: Path, now: object) -> None:
+    site = _site(tmp_path, now, configured=False)
+    (site / "reader.js").unlink()
+    server, thread = _serve(site)
+    try:
+        with playwright_api.sync_playwright() as runtime:
+            browser = runtime.chromium.launch(headless=True, channel="chrome", args=["--mute-audio"])
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.add_init_script(
+                "if(window.speechSynthesis) speechSynthesis.speak=()=>{};"
+                "HTMLMediaElement.prototype.play=()=>Promise.resolve();"
+            )
+            page.goto(f"http://127.0.0.1:{server.server_port}/dashboard/", wait_until="networkidle")
+            assert page.locator("#dashboard-status").inner_text() == (
+                "Your dashboard could not be loaded. Refresh the page to try again."
+            )
+            assert page.locator("#signed-out").is_visible()
+            assert page.locator("#private-dashboard").is_hidden()
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_dashboard_signed_out_shell_contains_no_private_rows(tmp_path: Path, now: object) -> None:

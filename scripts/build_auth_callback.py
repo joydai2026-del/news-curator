@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import sys
 from pathlib import Path
@@ -50,6 +51,10 @@ def materialize_callback(*, supabase_url: str, publishable_key: str, output: Pat
     if template.count(URL_PLACEHOLDER) != 1 or template.count(KEY_PLACEHOLDER) != 1 or template.count(CSP_PLACEHOLDER) != 1:
         raise ValueError("The auth callback template contract changed.")
     rendered = _configure_page(template, config)
+    client_version = hashlib.sha256((ROOT / "static/auth/client.js").read_bytes()).hexdigest()[:16]
+    if rendered.count('src="../client.js"') != 1:
+        raise ValueError("The auth callback client asset contract changed.")
+    rendered = rendered.replace('src="../client.js"', f'src="../client.js?v={client_version}"')
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding="utf-8")
 
