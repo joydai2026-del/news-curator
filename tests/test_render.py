@@ -792,6 +792,13 @@ class TestAccordionReadingCompanion:
         assert 'Load 20 more' not in page
         assert 'id="updates-status" role="status" aria-live="polite"' in page
 
+    def test_dynamic_cards_have_a_symmetric_view_index_lifecycle(self, now):
+        page = render({"AI": [make_item("A story")]}, now=now)
+        assert "function addCard(card)" in page
+        assert "function removeCard(card)" in page
+        assert "index.splice(position,1)" in page
+        assert "{addCard:addCard,removeCard:removeCard,apply:apply" in page
+
     def test_card_exposes_canonical_story_and_topic_ids(self, now):
         item = make_item("A story")
         card = card_with(render({"AI News": [item]}, now=now), "A story")

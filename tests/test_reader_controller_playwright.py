@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from curator.models import TierResult
-from curator.render import render_site
+from curator.render import JS as VIEW_JS, render_site
 from tests.conftest import make_item
 
 
@@ -954,6 +954,113 @@ def test_unconfigured_page_keeps_articles_readable_without_interactive_state_con
             assert page.locator("a", has_text="Read original").is_visible()
             assert page.locator(".state-action:visible").count() == 0
             assert page.locator(".state-action:enabled").count() == 0
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_logout_removes_dynamic_saved_card_from_dom_and_view_index(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    public_id = _story(1)["story_id"]
+    dynamic_id = _story(77)["story_id"]
+    (site / "index.html").write_text(
+        f"""<!doctype html><html><head><meta charset="utf-8"><style>
+        .card[hidden],.topic-section[hidden],#empty[hidden],#updates-status[hidden]{{display:none}}
+        .grid{{display:flex;flex-direction:column}}
+        </style></head><body>
+        <a class="profile-link" href="#">Profile</a>
+        <button class="chip" data-filter="__all__">All</button>
+        <button class="chip" data-filter="__saved__">Saved</button>
+        <button class="chip" data-filter="ai" data-topic-id="ai">AI</button>
+        <input id="q"><span id="count"></span><span id="active-topic" hidden></span>
+        <p id="reader-status"></p><button id="load-more">Load more</button>
+        <p id="updates-status" hidden><button id="show-updates"></button></p>
+        <main id="sections"><section class="topic-section" data-section="ai" data-topic-id="ai">
+          <div class="grid"><article class="card" data-story-id="{public_id}"
+            data-topic-ids="ai" data-topic-api-ids="ai" data-rank-all="1" data-rank-ai="1"
+            data-state-revision="0" data-interest-revision="0">
+            <button class="headline accordion-toggle">Public story</button><div class="full">Public summary</div>
+            <button class="state-action read-action" disabled>Mark read</button>
+            <button class="state-action save-action" disabled>Save</button>
+            <button class="state-action interest-action" data-topic-id="ai" disabled>More like this</button>
+          </article></div>
+        </section></main><p id="empty" hidden>Nothing matched in this window.</p>
+        <script>localStorage.setItem("nc-tab", "__saved__");</script>
+        <script>{VIEW_JS}</script>
+        <script>
+        window.__signedIn = true;
+        window.setInterval = () => 1;
+        window.NewsCuratorAuth = {{
+          config: () => ({{url: "{ORIGIN}", key: "public-key"}}),
+          hasSessionCandidate: () => window.__signedIn,
+          sessionForRequest: async () => window.__signedIn ? ({{access_token: "private-token"}}) : null,
+          clearSession: () => {{ window.__signedIn = false; }},
+          channelName: "news-curator-auth"
+        }};
+        window.BroadcastChannel = class {{
+          constructor() {{ window.__authChannel = this; }}
+          addEventListener(_type, listener) {{ this.listener = listener; }}
+          postMessage() {{}}
+        }};
+        </script><script src="reader.js"></script></body></html>""",
+        encoding="utf-8",
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        if request.url.endswith("/latest_publication"):
+            payload: object = {
+                "publication_seq": 7,
+                "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [{"topic_id": "ai", "name": "AI"}],
+                "initial_history_cursor": None,
+                "poll_seconds": 30,
+                "page_size": 2,
+            }
+        elif request.url.endswith("/saved_page"):
+            payload = [_story(77, "saved_at") | {
+                "title": "Saved-only story",
+                "saved_at": "2026-09-07T12:02:00Z",
+                "topic_ids": ["ai"],
+                "topic_ranks": {"ai": 7},
+                "next_cursor": {"before_saved_at": "2026-09-07T12:02:00Z", "before_story_id": dynamic_id},
+            }]
+        elif request.url.endswith("/feed_page"):
+            payload = [_story(1)]
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            dynamic = page.locator(f'article.card[data-story-id="{dynamic_id}"]')
+            assert dynamic.is_visible()
+            page.locator("#q").fill("Saved-only")
+            assert page.locator("#count").inner_text() == "1 matching story"
+
+            page.evaluate("window.__authChannel.listener({data: {type: 'logout'}})")
+            page.locator("#reader-status").get_by_text("Signed out. Public stories are ready.").wait_for()
+            assert page.evaluate("window.NewsCuratorView.currentTab()") == "__all__"
+            assert dynamic.count() == 0
+            assert page.locator("#count").inner_text() == "0 matching stories"
+            assert page.locator("#empty").is_visible()
+            page.locator("#q").fill("")
+            public = page.locator(f'article.card[data-story-id="{public_id}"]')
+            assert public.is_visible()
+            assert page.locator("article.card").count() == 1
             browser.close()
     finally:
         server.shutdown()

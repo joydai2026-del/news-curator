@@ -653,9 +653,9 @@
       cards.forEach((card, storyId) => {
         if (!card.newsCuratorStaticCard) {
           cards.delete(storyId);
+          view.removeCard(card);
           card.replaceChildren();
           [...card.attributes].forEach((attribute) => card.removeAttribute(attribute.name));
-          view.addCard(card);
           card.remove();
           return;
         }

@@ -439,6 +439,11 @@ JS = """
     apply();
   }
 
+  function removeCard(card){
+    var position=index.findIndex(function(e){return e.el===card;});
+    if(position>=0){index.splice(position,1);}
+  }
+
   chips.forEach(function(c){c.addEventListener('click',function(){setTab(c.dataset.filter);});});
   if(box){box.addEventListener('input',apply);}
 
@@ -461,7 +466,7 @@ JS = """
   var saved='__all__';
   try{saved=localStorage.getItem('nc-tab')||'__all__';}catch(e){}
   setTab(chips.some(function(c){return c.dataset.filter===saved;})?saved:'__all__');
-  window.NewsCuratorView=Object.freeze({addCard:addCard,apply:apply,currentTab:function(){return tab;}});
+  window.NewsCuratorView=Object.freeze({addCard:addCard,removeCard:removeCard,apply:apply,currentTab:function(){return tab;}});
 
   // Staleness is a property of WHEN YOU LOOK, so it is measured here rather
   // than baked in at build time (where it would always read as zero).
