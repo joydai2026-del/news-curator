@@ -10,6 +10,7 @@ import pytest
 
 from curator.models import TierResult
 from curator.render import JS as VIEW_JS, render_site
+from scripts.build_auth_callback import activate_personalization_link
 from tests.conftest import make_item
 
 
@@ -1098,6 +1099,161 @@ def test_logout_removes_dynamic_saved_card_from_dom_and_view_index(tmp_path: Pat
             public = page.locator(f'article.card[data-story-id="{public_id}"]')
             assert public.is_visible()
             assert page.locator("article.card").count() == 1
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    "viewport",
+    [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}],
+    ids=["desktop", "phone"],
+)
+def test_polled_update_banner_is_an_accessible_overlay_until_explicit_refresh(
+    tmp_path: Path,
+    now: object,
+    viewport: dict[str, int],
+) -> None:
+    site = tmp_path / "site"
+    items = []
+    for index in range(1, 9):
+        item = make_item(
+            f"Banner geometry story {index}",
+            f"https://publisher.example/banner-{index}",
+        )
+        item.description = (
+            "The publisher supplied a complete public summary with enough context "
+            "to keep this real rendered card visible during the update check."
+        )
+        items.append(item)
+    render_site(
+        {"AI": items},
+        [TierResult(tier="rss", items=[], ok=True)],
+        now,
+        site,
+        topic_ids_by_name={"AI": "ai"},
+    )
+    activate_personalization_link(
+        site / "index.html",
+        supabase_url=ORIGIN,
+        publishable_key="sb_publishable_test",
+    )
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    calls = {"latest": 0, "updates": 0}
+    latest_sequences: list[int] = []
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        if request.url.endswith("/latest_publication"):
+            calls["latest"] += 1
+            publication_seq = 7 if calls["latest"] == 1 else 8
+            latest_sequences.append(publication_seq)
+            payload: object = {
+                "publication_seq": publication_seq,
+                "finalized_at": "2026-09-08T04:00:00Z",
+                "topics": [{"topic_id": "ai", "name": "AI"}],
+                "initial_history_cursor": None,
+                "poll_seconds": 30,
+                "page_size": 3,
+            }
+        elif request.url.endswith("/feed_page"):
+            payload = []
+        elif request.url.endswith("/updates_since"):
+            calls["updates"] += 1
+            payload = [_update(1)]
+        else:
+            raise AssertionError(f"unexpected RPC: {request.url}")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    def layout(page: object) -> dict[str, object]:
+        return page.evaluate(
+            """() => {
+              const box = selector => {
+                const rect = document.querySelector(selector).getBoundingClientRect();
+                return {x: rect.x, y: rect.y, width: rect.width, height: rect.height};
+              };
+              return {
+                topic: box('.topic-section:not([hidden]) .section-title'),
+                card: box('article.card:not([hidden])'),
+                scrollY: window.scrollY,
+                order: [...document.querySelectorAll('article.card:not([hidden])')]
+                  .map(card => card.dataset.storyId),
+                focus: document.activeElement && document.activeElement.id,
+              };
+            }"""
+        )
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(viewport=viewport)
+            context.add_init_script(
+                """(() => {
+                  const nativeSetInterval = window.setInterval;
+                  window.setInterval = (callback, delay, ...args) => {
+                    window.__readerPoll = () => callback(...args);
+                    window.__readerPollDelay = delay;
+                    return 1;
+                  };
+                  window.__nativeSetInterval = nativeSetInterval;
+                })();"""
+            )
+            page = context.new_page()
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            page.wait_for_function("() => typeof window.__readerPoll === 'function'")
+            page.evaluate(
+                "window.scrollTo(0, Math.min(240, document.documentElement.scrollHeight - innerHeight))"
+            )
+            page.locator("#q").focus()
+            before = layout(page)
+            assert before["focus"] == "q"
+
+            page.evaluate("() => window.__readerPoll()")
+            page.locator("#updates-status").wait_for(state="visible")
+            page.get_by_role("button", name="1 new story available").wait_for()
+            after = layout(page)
+
+            assert calls["latest"] == 2 and calls["updates"] == 1
+            assert after["order"] == before["order"]
+            assert after["scrollY"] == before["scrollY"]
+            assert after["focus"] == "q"
+            assert after["topic"] == pytest.approx(before["topic"], abs=0.5), (
+                viewport,
+                before,
+                after,
+            )
+            assert after["card"] == pytest.approx(before["card"], abs=0.5), (
+                viewport,
+                before,
+                after,
+            )
+
+            updates_button = page.get_by_role("button", name="1 new story available")
+            button_box = updates_button.bounding_box()
+            assert button_box is not None
+            assert 0 <= button_box["x"]
+            assert button_box["x"] + button_box["width"] <= viewport["width"]
+            assert 0 <= button_box["y"]
+            assert button_box["y"] + button_box["height"] <= viewport["height"]
+            page.keyboard.press("Tab")
+            assert page.evaluate("document.activeElement.id") == "show-updates"
+            assert updates_button.evaluate("button => button.matches(':focus-visible')")
+            with page.expect_response(
+                lambda response: response.url.endswith("/latest_publication")
+            ):
+                with page.expect_navigation(wait_until="domcontentloaded"):
+                    page.keyboard.press("Enter")
+            assert calls["latest"] == 3
+            assert latest_sequences == [7, 8, 8]
+            assert page.locator("#updates-status").is_hidden()
             browser.close()
     finally:
         server.shutdown()

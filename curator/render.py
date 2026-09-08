@@ -326,8 +326,9 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .state-action,.load-more,.updates-button{border:1px solid var(--line);cursor:pointer}
 .state-action[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
 .reader-status{min-height:1.5rem;color:var(--muted);font-size:.78rem}
-.updates-status{position:sticky;top:5.2rem;z-index:29;text-align:center;margin:.5rem 0}
-.updates-button{min-height:44px;border-radius:999px;padding:.55rem 1rem;background:var(--accent);color:var(--accent-fg);font-weight:700}
+/* Updates float outside document flow so a polling result never moves the feed. */
+.updates-status{position:fixed;bottom:max(1rem,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:31;width:max-content;max-width:calc(100% - 2rem);text-align:center;margin:0;pointer-events:none}
+.updates-button{min-height:44px;max-width:100%;border-radius:999px;padding:.55rem 1rem;background:var(--accent);color:var(--accent-fg);font-weight:700;box-shadow:var(--shadow);pointer-events:auto}
 .history-tools{display:flex;justify-content:center;margin:1.25rem 0}
 .load-more{min-height:44px;border-radius:999px;padding:.65rem 1rem;background:var(--card);color:var(--accent);font-weight:700}
 .empty{margin:1.5rem 0}
