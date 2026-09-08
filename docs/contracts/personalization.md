@@ -1,10 +1,10 @@
 # Personalization contract
 
-Status: local implementation. Cloud activation is not complete.
+Status: preferences and reading state are deployed. Google-only sign-in activation and real Google acceptance are separate release gates.
 
 ## Boundary
 
-The public news page remains readable without an account. Authentication exists only to read and write the signed-in user's private preferences. The browser and agent use a Supabase publishable key. A `service_role` key is prohibited in both flows.
+The public news page remains readable without an account. Authentication reads and writes the signed-in user's own preferences and reading state. The browser and agent use a Supabase publishable key. A `service_role` key is prohibited in both flows.
 
 ## Data contract
 
@@ -30,11 +30,11 @@ Invalid data and unauthenticated calls are errors. A conflict does not change th
 
 ## Browser path
 
-`static/auth/callback/index.html` and `static/auth/client.js` provide the human interface without a third-party JavaScript dependency. An existing owner requests an email one-time code from `/auth/v1/otp` with `create_user: false`, then verifies it at `/auth/v1/verify`. Production must configure the Supabase email template to show `{{ .Token }}` and must pre-provision the owner before disabling public signup. A successful verification must include a bounded, decodable access token whose `sub` exactly matches the returned `user.id`. The browser persists only `access_token`, `refresh_token`, `expires_at`, and `user_id` in `sessionStorage`. It never persists the email address, entered code, provider tokens, or the raw response. Errors never display credentials.
+`static/auth/callback/index.html` and `static/auth/client.js` provide Google-only sign-in without a third-party JavaScript dependency. The button starts Supabase's Google authorization-code flow with PKCE (a one-time verifier that binds the returning code to the initiating browser tab). The exact callback contains a random `client_state`; the browser verifies it before exchanging the code at `/auth/v1/token?grant_type=pkce`. It scrubs callback query and fragment data before network exchange. Provider errors, duplicate code/state parameters, and implicit token fragments fail closed. A successful exchange must include a bounded, decodable access token whose `sub` exactly matches the returned `user.id`. The browser persists only `access_token`, `refresh_token`, `expires_at`, and `user_id` in `sessionStorage`. It never persists the email address, Google provider tokens, or raw response. Errors never display credentials. Email/code sign-in is not exposed.
 
-The browser exposes `window.NewsCuratorPersonalization.get()` and `.set(input)` as the preference API seam used by the page. They use the same owner-only table and compare-and-swap RPC as the agent client, apply the same input and response bounds, and require the validated session created by email-code verification. When the saved access token has expired, both operations refresh through the exact configured Supabase origin at `/auth/v1/token?grant_type=refresh_token` before any preference request. The refresh request uses only the publishable key and current refresh token, rejects redirects and response URL mismatches before reading a body, requires the same user id, requires a newly rotated refresh token, and persists only the four-field minimal session projection. Any refresh failure erases the saved session.
+The browser exposes `window.NewsCuratorPersonalization.get()` and `.set(input)` as the preference API seam used by the page. They use the same owner-only table and compare-and-swap RPC as the agent client, apply the same input and response bounds, and require the validated Google sign-in session. When the saved access token has expired, both operations refresh through the exact configured Supabase origin at `/auth/v1/token?grant_type=refresh_token` before any preference request. The refresh request uses only the publishable key and current refresh token, rejects redirects and response URL mismatches before reading a body, requires the same user id, requires a newly rotated refresh token, and persists only the four-field minimal session projection. Any refresh failure erases the saved session.
 
-The same JavaScript still contains the PKCE callback primitives used by the agent login path and their regression tests. The human page does not start that flow.
+The human page and agent client both start Google PKCE sign-in. Returning to the digest from the callback intentionally stays in the authenticated tab, preserving session-storage continuity when cross-tab messaging is unavailable.
 
 The checked-in callback is a fail-closed template. Do not edit its placeholders for activation. Materialize a separate build artifact using the exact project origin and public key:
 
@@ -94,9 +94,9 @@ Cloud-linked status requires all of the following. None is implied by local test
 
 1. Create or select the intended Supabase project outside this repository.
 2. Apply the checked-in migration and independently inspect grants, RLS policies, and function security.
-3. Pre-provision the intended owner account, configure the email template to show `{{ .Token }}`, and disable public signup.
-4. In Supabase, set the exact deployed site origin and exact static page URL. If the agent login path is activated, also enable the Google provider, configure its Supabase provider callback, and add the native loopback pattern.
+3. Configure a dedicated Google Web application client with basic sign-in scopes only. Its consent audience must allow the intended public users, not only a test allowlist. Do not reuse newsletter-ingestion credentials. Enable Google and new-user signup in Supabase, and disable email sign-in.
+4. In Google, register the exact Supabase provider callback. In Supabase, allow the exact deployed static callback and verify its query-state round trip. If the agent login path is activated, also add the native loopback pattern.
 5. Run the callback materializer into the static build output using only the project URL and publishable key. Put the same two public values in the agent environment. Confirm no service-role credential appears in either surface, build output, or logs.
 6. Run the two-user, anon, expired-token, altered-user-id, direct-update, oversized-data, replay, refresh-rotation, and logout tests against the linked project.
-7. Verify email-code sign-in, the deployed meta CSP, session cleanup, interest save/reload, sign-out, and the absence of credentials in the rendered assets in a real browser.
+7. Verify real Google redirect, consent and callback exchange for new and returning users, the deployed meta CSP, session cleanup, interest save/reload, sign-out, and the absence of credentials in rendered assets. Local routed responses or admin-created sessions do not establish Google sign-in readiness.
 8. Record the linked test receipt separately. Do not relabel local contract tests as cloud proof.
