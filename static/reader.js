@@ -378,6 +378,28 @@
       applyInterestTopic(card, interestButton.dataset.topicId);
     }
   }
+
+  function setStoryStateControlsDisabled(card, disabled) {
+    const readButton = card.querySelector(".read-action");
+    const saveButton = card.querySelector(".save-action");
+    if (readButton) readButton.disabled = disabled;
+    if (saveButton) saveButton.disabled = disabled;
+  }
+
+  function beginStateMutation(card) {
+    if (card.newsCuratorStateMutationToken) return null;
+    const token = {};
+    card.newsCuratorStateMutationToken = token;
+    setStoryStateControlsDisabled(card, true);
+    return token;
+  }
+
+  function finishStateMutation(card, token, ready) {
+    if (card.newsCuratorStateMutationToken !== token) return false;
+    delete card.newsCuratorStateMutationToken;
+    setStoryStateControlsDisabled(card, !ready);
+    return true;
+  }
   function idempotencyKey() {
     if (crypto.randomUUID) return crypto.randomUUID();
     const bytes = new Uint8Array(16);
@@ -517,7 +539,7 @@
   }
 
   const contract = {
-    actionTopic, applyInterestTopic, applyServerRank, applyServerState, createApi, createStoryCard, drainUpdates, effectiveTopic, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
+    actionTopic, applyInterestTopic, applyServerRank, applyServerState, beginStateMutation, createApi, createStoryCard, drainUpdates, effectiveTopic, finishStateMutation, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
     rankingReason, run, safeDestination,
     validateFeedPage, validateLatestPublication, validateUpdates,
   };
@@ -598,8 +620,11 @@
     function stateReady(card) { return hydratedTopics(card).has(selectedTopic()); }
     function refreshStateControls() {
       cards.forEach((card) => {
-        const disabled = !stateReady(card);
-        card.querySelectorAll(".state-action").forEach((button) => { button.disabled = disabled; });
+        const ready = stateReady(card);
+        card.querySelectorAll(".state-action").forEach((button) => {
+          const stateWrite = button.classList.contains("read-action") || button.classList.contains("save-action");
+          button.disabled = !ready || (stateWrite && Boolean(card.newsCuratorStateMutationToken));
+        });
       });
     }
     function refreshInterestControls() {
@@ -618,6 +643,7 @@
       });
     }
     function clearPrivateCardState(card) {
+      delete card.newsCuratorStateMutationToken;
       card.classList.remove("is-read", "is-saved", "is-more-like", "is-less-like");
       interestStates(card).clear();
       hydratedTopics(card).clear();
@@ -831,8 +857,8 @@
         if (requestEpoch === authEpoch) announce("Older stories could not be loaded. Try again.");
       } finally { loadButton.disabled = false; }
     }
-    function reapplyCurrentMembership(card) {
-      const focused = document.activeElement;
+    function reapplyCurrentMembership(card, priorFocusedAction = null) {
+      const focused = priorFocusedAction || document.activeElement;
       const cardHadFocus = Boolean(focused && card.contains(focused));
       const scrollX = window.scrollX;
       const scrollY = window.scrollY;
@@ -846,7 +872,12 @@
       window.scrollTo(scrollX, scrollY);
     }
     async function mutateState(card, read, saved) {
+      const focusedAction = document.activeElement;
+      const restoreFocusOnRollback = Boolean(focusedAction && card.contains(focusedAction));
+      const mutationToken = beginStateMutation(card);
+      if (!mutationToken) return;
       const requestEpoch = authEpoch;
+      let rolledBack = false;
       const previous = {
         read_at: card.classList.contains("is-read") ? "local" : null,
         saved_at: card.classList.contains("is-saved") ? "local" : null,
@@ -855,16 +886,22 @@
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
         const result = await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, idempotencyKey());
-        if (requestEpoch !== authEpoch) return;
+        if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
         if (result.status === "conflict") fail("Story state changed in another session.");
         applyServerState(card, { ...previous, ...result });
-        reapplyCurrentMembership(card);
+        reapplyCurrentMembership(card, restoreFocusOnRollback ? focusedAction : null);
         announce("Reading state saved.");
       } catch (_) {
-        if (requestEpoch !== authEpoch) return;
+        if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
         applyServerState(card, previous);
         reapplyCurrentMembership(card);
+        rolledBack = true;
         announce("Reading state could not be saved. Try again.");
+      } finally {
+        const unlocked = finishStateMutation(card, mutationToken, stateReady(card));
+        if (unlocked && rolledBack && restoreFocusOnRollback && focusedAction.isConnected && !card.hidden) {
+          focusedAction.focus({ preventScroll: true });
+        }
       }
     }
     document.getElementById("sections").addEventListener("click", (event) => {

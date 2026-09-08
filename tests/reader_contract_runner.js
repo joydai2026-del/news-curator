@@ -413,6 +413,16 @@ async function main() {
   assert.equal(fakeCard.classList.values.has("is-read"), true);
   assert.equal(fakeCard.controls[".read-action"].textContent, "Mark unread");
   assert.equal(fakeCard.controls[".save-action"].textContent, "Save");
+  const stateToken = reader.beginStateMutation(fakeCard);
+  assert.ok(stateToken);
+  assert.equal(fakeCard.controls[".read-action"].disabled, true);
+  assert.equal(fakeCard.controls[".save-action"].disabled, true);
+  assert.equal(reader.beginStateMutation(fakeCard), null);
+  assert.equal(reader.finishStateMutation(fakeCard, {}, true), false);
+  assert.equal(fakeCard.controls[".read-action"].disabled, true);
+  assert.equal(reader.finishStateMutation(fakeCard, stateToken, true), true);
+  assert.equal(fakeCard.controls[".read-action"].disabled, false);
+  assert.equal(fakeCard.controls[".save-action"].disabled, false);
   reader.applyServerState(fakeCard, {
     interests: [{ topic_id: "ai", signal: "more_like", revision: 1 }],
   });

@@ -313,6 +313,35 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "button => { button.setAttribute('aria-expanded', 'true'); button.click(); }"
             )
             page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            double_click_revision = int(first.get_attribute("data-state-revision") or "0")
+            writes_before_double_click = len(state_writes)
+            first.locator(".save-action").evaluate(
+                "button => {"
+                " button.dispatchEvent(new MouseEvent('click', {bubbles: true}));"
+                " button.dispatchEvent(new MouseEvent('click', {bubbles: true}));"
+                "}"
+            )
+            page.wait_for_function(
+                "([card, revision]) => card.dataset.stateRevision === String(revision + 1)",
+                arg=[first.element_handle(), double_click_revision],
+            )
+            assert len(state_writes) == writes_before_double_click + 1
+            assert state_writes[-1] == (
+                first.get_attribute("data-story-id"), double_click_revision
+            )
+            assert first.evaluate("card => card.classList.contains('is-saved')")
+            assert first.locator(".read-action").is_enabled()
+            assert first.locator(".save-action").is_enabled()
+
+            first.locator(".save-action").click()
+            page.wait_for_function(
+                "([card, revision]) => card.dataset.stateRevision === String(revision + 2)",
+                arg=[first.element_handle(), double_click_revision],
+            )
+            assert state_writes[-1] == (
+                first.get_attribute("data-story-id"), double_click_revision + 1
+            )
+            assert not first.evaluate("card => card.classList.contains('is-saved')")
             page.evaluate("window.scrollTo(0, 240)")
 
             async_actions = [
