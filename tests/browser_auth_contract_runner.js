@@ -144,9 +144,19 @@ async function main() {
     return response(200, rawSession(), url);
   };
   const callback = new URL(`https://news.example/auth/callback/?code=auth-code&client_state=${state}`);
+  const callbackStartedAt = Math.floor(Date.now() / 1000);
   assert.equal(await client.finishCallback(callback, lifecycleFetch), true);
+  const callbackFinishedAt = Math.floor(Date.now() / 1000);
   assert.equal(browser.broadcasts[0].name, "news-curator.auth.v1");
-  assert.deepEqual(browser.broadcasts[0].value, { type: "session", session: projected });
+  const broadcastSession = browser.broadcasts[0].value.session;
+  assert.deepEqual(browser.broadcasts[0].value, {
+    type: "session", session: { ...projected, expires_at: broadcastSession.expires_at },
+  });
+  assert.ok(Number.isInteger(broadcastSession.expires_at));
+  assert.ok(
+    broadcastSession.expires_at >= callbackStartedAt + 3600 &&
+      broadcastSession.expires_at <= callbackFinishedAt + 3600
+  );
   assert.deepEqual(browser.historyCalls[0], [null, "", "/auth/callback/"]);
   assert.equal(browser.storage.has("news-curator.auth.state"), false);
   assert.equal(browser.storage.has("news-curator.auth.verifier"), false);
