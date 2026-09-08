@@ -4,6 +4,17 @@ snapshot_date: 2026-09-01
 planning_authority: none
 current_plan: https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2
 note: "Historical results remain dated snapshots. The September 8 reading/history verification below records code and release evidence only. Notion remains the planning authority."
+main_account_navigation_correction:
+  date: 2026-09-08
+  evidence: docs/evidence/2026-09-08-main-account-navigation.md
+  user_reported_main_entry_and_identity: REOPENED
+  main_google_main_local_contract: GREEN
+  exact_served_main_google_main: PENDING
+  visible_account_save_reload_and_same_tab_interests: PENDING
+  desktop_short_window_and_phone_navigation: LOCAL_GREEN_LIVE_PENDING
+  independent_review: PENDING
+  product_owner_acceptance: OPEN
+  note: "The earlier Google callback proof did not verify direct main-page entry or visible account identity. This dated correction has its own gates. Local error paths are B, not real Google proof. Session storage remains per tab; independent new tabs may require sign-in."
 release_verification:
   date: 2026-09-08
   evidence: docs/evidence/2026-09-08-m1-release.md
@@ -334,17 +345,17 @@ criteria:
       - "Cloud-linked Supabase and Google activation are not complete."
   - id: NCV3-20
     group: locally_provable
-    description: Story, external, settings-entry, privacy, and footer destination links open in a new tab with rel="noopener noreferrer". The auth callback's Back to the digest return intentionally stays in its authenticated tab so sessionStorage survives when cross-tab messaging is unavailable. Unsafe URL schemes remain rejected.
+    description: Story, external, privacy, and footer destination links open in a new tab with rel="noopener noreferrer". Internal account, Interests, and callback-return navigation stay in the same tab so sessionStorage survives. The main unsigned link starts Google directly, including its early-click fallback. Unsafe URL schemes remain rejected.
     check_type: render_security_contract
     code_audit_target:
       - "curator/render.py"
       - "static/auth/"
       - "tests/"
     planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_render.py tests/test_reader_browser_contract.py tests/test_auth_callback_playwright.py"
-    comparison_mode: "destination anchors have target=_blank and rel tokens noopener plus noreferrer; the callback return preserves one tab and its session without BroadcastChannel; unsafe schemes never render as navigable links"
+    comparison_mode: "external destination anchors have target=_blank and rel tokens noopener plus noreferrer; internal account and callback navigation preserve one tab and its session; unsafe schemes never render as navigable links"
     side_effects: "Uses local render fixtures only."
     current_status: GREEN
-    evidence: docs/evidence/2026-09-08-m1-release.md
+    evidence: docs/evidence/2026-09-08-main-account-navigation.md
     blockers: []
   - id: NCV3-21
     group: locally_provable
@@ -576,7 +587,7 @@ live_proven_gates:
     blockers:
       - "Approved production build, deploy, archive finalization, anonymous reading, and unattended hourly publication passed. Translation is intentionally disabled; translation activation and quality calibration are outside this reading-history release."
   - id: NCV3-LIVE-02
-    description: "The reviewed production build passes a real desktop and mobile-width reading/history walkthrough: story, external, and settings-entry links open safely in a new tab, state persists after reload, topic pagination appends without duplicates or jumps, and a newer-edition banner appears without silent replacement."
+    description: "The reviewed production build passes a real desktop and mobile-width reading/history walkthrough: story and external links open safely in a new tab, internal account navigation stays in the same tab, state persists after reload, topic pagination appends without duplicates or jumps, and a newer-edition banner appears without silent replacement."
     check_type: production_browser_run
     planned_command: "Run the approved production browser checklist at desktop and mobile viewport sizes against the deployed commit, recording build identity and screenshots without private account data."
     comparison_mode: "every named interaction passes on the same deployed build and no private identity, token, or state appears in the public artifact or receipt"
@@ -584,7 +595,7 @@ live_proven_gates:
     current_status: GREEN
     evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
-    note: "Final code passed desktop/phone persistence, filters, pagination, logout, and the real publication 5-to-6 banner transition. Topic/card geometry, scroll, order, and focus stayed unchanged until Tab/Enter explicitly loaded the new edition."
+    note: "Historical release passed desktop/phone persistence, filters, pagination, logout, and the real publication 5-to-6 banner transition. The new main_account_navigation_correction entry separately tracks reopened account/navigation acceptance and must pass its own exact-served flow."
   - id: NCV3-LIVE-03
     description: The protected newsletter workflow verifies its bound Gmail profile before ingestion and publishes only a generic pass or fail receipt. No mailbox address, expected digest, OAuth token, or raw profile response is exposed.
     check_type: protected_workflow_identity_run

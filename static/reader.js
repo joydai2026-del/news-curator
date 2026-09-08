@@ -229,11 +229,21 @@
       const response = await fetchImpl(requestedUrl, {
         method: "POST", headers, body: JSON.stringify(body), credentials: "omit",
         referrerPolicy: "no-referrer", redirect: "error",
+        signal: AbortSignal.timeout(15000),
       });
       if (response.redirected !== false || response.url !== requestedUrl) fail("The reader endpoint redirected unexpectedly.");
       const payload = await boundedJson(response, "The reader response was invalid.");
-      if (!response.ok) fail("The reader request failed.");
-      return validator(payload, Boolean(session));
+      if (!response.ok) {
+        if (session && [401, 403].includes(response.status) && typeof window !== "undefined") {
+          window.NewsCuratorAuth?.rejectSession?.(session);
+        }
+        fail("The reader request failed.");
+      }
+      const result = validator(payload, Boolean(session));
+      if (session && ["feed_page", "saved_page"].includes(name) && typeof window !== "undefined") {
+        window.NewsCuratorAuth?.confirmSession?.(session);
+      }
+      return result;
     }
     return Object.freeze({
       latestPublication: () => rpc("latest_publication", {}, validateLatestPublication),
@@ -603,6 +613,7 @@
     const hydrated = new Set();
     let publicationSeq = 0;
     let latest = null;
+    let initializing = true;
     let pollTimer = null;
     let updateCursor = null;
     let nextHistoryAllRank = HISTORY_RANK_OFFSET;
@@ -613,8 +624,9 @@
 
     function announce(message) { status.textContent = message; }
     function signedIn() { try { return auth.hasSessionCandidate(); } catch (_) { return false; } }
+    let sessionWasPresent = signedIn();
     function requireSignIn() {
-      if (signedIn()) return true;
+      if (signedIn() && (!auth.isConfirmed || auth.isConfirmed())) return true;
       announce("Sign in to sync reading controls.");
       const link = document.querySelector(".profile-link");
       if (link) link.focus();
@@ -704,6 +716,7 @@
       delete card.newsCuratorLocalRead;
     }
     async function handleLogout() {
+      sessionWasPresent = false;
       authEpoch += 1;
       auth.clearSession();
       document.querySelectorAll(".state-action").forEach((button) => { button.disabled = true; });
@@ -1087,15 +1100,36 @@
     });
     loadButton.addEventListener("click", () => { void loadMore(); });
     updatesButton.addEventListener("click", () => { window.location.reload(); });
+    window.addEventListener("news-curator:auth-changed", () => {
+      if (!signedIn()) {
+        // An unsigned pageshow is not a logout. Keep this tab's anonymous
+        // read intent while still clearing private state after a real session.
+        if (sessionWasPresent) void handleLogout();
+        return;
+      }
+      sessionWasPresent = true;
+      if (!latest) {
+        if (!initializing) window.location.reload();
+        return;
+      }
+      void hydrate(true).catch(() => {
+        auth.accountUnavailable?.();
+        announce("Sign-in could not be checked. Use Check sign-in again to retry.");
+      });
+    });
     if (typeof BroadcastChannel !== "undefined") {
       const channel = new BroadcastChannel(auth.channelName);
       channel.addEventListener("message", (event) => {
         if (exactFields(event.data, ["session", "type"]) && event.data.type === "session") {
           try {
             auth.acceptSession(event.data.session);
+            sessionWasPresent = true;
             invalidateHydrationForSession();
-            void hydrate(true).catch(() => { announce("Signed in, but reading state could not be synced."); });
-            announce("Signed in. Reading state is syncing.");
+            void hydrate(true).catch(() => {
+              auth.accountUnavailable?.();
+              announce("Sign-in could not be checked. Use Check sign-in again to retry.");
+            });
+            announce("Checking sign-in. Reading state is syncing.");
           } catch (_) {}
           return;
         }
@@ -1116,6 +1150,7 @@
       latest = await api.latestPublication();
       if (!latest) {
         loadButton.hidden = true;
+        auth.accountUnavailable?.();
         announce("No published edition is available yet.");
         return;
       }
@@ -1146,7 +1181,10 @@
       pollTimer = window.setInterval(poll, latest.poll_seconds * 1000);
       void pollTimer;
       await hydrate();
-    } catch (_) { announce("Synced reading features are temporarily unavailable."); }
+    } catch (_) {
+      auth.accountUnavailable?.();
+      announce("Synced reading features are temporarily unavailable. Try checking sign-in again.");
+    } finally { initializing = false; }
   }
   if (!commonJs) void run();
 })();

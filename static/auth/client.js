@@ -5,11 +5,62 @@
   const STATE_KEY = "news-curator.auth.state";
   const VERIFIER_KEY = "news-curator.auth.verifier";
   const SESSION_KEY = "news-curator.auth.session";
+  const RETURN_KEY = "news-curator.auth.return-to-feed";
   const CHANNEL_NAME = "news-curator.auth.v1";
   const SESSION_FIELDS = ["access_token", "expires_at", "refresh_token", "user_id"];
   const MAX_TOKEN_CHARS = 16384;
   const MAX_RESPONSE_BYTES = 64 * 1024;
   const encoder = new TextEncoder();
+  let accountLink = null;
+  let confirmedAccessToken = null;
+  let accountCheckFailed = false;
+
+  function updateAccount() {
+    if (!accountLink) return;
+    let session = null;
+    try { session = validateStoredSession(loadSessionCandidate()); } catch (_) {}
+    const confirmed = session && session.access_token === confirmedAccessToken;
+    const identity = confirmed && decodePayload(session.access_token);
+    const name = identity && [identity.user_metadata?.full_name, identity.user_metadata?.name, identity.email]
+      .find((value) => boundedString(value, 160));
+    accountLink.textContent = confirmed ? `Signed in${name ? `: ${name}` : ""} · Interests`
+      : hasSessionCandidate() ? accountCheckFailed ? "Check sign-in again" : "Checking sign-in…" : "Sign in with Google";
+    accountLink.dataset.signedIn = confirmed ? "true" : "false";
+    if (confirmed) accountLink.setAttribute("href", CALLBACK_PATH);
+  }
+
+  function confirmSession(session) {
+    try {
+      const current = loadSessionCandidate();
+      if (current.access_token !== session.access_token || current.user_id !== session.user_id) return;
+      validateStoredSession(current);
+      confirmedAccessToken = current.access_token;
+      accountCheckFailed = false;
+      updateAccount();
+    } catch (_) {}
+  }
+
+  function rejectSession(session) {
+    try {
+      if (loadSessionCandidate().access_token !== session.access_token) return;
+      clearSession();
+      broadcastLogout();
+      notifyAuthChange();
+    } catch (_) {}
+  }
+
+  function accountUnavailable() {
+    accountCheckFailed = true;
+    confirmedAccessToken = null;
+    updateAccount();
+  }
+
+  function notifyAuthChange() {
+    updateAccount();
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new Event("news-curator:auth-changed"));
+    }
+  }
 
   function fail(message) {
     throw new Error(message);
@@ -95,12 +146,14 @@
     return url.toString();
   }
 
-  async function beginSignIn() {
+  async function beginSignIn({ returnToFeed = false } = {}) {
     const { url } = config();
     const state = randomValue();
     const verifier = randomValue(48);
     sessionStorage.setItem(STATE_KEY, state);
     sessionStorage.setItem(VERIFIER_KEY, verifier);
+    if (returnToFeed) sessionStorage.setItem(RETURN_KEY, "1");
+    else sessionStorage.removeItem(RETURN_KEY);
     const authorize = new URL(`${url}/auth/v1/authorize`);
     authorize.searchParams.set("provider", "google");
     authorize.searchParams.set("redirect_to", callbackUrl(state));
@@ -225,11 +278,14 @@
     const identity = decodePayload(session.access_token);
     if (!identity || identity.sub !== session.user_id) fail("The shared session was invalid.");
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    updateAccount();
     return session;
   }
 
   function clearSession() {
+    confirmedAccessToken = null;
     sessionStorage.removeItem(SESSION_KEY);
+    updateAccount();
   }
 
   function broadcastSession(session) {
@@ -340,6 +396,7 @@
   }
 
   async function refreshSession(authConfig, currentSession, fetchImpl = fetch, nowSeconds = Date.now() / 1000) {
+    const snapshot = sessionStorage.getItem(SESSION_KEY);
     try {
       const checkedConfig = validateAuthConfig(authConfig);
       const previous = validateSessionShape(currentSession);
@@ -351,15 +408,24 @@
         credentials: "omit",
         referrerPolicy: "no-referrer",
         redirect: "error",
+        signal: AbortSignal.timeout(15000),
       });
       requireExactResponse(response, tokenUrl, "The authentication endpoint redirected unexpectedly.");
       if (!response.ok) fail("Session refresh failed.");
       const rawSession = await boundedJson(response, "The refreshed session was invalid.");
       const safeSession = projectRefreshedSession(rawSession, previous, nowSeconds);
+      // Never let a late refresh restore a signed-out session or overwrite a
+      // different login that completed while this request was in flight.
+      if (sessionStorage.getItem(SESSION_KEY) !== snapshot) fail("The saved session changed.");
+      if (decodePayload(safeSession.access_token)?.sub !== previous.user_id) fail("The refreshed identity was invalid.");
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+      updateAccount();
       return safeSession;
     } catch (_) {
-      sessionStorage.removeItem(SESSION_KEY);
+      if (sessionStorage.getItem(SESSION_KEY) === snapshot) {
+        clearSession();
+        notifyAuthChange();
+      }
       fail("Session refresh failed.");
     }
   }
@@ -422,6 +488,7 @@
       credentials: "omit",
       referrerPolicy: "no-referrer",
       redirect: "error",
+      signal: AbortSignal.timeout(15000),
     });
     requireExactResponse(response, requestedUrl, "The preference endpoint redirected unexpectedly.");
     const payload = await responseJson(response);
@@ -446,6 +513,7 @@
       credentials: "omit",
       referrerPolicy: "no-referrer",
       redirect: "error",
+      signal: AbortSignal.timeout(15000),
     });
     requireExactResponse(rpc, rpcUrl, "The preference endpoint redirected unexpectedly.");
     const outcome = await responseJson(rpc);
@@ -489,6 +557,7 @@
       credentials: "omit",
       referrerPolicy: "no-referrer",
       redirect: "error",
+      signal: AbortSignal.timeout(15000),
     });
     requireExactResponse(created, createUrl, "The preference endpoint redirected unexpectedly.");
     const inserted = await responseJson(created);
@@ -509,6 +578,7 @@
     const verifier = sessionStorage.getItem(VERIFIER_KEY);
     sessionStorage.removeItem(STATE_KEY);
     sessionStorage.removeItem(VERIFIER_KEY);
+    sessionStorage.removeItem(RETURN_KEY);
     history.replaceState(null, "", CALLBACK_PATH);
     if (providerError || fragment.has("access_token") || fragment.has("refresh_token")) fail("Sign in failed.");
     if (!code) return false;
@@ -529,6 +599,7 @@
       credentials: "omit",
       referrerPolicy: "no-referrer",
       redirect: "error",
+      signal: AbortSignal.timeout(15000),
     });
     requireExactResponse(response, tokenUrl, "The authentication endpoint redirected unexpectedly.");
     if (!response.ok) fail("Sign in failed.");
@@ -556,6 +627,7 @@
         credentials: "omit",
         referrerPolicy: "no-referrer",
         redirect: "error",
+        signal: AbortSignal.timeout(15000),
       });
       requireExactResponse(response, logoutUrl, "The authentication endpoint redirected unexpectedly.");
       return response.ok;
@@ -603,7 +675,47 @@
     config,
     hasSessionCandidate,
     sessionForRequest: readerSessionForRequest,
+    confirmSession,
+    rejectSession,
+    accountUnavailable,
+    isConfirmed: () => {
+      try { return validateStoredSession(loadSessionCandidate()).access_token === confirmedAccessToken; } catch (_) { return false; }
+    },
   });
+
+  accountLink = document.querySelector(".profile-link");
+  if (accountLink) {
+    accountLink.removeAttribute("target");
+    updateAccount();
+    let openingGoogle = false;
+    accountLink.addEventListener("click", async (event) => {
+      if (accountLink.dataset.signedIn === "true") return;
+      event.preventDefault();
+      if (openingGoogle) return;
+      if (hasSessionCandidate()) {
+        accountCheckFailed = false;
+        notifyAuthChange();
+        return;
+      }
+      openingGoogle = true;
+      accountLink.textContent = "Opening Google sign-in…";
+      try { await beginSignIn({ returnToFeed: true }); } catch (_) {
+        openingGoogle = false;
+        updateAccount();
+        const status = document.getElementById("reader-status");
+        if (status) status.textContent = "Google sign in could not start. Try again.";
+      }
+    });
+    const recoverAccount = () => {
+      void readerSessionForRequest().catch(() => null).then((session) => {
+        if (!session || session.access_token !== confirmedAccessToken) notifyAuthChange();
+      });
+    };
+    window.addEventListener("pageshow", recoverAccount);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") recoverAccount();
+    });
+  }
 
   async function run() {
     const status = document.getElementById("status");
@@ -720,13 +832,30 @@
     });
 
     try {
-      if (hasCallback) await finishCallback(callback);
+      const startValues = callback.searchParams.getAll("start");
+      if (!hasCallback && startValues.length) {
+        // The same-origin early-click fallback is consumed before navigation.
+        // Provider errors cannot replay this flag into an automatic login loop.
+        history.replaceState(null, "", CALLBACK_PATH);
+        if (startValues.length === 1 && startValues[0] === "google" && !hasSessionCandidate()) {
+          setBusy(true);
+          announce("Opening Google sign-in…");
+          await beginSignIn({ returnToFeed: true });
+          return;
+        }
+      }
+      const returnToFeed = sessionStorage.getItem(RETURN_KEY) === "1";
+      if (hasCallback && await finishCallback(callback) && returnToFeed) {
+        window.location.replace("/");
+        return;
+      }
       currentSession = loadSessionCandidate();
       await loadPreferences();
       announce(hasCallback ? "Signed in. Your interests are ready." : "Your interests are ready.");
     } catch (_) {
       const signedIn = currentSession !== null;
       showSignedOut();
+      setBusy(false);
       announce(signedIn
         ? "Signed in, but your interests could not be loaded. Refresh the page to try again."
         : hasCallback ? "Sign in failed. Try again." : "Sign in to personalize your feed.");

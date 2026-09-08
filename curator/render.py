@@ -249,8 +249,8 @@ footer a:hover{color:var(--fg)}
     --accent-fg:#0d100e; --warm:#2b2419; --blue:#1b262d; --shadow:0 18px 55px rgba(0,0,0,.36);
   }
 }
-html{overflow-x:hidden;background:var(--bg)}
-body{overflow-x:hidden;background:
+html{overflow-x:hidden;overflow-x:clip;background:var(--bg)}
+body{overflow-x:hidden;overflow-x:clip;background:
   radial-gradient(circle at 12% 0%,var(--warm),transparent 30rem),
   radial-gradient(circle at 92% 18%,var(--blue),transparent 34rem),var(--bg);
   font-family:var(--sans)}
@@ -342,6 +342,7 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
   .wrap{padding:.75rem .75rem 3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
   .intro h1{font-size:2.15rem}.topbar{gap:.5rem}.crumb{padding-top:.5rem}
   .tools{margin-left:-.1rem;margin-right:-.1rem;flex-direction:column;align-items:stretch}
+  .mobiletopics{width:100%;max-width:100%;box-sizing:border-box;flex:none;padding-right:2px}
   .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
   .panel{padding:0 .85rem 1rem}.detail .row{grid-template-columns:1fr;gap:.05rem}
 }
@@ -462,7 +463,19 @@ JS = """
     if(position>=0){index.splice(position,1);}
   }
 
-  chips.forEach(function(c){c.addEventListener('click',function(){setTab(c.dataset.filter);});});
+  chips.forEach(function(c){
+    c.addEventListener('click',function(){setTab(c.dataset.filter);});
+    c.addEventListener('focus',function(){
+      var nav=c.closest('.mobiletopics'), rail=c.closest('.rail');
+      var container=nav||rail;
+      if(!container){return;}
+      var itemBox=c.getBoundingClientRect(), containerBox=container.getBoundingClientRect();
+      if(itemBox.left<containerBox.left){container.scrollLeft-=Math.ceil(containerBox.left-itemBox.left);}
+      else if(itemBox.right>containerBox.right){container.scrollLeft+=Math.ceil(itemBox.right-containerBox.right);}
+      if(itemBox.top<containerBox.top){container.scrollTop-=containerBox.top-itemBox.top;}
+      else if(itemBox.bottom>containerBox.bottom){container.scrollTop+=itemBox.bottom-containerBox.bottom;}
+    });
+  });
   if(box){box.addEventListener('input',apply);}
 
   if(grid){

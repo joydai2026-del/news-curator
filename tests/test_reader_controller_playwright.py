@@ -13,6 +13,7 @@ from curator.identity import story_id_for_item
 from curator.render import JS as VIEW_JS, render_site
 from scripts.build_auth_callback import activate_personalization_link
 from tests.conftest import make_item
+from tests.test_auth_callback_playwright import _muted_browser_runtime  # noqa: F401
 
 
 playwright_api = pytest.importorskip("playwright.sync_api")
@@ -1175,6 +1176,8 @@ def test_real_render_open_marks_read_locally_and_unread_reopens_without_layout_j
             assert _visible_story_ids(page) == before_order
             assert page.evaluate("window.scrollY") == before_scroll
             assert page.get_by_role("button", name="Mark read").count() == 0
+            if not signed_in:
+                assert not page.locator("#reader-status").inner_text().startswith("Signed out.")
             unread = page.get_by_role("button", name="Mark unread")
             assert unread.is_visible() and unread.is_enabled()
             page.locator('.chip[data-filter="ai"]:visible').click()

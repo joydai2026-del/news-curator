@@ -24,6 +24,61 @@ ROOT = Path(__file__).resolve().parents[1]
 SUPABASE_ORIGIN = "https://project-ref.supabase.co"
 
 
+_PENDING_FETCH_UNTIL_ABORT = """target => {
+  const nativeFetch = window.fetch.bind(window);
+  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+  window.__requestedTimeouts = [];
+  window.__pendingRequestAborted = false;
+  AbortSignal.timeout = milliseconds => {
+    window.__requestedTimeouts.push(milliseconds);
+    return nativeTimeout(100);
+  };
+  window.fetch = (url, options = {}) => {
+    if (!String(url).includes(target)) return nativeFetch(url, options);
+    return new Promise((_resolve, reject) => {
+      const aborted = () => {
+        window.__pendingRequestAborted = true;
+        reject(new DOMException('Request timed out', 'TimeoutError'));
+      };
+      if (options.signal?.aborted) aborted();
+      else options.signal?.addEventListener('abort', aborted, {once: true});
+    });
+  };
+}"""
+
+
+@pytest.fixture(autouse=True)
+def _muted_browser_runtime(monkeypatch):
+    launch = playwright_api.BrowserType.launch
+    new_context = playwright_api.Browser.new_context
+    new_page = playwright_api.Browser.new_page
+    silence = """if(window.speechSynthesis) speechSynthesis.speak=()=>{};
+        HTMLMediaElement.prototype.play=()=>Promise.resolve();"""
+
+    def muted_launch(browser_type, **kwargs):
+        kwargs["args"] = [*kwargs.get("args", []), "--mute-audio"]
+        try:
+            return launch(browser_type, **kwargs)
+        except playwright_api.Error as error:
+            if "Executable doesn't exist" not in str(error):
+                raise
+            return launch(browser_type, **{**kwargs, "channel": "chrome"})
+
+    def muted_context(browser, **kwargs):
+        context = new_context(browser, **kwargs)
+        context.add_init_script(silence)
+        return context
+
+    def muted_page(browser, **kwargs):
+        page = new_page(browser, **kwargs)
+        page.add_init_script(silence)
+        return page
+
+    monkeypatch.setattr(playwright_api.BrowserType, "launch", muted_launch)
+    monkeypatch.setattr(playwright_api.Browser, "new_context", muted_context)
+    monkeypatch.setattr(playwright_api.Browser, "new_page", muted_page)
+
+
 def _google_callback_location(authorize_url: str) -> tuple[str, dict[str, list[str]]]:
     query = parse_qs(urlsplit(authorize_url).query)
     assert query["provider"] == ["google"]
@@ -81,7 +136,8 @@ def _feed_story(index: int, title: str) -> dict[str, object]:
     }
 
 
-def test_oauth_callback_is_consumed_and_scrubbed_during_page_startup(tmp_path: Path) -> None:
+@pytest.mark.parametrize("exchange_failure", ["http", "timeout"])
+def test_oauth_callback_is_consumed_and_scrubbed_during_page_startup(tmp_path: Path, exchange_failure: str) -> None:
     site = tmp_path / "site"
     callback = site / "auth" / "callback" / "index.html"
     materialize_callback(
@@ -109,6 +165,9 @@ def test_oauth_callback_is_consumed_and_scrubbed_during_page_startup(tmp_path: P
         calls.append((request.url, request.post_data_json if request.post_data else {}))
         if "/auth/v1/token?grant_type=pkce" in request.url:
             if fail_exchange:
+                if exchange_failure == "timeout":
+                    route.abort("timedout")
+                    return
                 route.fulfill(
                     status=400,
                     content_type="application/json",
@@ -171,10 +230,14 @@ def test_oauth_callback_is_consumed_and_scrubbed_during_page_startup(tmp_path: P
 
             fail_exchange = True
             failed = context.new_page()
+            if exchange_failure == "timeout":
+                failed.add_init_script(
+                    f"({_PENDING_FETCH_UNTIL_ABORT})('/auth/v1/token?grant_type=pkce');"
+                )
             failed.route(f"{SUPABASE_ORIGIN}/**", fulfill)
             failed.goto(url, wait_until="networkidle")
             assert failed.url == f"http://127.0.0.1:{server.server_port}/auth/callback/"
-            failed.locator("#login-panel").wait_for(state="visible")
+            failed.locator("#login-panel").wait_for(state="visible", timeout=3000)
             assert failed.locator("#status").inner_text() == "Sign in failed. Try again."
             assert "sensitive provider detail" not in failed.locator("body").inner_text()
             assert failed.evaluate(
@@ -182,6 +245,17 @@ def test_oauth_callback_is_consumed_and_scrubbed_during_page_startup(tmp_path: P
                 "sessionStorage.getItem('news-curator.auth.verifier'), "
                 "sessionStorage.getItem('news-curator.auth.session')]"
             ) == [None, None, None]
+            if exchange_failure == "timeout":
+                assert failed.evaluate("window.__pendingRequestAborted") is True
+                assert failed.evaluate("window.__requestedTimeouts") == [15000]
+            early_failure = context.new_page()
+            early_failure.add_init_script("crypto.subtle.digest = async () => { throw new Error('Unavailable'); };")
+            early_failure.goto(
+                f"http://127.0.0.1:{server.server_port}/auth/callback/?start=google",
+                wait_until="networkidle",
+            )
+            assert early_failure.url == f"http://127.0.0.1:{server.server_port}/auth/callback/"
+            assert early_failure.get_by_role("button", name="Sign in with Google", exact=True).is_enabled()
             browser.close()
     finally:
         server.shutdown()
@@ -392,7 +466,7 @@ def test_google_callback_errors_are_scrubbed_and_retryable(tmp_path: Path, callb
         thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("logout_failure", [None, "500", "redirect", "network"])
+@pytest.mark.parametrize("logout_failure", [None, "500", "redirect", "network", "timeout"])
 def test_profile_logout_always_clears_private_digest_state_across_tabs(
     tmp_path: Path, now: object, logout_failure: str | None
 ) -> None:
@@ -509,8 +583,8 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             }]
         elif request.url.endswith("/auth/v1/logout"):
             logged_out = True
-            if logout_failure == "network":
-                route.abort("connectionfailed")
+            if logout_failure in {"network", "timeout"}:
+                route.abort("timedout" if logout_failure == "timeout" else "connectionfailed")
                 return
             if logout_failure == "redirect":
                 route.fulfill(
@@ -533,10 +607,10 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             digest = context.new_page()
             digest.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
 
-            with context.expect_page() as profile_info:
-                digest.locator(".profile-link").click()
-            profile = profile_info.value
-            profile.wait_for_load_state("networkidle")
+            # This case isolates an already-open tab receiving login/logout.
+            # Main-page same-tab entry is covered by test_main_account_playwright.
+            profile = context.new_page()
+            profile.goto(f"http://127.0.0.1:{server.server_port}/auth/callback/", wait_until="networkidle")
             profile.get_by_role("button", name="Sign in with Google", exact=True).click()
             profile.locator("#preferences-panel").wait_for(state="visible")
             digest.wait_for_function(
@@ -569,7 +643,7 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 """
                 window.__logoutDisabledObserved = false;
                 new MutationObserver(() => {
-                  const buttons = [...document.querySelectorAll('.state-action')];
+                  const buttons = [...document.querySelectorAll('.state-action:not(.read-action)')];
                   if (sessionStorage.getItem('news-curator.auth.session') === null &&
                       buttons.length > 0 && buttons.every(button => button.disabled)) {
                     window.__logoutDisabledObserved = true;
@@ -577,13 +651,18 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 }).observe(document.body, {attributes: true, subtree: true});
                 """
             )
+            if logout_failure == "timeout":
+                profile.evaluate(_PENDING_FETCH_UNTIL_ABORT, "/auth/v1/logout")
             profile.locator("#sign-out").click()
             profile_status = (
                 "Signed out."
                 if logout_failure is None
                 else "Signed out locally. Remote sign-out could not be confirmed."
             )
-            profile.get_by_text(profile_status, exact=True).wait_for()
+            profile.get_by_text(profile_status, exact=True).wait_for(timeout=3000)
+            if logout_failure == "timeout":
+                assert profile.evaluate("window.__pendingRequestAborted") is True
+                assert profile.evaluate("window.__requestedTimeouts") == [15000]
             digest.wait_for_function(
                 "() => sessionStorage.getItem('news-curator.auth.session') === null"
             )
@@ -595,7 +674,7 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             assert digest.get_by_text("Private interest-ranked story", exact=True).count() == 0
             assert digest.locator(".is-read, .is-saved, .is-more-like, .is-less-like").count() == 0
             assert digest.get_by_text("Unsave", exact=True).count() == 0
-            assert digest.get_by_text("Mark unread", exact=True).count() == 0
+            assert digest.locator(".read-action:visible").count() == 0
             assert digest.get_by_text("More like this added", exact=True).count() == 0
             assert digest.get_by_text("confidential topic", exact=False).count() == 0
             assert digest.get_by_text(
@@ -607,6 +686,10 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 call for call in calls
                 if str(call["url"]).endswith(("/set_story_state", "/set_story_interest"))
             ])
+            public_card = digest.locator("article.card", has_text="Anonymous public story")
+            public_card.locator(".headline").click()
+            public_card.get_by_role("button", name="Mark unread", exact=True).click()
+            assert "is-read" not in (public_card.get_attribute("class") or "").split()
             digest.locator("article.card", has_text="Anonymous public story").locator(
                 ".save-action"
             ).evaluate("button => button.click()")

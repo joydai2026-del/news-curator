@@ -510,7 +510,9 @@ async function main() {
     ["show-updates", { dataset: {}, addEventListener() {} }],
     ["sections", { addEventListener() {}, append() {} }],
   ]);
+  const authListeners = new Map();
   global.window = {
+    addEventListener(name, listener) { authListeners.set(name, listener); },
     NewsCuratorAuth: {
       config: () => ({ url: "https://reader.example", key: "public-key" }),
       hasSessionCandidate: () => false,
@@ -530,6 +532,8 @@ async function main() {
   await reader.run();
   assert.equal(controls.get("reader-status").textContent, "No published edition is available yet.");
   assert.equal(controls.get("load-more").hidden, true);
+  authListeners.get("news-curator:auth-changed")();
+  assert.equal(controls.get("reader-status").textContent, "No published edition is available yet.");
   delete global.fetch;
   delete global.document;
   delete global.window;
@@ -542,6 +546,7 @@ async function main() {
   unavailableSavedTab.disabled = true;
   global.window = {
     NewsCuratorAuth: { config: () => { throw new Error("unconfigured"); } },
+    addEventListener() {},
     NewsCuratorView: { currentTab: () => "__all__" },
   };
   global.document = {
@@ -581,6 +586,7 @@ async function main() {
   global.BroadcastChannel = undefined;
   global.CSS = { escape: (value) => value };
   global.window = {
+    addEventListener() {},
     NewsCuratorAuth: {
       config: () => ({ url: "https://reader.example", key: "public-key" }),
       hasSessionCandidate: () => true,
