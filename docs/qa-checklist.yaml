@@ -3,7 +3,22 @@ status: dormant_historical_evidence
 snapshot_date: 2026-09-01
 planning_authority: none
 current_plan: https://app.notion.com/p/Fall-2026-AI-Sprint-3c6442f52cf7801db1c2fe2e54d777f2
-note: "Historical results below remain evidence snapshots. Pending and blocked reading/history checks record the approved acceptance contract without replacing Notion as the planning authority."
+note: "Historical results remain dated snapshots. The September 8 reading/history verification below records code and release evidence only. Notion remains the planning authority."
+release_verification:
+  date: 2026-09-08
+  evidence: docs/evidence/2026-09-08-m1-release.md
+  reviewed_commit: d2db842983601d8ef9554325c5a11254f29407ea
+  merge_commit: a96efb2ba1a01d3a377cfec07d8262bf276ae69d
+  correction_reviewed_commit: 0d070b7d80437ced2e826d7167c6aef9e1819c86
+  correction_merge_commit: 0c19e83617d6edb8b2e613f60e26568e4599c6ec
+  served_build: 107989e9627bff86c0e8822623cd9c3154a186e0
+  final_workflow_run: https://github.com/joydai2026-del/news-curator/actions/runs/34234978520
+  production_migrations: GREEN
+  authenticated_reading_browser_and_api: GREEN
+  live_banner_geometry_and_keyboard: GREEN
+  product_owner_acceptance: OPEN
+  email_code_delivery_this_release: NOT_EXERCISED
+  historical_notes: "Cloud and translation entries without this release evidence pointer retain their historical snapshot meaning."
 historical_source: docs/plans/2026-08-29-news-curator-v3-backend-platform.md
 generated_for_historical_snapshot: News Curator v3 backend platform
 state_ladder:
@@ -291,16 +306,17 @@ criteria:
       - "Cloud-linked Supabase and Google activation are not complete."
   - id: NCV3-20
     group: locally_provable
-    description: Every rendered link, including feed cards, authentication, privacy, and footer navigation, opens in a new tab and carries rel="noopener noreferrer". Unsafe URL schemes remain rejected.
+    description: Story, external, settings-entry, privacy, and footer destination links open in a new tab with rel="noopener noreferrer". The auth callback's Back to the digest return intentionally stays in its authenticated tab so sessionStorage survives when cross-tab messaging is unavailable. Unsafe URL schemes remain rejected.
     check_type: render_security_contract
     code_audit_target:
       - "curator/render.py"
       - "static/auth/"
       - "tests/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_render.py tests/test_render_security.py tests/test_static_auth_pages.py"
-    comparison_mode: "every rendered anchor has target=_blank and rel tokens noopener plus noreferrer; unsafe schemes never render as navigable links"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_render.py tests/test_reader_browser_contract.py tests/test_auth_callback_playwright.py"
+    comparison_mode: "destination anchors have target=_blank and rel tokens noopener plus noreferrer; the callback return preserves one tab and its session without BroadcastChannel; unsafe schemes never render as navigable links"
     side_effects: "Uses local render fixtures only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-21
     group: locally_provable
@@ -312,10 +328,11 @@ criteria:
       - "curator/translation/"
       - "curator/personalization/"
       - "supabase/migrations/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_dedup.py tests/test_localized_pipeline.py tests/test_reading_history_identity.py"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_story_identity_coverage.py tests/test_localized_pipeline.py"
     comparison_mode: "all projections and persistence calls for one canonical URL use exactly one stable story id"
     side_effects: "Uses local fixtures and fake persistence only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-22
     group: locally_provable
@@ -326,10 +343,11 @@ criteria:
       - "curator/dedup.py"
       - "curator/pipeline.py"
       - "curator/models.py"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_newsletter_privacy.py tests/test_newsletter_wiring.py tests/test_newsletter_coverage.py tests/test_dedup.py"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_newsletter_privacy.py tests/test_newsletter_wiring.py tests/test_story_identity_coverage.py"
     comparison_mode: "coverage survives each filter and cap path, merges onto the canonical survivor, and captured public artifacts contain no private newsletter body, sender address, or subject beyond approved coverage labels"
     side_effects: "Uses synthetic private newsletter fixtures only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-23
     group: locally_provable
@@ -339,23 +357,25 @@ criteria:
       - "supabase/migrations/"
       - "curator/personalization/"
       - "tests/_personalization_local_harness.py"
-    planned_command: "supabase db reset && eval \"$(supabase status -o env)\" && NEWS_CURATOR_LOCAL_SUPABASE_URL=\"$API_URL\" NEWS_CURATOR_LOCAL_SUPABASE_ANON_KEY=\"$ANON_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_SERVICE_ROLE_KEY=\"$SERVICE_ROLE_KEY\" NEWS_CURATOR_LOCAL_SUPABASE_JWT_SECRET=\"$JWT_SECRET\" uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_local_db.py"
+    planned_command: "python scripts/verify_local_reading.py"
     comparison_mode: "owner operations succeed and every anonymous, expired-token, cross-user, altered-id, and direct-table bypass attempt is denied"
-    side_effects: "Resets only the local Supabase development database. Never run against a cloud project."
+    side_effects: "Requires an already running, migrated disposable local Supabase stack. Captures local status bindings without printing them and creates/cleans only test records. Fails on missing bindings, skips, or non-loopback origins; never resets or targets cloud."
     current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-24
     group: locally_provable
     description: The latest-edition response identifies one successfully published edition and returns all configured topics from that edition, including topics with zero stories.
     check_type: archive_api_contract
     code_audit_target:
-      - "curator/archive/"
+      - "curator/archive_candidate.py"
       - "scripts/"
       - "supabase/migrations/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_archive_store.py tests/test_archive_api.py"
+    planned_command: "docker image inspect postgres:15 >/dev/null && python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_schema.py tests/test_reading_history_postgres_runtime.py"
     comparison_mode: "one published edition id is returned and its topic set exactly equals the configured topic set"
-    side_effects: "Uses local fixtures and fake persistence only."
-    current_status: PENDING
+    side_effects: "Runs the committed matrix in a disposable local PostgreSQL container. The image preflight fails instead of allowing the runtime test to skip. No cloud writes."
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-25
     group: locally_provable
@@ -363,26 +383,28 @@ criteria:
     check_type: retention_policy_test
     code_audit_target:
       - "curator/config.py"
-      - "curator/archive/"
+      - "curator/archive_candidate.py"
       - "scripts/"
       - "supabase/migrations/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_archive_retention.py tests/test_archive_store.py"
+    planned_command: "docker image inspect postgres:15 >/dev/null && python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_schema.py tests/test_reading_history_corrections_schema.py tests/test_reading_history_postgres_runtime.py"
     comparison_mode: "fake-clock boundary tests retain only policy-eligible real records, initial backfill is bounded to five days, and steady-state pruning retains at most 30 days"
-    side_effects: "Uses fake-clock records in local fixtures only."
-    current_status: PENDING
+    side_effects: "Uses local boundary fixtures and a disposable PostgreSQL container. The image preflight fails instead of allowing the runtime test to skip. No cloud writes."
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-26
     group: locally_provable
     description: Archive pagination is server-backed and keyset-based. Each topic owns an independent cursor, each page returns at most 20 rows, repeated requests do not duplicate rows, and one topic's pagination does not advance another topic.
     check_type: pagination_contract_test
     code_audit_target:
-      - "curator/archive/"
+      - "curator/archive_candidate.py"
       - "static/"
       - "supabase/migrations/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_archive_pagination.py tests/test_reading_history_browser_contract.py"
+    planned_command: "python scripts/verify_local_reading.py && python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_reader_browser_contract.py"
     comparison_mode: "each response contains 0 through 20 unique rows after its exclusive keyset cursor and cursor state is isolated per topic"
-    side_effects: "Uses deterministic local fixtures and a fake API only."
-    current_status: PENDING
+    side_effects: "Runs the fail-closed local PostgREST matrix plus the deterministic browser contract. Creates and cleans test records only in the disposable loopback database."
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-27
     group: locally_provable
@@ -391,10 +413,11 @@ criteria:
     code_audit_target:
       - "static/"
       - "curator/render.py"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_browser_contract.py"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_reader_controller_playwright.py"
     comparison_mode: "pre-action visible story-id order and scroll position remain equal after state actions; pagination preserves the prefix and appends only unique rows to the selected topic"
     side_effects: "Uses a local DOM harness and fake API only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-28
     group: locally_provable
@@ -403,10 +426,11 @@ criteria:
     code_audit_target:
       - "static/"
       - "curator/render.py"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_browser_contract.py tests/test_archive_api.py"
-    comparison_mode: "unchanged edition yields no banner; newer edition yields one banner; visible edition id changes only after the explicit banner action"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_reader_browser_contract.py tests/test_reader_controller_playwright.py"
+    comparison_mode: "unchanged edition yields no banner; a newer edition yields one keyboard-accessible banner without moving topic/card geometry, stealing focus, changing scroll, or replacing the current story order; only explicit activation reloads the edition"
     side_effects: "Uses a fake clock and fake API only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-29
     group: locally_provable
@@ -417,10 +441,11 @@ criteria:
       - "curator/render.py"
       - "curator/models.py"
       - "supabase/migrations/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_rank.py tests/test_rank_explanations.py tests/test_archive_store.py"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_interest_ranking.py tests/test_rank.py tests/test_render.py"
     comparison_mode: "100 percent preference-priority ordering is exact, freshness is the deterministic tiebreaker, and rendered explanations equal recomputed persisted weighted contributions"
     side_effects: "Uses deterministic local fixtures only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-30
     group: locally_provable
@@ -430,10 +455,11 @@ criteria:
       - "curator/personalization/"
       - "curator/rank.py"
       - "supabase/migrations/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_personalization_rank_semantics.py tests/test_reading_history_identity.py"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_interest_ranking.py tests/test_interest_materializer.py"
     comparison_mode: "read and save actions produce zero preference-weight change; More like this changes only the intended interest signal; replay produces no additional change"
     side_effects: "Uses fake persistence and deterministic ranking fixtures only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-31
     group: locally_provable
@@ -442,12 +468,13 @@ criteria:
     code_audit_target:
       - ".github/workflows/curate.yml"
       - "scripts/"
-      - "curator/archive/"
+      - "curator/archive_finalize.py"
       - "supabase/migrations/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_workflow_contract.py tests/test_archive_publication.py"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_archive_finalize.py tests/test_archive_finalize_workflow.py"
     comparison_mode: "only the success transition after Pages deployment finalizes the matching edition; every non-success or mismatched transition leaves it unpublished; replay creates no duplicate"
     side_effects: "Parses workflow YAML and uses fake deployment and persistence adapters only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-32
     group: locally_provable
@@ -458,10 +485,11 @@ criteria:
       - "curator/"
       - "supabase/migrations/"
       - "docs/contracts/"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_reading_history_api_parity.py tests/test_reading_history_browser_contract.py"
+    planned_command: "python scripts/verify_local_reading.py && python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_reader_browser_contract.py"
     comparison_mode: "the UI-to-operation inventory has no unmatched operation and shared contract fixtures produce equivalent outcomes through browser and API paths"
-    side_effects: "Uses local browser and API fakes only."
-    current_status: PENDING
+    side_effects: "Runs the fail-closed local PostgREST matrix plus the deterministic browser contract. Creates and cleans test records only in the disposable loopback database."
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
   - id: NCV3-33
     group: locally_provable
@@ -471,10 +499,11 @@ criteria:
       - ".github/workflows/curate.yml"
       - "curator/newsletter/"
       - "tests/test_secret_leaks.py"
-    planned_command: "uv run pytest -p no:cacheprovider -o addopts='' -q tests/test_newsletter_profile_guard.py tests/test_secret_leaks.py tests/test_workflow_contract.py"
+    planned_command: "python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_newsletter_gmail.py tests/test_newsletter_lane.py tests/test_secret_leaks.py tests/test_workflow_contract.py"
     comparison_mode: "match continues, absent or mismatch fails before mailbox data use, and injected address, digest, token, and profile sentinels are absent from captured logs and artifacts"
     side_effects: "Uses a fake Gmail profile response and synthetic secrets only."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
 cloud_linked_gates:
   - id: NCV3-CLOUD-01
@@ -483,10 +512,10 @@ cloud_linked_gates:
     planned_command: "supabase link --project-ref <JJ-approved-project-ref> && supabase db push && uv run pytest -q tests/test_personalization_cloud.py"
     comparison_mode: "real anon and cross-user requests are denied; real owner authorization-code PKCE flow completes with approved redirects only"
     side_effects: "Mutates only a JJ-approved cloud Supabase project. Requires separate action-time authorization."
-    current_status: BLOCKED
+    current_status: PARTIAL
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers:
-      - "No Supabase project/link/environment variables are currently present."
-      - "JJ has not authorized cloud mutation."
+      - "Project linking, approved migrations, owner/cross-user API boundaries, and authenticated reading passed in production. This release used disposable admin-created sessions and did not exercise email-code delivery or the Google authorization-code flow."
   - id: NCV3-CLOUD-02
     description: Google Cloud Translation credentials, billing, origin-bound bearer authentication, rotation, revocation, and protected workflow environment are activated and verified.
     check_type: live_cloud_contract
@@ -503,8 +532,10 @@ cloud_linked_gates:
     planned_command: "Run the cloud reading/history contract suite against the approved Supabase project using two real test users and a service-only setup identity."
     comparison_mode: "owner requests succeed; anonymous, expired-token, cross-user, altered-id, and direct-table requests fail; edition, topic, and pagination results match the approved contract"
     side_effects: "Creates and removes bounded test records in the approved cloud Supabase project. Run once after reviewed migration deployment."
-    current_status: PENDING
-    blockers: []
+    current_status: PARTIAL
+    evidence: docs/evidence/2026-09-08-m1-release.md
+    blockers:
+      - "Production owner, cross-user, direct-table, pagination, CAS, and replay checks passed. Expired-token rejection was exercised on the local PostgREST stack, not by waiting for a production token to expire."
 live_proven_gates:
   - id: NCV3-LIVE-01
     description: The protected scheduled translation path and public static page work on the same reviewed build. Public news remains readable without an account and falls back to originals under translation failure.
@@ -512,35 +543,40 @@ live_proven_gates:
     planned_command: "Run the approved main-only scheduled workflow, then inspect its deployed public page and dated workflow/source-health/translation receipts."
     comparison_mode: "scheduled build, sanitized artifact validation, static deployment, and public anonymous read succeed; injected or observed translation failure still serves originals"
     side_effects: "Dispatches workflow and may publish a production update. Requires separate action-time authorization."
-    current_status: BLOCKED
+    current_status: PARTIAL
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers:
-      - "Implementation, cloud activation, review, and calibration gates must pass first."
-      - "JJ has not authorized workflow dispatch or deployment."
+      - "Approved production build, deploy, archive finalization, anonymous reading, and unattended hourly publication passed. Translation is intentionally disabled; translation activation and quality calibration are outside this reading-history release."
   - id: NCV3-LIVE-02
     description: "The reviewed production build passes a real desktop and mobile-width reading/history walkthrough: all links open safely in a new tab, state persists after reload, topic pagination appends without duplicates or jumps, and a newer-edition banner appears without silent replacement."
     check_type: production_browser_run
     planned_command: "Run the approved production browser checklist at desktop and mobile viewport sizes against the deployed commit, recording build identity and screenshots without private account data."
     comparison_mode: "every named interaction passes on the same deployed build and no private identity, token, or state appears in the public artifact or receipt"
     side_effects: "Writes bounded state only to the authorized test user's read, saved, and interest rows."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
+    note: "Final code passed desktop/phone persistence, filters, pagination, logout, and the real publication 5-to-6 banner transition. Topic/card geometry, scroll, order, and focus stayed unchanged until Tab/Enter explicitly loaded the new edition."
   - id: NCV3-LIVE-03
     description: The protected newsletter workflow verifies its bound Gmail profile before ingestion and publishes only a generic pass or fail receipt. No mailbox address, expected digest, OAuth token, or raw profile response is exposed.
     check_type: protected_workflow_identity_run
     planned_command: "Run the protected main-only newsletter job on the reviewed commit and inspect the redacted Actions log plus generated artifact leak scan."
     comparison_mode: "generic identity-verified receipt exists before ingestion; protected values are absent from logs and artifacts; mismatch path fails closed in a controlled rehearsal"
     side_effects: "Reads the configured mailbox profile and may perform normal bounded newsletter ingestion. It must not send email."
-    current_status: PENDING
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
     blockers: []
+    note: "The first protected run correctly refused a mailbox-profile mismatch. Corrected run 34225512477 passed the real profile guard and ingested newsletter items. The scheduled run 34227237811 also passed. Only aggregate receipts are retained."
   - id: NCV3-LIVE-04
     description: The first production archive contains up to five days of real successfully published editions that are actually available. Missing days stay missing and are never replaced with mock or inferred records.
     check_type: time_gated_production_data_check
     planned_command: "Query the production latest-edition and per-topic archive APIs after deployment, then compare every returned edition identity with a successful Pages deployment receipt."
     comparison_mode: "all returned records have matching successful deployment receipts, observed span is no greater than five days, and no synthetic records exist"
     side_effects: "Read-only production API and GitHub Actions receipt inspection."
-    current_status: BLOCKED
-    blockers:
-      - "Real archive rows do not exist until the reviewed archive implementation is deployed and successful Pages publications are recorded."
+    current_status: GREEN
+    evidence: docs/evidence/2026-09-08-m1-release.md
+    blockers: []
+    note: "The first archive records 137 real stories from its successful Pages run. No older archive was available to backfill; missing days remain absent."
   - id: NCV3-LIVE-05
     description: Production proves retrieval of at least one real successfully published edition older than five days while retaining no edition older than the rolling 30-day boundary.
     check_type: time_gated_production_data_check
