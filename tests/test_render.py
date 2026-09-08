@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
@@ -10,7 +11,7 @@ import re
 
 from curator.identity import story_id_for_item
 from curator.models import TierResult
-from curator.render import human_age, render_html, render_site
+from curator.render import _content_version, human_age, render_html, render_site
 from tests.conftest import make_item, make_newsletter_item
 
 
@@ -244,6 +245,9 @@ class TestHumanAge:
 
 
 class TestRenderSite:
+    def test_asset_content_change_produces_a_new_version(self):
+        assert _content_version(b"reader version one") != _content_version(b"reader version two")
+
     def test_writes_index_and_nojekyll(self, tmp_path, now):
         path = render_site({"T": [make_item("a")]}, [], now, tmp_path)
         assert path.exists() and (tmp_path / ".nojekyll").exists()
@@ -254,6 +258,22 @@ class TestRenderSite:
         assert (tmp_path / "auth/client.js").read_text(encoding="utf-8") == (
             Path(__file__).resolve().parents[1] / "static/auth/client.js"
         ).read_text(encoding="utf-8")
+
+    def test_versions_every_runtime_asset_from_its_exact_content(self, tmp_path, now):
+        path = render_site({"T": [make_item("a")]}, [], now, tmp_path)
+
+        def version(relative_path: str) -> str:
+            content = (tmp_path / relative_path).read_bytes()
+            return hashlib.sha256(content).hexdigest()[:16]
+
+        page = path.read_text(encoding="utf-8")
+        dashboard = (tmp_path / "dashboard/index.html").read_text(encoding="utf-8")
+        assert f'<script src="auth/client.js?v={version("auth/client.js")}" defer></script>' in page
+        assert f'<script src="reader.js?v={version("reader.js")}" defer></script>' in page
+        assert f'<link rel="stylesheet" href="dashboard.css?v={version("dashboard/dashboard.css")}">' in dashboard
+        assert f'<script src="../auth/client.js?v={version("auth/client.js")}" defer></script>' in dashboard
+        assert f'<script src="../reader.js?v={version("reader.js")}" defer></script>' in dashboard
+        assert f'<script src="dashboard.js?v={version("dashboard/dashboard.js")}" defer></script>' in dashboard
 
     def test_leaves_no_temp_file_behind(self, tmp_path, now):
         render_site({"T": [make_item("a")]}, [], now, tmp_path)

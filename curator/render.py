@@ -61,6 +61,11 @@ from .models import Item, TierResult
 from .identity import story_id_for_item
 from .normalize import safe_url
 
+
+def _content_version(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()[:16]
+
+
 CSS = """
 *,*::before,*::after{box-sizing:border-box}
 :root{
@@ -254,7 +259,7 @@ body{overflow-x:hidden;overflow-x:clip;background:
   radial-gradient(circle at 12% 0%,var(--warm),transparent 30rem),
   radial-gradient(circle at 92% 18%,var(--blue),transparent 34rem),var(--bg);
   font-family:var(--sans)}
-.wrap{max-width:88rem;padding:1.4rem 1.5rem 5rem}
+.wrap{max-width:88rem;padding:1.4rem 1.5rem 0}
 .shell{display:grid;grid-template-columns:15rem minmax(0,1fr);gap:1.5rem;align-items:start}
 .rail{position:sticky;top:1.4rem;max-height:calc(100vh - 2.8rem);overflow-y:auto;border:1px solid var(--line);background:color-mix(in srgb,var(--card) 88%,transparent);
   box-shadow:var(--shadow);border-radius:1.35rem;padding:1.35rem 1rem;backdrop-filter:blur(18px)}
@@ -265,7 +270,7 @@ body{overflow-x:hidden;overflow-x:clip;background:
 .railnav .chip{width:100%;min-height:44px;display:flex;align-items:center;justify-content:flex-start;border-radius:.7rem;padding:.5rem .65rem;background:transparent;color:var(--muted);text-align:left}
 .railnav .chip[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);font-weight:700}
 .railnote{margin:1.25rem .5rem 0;padding-top:.9rem;border-top:1px solid var(--line);font-size:.7rem;line-height:1.55;color:var(--faint)}
-.maincol{min-width:0}
+.maincol{min-width:0;padding-bottom:5rem}
 .topbar{display:flex;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1rem}
 .crumb{font-size:.75rem;color:var(--faint)}
 .profile-slot{min-height:44px;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}
@@ -335,11 +340,11 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 footer{margin-top:2rem;padding:1.25rem .25rem 0}
 .shot,.pad>.eyebrow,.hl,.desc,.meta{display:none!important}
 @media (max-width:980px){
-  .shell{grid-template-columns:1fr}.rail{display:none}.wrap{padding:1rem 1rem 4rem}
+  .shell{grid-template-columns:1fr}.rail{display:none}.wrap{padding:1rem 1rem 0}.maincol{padding-bottom:4rem}
   .tools{top:0}.mobiletopics{display:flex}.panelin{grid-template-columns:1fr;gap:1rem}.topbar{align-items:flex-start}
 }
 @media (max-width:620px){
-  .wrap{padding:.75rem .75rem 3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
+  .wrap{padding:.75rem .75rem 0}.maincol{padding-bottom:3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
   .intro h1{font-size:2.15rem}.topbar{gap:.5rem}.crumb{padding-top:.5rem}
   .tools{margin-left:-.1rem;margin-right:-.1rem;flex-direction:column;align-items:stretch}
   .mobiletopics{width:100%;max-width:100%;box-sizing:border-box;flex:none;padding-right:2px}
@@ -1127,6 +1132,16 @@ def render_site(
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
+    static_dir = Path(__file__).resolve().parents[1] / "static"
+    versioned_assets = {
+        relative_path: _content_version((static_dir / relative_path).read_bytes())
+        for relative_path in (
+            Path("reader.js"),
+            Path("auth/client.js"),
+            Path("dashboard/dashboard.css"),
+            Path("dashboard/dashboard.js"),
+        )
+    }
     payload = render_html(
         ranked,
         results,
@@ -1137,6 +1152,13 @@ def render_site(
         require_summaries=require_summaries,
         topic_ids_by_name=topic_ids_by_name,
     )
+    payload = payload.replace(
+        '<script src="auth/client.js" defer></script>',
+        f'<script src="auth/client.js?v={versioned_assets[Path("auth/client.js")]}" defer></script>',
+    ).replace(
+        '<script src="reader.js" defer></script>',
+        f'<script src="reader.js?v={versioned_assets[Path("reader.js")]}" defer></script>',
+    )
 
     # Write via a temp file in the same directory, then replace, so an
     # interrupted run can never leave a half-written page published.
@@ -1145,7 +1167,6 @@ def render_site(
     tmp.replace(path)
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
-    static_dir = Path(__file__).resolve().parents[1] / "static"
     for relative_path in (
         Path("reader.js"),
         Path("auth/client.js"),
@@ -1159,7 +1180,24 @@ def render_site(
         destination = out_dir / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         asset_tmp = destination.with_suffix(destination.suffix + ".tmp")
-        asset_tmp.write_bytes(source.read_bytes())
+        content = source.read_bytes()
+        if relative_path == Path("dashboard/index.html"):
+            dashboard = content.decode("utf-8")
+            dashboard = dashboard.replace(
+                'href="dashboard.css"',
+                f'href="dashboard.css?v={versioned_assets[Path("dashboard/dashboard.css")]}"',
+            ).replace(
+                'src="../auth/client.js"',
+                f'src="../auth/client.js?v={versioned_assets[Path("auth/client.js")]}"',
+            ).replace(
+                'src="../reader.js"',
+                f'src="../reader.js?v={versioned_assets[Path("reader.js")]}"',
+            ).replace(
+                'src="dashboard.js"',
+                f'src="dashboard.js?v={versioned_assets[Path("dashboard/dashboard.js")]}"',
+            )
+            content = dashboard.encode("utf-8")
+        asset_tmp.write_bytes(content)
         asset_tmp.replace(destination)
 
     # A CNAME committed at the repo root has to be copied into the published

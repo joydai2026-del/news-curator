@@ -92,7 +92,15 @@
     const auth = window.NewsCuratorAuth;
     const personalization = window.NewsCuratorPersonalization;
     const readerFactory = window.NewsCuratorReaderApi;
-    if (!auth || !personalization || !readerFactory) return;
+    if (!auth || !personalization || !readerFactory) {
+      const status = document.getElementById("dashboard-status");
+      const signedOut = document.getElementById("signed-out");
+      const privateRoot = document.getElementById("private-dashboard");
+      if (status) status.textContent = "Your dashboard could not be loaded. Refresh the page to try again.";
+      if (signedOut) signedOut.hidden = false;
+      if (privateRoot) privateRoot.hidden = true;
+      return;
+    }
     const signedOut = document.getElementById("signed-out");
     const privateRoot = document.getElementById("private-dashboard");
     const status = document.getElementById("dashboard-status");
