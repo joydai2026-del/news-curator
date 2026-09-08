@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,14 +18,19 @@ MIGRATION = ROOT / "supabase/migrations/202609070001_reading_history.sql"
 POSTGRES_IMAGE = "postgres:15"
 
 
-def _run(*args: str, input_text: str | None = None, check: bool = True):
+def _run(
+    *args: str,
+    input_text: str | None = None,
+    check: bool = True,
+    timeout_seconds: float = 60,
+):
     return subprocess.run(
         args,
         input=input_text,
         text=True,
         capture_output=True,
         check=check,
-        timeout=60,
+        timeout=timeout_seconds,
     )
 
 
@@ -89,6 +95,79 @@ def _jsonb(value: object) -> str:
     return "'" + json.dumps(value, separators=(",", ":")).replace("'", "''") + "'::jsonb"
 
 
+def _postgres_readiness(container: str) -> tuple[bool, str]:
+    pid_one = _run(
+        "docker", "exec", container, "cat", "/proc/1/comm",
+        check=False, timeout_seconds=5,
+    )
+    process_name = pid_one.stdout.strip()
+    if pid_one.returncode != 0 or process_name != "postgres":
+        detail = (pid_one.stderr or pid_one.stdout).strip()
+        return False, f"pid 1={process_name or '<unavailable>'}; {detail}".strip()
+
+    query = _run(
+        "docker", "exec", container, "psql", "-X", "-U", "postgres",
+        "-At", "-c", "select 1", check=False, timeout_seconds=5,
+    )
+    ready = query.returncode == 0 and query.stdout.strip() == "1"
+    detail = (query.stderr or query.stdout).strip()
+    return ready, f"pid 1=postgres; query={detail or '<no output>'}"
+
+
+def _wait_for_postgres(
+    container: str,
+    *,
+    deadline_seconds: float = 30,
+    probe: Callable[[str], tuple[bool, str]] = _postgres_readiness,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    deadline = monotonic() + deadline_seconds
+    consecutive_ready = 0
+    last_detail = "no readiness probe completed"
+    while monotonic() < deadline:
+        ready, last_detail = probe(container)
+        consecutive_ready = consecutive_ready + 1 if ready else 0
+        if consecutive_ready >= 2:
+            return
+        sleep(0.25)
+
+    logs = _run(
+        "docker", "logs", "--tail", "80", container,
+        check=False, timeout_seconds=5,
+    )
+    diagnostic = (logs.stderr or logs.stdout).strip()
+    pytest.fail(
+        "PostgreSQL final postmaster did not become stably ready within "
+        f"{deadline_seconds:.1f}s. Last probe: {last_detail}. "
+        f"Container logs: {diagnostic or '<empty>'}",
+        pytrace=False,
+    )
+
+
+def test_wait_for_postgres_requires_stable_final_postmaster() -> None:
+    observations = iter([
+        (False, "entrypoint pid 1 is docker-entrypoint.sh"),
+        (True, "final postmaster ready"),
+        (False, "temporary server stopped"),
+        (True, "final postmaster ready"),
+        (True, "final postmaster ready"),
+    ])
+    clock = [0.0]
+
+    def advance(seconds: float) -> None:
+        clock[0] += seconds
+
+    _wait_for_postgres(
+        "test-container",
+        deadline_seconds=2.0,
+        probe=lambda _container: next(observations),
+        monotonic=lambda: clock[0],
+        sleep=advance,
+    )
+    assert list(observations) == []
+
+
 def test_republication_uses_corrected_publisher_time_in_story_entry_and_feed() -> None:
     if shutil.which("docker") is None:
         pytest.skip("Docker is unavailable.")
@@ -101,16 +180,7 @@ def test_republication_uses_corrected_publisher_time_in_story_entry_and_feed() -
         "-e", "POSTGRES_PASSWORD=review-only", POSTGRES_IMAGE,
     )
     try:
-        for _ in range(30):
-            ready = _run(
-                "docker", "exec", container, "psql", "-U", "postgres",
-                "-At", "-c", "select 1", check=False,
-            )
-            if ready.returncode == 0 and ready.stdout.strip() == "1":
-                break
-            time.sleep(0.25)
-        else:
-            pytest.fail("PostgreSQL did not become ready.")
+        _wait_for_postgres(container)
         _run(
             "docker", "exec", container, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1",
             "-c", "create role anon nologin; create role authenticated nologin; "
