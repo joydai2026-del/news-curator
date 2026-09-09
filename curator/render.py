@@ -332,7 +332,7 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .state-action[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
 .reader-status{min-height:1.5rem;color:var(--muted);font-size:.78rem}
 /* Updates float outside document flow so a polling result never moves the feed. */
-.updates-status{position:fixed;bottom:max(1rem,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:31;width:max-content;max-width:calc(100% - 2rem);text-align:center;margin:0;pointer-events:none}
+.updates-status{position:absolute;top:calc(100% + .5rem);left:50%;transform:translateX(-50%);z-index:31;width:max-content;max-width:calc(100% - 2rem);text-align:center;margin:0;pointer-events:none}
 .updates-button{min-height:44px;max-width:100%;border-radius:999px;padding:.55rem 1rem;background:var(--accent);color:var(--accent-fg);font-weight:700;box-shadow:var(--shadow);pointer-events:auto}
 .history-tools{display:flex;justify-content:center;margin:1.25rem 0}
 .load-more{min-height:44px;border-radius:999px;padding:.65rem 1rem;background:var(--card);color:var(--accent);font-weight:700}
@@ -1008,31 +1008,11 @@ def render_html(
     empty_hidden = " hidden" if rendered_count else ""
 
     safe_repo = safe_url(repo_url) if repo_url else None
-    edit_url = edit_topics_url(safe_repo)
-
-    if edit_url:
-        # The manager's path in one line. Editing the keyword file is the only
-        # thing anyone needs to change what this page collects, so that is the
-        # link, pointed straight at the file rather than at the repo.
-        add_line = (
-            f'<p><a class="add-topic" href="{_e(edit_url)}" target="_blank" '
-            'rel="noopener noreferrer">Add a topic or keyword</a> '
-            "- edit <code>topics.yaml</code> on GitHub. If you can commit to this "
-            "repository, saving rebuilds the page. Otherwise GitHub opens a pull request "
-            "for the owner to merge, and it appears after they do.</p>"
-        )
-    else:
-        add_line = (
-            "<p>Add a topic or keyword by editing <code>topics.yaml</code>. "
-            "The change appears here on the next build.</p>"
-        )
-
     repo_line = (
-        f'<p><a href="{_e(safe_repo)}" target="_blank" '
-        'rel="noopener noreferrer">Open source on GitHub</a>. Fork it, edit '
-        f"<code>topics.yaml</code>, and it becomes yours.</p>"
+        f' · <a href="{_e(safe_repo)}" target="_blank" '
+        'rel="noopener noreferrer">Source code</a>'
         if safe_repo
-        else "<p>Open source. Fork it, edit <code>topics.yaml</code>, and it becomes yours.</p>"
+        else ""
     )
 
     return f"""<!doctype html>
@@ -1078,33 +1058,20 @@ def render_html(
         <input class="q" id="q" type="search" placeholder="Search this edition"
                aria-label="Search these stories" autocomplete="off" spellcheck="false">
       </div>
-    </div>
-    <div class="updates-status" id="updates-status" role="status" aria-live="polite" hidden>
-      <button class="updates-button" id="show-updates" type="button"></button>
+      <div class="updates-status" id="updates-status" role="status" aria-live="polite" hidden>
+        <button class="updates-button" id="show-updates" type="button"></button>
+      </div>
     </div>
     <p class="countline"><span class="count" id="count" role="status" aria-live="polite"></span></p>
     <main>
       <h2 class="active-topic" id="active-topic" hidden></h2>
       <div class="sections" id="sections">{''.join(sections)}</div>
       <p class="empty" id="empty"{empty_hidden}>Nothing matched in this window.</p>
-      <div class="history-tools"><button class="load-more" id="load-more" type="button">Load more</button></div>
+      <div class="history-tools"><button class="load-more" id="load-more" type="button" hidden>Load more</button></div>
       <p class="reader-status" id="reader-status" role="status" aria-live="polite"></p>
     </main>
     <footer>
-      <p>This edition combines Hacker News, RSS feeds, news sitemaps, and eligible newsletter items,
-         then builds one deduplicated story list. When a configured saved-interest profile is
-         present, the build uses it as an additional ranking input. Rebuilt on a schedule.</p>
-      <p>Every headline and summary is assembled only from text the named source supplied in its
-         feed, page metadata, or article lead at build time. Rows marked
-         <span class="via">via</span> came through an aggregator or newsletter. Nothing here is
-         written or rewritten by an AI, and no linked claim has been checked.</p>
-      <p>The Reading Companion loads no publisher images, third-party scripts, web fonts, or
-         analytics. Original links use <code>no-referrer</code>. The build may read a publisher's
-         image metadata for coverage reporting, but the page does not request or display that image.
-         No full destination article body is retained.</p>
-      <p class="health">Sources this run - {_health_line(results)}</p>
-      {add_line}
-      {repo_line}
+      <p><a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy</a>{repo_line}</p>
     </footer>
   </div>
 </div>

@@ -625,6 +625,7 @@
     const cursors = new Map();
     const exhausted = new Set();
     const hydrated = new Set();
+    const pageRequests = new Set();
     let publicationSeq = 0;
     let latest = null;
     let initializing = true;
@@ -647,6 +648,13 @@
       return false;
     }
     function selectedTopic() { return view.currentTab(); }
+    function refreshLoadButton() {
+      const topic = selectedTopic();
+      loadButton.hidden = initializing || !latest || exhausted.has(topic) ||
+        (topic === "__saved__" && !signedIn());
+      loadButton.disabled = [...pageRequests].some((request) =>
+        request.topic === topic && request.epoch === authEpoch);
+    }
     function topicIdForSlug(slug) {
       if (slug === "__all__" || slug === "__saved__") return slug;
       const chip = document.querySelector(`.chip[data-filter="${CSS.escape(slug)}"]`);
@@ -937,28 +945,43 @@
       }
       const wasHydrated = hydrated.has(topic);
       const requestEpoch = authEpoch;
-      const initialCursor = topic === "__all__" ? { order_mode: "history_freshness" } : null;
-      const rows = topic === "__saved__"
-        ? await api.savedPage(null, latest.page_size)
-        : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
-      if (requestEpoch !== authEpoch) return;
-      mergeRows(rows, true, topic);
-      const cursor = topic === "__saved__"
-        ? nextSavedCursor(rows, latest.page_size)
-        : nextFeedCursor(rows, latest.initial_history_cursor, initialCursor, latest.page_size);
-      if (!wasHydrated) {
-        if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
-        hydrated.add(topic);
+      const request = { topic, epoch: requestEpoch };
+      pageRequests.add(request);
+      refreshLoadButton();
+      try {
+        const initialCursor = topic === "__all__" ? { order_mode: "history_freshness" } : null;
+        const rows = topic === "__saved__"
+          ? await api.savedPage(null, latest.page_size)
+          : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
+        if (requestEpoch !== authEpoch) return;
+        mergeRows(rows, true, topic);
+        const cursor = topic === "__saved__"
+          ? nextSavedCursor(rows, latest.page_size)
+          : nextFeedCursor(rows, latest.initial_history_cursor, initialCursor, latest.page_size);
+        if (!wasHydrated) {
+          if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
+          hydrated.add(topic);
+        }
+        flushPendingReadIntents();
+      } finally {
+        pageRequests.delete(request);
+        refreshLoadButton();
       }
-      flushPendingReadIntents();
     }
     async function loadMore() {
       const topic = selectedTopic();
-      if (exhausted.has(topic)) return;
+      if (!latest || initializing || loadButton.disabled || exhausted.has(topic)) return;
       if (topic === "__saved__" && !requireSignIn()) return;
-      loadButton.disabled = true;
       const requestEpoch = authEpoch;
+      const request = { topic, epoch: requestEpoch };
+      pageRequests.add(request);
+      refreshLoadButton();
       try {
+        if (!hydrated.has(topic)) {
+          await hydrate();
+          if (requestEpoch === authEpoch && topic === selectedTopic()) announce("This section is ready.");
+          return;
+        }
         let rows;
         const currentCursor = cursors.get(topic) || null;
         if (topic === "__saved__") {
@@ -974,10 +997,16 @@
         }
         mergeRows(rows, true, topic);
         if (topic === "__saved__" && rows.length < latest.page_size) exhausted.add(topic);
-        announce(rows.length ? loadedStatus(rows.length) : "No older stories remain in this section.");
+        if (topic === selectedTopic()) {
+          announce(rows.length ? loadedStatus(rows.length) : exhausted.has(topic)
+            ? "No older stories remain in this section." : "Load more to check older stories.");
+        }
       } catch (_) {
-        if (requestEpoch === authEpoch) announce("Older stories could not be loaded. Try again.");
-      } finally { loadButton.disabled = false; }
+        if (requestEpoch === authEpoch && topic === selectedTopic()) announce("Older stories could not be loaded. Try again.");
+      } finally {
+        pageRequests.delete(request);
+        refreshLoadButton();
+      }
     }
     function reapplyCurrentMembership(card, priorFocusedAction = null) {
       const focused = priorFocusedAction || document.activeElement;
@@ -1107,6 +1136,7 @@
     });
     document.querySelectorAll(".chip").forEach((chip) => {
       chip.addEventListener("click", () => {
+        refreshLoadButton();
         refreshStateControls();
         refreshInterestControls();
         void hydrate().catch(() => { announce("This section could not be synced. Try again."); });
@@ -1198,7 +1228,10 @@
     } catch (_) {
       auth.accountUnavailable?.();
       announce("Synced reading features are temporarily unavailable. Try checking sign-in again.");
-    } finally { initializing = false; }
+    } finally {
+      initializing = false;
+      refreshLoadButton();
+    }
   }
   if (!commonJs) void run();
 })();

@@ -177,21 +177,28 @@ class TestContent:
 
 class TestHealthLine:
     def test_healthy_tier_shows_a_count(self, now):
+        from curator.render import _health_line
+
         results = [TierResult(tier="rss", items=[make_item("a")])]
-        assert "rss: 1 items" in render({"T": []}, results, now=now)
+        assert "rss: 1 items" in _health_line(results)
+        assert "rss: 1 items" not in render({"T": []}, results, now=now)
 
     def test_partial_failure_is_not_hidden_behind_a_count(self, now):
+        from curator.render import _health_line
+
         # Regression: a tier with items AND a failure used to render as a
         # reassuring "reddit: 10", hiding the degradation entirely.
         results = [
             TierResult(tier="reddit", items=[make_item("a")], ok=False, note="rate-limited after 2/5")
         ]
-        html = render({"T": []}, results, now=now)
+        html = _health_line(results)
         assert "degraded" in html and "rate-limited after 2/5" in html
 
     def test_dead_tier_is_named(self, now):
+        from curator.render import _health_line
+
         results = [TierResult(tier="reddit", items=[], ok=False, note="blocked")]
-        assert "reddit: blocked" in render({"T": []}, results, now=now)
+        assert "reddit: blocked" in _health_line(results)
 
 
 class TestStaleness:
@@ -385,51 +392,54 @@ class TestAccordionMediaBoundary:
         html = render({"T": [item]}, now=now)
         assert 'onload="alert' not in html
 
-    def test_the_footer_no_longer_claims_pages_are_never_fetched(self, now):
-        # v1 promised destination pages are never fetched. v1.1 reads the head
-        # of an article for its og:image, so that sentence had to go with the
-        # feature rather than quietly outlive it.
+    def test_the_footer_omits_the_explanatory_appendix(self, now):
         html = flat(render({"T": [make_item("a")]}, now=now))
         assert "never fetched" not in html
-        assert "may read a publisher's image metadata" in html
-        assert "No full destination article body is retained" in html
+        assert "may read a publisher's image metadata" not in html
+        assert "This edition combines" not in html
+        assert "Sources this run" not in html
+        assert "no linked claim has been checked" not in html
 
     def test_the_footer_matches_the_text_only_request_boundary(self, now):
         item = make_item("A story")
         item.image_url = "https://cdn.example/a.jpg"
         html = flat(render({"T": [item]}, now=now))
-        assert "loads no publisher images" in html
+        assert 'href="privacy.html"' in html
         assert "no-referrer" in html
         assert "hotlinked from the publishers" not in html
 
 
-class TestAddTopicLink:
-    """The manager's path: edit the keyword file, on GitHub, with no backend."""
+class TestCompactFooter:
+    """Keep essential privacy/source links without a repository-editing appendix."""
 
-    def test_a_github_repo_gets_an_editor_link(self, now):
+    def test_a_github_repo_gets_a_source_link(self, now):
         html = render(
             {"T": [make_item("a")]},
             now=now,
             repo_url="https://github.com/joydai2026-del/news-curator",
         )
-        assert "https://github.com/joydai2026-del/news-curator/edit/main/topics.yaml" in html
-        assert "Add a topic or keyword" in html
+        assert 'href="https://github.com/joydai2026-del/news-curator"' in html
+        assert '>Source code</a>' in html
+        assert "Add a topic or keyword" not in html
+        assert "topics.yaml" not in html
 
     def test_a_trailing_slash_does_not_double_up(self, now):
         html = render({"T": [make_item("a")]}, now=now, repo_url="https://github.com/a/b/")
-        assert "https://github.com/a/b/edit/main/topics.yaml" in html
+        assert 'href="https://github.com/a/b/"' in html
+        assert "/edit/main/" not in html
 
-    def test_a_non_github_host_gets_instructions_instead_of_a_broken_link(self, now):
-        # /edit/<branch>/<file> is GitHub's route. A self-hosted fork gets no
-        # link rather than a wrong one.
+    def test_a_non_github_host_keeps_its_source_link(self, now):
         html = render({"T": [make_item("a")]}, now=now, repo_url="https://git.example/a/b")
         assert "/edit/main/topics.yaml" not in html
-        assert "topics.yaml" in html
+        assert 'href="https://git.example/a/b"' in html
+        assert '>Source code</a>' in html
 
-    def test_no_repo_url_still_explains_the_path(self, now):
+    def test_no_repo_url_keeps_only_privacy(self, now):
         html = render({"T": [make_item("a")]}, now=now)
         assert "/edit/main/" not in html
-        assert "topics.yaml" in html
+        assert 'href="privacy.html"' in html
+        assert '>Source code</a>' not in html
+        assert "topics.yaml" not in html
 
     def test_an_unsafe_repo_url_produces_no_link(self, now):
         html = render({"T": [make_item("a")]}, now=now, repo_url="javascript:alert(1)")
@@ -794,7 +804,7 @@ class TestAccordionReadingCompanion:
 
     def test_footer_only_claims_personalization_when_a_profile_is_present(self, now):
         page = flat(render({"AI": [make_item("A story")]}, now=now))
-        assert "When a configured saved-interest profile is present" in page
+        assert "When a configured saved-interest profile is present" not in page
 
     def test_page_metadata_does_not_claim_every_fork_is_personalized(self, now):
         page = render({"AI": [make_item("A story")]}, now=now)

@@ -123,6 +123,121 @@ def _visually_ordered_story_ids(page: object) -> list[str]:
     )
 
 
+def test_pagination_hides_exhausted_scopes_but_preserves_cursor_and_retry(
+    tmp_path: Path, now: object
+) -> None:
+    site = tmp_path / "site"
+    render_site(
+        {name: [make_item(name)] for name in ("AI", "US News")},
+        [TierResult(tier="rss", items=[], ok=True)], now, site,
+        topic_ids_by_name={"AI": "ai", "US News": "us"},
+    )
+    activate_personalization_link(
+        site / "index.html", supabase_url=ORIGIN, publishable_key="sb_publishable_test",
+    )
+    _install_signed_auth_stub(site)
+    calls = []
+    fail_once = [True]
+    held = []
+    initial_cursor = {"before_published_at": "2026-09-02T12:00:00Z",
+                      "before_story_id": "story:" + "0" * 64}
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(site)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def fulfill(route: object) -> None:
+        request = route.request
+        body = request.post_data_json
+        if request.url.endswith("/latest_publication"):
+            payload = {
+                "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
+                "topics": [{"topic_id": "ai", "name": "AI"}, {"topic_id": "us", "name": "US News"}],
+                "initial_history_cursor": initial_cursor, "page_size": 2, "poll_seconds": 300,
+            }
+        elif request.url.endswith("/saved_page"):
+            payload = []
+        elif request.url.endswith("/feed_page"):
+            calls.append(body)
+            topic = body["p_topic_id"]
+            if topic is None and body.get("p_before_published_at") is None:
+                payload = [_story(1, "history_freshness"), _story(2, "history_freshness")]
+            elif topic is None and fail_once[0]:
+                fail_once[0] = False
+                route.fulfill(status=500, content_type="application/json", body='{}')
+                return
+            elif topic == "us" and body["p_order_mode"] == "history_freshness":
+                held.append(route)
+                return
+            else:
+                payload = []
+        else:
+            raise AssertionError("Unexpected pagination RPC")
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright_api.sync_playwright() as playwright:
+            browser = _launch_browser(playwright)
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page.route(f"{ORIGIN}/**", fulfill)
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="networkidle")
+            more = page.locator("#load-more")
+            playwright_api.expect(more).to_be_visible()
+            search = page.get_by_role("searchbox")
+            search.fill("No matching local headline")
+            playwright_api.expect(more).to_be_visible()
+            more.click()
+            playwright_api.expect(page.locator("#reader-status")).to_have_text(
+                "Older stories could not be loaded. Try again."
+            )
+            playwright_api.expect(more).to_be_visible()
+            playwright_api.expect(more).to_be_enabled()
+            failed_cursor = calls[-1]
+            more.click()
+            playwright_api.expect(more).to_be_hidden()
+            assert calls[-1] == failed_cursor, "Retry must preserve the failed page cursor"
+            playwright_api.expect(page.locator("#reader-status")).to_have_text(
+                "No older stories remain in this section."
+            )
+            search.fill("")
+            playwright_api.expect(more).to_be_hidden()
+            page.get_by_role("button", name="AI", exact=True).click()
+            playwright_api.expect(more).to_be_visible()
+            playwright_api.expect(more).to_be_enabled()
+            more.click()
+            playwright_api.expect(more).to_be_hidden()
+            assert calls[-1]["p_order_mode"] == "history_freshness"
+            assert calls[-1]["p_before_published_at"] == initial_cursor["before_published_at"]
+            page.get_by_role("button", name="Saved", exact=True).click()
+            playwright_api.expect(more).to_be_hidden()
+            page.get_by_role("button", name="US News", exact=True).click()
+            playwright_api.expect(more).to_be_visible()
+            playwright_api.expect(more).to_be_enabled()
+            more.click()
+            playwright_api.expect(more).to_be_disabled()
+            page.get_by_role("button", name="AI", exact=True).click()
+            playwright_api.expect(more).to_be_hidden()
+            prior_status = page.locator("#reader-status").text_content()
+            assert len(held) == 1
+            held.pop().fulfill(status=200, content_type="application/json", body='[]')
+            page.wait_for_timeout(50)
+            playwright_api.expect(more).to_be_hidden()
+            assert page.locator("#reader-status").text_content() == prior_status
+            page.get_by_role("button", name="US News", exact=True).click()
+            playwright_api.expect(more).to_be_hidden()
+            page.get_by_role("button", name="All", exact=True).click()
+            playwright_api.expect(more).to_be_hidden()
+            page.set_viewport_size({"width": 390, "height": 844})
+            playwright_api.expect(more).to_be_hidden()
+            footer = page.locator("footer")
+            assert footer.inner_text().strip() == "Privacy"
+            assert footer.get_by_role("link", name="Privacy").get_attribute("href") == "privacy.html"
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_path: Path) -> None:
     site = tmp_path / "site"
     site.mkdir()
@@ -1621,8 +1736,8 @@ def test_logout_removes_dynamic_saved_card_from_dom_and_view_index(tmp_path: Pat
 
 @pytest.mark.parametrize(
     "viewport",
-    [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}],
-    ids=["desktop", "phone"],
+    [{"width": 1440, "height": 1000}, {"width": 1100, "height": 560}, {"width": 390, "height": 844}],
+    ids=["desktop", "short-desktop", "phone"],
 )
 def test_polled_update_banner_is_an_accessible_overlay_until_explicit_refresh(
     tmp_path: Path,
@@ -1756,6 +1871,11 @@ def test_polled_update_banner_is_an_accessible_overlay_until_explicit_refresh(
             assert button_box["x"] + button_box["width"] <= viewport["width"]
             assert 0 <= button_box["y"]
             assert button_box["y"] + button_box["height"] <= viewport["height"]
+            tools_box = page.locator(".tools").bounding_box()
+            assert tools_box is not None
+            tools_bottom = tools_box["y"] + tools_box["height"]
+            assert tools_bottom <= button_box["y"] <= tools_bottom + 20
+            page.screenshot(path=str(tmp_path / "top-banner.png"))
             page.keyboard.press("Tab")
             assert page.evaluate("document.activeElement.id") == "show-updates"
             assert updates_button.evaluate("button => button.matches(':focus-visible')")
