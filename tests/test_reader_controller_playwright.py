@@ -203,6 +203,9 @@ def test_pagination_hides_exhausted_scopes_but_preserves_cursor_and_retry(
             page.get_by_role("button", name="AI", exact=True).click()
             playwright_api.expect(more).to_be_visible()
             playwright_api.expect(more).to_be_enabled()
+            playwright_api.expect(page.locator("#reader-status")).not_to_contain_text(
+                "No older stories remain"
+            )
             more.click()
             playwright_api.expect(more).to_be_hidden()
             assert calls[-1]["p_order_mode"] == "history_freshness"

@@ -1136,6 +1136,7 @@
     });
     document.querySelectorAll(".chip").forEach((chip) => {
       chip.addEventListener("click", () => {
+        announce("");
         refreshLoadButton();
         refreshStateControls();
         refreshInterestControls();
