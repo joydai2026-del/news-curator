@@ -11,7 +11,7 @@ import pytest
 
 from curator.models import TierResult
 from curator.identity import story_id_for_item
-from curator.render import JS as VIEW_JS, render_site
+from curator.render import CSS as VIEW_CSS, JS as VIEW_JS, render_site
 from scripts.build_auth_callback import activate_personalization_link
 from tests.conftest import make_item
 from tests.test_auth_callback_playwright import _muted_browser_runtime  # noqa: F401
@@ -245,6 +245,8 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    status_rule = re.search(r"\.reader-status\{[^}]*\}", VIEW_CSS)
+    assert status_rule is not None and "min-height:1.5rem" in status_rule.group(0)
     (site / "index.html").write_text(
         """<!doctype html><html><head><meta charset="utf-8"><style>
         body{margin:0}.tools{height:80px}.grid{display:flex;flex-direction:column}.card{height:180px;margin:8px}
@@ -258,7 +260,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
           <button class="chip" data-filter="ai" data-topic-id="ai">AI</button>
           <button class="chip" data-filter="quantum-computing" data-topic-id="quantum">Quantum Computing</button>
         </div>
-        <p id="reader-status"></p><button id="load-more">Load more</button>
+        <p class="reader-status" id="reader-status"></p><button id="load-more">Load more</button>
         <p id="updates-status" hidden><button id="show-updates"></button></p>
         <main id="sections"><section class="topic-section" data-section="quantum-computing" data-topic-id="quantum">
           <h2>Quantum Computing</h2><div class="grid">
@@ -310,7 +312,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
           window.NewsCuratorView.apply();
         }));
         window.BroadcastChannel = undefined;
-        </script><script src="reader.js"></script></body></html>""",
+        </script><script src="reader.js"></script></body></html>""".replace(
+            "<style>", "<style>" + status_rule.group(0), 1
+        ),
         encoding="utf-8",
     )
 
