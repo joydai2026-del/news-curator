@@ -371,7 +371,8 @@ def _select_with_final_band_backfill(candidates, policy, history_available):
         proposed = _final_diversity_caps(entries, bands)
         next_caps = {name: min(value, applied[name]) if applied[name] is not None else value
                      for name, value in proposed.items()}
-        if any(applied[name] != value for name, value in next_caps.items()):
+        caps_changed = any(applied[name] != value for name, value in next_caps.items())
+        if caps_changed:
             applied.update(next_caps)
             entries, shortfalls, rejected = _select(
                 candidates, policy, source_diversity_cap=applied['source'],
@@ -380,7 +381,7 @@ def _select_with_final_band_backfill(candidates, policy, history_available):
         entries, rejected, swapped = _backfill_distinct(
             entries, candidates, policy, rejected, bands,
             source_diversity_cap=applied['source'], topic_diversity_cap=applied['topic'])
-        if not swapped and not any(applied[name] != value for name, value in next_caps.items()):
+        if not swapped and not caps_changed:
             return entries, shortfalls, rejected, bands, verdict
         bands, verdict = _bands(entries, policy, history_available, shortfalls)
     return entries, shortfalls, rejected, bands, verdict

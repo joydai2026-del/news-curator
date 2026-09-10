@@ -311,7 +311,7 @@ def materialize_private_discovery(cfg, snapshot, policy, secret_config: SecretPr
         failed_bands = [
             {'band': band['band'], 'verdict': band['verdict']}
             for band in receipt['bands']
-            if band['verdict'] not in ('PASS', 'DISABLED')
+            if band['verdict'] not in ('PASS', 'DISABLED', 'QUALIFIED_SHORTFALL')
         ]
         return {'schema_version': 1, 'status': 'not_settled', 'reason_code': 'edition_bands_failed',
                 'selected_count': len(receipt['entries']), 'shortfalls': receipt['shortfalls'],

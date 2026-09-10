@@ -207,6 +207,19 @@ def test_failed_bands_keep_previous_edition(inputs):
     assert transport.envelope is None
 
 
+def test_failed_band_diagnostics_exclude_qualified_shortfall(inputs):
+    cfg, snapshot, _ = inputs
+    policy = load_discovery_policy(REPO / 'config/discovery-policy-r3.yaml')
+    policy['bands']['topic_diversity']['cap'] = 0.1
+    policy['bands']['deliberate_surprise'].update(floor=0.5, cap=1.0)
+    result = build((cfg, snapshot, policy), Transport())
+    assert result['status'] == 'not_settled'
+    assert result['failed_bands']
+    assert all(band['verdict'] == 'FAIL' for band in result['failed_bands'])
+    assert 'topic_diversity' in {band['band'] for band in result['failed_bands']}
+    assert 'deliberate_surprise' not in {band['band'] for band in result['failed_bands']}
+
+
 def test_digest_mismatch_readback_refuses_completion(inputs):
     transport = Transport()
     transport.tamper_readback = True
