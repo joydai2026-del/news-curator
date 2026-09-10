@@ -89,6 +89,21 @@ def test_health_reporting_runs_after_a_failed_build_without_masking_it():
     assert "if [ -f ./source-health.json ]" in str(step["run"])
 
 
+def test_discovery_materializer_failure_is_explicit_without_breaking_fallback():
+    build = _jobs()["build"]
+    materialize = _step_named(build, "Materialize private discovery edition")
+    notice = _step_named(build, "Report private discovery settlement failure")
+    assert materialize["id"] == "materialize_discovery"
+    assert materialize["continue-on-error"] is True
+    assert materialize["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "--previous-source-snapshot" not in str(materialize["run"])
+    assert not any(step.get("name") == "Restore public discovery baseline" for step in _steps(build))
+    assert notice["if"] == "${{ steps.materialize_discovery.outcome == 'failure' }}"
+    assert "::warning title=Private discovery not settled::" in str(notice["run"])
+    assert "No new private edition was stored" in str(notice["run"])
+    assert "Existing private state was preserved" in str(notice["run"])
+
+
 def test_rendered_newsletter_privacy_assertion_remains_intact():
     run = str(_step_named(_jobs()["build"], "Verify the rendered page has real content")["run"])
     for locked in (

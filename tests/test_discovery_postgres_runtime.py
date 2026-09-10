@@ -26,6 +26,7 @@ from curator.source_snapshot import load_source_snapshot, write_source_snapshot,
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / 'supabase/migrations/202609090001_discovery_lanes.sql'
+RETRY_MIGRATION = ROOT / 'supabase/migrations/202609100001_discovery_retry_identity.sql'
 IMAGE = 'postgres:17.11'
 OWNER = '11111111-1111-4111-8111-111111111111'
 OTHER = '22222222-2222-4222-8222-222222222222'
@@ -87,6 +88,7 @@ def db():
         _sql(container, (ROOT / 'supabase/migrations/202609070001_reading_history.sql').read_text())
         _sql(container, (ROOT / 'supabase/migrations/202609080001_dashboard_summary.sql').read_text())
         _sql(container, MIGRATION.read_text())
+        _sql(container, RETRY_MIGRATION.read_text())
         _sql(container, f"""
           insert into auth.users values('{OWNER}'),('{OTHER}');
           insert into public.user_preferences(user_id,revision,interests) values('{OWNER}',1,array['OpenAI']),('{OTHER}',1,array['OpenAI']);
@@ -158,6 +160,17 @@ def _wire(payload):
 def _finalize_expression(payload, digest=None):
     text, computed = _wire(payload)
     return f'public.finalize_private_discovery({_quote(text)},{_quote(digest or computed)})'
+
+
+def _retry_expression(payload):
+    receipt = payload['receipt']
+    bindings = receipt['bindings']
+    values = [payload['owner_user_id'], bindings['snapshot_digest'], bindings['profile_revision'],
+              payload['profile_fingerprint'], bindings['policy_digest'], payload['code_revision'],
+              receipt['language'], bindings['ranking_configuration_digest'],
+              bindings['display_dedup_digest'], bindings['code_digest']]
+    return 'public.private_discovery_retry_identity(' + ','.join(
+        str(value) if isinstance(value, int) else _quote(value) for value in values) + ')'
 
 
 def test_private_discovery_full_contract(db, tmp_path):
@@ -236,6 +249,37 @@ def test_private_discovery_full_contract(db, tmp_path):
     _sql(db, f"delete from public.private_discovery_editions where owner_user_id='{OWNER}';")
     retained = _json_call(db, f"public.set_story_state('{story}',false,true,1,'retained-save')", role='authenticated', owner=OWNER)
     assert retained['status'] == 'updated'
+
+
+def test_retry_identity_is_service_only_bounded_and_ambiguous_fail_closed(db, tmp_path):
+    payload = _payload(tmp_path, edition_id='retry-contract')
+    expression = _finalize_expression(payload)
+    _json_call(db, expression)
+    retry = _json_call(db, _retry_expression(payload))
+    assert set(retry) == {'edition_id', 'payload_digest', 'receipt_digest', 'generated_at'}
+    assert retry['edition_id'] == payload['edition_id']
+    for role in ('anon', 'authenticated'):
+        denied = _sql(db, f'set role {role}; select {_retry_expression(payload)};', check=False)
+        assert denied.returncode and 'permission denied' in denied.stderr
+    null_expression = (
+        f"public.private_discovery_retry_identity('{OWNER}',null,1,'{'a'*64}',"
+        f"'{'b'*64}','{'c'*40}','en','{'d'*64}','{'e'*64}','{'f'*64}')"
+    )
+    null_rejected = _sql(db, f'set role service_role; select {null_expression};', check=False)
+    assert null_rejected.returncode and 'retry identity unavailable' in null_rejected.stderr
+    index_count = _sql(
+        db, "select count(*) from pg_indexes where schemaname='public' "
+        "and indexname='private_discovery_retry_lookup';"
+    )
+    assert index_count.stdout.strip() == '1'
+
+    duplicate_id = 'm2:' + 'f' * 64
+    _sql(db, f"""insert into public.private_discovery_editions
+      select owner_user_id,'{duplicate_id}',payload_digest,payload_text,payload,generated_at,stored_at
+      from public.private_discovery_editions where owner_user_id='{OWNER}' and edition_id='{payload['edition_id']}';""")
+    ambiguous = _sql(db, f'set role service_role; select {_retry_expression(payload)};', check=False)
+    assert ambiguous.returncode and 'retry identity ambiguous' in ambiguous.stderr
+    _sql(db, f"delete from public.private_discovery_editions where edition_id in ('{duplicate_id}','{payload['edition_id']}');")
 
 
 @pytest.mark.parametrize('mutation', ['failed','unknown_band','missing_profile','invalid_source_fact','duplicate','stale_history'])

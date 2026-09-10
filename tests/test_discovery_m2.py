@@ -152,6 +152,22 @@ def test_publisher_change_wins_overlap_and_binds_before_after(tmp_path, capture,
     assert receipt['shortfalls']['hot'] == policy['lane_quotas']['hot']
 
 
+def test_old_baseline_cannot_claim_an_update_outside_the_updates_window(tmp_path, capture, cfg, policy):
+    rows = records(capture, WIRED)
+    publisher = next(i for i in rows if not i.is_aggregator)
+    before = deepcopy(publisher)
+    before.description = ''
+    previous_path = tmp_path / 'manual-older-baseline.json'
+    write_source_snapshot([TierResult('sources', [before])], previous_path,
+                          generated_at=NOW-timedelta(hours=policy['windows']['updates'] + 1),
+                          configuration_digest=capture.configuration_digest)
+    previous = load_source_snapshot(previous_path, current_time=NOW,
+                                    max_age_seconds=int(max(policy['windows'].values()) * 3600))
+    receipt = run(cfg, snapshot(tmp_path, capture, rows), policy, previous_snapshot=previous)
+    assert not member(receipt, 'updates')
+    assert replay_discovery(receipt)
+
+
 @pytest.mark.parametrize('invalid_evidence', ['estimated', 'future', 'same_observation_time'])
 def test_invalid_time_evidence_cannot_create_update(tmp_path, capture, cfg, policy, invalid_evidence):
     rows = records(capture, WIRED)

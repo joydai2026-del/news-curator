@@ -290,33 +290,31 @@ jobs:
           name: newsletter-artifact
           path: .
 
-      - name: Restore public discovery baseline
-        if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && vars.NEWS_CURATOR_DISCOVERY_ENABLED == 'true' }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >
-          python scripts/fetch_discovery_baseline.py --root .
-          --source-snapshot "$RUNNER_TEMP/source-snapshot.json"
-          --output "$RUNNER_TEMP/discovery-previous-source.json"
-
       - name: Materialize private discovery edition
+        id: materialize_discovery
         if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && vars.NEWS_CURATOR_DISCOVERY_ENABLED == 'true' }}
         # A refused candidate retains the last passing private edition. This
         # step emits aggregate outcomes only; no private artifact is uploaded.
         continue-on-error: true
         env:
+          GH_TOKEN: ${{ github.token }}
           NEWS_CURATOR_OWNER_USER_ID: ${{ secrets.NEWS_CURATOR_OWNER_USER_ID }}
           NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
           NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
         run: |
-          previous_args=()
-          if [ -f "$RUNNER_TEMP/discovery-previous-source.json" ]; then
-            previous_args=(--previous-source-snapshot "$RUNNER_TEMP/discovery-previous-source.json")
-          fi
           python scripts/materialize_discovery.py --root . \
             --source-snapshot "$RUNNER_TEMP/source-snapshot.json" \
-            --code-revision "$GITHUB_SHA" "${previous_args[@]}"
+            --code-revision "$GITHUB_SHA"
+
+      - name: Report private discovery settlement failure
+        if: ${{ steps.materialize_discovery.outcome == 'failure' }}
+        run: |
+          echo "::warning title=Private discovery not settled::No new private edition was stored. Existing private state was preserved."
+          {
+            echo "## Private discovery"
+            echo
+            echo "Not settled. No new private edition was stored. Existing private state was preserved."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Materialize saved-interest ranking
         if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}
