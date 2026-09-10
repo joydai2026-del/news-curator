@@ -61,3 +61,20 @@ The M2-only category interpretation maps a saved configured category name or id 
 A read-only replay against the original failed activation capture after the saved-interest update selected 18 stories. Relevance passed at 1.000, while Deliberate Surprise failed at 0.000; the other five bands passed. A separate production-method readiness check used the latest successful scheduled capture and the chronology-selected validated prior capture. It selected 16 stories: Relevance passed at 1.000, Deliberate Surprise failed at 0.000, and Trend failed at 0.125; the other four bands passed. These two captured pools contained no Surprise-qualified candidates. They do not prove that future captures cannot pass.
 
 No further activation occurred. Discovery remains disabled and production still has zero private editions. Completion still requires a genuine protected-job PASS followed by private lane, read, save, reload, and logout verification. Quality bands, quotas, lane priority, and evidence rules remain unchanged. M1 learning remains separate.
+
+
+## Approved qualified-shortfall release
+
+JJ approved ongoing production delivery and qualified editions with honest Hot and Surprise shortage notices. This changes only the lower-share behavior for those two bands when the actual matching primary lane has a positive shortfall. Upper caps, all other quality bands, per-story eligibility, lane priority, owner isolation, and replay identity remain enforced. M2 category preferences were retained as authorized; M1 learning remains separate.
+
+PR [23](https://github.com/joydai2026-del/news-curator/pull/23) merged as `13c11e0c7031cd1e1af9618b19fdefff01c7ce35`. Exact-head CI [34487060014](https://github.com/joydai2026-del/news-curator/actions/runs/34487060014) and post-merge CI [34487524990](https://github.com/joydai2026-del/news-curator/actions/runs/34487524990) passed all four jobs, including PostgreSQL 17.11. The PostgreSQL checks exercised an actual two-thirds share and rejected forged shares, targets, caps, shortfalls, and malformed revision mappings. Independent security review passed.
+
+Migration `202609100002_discovery_qualified_shortfalls.sql` was applied and read back with SHA-256 `6c02fe5da5dc05e25fe210e2fb3e8e7ceddf86d01816952fff7b81414328ad39`. Service-only settlement and forced row-level security remained intact. Flag-off Curate [34487524999](https://github.com/joydai2026-del/news-curator/actions/runs/34487524999) succeeded at that merge commit.
+
+## Third activation and recovery
+
+Activation [34487953820](https://github.com/joydai2026-del/news-curator/actions/runs/34487953820) selected 18 stories: Updates 8, Hot 4, Interested 6, Surprise 0. Deliberate Surprise correctly qualified for the approved shortfall behavior, but Topic Diversity failed. No private edition was stored. Discovery was disabled and the run force-canceled after normal cancellation did not stop its always-running build job. Terminal readback confirmed the build canceled with no deployment job completed. The public flag-off release remained healthy.
+
+The final-diversity selection loop compared its new caps with the already-updated caps, allowing premature termination after a reselection reduced the edition size. This could leave a previously computed topic count above the same unchanged share cap when divided by the smaller edition. The repair must continue until the counts and denominator stabilize. Qualified shortfalls must also be excluded from failure-only diagnostics.
+
+The narrow selector and diagnostic repair passed independent review and 102 focused tests across the discovery engine, qualified-shortfall policy, and protected adapter. The new regression exercises repeated cap tightening after the denominator shrinks. It does not relax production policy or substitute for a stored owner receipt.

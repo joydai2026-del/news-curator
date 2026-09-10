@@ -11,6 +11,7 @@ from curator.discovery import (
     replay_discovery,
     validate_discovery_policy,
 )
+import curator.discovery as discovery
 from curator.source_snapshot import (
     load_source_snapshot,
     snapshot_config_digest,
@@ -114,3 +115,40 @@ def test_shortfall_opt_in_requires_exact_r3_identity_and_mapping():
     for invalid in (pseudo, partial, missing, mixed):
         with pytest.raises(DiscoveryError, match="discovery_qualified_shortfalls"):
             validate_discovery_policy(invalid)
+
+
+def test_final_topic_cap_recomputes_after_selection_shrinks(tmp_path, monkeypatch):
+    policy = _policy("discovery-policy-r3.yaml")
+    receipt = _receipt(tmp_path, policy)
+    rows = receipt["entries"]
+    assert len(rows) >= 3
+    candidates = rows * 7
+    calls = []
+
+    def select(_candidates, _policy, *, source_diversity_cap=None, topic_diversity_cap=None):
+        calls.append(topic_diversity_cap)
+        size = 20 if topic_diversity_cap is None else 18 if topic_diversity_cap == 7 else 17
+        return candidates[:size], receipt["shortfalls"], []
+
+    def bands(entries, _policy, _history_available, _shortfalls=None):
+        achieved = 8 / 20 if len(entries) == 20 else 7 / 18 if len(entries) == 18 else 6 / 17
+        verdict = "FAIL" if len(entries) in (20, 18) else "PASS"
+        return ([
+            {"band": "source_diversity", "verdict": "PASS", "achieved": 0.1,
+             "cap": 1.0, "distinct": 2, "min_distinct": 1},
+            {"band": "topic_diversity", "verdict": verdict, "achieved": achieved,
+             "cap": 0.375, "distinct": 2, "min_distinct": 0},
+        ], verdict)
+
+    monkeypatch.setattr(discovery, "_select", select)
+    monkeypatch.setattr(discovery, "_bands", bands)
+    monkeypatch.setattr(discovery, "_backfill_distinct",
+                        lambda entries, _candidates, _policy, rejected, _bands, **_kwargs:
+                        (entries, rejected, False))
+    original = deepcopy(policy)
+    entries, shortfalls, _rejected, _bands_result, verdict = (
+        discovery._select_with_final_band_backfill(candidates, policy, True)
+    )
+    assert calls == [None, 7, 6]
+    assert len(entries) == 17 and verdict == "PASS"
+    assert shortfalls == receipt["shortfalls"] and policy == original
