@@ -4,6 +4,8 @@
   const MAX_PAGE_SIZE = 100;
   const HISTORY_RANK_OFFSET = 1000000;
   const MAX_RESPONSE_BYTES = 256 * 1024;
+  const MAX_DISCOVERY_BYTES = 1024 * 1024;
+  const DISCOVERY_LANES = ["updates", "hot", "interested", "surprise"];
   const STORY_ID = /^story:[0-9a-f]{64}$/;
   const TOPIC_ID = /^[a-z0-9][a-z0-9-]{0,79}$/;
   const ORDERING_MODES = new Set([
@@ -99,10 +101,11 @@
         !Number.isSafeInteger(value.publication_seq) || value.publication_seq < 0 ||
         !Number.isSafeInteger(value.position) || value.position < 0 ||
         !ORDERING_MODES.has(value.ordering_mode) || !isObject(value.ordering_key) ||
-        !pageModes.includes(value.page_order_mode) || !isObject(value.next_cursor) ||
+        !pageModes.includes(value.page_order_mode) ||
+        (value.page_order_mode === "discovery" ? value.next_cursor !== null : !isObject(value.next_cursor)) ||
         encoder.encode(JSON.stringify(value.ordering_key)).length > 2048 || !isObject(value.score_components) ||
         encoder.encode(JSON.stringify(value.score_components)).length > 8192 ||
-        !Array.isArray(value.topic_ids) || value.topic_ids.length < 1 || value.topic_ids.length > 20 ||
+        !Array.isArray(value.topic_ids) || (!["discovery", "saved_at"].includes(value.page_order_mode) && value.topic_ids.length < 1) || value.topic_ids.length > 20 ||
         !value.topic_ids.every((topic) => TOPIC_ID.test(topic)) ||
         !isObject(value.topic_ranks) || Object.keys(value.topic_ranks).length > 100 ||
         !Object.entries(value.topic_ranks).every(([topic, position]) =>
@@ -124,7 +127,10 @@
         fail("The feed response was invalid.");
       }
     });
-    if (value.page_order_mode === "edition_rank") {
+    if (value.page_order_mode === "discovery") {
+      if (value.publication_seq !== 0 || value.position !== 0 || !exactFields(value.topic_ranks, []) ||
+          value.ordering_mode !== "weighted_total" || !exactFields(value.ordering_key, [])) fail("The discovery card was invalid.");
+    } else if (value.page_order_mode === "edition_rank") {
       if (!exactFields(value.next_cursor, ["after_position", "after_story_id"]) ||
           !Number.isSafeInteger(value.next_cursor.after_position) || value.next_cursor.after_position < 0 ||
           !STORY_ID.test(value.next_cursor.after_story_id)) fail("The feed response was invalid.");
@@ -156,6 +162,47 @@
   }
   function validateSavedPage(value, pageSize = MAX_PAGE_SIZE) {
     return validateCardPage(value, ["saved_at"], pageSize);
+  }
+  function validateDiscovery(value) {
+    const error = "The private edition response was invalid.";
+    if (!exactFields(value, ["schema_version", "status", "reason_code", "edition"]) || value.schema_version !== 1) fail(error);
+    if (value.status === "unavailable") {
+      if (value.edition !== null || !["no_private_edition", "edition_unavailable"].includes(value.reason_code)) fail(error);
+      return value;
+    }
+    const edition = value.edition;
+    const digest = (v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+    const integer = (v) => Number.isSafeInteger(v) && v >= 0;
+    if (value.status !== "ready" || value.reason_code !== "" ||
+        !exactFields(edition, ["edition_id", "generated_at", "code_revision", "policy_revision", "policy_digest", "snapshot_digest", "profile_revision", "receipt_digest", "stale", "disclosures", "shortfalls", "entries"]) ||
+        !boundedString(edition.edition_id, 256) || !validTimestamp(edition.generated_at) ||
+        typeof edition.code_revision !== "string" || !/^[0-9a-f]{40}$/.test(edition.code_revision) ||
+        !integer(edition.policy_revision) || edition.policy_revision < 1 || !integer(edition.profile_revision) ||
+        !digest(edition.policy_digest) || !digest(edition.snapshot_digest) || !digest(edition.receipt_digest) ||
+        typeof edition.stale !== "boolean" || !Array.isArray(edition.disclosures) || edition.disclosures.length > 30 ||
+        !edition.disclosures.every((v) => boundedString(v, 2000)) ||
+        !exactFields(edition.shortfalls, DISCOVERY_LANES) || !Object.values(edition.shortfalls).every(integer) ||
+        !Array.isArray(edition.entries) || edition.entries.length > MAX_PAGE_SIZE ||
+        encoder.encode(JSON.stringify(value)).length > MAX_DISCOVERY_BYTES) fail(error);
+    const seen = new Set();
+    edition.entries.forEach((entry, index) => {
+      if (!exactFields(entry, ["position", "primary_lane", "reason", "secondary_reasons", "card"]) ||
+          entry.position !== index + 1 || !DISCOVERY_LANES.includes(entry.primary_lane) ||
+          !boundedString(entry.reason, 2000) || !Array.isArray(entry.secondary_reasons) || entry.secondary_reasons.length > 3) fail(error);
+      const lanes = new Set([entry.primary_lane]);
+      entry.secondary_reasons.forEach((reason) => {
+        if (!exactFields(reason, ["lane", "reason"]) || !DISCOVERY_LANES.includes(reason.lane) ||
+            lanes.has(reason.lane) || !boundedString(reason.reason, 2000)) fail(error);
+        lanes.add(reason.lane);
+      });
+      validateStory(entry.card, ["discovery"]);
+      if (seen.has(entry.card.story_id)) fail(error);
+      seen.add(entry.card.story_id);
+      const components = ["relevance", "freshness", "trend", "editor_consensus", "deliberate_surprise", "diversity", "repetition_penalty", "source_fatigue_penalty", "final_score"];
+      if (!exactFields(entry.card.score_components, components) ||
+          !Object.values(entry.card.score_components).every((v) => typeof v === "number" && Number.isFinite(v))) fail(error);
+    });
+    return value;
   }
   function validateUpdates(value, pageSize = MAX_PAGE_SIZE) {
     if (!Array.isArray(value) || value.length > validatePageSize(pageSize)) fail("The updates response was invalid.");
@@ -200,9 +247,9 @@
     }
     return { status: "updated", interest_signal: value.signal, interest_revision: value.revision };
   }
-  async function boundedJson(response, message) {
+  async function boundedJson(response, message, byteLimit = MAX_RESPONSE_BYTES) {
     const text = await response.text();
-    if (encoder.encode(text).length > MAX_RESPONSE_BYTES) fail(message);
+    if (encoder.encode(text).length > byteLimit) fail(message);
     try { return JSON.parse(text); } catch (_) { fail(message); }
   }
   function validateApiConfig(config) {
@@ -215,7 +262,7 @@
   }
   function createApi(rawConfig, sessionProvider, fetchImpl = fetch) {
     const config = validateApiConfig(rawConfig);
-    async function rpc(name, body, validator, requiresAuth = false) {
+    async function rpc(name, body, validator, requiresAuth = false, byteLimit = MAX_RESPONSE_BYTES) {
       let session = null;
       try {
         session = await sessionProvider();
@@ -228,11 +275,11 @@
       if (session && boundedString(session.access_token, 16384)) headers.authorization = `Bearer ${session.access_token}`;
       const response = await fetchImpl(requestedUrl, {
         method: "POST", headers, body: JSON.stringify(body), credentials: "omit",
-        referrerPolicy: "no-referrer", redirect: "error",
+        referrerPolicy: "no-referrer", redirect: "error", cache: "no-store",
         signal: AbortSignal.timeout(15000),
       });
       if (response.redirected !== false || response.url !== requestedUrl) fail("The reader endpoint redirected unexpectedly.");
-      const payload = await boundedJson(response, "The reader response was invalid.");
+      const payload = await boundedJson(response, "The reader response was invalid.", byteLimit);
       if (!response.ok) {
         if (session && [401, 403].includes(response.status) && typeof window !== "undefined") {
           window.NewsCuratorAuth?.rejectSession?.(session);
@@ -240,13 +287,17 @@
         fail("The reader request failed.");
       }
       const result = validator(payload, Boolean(session));
-      if (session && ["feed_page", "saved_page"].includes(name) && typeof window !== "undefined") {
+      if (session && ["feed_page", "saved_page", "discovery_edition"].includes(name) && typeof window !== "undefined") {
         window.NewsCuratorAuth?.confirmSession?.(session);
       }
       return result;
     }
     return Object.freeze({
       latestPublication: () => rpc("latest_publication", {}, validateLatestPublication),
+      discoveryEdition: (editionId = null) => {
+        if (editionId !== null && !boundedString(editionId, 256)) fail("Invalid edition.");
+        return rpc("discovery_edition", { p_edition_id: editionId }, validateDiscovery, true, MAX_DISCOVERY_BYTES);
+      },
       feedPage: (topicId, cursor, pageSize) => rpc("feed_page", {
         p_topic_id: topicId === "__all__" ? null : topicId,
         p_order_mode: cursor ? cursor.order_mode : (topicId === "__all__" ? "history_freshness" : "edition_rank"),
@@ -514,7 +565,14 @@
     interest.dataset.fallbackTopicId = interest.dataset.topicId;
     const close = element("button", "shut", "Close");
     close.type = "button";
-    actions.append(read, save, interest, close);
+    actions.append(read, save);
+    if (row.topic_ids.length) actions.append(interest);
+    else {
+      const addInterest = element("a", "add-interest", "Add an interest");
+      addInterest.href = "/auth/callback/";
+      actions.append(addInterest);
+    }
+    actions.append(close);
     summary.append(actions);
     const reason = element("aside", "signal");
     reason.append(
@@ -562,7 +620,7 @@
   const contract = {
     actionTopic, applyInterestTopic, applyServerRank, applyServerState, beginStateMutation, createApi, createStoryCard, drainUpdates, effectiveTopic, finishStateMutation, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
     rankingReason, run, safeDestination,
-    validateFeedPage, validateLatestPublication, validateUpdates,
+    validateDiscovery, validateFeedPage, validateSavedPage, validateLatestPublication, validateUpdates,
   };
   const commonJs = typeof module !== "undefined" && module.exports;
   if (commonJs) {
@@ -636,6 +694,137 @@
     const authoritativeAllHistoryOrder = [];
     const authoritativeAllHistoryIds = new Set();
     const pendingUpdates = new Map();
+    const discoveryControls = document.getElementById("discovery-controls");
+    const discoveryStatus = document.getElementById("discovery-status");
+    const discoveryNotice = document.getElementById("discovery-notice");
+    const discoveryAccept = document.getElementById("discovery-accept");
+    let discoveryEdition = null;
+    let pendingDiscovery = null;
+    let discoveryLane = "updates";
+    let discoveryActive = false;
+    let discoveryRequest = 0;
+    let publicCards = [];
+    let discoverySection = null;
+    function discoveryMessage(message) { if (discoveryStatus) discoveryStatus.textContent = message; }
+    function setDiscoveryLane(lane) {
+      discoveryLane = lane;
+      if (discoverySection) discoverySection.dataset.discoverySelectedLane = lane;
+      discoveryControls?.querySelectorAll("[data-discovery-lane]").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.discoveryLane === lane && discoveryActive));
+      });
+      view.apply();
+      const count = discoveryEdition?.entries.filter((entry) => entry.primary_lane === lane).length || 0;
+      const emptyReasons = { updates: "No verified publisher changes are available in this edition.", hot: "No stories met the recent independent-coverage threshold.", interested: "No fresh stories matched your settled interests.", surprise: "No unseen stories outside your interests met the quality and importance checks." };
+      discoveryMessage(count ? `${count} ${count === 1 ? "story" : "stories"} in ${lane}.${discoveryEdition.stale ? " This edition is older than usual." : ""}` : emptyReasons[lane]);
+    }
+    function leaveDiscovery(clearEdition = false) {
+      discoveryRequest += 1;
+      if (discoveryActive) {
+        cards.forEach((card) => {
+          clearPrivateCardState(card);
+          view.removeCard(card);
+          card.replaceChildren();
+          [...card.attributes].forEach((attribute) => card.removeAttribute(attribute.name));
+          card.remove();
+        });
+        cards.clear();
+        discoverySection?.remove();
+        discoverySection = null;
+        publicCards.forEach(({ card, parent }) => {
+          parent.append(card); cards.set(card.dataset.storyId, card); view.addCard(card);
+        });
+        publicCards = [];
+      }
+      discoveryActive = false;
+      if (clearEdition) {
+        discoveryEdition = null; pendingDiscovery = null;
+        if (discoveryNotice) discoveryNotice.hidden = true;
+      }
+      discoveryControls?.querySelectorAll("[data-discovery-lane]").forEach((button) => button.setAttribute("aria-pressed", "false"));
+      view.apply(); refreshLoadButton();
+    }
+    function showDiscovery(edition) {
+      if (!signedIn() || !discoveryControls) return;
+      leaveDiscovery();
+      discoveryEdition = edition;
+      pendingDiscovery = null;
+      if (discoveryNotice) discoveryNotice.hidden = true;
+      publicCards = [...cards.values()].map((card) => ({ card, parent: card.parentNode }));
+      publicCards.forEach(({ card }) => { view.removeCard(card); card.remove(); });
+      cards.clear();
+      discoveryActive = true;
+      discoverySection = element("section", "topic-section discovery-section");
+      discoverySection.dataset.section = "__discovery__";
+      discoverySection.dataset.discoverySelectedLane = discoveryLane;
+      const grid = element("div", "grid"); discoverySection.append(grid);
+      document.getElementById("sections").append(discoverySection);
+      edition.entries.forEach((entry) => {
+        const card = createStoryCard(entry.card, selectedTopic(), topicSlugForId, topicIdForSlug(selectedTopic()));
+        card.dataset.discoveryLane = entry.primary_lane;
+        card.dataset.discoveryPosition = String(entry.position);
+        const signals = card.querySelector(".signal");
+        signals.replaceChildren(element("b", "", "Why this story"), element("span", "", entry.reason));
+        entry.secondary_reasons.forEach((reason) => signals.append(element("p", "secondary-reason", `${reason.lane}: ${reason.reason}`)));
+        cards.set(entry.card.story_id, card); grid.append(card); view.addCard(card);
+      });
+      discoveryControls.hidden = false;
+      if (selectedTopic() === "__saved__") view.setTab?.("__all__");
+      setDiscoveryLane(discoveryLane); refreshStateControls(); refreshInterestControls(); refreshLoadButton();
+    }
+    async function fetchDiscovery(initial = false) {
+      if (!discoveryControls || !signedIn()) return;
+      const epoch = authEpoch, request = ++discoveryRequest;
+      try {
+        const response = await api.discoveryEdition();
+        if (epoch !== authEpoch || request !== discoveryRequest || !signedIn()) return;
+        discoveryControls.hidden = false;
+        if (response.status !== "ready") {
+          leaveDiscovery(true);
+          discoveryMessage("Your private discovery edition is not ready yet. Public stories are available.");
+          return;
+        }
+        if (!discoveryEdition && initial) {
+          discoveryLane = "updates"; view.setTab?.("__all__"); showDiscovery(response.edition);
+        } else if (discoveryEdition?.edition_id !== response.edition.edition_id) {
+          pendingDiscovery = response.edition;
+          if (discoveryNotice) discoveryNotice.hidden = false;
+        }
+      } catch (_) {
+        if (epoch === authEpoch && request === discoveryRequest && signedIn()) {
+          discoveryControls.hidden = false;
+          discoveryMessage("Your private edition could not be checked. Public stories remain available.");
+        }
+      }
+    }
+    async function openStoredDiscovery(editionId, lane) {
+      const epoch = authEpoch, request = ++discoveryRequest;
+      try {
+        const response = await api.discoveryEdition(editionId);
+        if (epoch !== authEpoch || request !== discoveryRequest || !signedIn()) return;
+        if (response.status !== "ready") {
+          leaveDiscovery(true);
+          discoveryMessage("That private edition is no longer available. Public stories are available.");
+          return;
+        }
+        if (response.edition.edition_id !== editionId) fail("The requested edition changed.");
+        discoveryLane = lane; showDiscovery(response.edition);
+      } catch (_) {
+        if (epoch === authEpoch && request === discoveryRequest) discoveryMessage("That private edition could not be loaded. Try again.");
+      }
+    }
+    discoveryControls?.addEventListener("click", (event) => {
+      const lane = event.target.closest?.("[data-discovery-lane]")?.dataset.discoveryLane;
+      if (lane && DISCOVERY_LANES.includes(lane)) {
+        if (!discoveryEdition) { void fetchDiscovery(true); return; }
+        discoveryLane = lane;
+        if (!discoveryActive) void openStoredDiscovery(discoveryEdition.edition_id, lane); else setDiscoveryLane(lane);
+      }
+      if (event.target.closest?.("[data-discovery-public]")) {
+        leaveDiscovery(); discoveryMessage("Showing public stories.");
+        void hydrate(true).catch(() => announce("Public stories could not be synced."));
+      }
+    });
+    discoveryAccept?.addEventListener("click", () => { if (pendingDiscovery) void openStoredDiscovery(pendingDiscovery.edition_id, discoveryLane); });
 
     function announce(message) { status.textContent = message; }
     function signedIn() { try { return auth.hasSessionCandidate(); } catch (_) { return false; } }
@@ -650,7 +839,7 @@
     function selectedTopic() { return view.currentTab(); }
     function refreshLoadButton() {
       const topic = selectedTopic();
-      loadButton.hidden = initializing || !latest || exhausted.has(topic) ||
+      loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
       loadButton.disabled = [...pageRequests].some((request) =>
         request.topic === topic && request.epoch === authEpoch);
@@ -670,7 +859,7 @@
       }
       return card.newsCuratorHydratedTopics;
     }
-    function stateReady(card) { return hydratedTopics(card).has(selectedTopic()); }
+    function stateReady(card) { return (discoveryActive && Boolean(card.dataset.discoveryLane) && signedIn()) || hydratedTopics(card).has(selectedTopic()); }
     function refreshStateControls() {
       cards.forEach((card) => {
         const ready = stateReady(card);
@@ -740,6 +929,9 @@
     async function handleLogout() {
       sessionWasPresent = false;
       authEpoch += 1;
+      leaveDiscovery(true);
+      if (discoveryControls) discoveryControls.hidden = true;
+      discoveryMessage("");
       auth.clearSession();
       document.querySelectorAll(".state-action").forEach((button) => { button.disabled = true; });
       cards.forEach((card, storyId) => {
@@ -779,6 +971,9 @@
     }
     function invalidateHydrationForSession() {
       authEpoch += 1;
+      leaveDiscovery(true);
+      if (discoveryControls) discoveryControls.hidden = true;
+      discoveryMessage("");
       document.querySelectorAll(".state-action").forEach((button) => { button.disabled = true; });
       cursors.clear();
       exhausted.clear();
@@ -937,6 +1132,7 @@
       });
     }
     async function hydrate(force = false) {
+      if (discoveryActive) return;
       const topic = selectedTopic();
       if (!force && hydrated.has(topic)) return;
       if (topic === "__saved__" && !signedIn()) {
@@ -953,7 +1149,7 @@
         const rows = topic === "__saved__"
           ? await api.savedPage(null, latest.page_size)
           : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
-        if (requestEpoch !== authEpoch) return;
+        if (requestEpoch !== authEpoch || discoveryActive) return;
         mergeRows(rows, true, topic);
         const cursor = topic === "__saved__"
           ? nextSavedCursor(rows, latest.page_size)
@@ -986,12 +1182,12 @@
         const currentCursor = cursors.get(topic) || null;
         if (topic === "__saved__") {
           rows = await api.savedPage(currentCursor, latest.page_size);
-          if (requestEpoch !== authEpoch) return;
+          if (requestEpoch !== authEpoch || discoveryActive) return;
           const cursor = nextSavedCursor(rows, latest.page_size);
           if (cursor) cursors.set(topic, cursor);
         } else {
           rows = await api.feedPage(topicIdForSlug(topic), currentCursor, latest.page_size);
-          if (requestEpoch !== authEpoch) return;
+          if (requestEpoch !== authEpoch || discoveryActive) return;
           const cursor = nextFeedCursor(rows, latest.initial_history_cursor, currentCursor, latest.page_size);
           if (cursor) cursors.set(topic, cursor); else exhausted.add(topic);
         }
@@ -1136,6 +1332,7 @@
     });
     document.querySelectorAll(".chip").forEach((chip) => {
       chip.addEventListener("click", () => {
+        if (selectedTopic() === "__saved__" && discoveryActive) leaveDiscovery();
         announce("");
         refreshLoadButton();
         refreshStateControls();
@@ -1153,6 +1350,8 @@
         return;
       }
       sessionWasPresent = true;
+      invalidateHydrationForSession();
+      void fetchDiscovery(true);
       if (!latest) {
         if (!initializing) window.location.reload();
         return;
@@ -1170,6 +1369,7 @@
             auth.acceptSession(event.data.session);
             sessionWasPresent = true;
             invalidateHydrationForSession();
+            void fetchDiscovery(true);
             void hydrate(true).catch(() => {
               auth.accountUnavailable?.();
               announce("Sign-in could not be checked. Use Check sign-in again to retry.");
@@ -1193,6 +1393,7 @@
     });
     try {
       latest = await api.latestPublication();
+      void fetchDiscovery(true);
       if (!latest) {
         loadButton.hidden = true;
         auth.accountUnavailable?.();
@@ -1202,6 +1403,7 @@
       loadButton.textContent = `Load ${latest.page_size} more`;
       publicationSeq = latest.publication_seq;
       const poll = async () => {
+        void fetchDiscovery(false);
         try {
           const current = await api.latestPublication();
           if (!current || current.publication_seq <= publicationSeq) return;

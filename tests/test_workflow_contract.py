@@ -154,7 +154,7 @@ def test_secret_jobs_are_read_only_and_secret_steps_are_main_only() -> None:
         assert "pages" not in permissions
         assert all("cache" not in step.get("with", {}) for step in _steps(job))
     build = jobs["build"]
-    assert build["permissions"] == {"contents": "read"}
+    assert build["permissions"] == {"contents": "read", "actions": "read"}
     assert _environment_name(build) == "personalization"
     finalizer = jobs["finalize-archive"]
     assert finalizer["permissions"] == {"contents": "read"}
@@ -207,7 +207,7 @@ def test_permissions_are_bound_to_the_exact_jobs() -> None:
     jobs = _jobs()
     assert jobs["newsletter"]["permissions"] == {"contents": "read"}
     assert jobs["translation"]["permissions"] == {"contents": "read", "id-token": "write"}
-    assert jobs["build"]["permissions"] == {"contents": "read"}
+    assert jobs["build"]["permissions"] == {"contents": "read", "actions": "read"}
     assert jobs["finalize-archive"]["permissions"] == {"contents": "read"}
     assert jobs["persist-state"]["permissions"] == {"contents": "write"}
     assert jobs["deploy"]["permissions"] == {"pages": "write", "id-token": "write"}

@@ -20,6 +20,7 @@ on:
     paths:
       - "topics.yaml"
       - "sources.yaml"
+      - "config/**"
       - "curator/**"
       - "scripts/**"
       - "static/**"
@@ -259,6 +260,7 @@ jobs:
     if: ${{ always() }}
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -287,6 +289,34 @@ jobs:
         with:
           name: newsletter-artifact
           path: .
+
+      - name: Restore public discovery baseline
+        if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && vars.NEWS_CURATOR_DISCOVERY_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          python scripts/fetch_discovery_baseline.py --root .
+          --source-snapshot "$RUNNER_TEMP/source-snapshot.json"
+          --output "$RUNNER_TEMP/discovery-previous-source.json"
+
+      - name: Materialize private discovery edition
+        if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && vars.NEWS_CURATOR_DISCOVERY_ENABLED == 'true' }}
+        # A refused candidate retains the last passing private edition. This
+        # step emits aggregate outcomes only; no private artifact is uploaded.
+        continue-on-error: true
+        env:
+          NEWS_CURATOR_OWNER_USER_ID: ${{ secrets.NEWS_CURATOR_OWNER_USER_ID }}
+          NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
+          NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
+        run: |
+          previous_args=()
+          if [ -f "$RUNNER_TEMP/discovery-previous-source.json" ]; then
+            previous_args=(--previous-source-snapshot "$RUNNER_TEMP/discovery-previous-source.json")
+          fi
+          python scripts/materialize_discovery.py --root . \
+            --source-snapshot "$RUNNER_TEMP/source-snapshot.json" \
+            --code-revision "$GITHUB_SHA" "${previous_args[@]}"
 
       - name: Materialize saved-interest ranking
         if: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' }}
@@ -389,9 +419,15 @@ jobs:
           PY
 
       - name: Build the page
+        env:
+          DISCOVERY_ENABLED: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && vars.NEWS_CURATOR_DISCOVERY_ENABLED == 'true' }}
         run: |
           translation_args=()
           interest_args=()
+          discovery_args=()
+          if [ "$DISCOVERY_ENABLED" = "true" ]; then
+            discovery_args=(--discovery-enabled)
+          fi
           if [ -f "$RUNNER_TEMP/validated-translation.json" ]; then
             translation_args=(--translation-artifact "$RUNNER_TEMP/validated-translation.json")
           fi
@@ -405,6 +441,7 @@ jobs:
             --archive-candidate "$RUNNER_TEMP/archive-candidate.json" \
             --build-nonce "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT" \
             --commit-sha "$GITHUB_SHA" \
+            "${discovery_args[@]}" \
             "${interest_args[@]}" \
             "${translation_args[@]}"
 
