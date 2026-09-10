@@ -705,6 +705,45 @@
     let discoveryRequest = 0;
     let publicCards = [];
     let discoverySection = null;
+    const editionMeta = document.querySelector('.edition-meta');
+    const editionMetaSpans = editionMeta ? [...editionMeta.querySelectorAll('span')] : [];
+    const publicEditionMeta = editionMetaSpans.map((span) => span.textContent);
+    const publicStoryCount = editionMetaSpans.find((span) => / stories?$/.test(span.textContent.trim()));
+    const staleMeta = document.getElementById('stale');
+    const publicStale = staleMeta ? {
+      built: staleMeta.dataset.built, text: staleMeta.textContent, hidden: staleMeta.hidden,
+      previousHidden: staleMeta.previousElementSibling?.hidden,
+    } : null;
+    function editionTime(iso) {
+      const formatted = new Intl.DateTimeFormat('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric',
+        minute: '2-digit', timeZoneName: 'short',
+        timeZone: editionMeta?.dataset.timezone || 'America/New_York',
+      }).format(new Date(iso));
+      return formatted.replace(/^([^,]+), (\d{4}), (.+)$/, '$1, $2 at $3');
+    }
+    function showPrivateEditionMeta(edition) {
+      if (editionMetaSpans[0]) editionMetaSpans[0].textContent = `Built ${editionTime(edition.generated_at)}`;
+      if (publicStoryCount) {
+        const count = edition.entries.length;
+        publicStoryCount.textContent = `${count} ${count === 1 ? 'story' : 'stories'}`;
+      }
+      if (staleMeta) {
+        staleMeta.dataset.built = edition.generated_at;
+        staleMeta.textContent = '';
+        staleMeta.hidden = true;
+        if (staleMeta.previousElementSibling) staleMeta.previousElementSibling.hidden = true;
+      }
+    }
+    function restorePublicEditionMeta() {
+      editionMetaSpans.forEach((span, index) => { span.textContent = publicEditionMeta[index]; });
+      if (staleMeta && publicStale) {
+        staleMeta.dataset.built = publicStale.built;
+        staleMeta.textContent = publicStale.text;
+        staleMeta.hidden = publicStale.hidden;
+        if (staleMeta.previousElementSibling) staleMeta.previousElementSibling.hidden = publicStale.previousHidden;
+      }
+    }
     function discoveryMessage(message) { if (discoveryStatus) discoveryStatus.textContent = message; }
     function setDiscoveryLane(lane) {
       discoveryLane = lane;
@@ -736,6 +775,7 @@
         publicCards = [];
       }
       discoveryActive = false;
+      restorePublicEditionMeta();
       if (clearEdition) {
         discoveryEdition = null; pendingDiscovery = null;
         if (discoveryNotice) discoveryNotice.hidden = true;
@@ -747,6 +787,7 @@
       if (!signedIn() || !discoveryControls) return;
       leaveDiscovery();
       discoveryEdition = edition;
+      showPrivateEditionMeta(edition);
       pendingDiscovery = null;
       if (discoveryNotice) discoveryNotice.hidden = true;
       publicCards = [...cards.values()].map((card) => ({ card, parent: card.parentNode }));

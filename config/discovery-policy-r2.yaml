@@ -15,6 +15,7 @@ gates:
   interest_threshold: 0.35
   freshness_half_life_hours: 12
   cold_start: topic_config_match
+  cold_start_excluded_topic_ids: [trending]
 constraints:
   max_per_source: 3
   max_per_aggregator: 2

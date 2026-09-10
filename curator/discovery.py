@@ -96,7 +96,8 @@ def _validate_discovery_policy(value: Mapping) -> dict:
     for value in p['windows'].values():
         _number(value, low=0.001, high=8760)
     _keys(p['gates'], ('hot_min_sources', 'surprise_min_sources', 'min_source_weight',
-                       'interest_threshold', 'freshness_half_life_hours', 'cold_start'))
+                       'interest_threshold', 'freshness_half_life_hours', 'cold_start',
+                       'cold_start_excluded_topic_ids'))
     for name in ('hot_min_sources', 'surprise_min_sources'):
         _number(p['gates'][name], low=2, high=1000, integer=True)
     _number(p['gates']['min_source_weight'])
@@ -104,6 +105,11 @@ def _validate_discovery_policy(value: Mapping) -> dict:
     _number(p['gates']['freshness_half_life_hours'], low=0.001)
     if p['gates']['cold_start'] not in ('unavailable', 'topic_config_match'):
         raise DiscoveryError('discovery_cold_start')
+    excluded_topics = p['gates']['cold_start_excluded_topic_ids']
+    if (not isinstance(excluded_topics, list)
+            or not all(isinstance(value, str) and value.strip() == value and value for value in excluded_topics)
+            or len(set(excluded_topics)) != len(excluded_topics)):
+        raise DiscoveryError('discovery_cold_start_excluded_topics')
     _keys(p['constraints'], ('max_per_source', 'max_per_aggregator', 'max_per_topic',
                             'max_per_source_window', 'max_appearances'))
     for value in p['constraints'].values():
@@ -239,10 +245,30 @@ def _score(raw, policy):
     return result
 
 
-def _select(candidates, policy):
-    counts, topics = Counter(), Counter()
+def _selection_reason(row, constraints, counts, topics, display_groups, *, source_diversity_cap=None,
+                      topic_diversity_cap=None):
+    source = row['independent_source']
+    limit = constraints['max_per_aggregator'] if row['is_aggregator'] else constraints['max_per_source']
+    if row['display_cluster_id'] in display_groups:
+        return 'duplicate_display_cluster'
+    if counts[source] >= limit:
+        return 'source_cap'
+    if source_diversity_cap is not None and counts[source] >= source_diversity_cap:
+        return 'source_diversity_cap'
+    if any(topics[t] >= constraints['max_per_topic'] for t in row['topic_ids']):
+        return 'topic_cap'
+    if topic_diversity_cap is not None and any(topics[t] >= topic_diversity_cap for t in row['topic_ids']):
+        return 'topic_diversity_cap'
+    if row['history_source_count'] is not None and row['history_source_count'] + counts[source] >= constraints['max_per_source_window']:
+        return 'source_window_cap'
+    if row['history_story_count'] is not None and row['history_story_count'] >= constraints['max_appearances'] and 'updates' not in row['lane_scores']:
+        return 'repetition_cap'
+    return ''
+
+
+def _select(candidates, policy, *, source_diversity_cap=None, topic_diversity_cap=None):
+    counts, topics, display_groups = Counter(), Counter(), set()
     selected, shortfalls, rejected = [], {}, []
-    display_groups = set()
     for lane in policy['lane_priority']:
         pool = sorted((r for r in candidates if r['primary_lane'] == lane),
                       key=lambda r: (-r['components']['final_score'], r['story_id']))
@@ -250,31 +276,103 @@ def _select(candidates, policy):
         for row in pool:
             if filled >= policy['lane_quotas'][lane]:
                 break
-            source = row['independent_source']
             constraints = policy['constraints']
-            limit = constraints['max_per_aggregator'] if row['is_aggregator'] else constraints['max_per_source']
-            reason = ''
-            if row['display_cluster_id'] in display_groups:
-                reason = 'duplicate_display_cluster'
-            elif counts[source] >= limit:
-                reason = 'source_cap'
-            elif any(topics[t] >= constraints['max_per_topic'] for t in row['topic_ids']):
-                reason = 'topic_cap'
-            elif row['history_source_count'] is not None and row['history_source_count'] + counts[source] >= constraints['max_per_source_window']:
-                reason = 'source_window_cap'
-            elif row['history_story_count'] is not None and row['history_story_count'] >= constraints['max_appearances'] and 'updates' not in row['lane_scores']:
-                reason = 'repetition_cap'
+            reason = _selection_reason(
+                row, constraints, counts, topics, display_groups,
+                source_diversity_cap=source_diversity_cap, topic_diversity_cap=topic_diversity_cap)
             if reason:
                 rejected.append({'story_id': row['story_id'], 'reason': reason})
                 skipped = True
                 continue
             selected.append({**row, 'position': len(selected) + 1, 'backfilled': skipped})
             display_groups.add(row['display_cluster_id'])
-            counts[source] += 1
+            counts[row['independent_source']] += 1
             topics.update(row['topic_ids'])
             filled += 1
         shortfalls[lane] = policy['lane_quotas'][lane] - filled
     return selected, shortfalls, rejected
+
+
+def _backfill_distinct(entries, candidates, policy, rejected, bands, *, source_diversity_cap, topic_diversity_cap):
+    """Replace one lowest-ranked duplicate with an eligible new identity."""
+    constraints = policy['constraints']
+    selected_ids = {row['story_id'] for row in entries}
+    counts = Counter(row['independent_source'] for row in entries)
+    topics = Counter(topic for row in entries for topic in row['topic_ids'])
+    display_groups = {row['display_cluster_id'] for row in entries}
+    for band_name, reason in (('source_diversity', 'source_diversity_distinct'),
+                              ('topic_diversity', 'topic_diversity_distinct')):
+        band = next(item for item in bands if item['band'] == band_name)
+        if band['verdict'] != 'FAIL' or band['distinct'] >= band['min_distinct']:
+            continue
+        targets = sorted(entries, key=lambda row: (row['components']['final_score'], row['story_id']))
+        for target in targets:
+            duplicate = counts[target['independent_source']] > 1 if band_name == 'source_diversity' else any(
+                topics[topic] > 1 for topic in target['topic_ids'])
+            if not duplicate:
+                continue
+            reduced_counts, reduced_topics = counts.copy(), topics.copy()
+            reduced_groups = display_groups - {target['display_cluster_id']}
+            reduced_counts[target['independent_source']] -= 1
+            reduced_topics.subtract(target['topic_ids'])
+            pool = sorted((row for row in candidates if row['primary_lane'] == target['primary_lane']
+                           and row['story_id'] not in selected_ids),
+                          key=lambda row: (-row['components']['final_score'], row['story_id']))
+            for replacement in pool:
+                if band_name == 'source_diversity':
+                    prospective_distinct = len({source for source, count in reduced_counts.items() if count > 0}
+                                               | {replacement['independent_source']})
+                else:
+                    prospective_distinct = len({topic for topic, count in reduced_topics.items() if count > 0}
+                                               | set(replacement['topic_ids']))
+                improves = prospective_distinct > band['distinct']
+                if not improves or _selection_reason(
+                        replacement, constraints, reduced_counts, reduced_topics, reduced_groups,
+                        source_diversity_cap=source_diversity_cap,
+                        topic_diversity_cap=topic_diversity_cap):
+                    continue
+                replacement = {**replacement, 'position': target['position'], 'backfilled': True}
+                replaced = [replacement if row['story_id'] == target['story_id'] else row for row in entries]
+                kept_rejections = [item for item in rejected if item['story_id'] != replacement['story_id']]
+                return replaced, [*kept_rejections, {'story_id': target['story_id'], 'reason': reason}], True
+    return entries, rejected, False
+
+
+def _final_diversity_caps(entries, bands):
+    """Return stricter per-source/topic caps required by failed final bands."""
+    caps = {}
+    for band_name, cap_name in (('source_diversity', 'source'), ('topic_diversity', 'topic')):
+        band = next(item for item in bands if item['band'] == band_name)
+        if (band['verdict'] == 'FAIL' and band['achieved'] is not None
+                and band['achieved'] > band['cap']):
+            cap = math.floor(len(entries) * band['cap'])
+            if cap > 0 or (cap_name == 'topic' and band['min_distinct'] == 0):
+                caps[cap_name] = cap
+    return caps
+
+
+def _select_with_final_band_backfill(candidates, policy, history_available):
+    """Backfill final share-band rejections from each story's primary lane."""
+    entries, shortfalls, rejected = _select(candidates, policy)
+    bands, verdict = _bands(entries, policy, history_available)
+    applied = {'source': None, 'topic': None}
+    for _ in range(policy['size']):
+        proposed = _final_diversity_caps(entries, bands)
+        next_caps = {name: min(value, applied[name]) if applied[name] is not None else value
+                     for name, value in proposed.items()}
+        if any(applied[name] != value for name, value in next_caps.items()):
+            applied.update(next_caps)
+            entries, shortfalls, rejected = _select(
+                candidates, policy, source_diversity_cap=applied['source'],
+                topic_diversity_cap=applied['topic'])
+            bands, verdict = _bands(entries, policy, history_available)
+        entries, rejected, swapped = _backfill_distinct(
+            entries, candidates, policy, rejected, bands,
+            source_diversity_cap=applied['source'], topic_diversity_cap=applied['topic'])
+        if not swapped and not any(applied[name] != value for name, value in next_caps.items()):
+            return entries, shortfalls, rejected, bands, verdict
+        bands, verdict = _bands(entries, policy, history_available)
+    return entries, shortfalls, rejected, bands, verdict
 
 
 def _bands(entries, policy, history_available):
@@ -314,7 +412,10 @@ def _derive(observations, earlier, topic_matches, p, profile_input, history_rows
         representative = min(valid, key=lambda r: (r['is_aggregator'], -r['source_weight'], r['source_id'], r['evidence_id']))
         age = (now - _time(representative['published_at'])).total_seconds()/3600
         topics = topic_matches[story_id]
-        affinity = profile_input['scores'].get(story_id, 0.0) if profile_available else float(bool(topics)) if p['gates']['cold_start'] == 'topic_config_match' else 0.0
+        subject_topics = topics if profile_available else [
+            topic for topic in topics if topic not in p['gates']['cold_start_excluded_topic_ids']
+        ]
+        affinity = profile_input['scores'].get(story_id, 0.0) if profile_available else float(bool(subject_topics)) if p['gates']['cold_start'] == 'topic_config_match' else 0.0
         count_story = None if history_rows is None else sum(r['story_id'] == story_id and (now-_time(r['shown_at'])).total_seconds()/3600 <= p['windows']['repetition'] for r in history_rows)
         count_novelty = None if history_rows is None else sum(r['story_id'] == story_id for r in history_rows)
         count_source = None if history_rows is None else sum(r['source_id'] == representative['independent_source'] and (now-_time(r['shown_at'])).total_seconds()/3600 <= p['windows']['source_fatigue'] for r in history_rows)
@@ -330,12 +431,12 @@ def _derive(observations, earlier, topic_matches, p, profile_input, history_rows
             reasons['hot'] = f"Exact-URL coverage on {len(hot)} independent sources within {p['windows']['hot']} hours, with distinct publication times. This measures coverage reach, not audience popularity."
         if affinity >= p['gates']['interest_threshold'] and age <= p['windows']['interested']:
             lanes['interested'] = affinity
-            reasons['interested'] = 'Matches the supplied saved-interest profile.' if profile_available else 'Matches shared configured topics; no personal profile is available.'
-        outside = affinity < p['gates']['interest_threshold'] if profile_available else p['gates']['cold_start'] == 'topic_config_match' and not topics
+            reasons['interested'] = 'Matches the supplied saved-interest profile.' if profile_available else 'Matches shared configured subject topics; no personal profile is available.'
+        outside = affinity < p['gates']['interest_threshold'] if profile_available else p['gates']['cold_start'] == 'topic_config_match' and not subject_topics
         quality = any(not r['is_aggregator'] and r['eligible_source'] and r['source_weight'] >= p['gates']['min_source_weight'] and not r['time_is_estimated'] and _time(r['published_at']) <= _time(r['observed_at']) and 0 <= (now-_time(r['published_at'])).total_seconds()/3600 <= p['windows']['surprise'] for r in rows)
         if outside and quality and age <= p['windows']['surprise'] and count_novelty == 0 and len(broad) >= p['gates']['surprise_min_sources']:
             lanes['surprise'] = 1.0 - affinity
-            reasons['surprise'] = ('Outside strong saved-interest matches' if profile_available else 'Outside shared configured topics') + f"; qualified publisher evidence and {len(broad)} independent sources within {p['windows']['surprise']} hours provide an importance proxy. Not present in the supplied edition history."
+            reasons['surprise'] = ('Outside strong saved-interest matches' if profile_available else 'Outside shared configured subject topics') + f"; qualified publisher evidence and {len(broad)} independent sources within {p['windows']['surprise']} hours provide an importance proxy. Not present in the supplied edition history."
         if not lanes:
             continue
         primary = next(lane for lane in p['lane_priority'] if lane in lanes)
@@ -372,8 +473,8 @@ def _derive(observations, earlier, topic_matches, p, profile_input, history_rows
         topic_rarity = sum(1/topic_frequency[t] for t in row['topic_ids'])/len(row['topic_ids']) if row['topic_ids'] else 0
         row['raw_components']['diversity'] = (source_rarity + topic_rarity)/2
         row['components'] = _score(row['raw_components'], p)
-    entries, shortfalls, rejected = _select(prepared, p)
-    bands, verdict = _bands(entries, p, history_rows is not None)
+    entries, shortfalls, rejected, bands, verdict = _select_with_final_band_backfill(
+        prepared, p, history_rows is not None)
     return prepared, entries, shortfalls, rejected, bands, verdict
 
 

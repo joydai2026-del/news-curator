@@ -23,6 +23,9 @@ from curator.source_snapshot import (  # noqa: E402
     load_source_snapshot, snapshot_config_digest,
 )
 
+LOCAL_HISTORY_MAX_BYTES = 16 * 1024 * 1024
+LOCAL_HISTORY_MAX_ROWS = 10_000
+
 
 def _write_new(path: Path, payload: dict) -> None:
     """Create a private file without following or overwriting an existing path."""
@@ -30,6 +33,18 @@ def _write_new(path: Path, payload: dict) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
         output.write(data + '\n')
+
+
+def _load_local_history(path: Path) -> list[dict]:
+    """Load a bounded, caller-supplied local history list without logging it."""
+    if path.stat().st_size > LOCAL_HISTORY_MAX_BYTES:
+        raise ValueError('history exceeds size limit')
+    value = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(value, list) or len(value) > LOCAL_HISTORY_MAX_ROWS:
+        raise ValueError('history must be a bounded JSON list')
+    if any(not isinstance(row, dict) for row in value):
+        raise ValueError('history rows must be JSON objects')
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,6 +56,15 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument('--previous-snapshot', type=Path)
     build.add_argument('--policy', type=Path)
     build.add_argument('--language', choices=('en', 'zh'), default='en')
+    history_controls = build.add_mutually_exclusive_group()
+    history_controls.add_argument(
+        '--first-local-edition', action='store_true',
+        help='Declare an empty history for this local privacy scope only.',
+    )
+    history_controls.add_argument(
+        '--history', type=Path,
+        help='Read a local JSON list of {story_id, source_id, shown_at} rows.',
+    )
     build.add_argument('--output', type=Path, required=True)
     verify = commands.add_parser('verify', help='Verify deterministic receipt replay without recollecting.')
     verify.add_argument('--receipt', type=Path, required=True)
@@ -78,9 +102,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         policy_path = args.policy or root / 'config/discovery-policy-r2.yaml'
         policy = load_discovery_policy(policy_path)
+        history = None
+        first_edition = None
+        if args.first_local_edition:
+            history = []
+            first_edition = True
+        elif args.history:
+            history = _load_local_history(args.history)
+            first_edition = False
         receipt = build_discovery(
             cfg, snapshot, policy, previous_snapshot=previous,
-            now=clock, language=args.language,
+            now=clock, language=args.language, history=history,
+            first_edition=first_edition,
         )
         replay_discovery(receipt)
         _write_new(args.output, receipt)

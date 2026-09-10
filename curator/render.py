@@ -1058,7 +1058,7 @@ def render_html(
       <div class="eyebrow">Today's edition</div>
       <h1>Your reading companion</h1>
       <p>Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.</p>
-      <div class="edition-meta">
+      <div class="edition-meta" data-timezone="{_e(timezone_name)}">
         <span>Built {_e(stamp)}</span><span>scheduled hourly</span><span>{total} stories</span>{stale}
       </div>
     </header>

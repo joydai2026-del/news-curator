@@ -12,7 +12,7 @@ python scripts/discovery_cli.py build --root . \
 python scripts/discovery_cli.py verify --receipt /path/to/new-private-receipt.json
 ```
 
-These are local historical source replays. Missing history is unknown, not empty. The CLI cannot settle an owner edition and its verification proves internal consistency, not source authenticity. Output is created with mode600 and never overwrites an existing file. The committed fixture is captured public news; controlled negative test mutations must not become a news demonstration.
+These are local historical source replays. Missing history is unknown, not empty. To declare an explicitly empty history for this local privacy scope, add `--first-local-edition`; this does not claim an account's or owner's history. To supply local history, add `--history /path/to/history.json`, a bounded JSON list whose rows contain `story_id`, `source_id`, and `shown_at`. Both controls are local inputs only and are mutually exclusive. The CLI cannot settle an owner edition and its verification proves internal consistency, not source authenticity. Output is created with mode600 and never overwrites an existing file. The committed fixture is captured public news; controlled negative test mutations must not become a news demonstration.
 
 ## Private serving path
 
@@ -32,11 +32,13 @@ This CLI uses the existing AgentAuth and macOS Keychain session. Topic-free Surp
 ## Configuration and release
 
 - Ranking and lanes: `config/discovery-policy-r2.yaml`. R1 remains frozen. A failed band never silently becomes an exception or a filled quota.
+- Cold-start affinity contract: configured non-subject topic IDs, initially `trending`, do not grant interest affinity. Their topic matches remain available for topic chips and evidence, so this rule does not remove or rewrite topic labels.
+- Source/topic share limits use the actual selected edition as their denominator. Deterministic same-lane backfill preserves quality constraints and records honest shortages; eligible same-lane replacements repair minimum source/topic variety.
 - Database storage: `discovery_storage_policy`. Normal quotas and limits remain configurable within the common 100-entry, 1 MiB read safety envelope. The larger private evidence payload has its own limit.
 - Deployment migration: `supabase/migrations/202609090001_discovery_lanes.sql`, after the existing M1 migrations.
 - Feature switch: repository variable `NEWS_CURATOR_DISCOVERY_ENABLED=true`, together with existing `NEWS_CURATOR_PERSONALIZATION_ENABLED=true`. Defaults off. Browser rendering can be tested locally with `--discovery-enabled`.
 - Rollback: disable the discovery feature switch and rebuild the existing public M1 page. Keep private tables and receipts for recovery. Do not delete records as a rollback shortcut.
 
-Release is separate from build completion. Require reviewed code, PostgreSQL17.11 CI, a genuine owner-bound passing edition and live owner read/save verification before acceptance. The captured source-only edition in the build record fails its bands and is not a release candidate.
+Release is separate from build completion. Require reviewed code, PostgreSQL17.11 CI, a genuine owner-bound passing edition and live owner read/save verification before acceptance. The latest captured source-only local edition in the build record passes all seven unchanged bands. That engine proof is separate from a real owner settlement and release acceptance.
 
 Baseline retrieval uses GitHub's documented [workflow runs API](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow) and [artifact download command](https://cli.github.com/manual/gh_run_download).

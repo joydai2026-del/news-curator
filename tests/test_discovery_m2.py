@@ -14,8 +14,10 @@ from pathlib import Path
 import pytest
 
 from curator.config import Category, Config
-from curator.discovery import (DiscoveryError, build_discovery, load_discovery_policy,
-                               replay_discovery, validate_discovery_policy)
+from curator.discovery import (DiscoveryError, _bands, _select,
+                               _select_with_final_band_backfill, build_discovery,
+                               load_discovery_policy, replay_discovery,
+                               validate_discovery_policy)
 from curator.models import TierResult
 from curator.source_snapshot import (SourceSnapshotError, load_source_snapshot,
                                      snapshot_config_digest, write_source_snapshot)
@@ -302,16 +304,147 @@ def test_absent_profile_is_unavailable_not_zero_count(capture, cfg, policy):
     assert receipt['bindings']['profile_digest'] is None
 
 
-def test_source_cap_backfills_from_same_primary_lane(capture, cfg, policy):
+def test_source_cap_backfills_from_same_primary_lane(policy):
+    # Constraint-only rows isolate the same-lane selection contract.
     policy['constraints']['max_per_source'] = 1
-    receipt = run(cfg, capture, policy)
-    by_id = {r['story_id']: r for r in receipt['candidates']}
-    capped = [r for r in receipt['rejected'] if r['reason'] == 'source_cap']
-    assert any(by_id[r['story_id']]['primary_lane'] == 'interested' for r in capped)
-    interested = [r for r in receipt['entries'] if r['primary_lane'] == 'interested']
-    assert interested and any(r['backfilled'] for r in interested)
-    assert receipt['shortfalls']['interested'] == policy['lane_quotas']['interested'] - len(interested)
-    assert receipt['shortfalls']['updates'] == policy['lane_quotas']['updates']
+    policy['lane_quotas'] = {'updates': 0, 'hot': 0, 'interested': 2, 'surprise': 0}
+    rows = [
+        {'story_id': 'source-cap-first', 'primary_lane': 'interested',
+         'components': {'final_score': 3}, 'independent_source': 'source-a',
+         'is_aggregator': False, 'display_cluster_id': 'one', 'topic_ids': [],
+         'history_source_count': None, 'history_story_count': None},
+        {'story_id': 'source-cap-rejected', 'primary_lane': 'interested',
+         'components': {'final_score': 2}, 'independent_source': 'source-a',
+         'is_aggregator': False, 'display_cluster_id': 'two', 'topic_ids': [],
+         'history_source_count': None, 'history_story_count': None},
+        {'story_id': 'source-cap-backfill', 'primary_lane': 'interested',
+         'components': {'final_score': 1}, 'independent_source': 'source-b',
+         'is_aggregator': False, 'display_cluster_id': 'three', 'topic_ids': [],
+         'history_source_count': None, 'history_story_count': None},
+    ]
+    entries, shortfalls, rejected = _select(rows, policy)
+    assert [entry['story_id'] for entry in entries] == ['source-cap-first', 'source-cap-backfill']
+    assert entries[1]['backfilled'] is True
+    assert rejected == [{'story_id': 'source-cap-rejected', 'reason': 'source_cap'}]
+    assert shortfalls['interested'] == 0
+
+
+def test_final_source_band_backfills_same_lane_without_shortening(policy):
+    # Constraint-only rows isolate selection mechanics. They are not a news
+    # receipt or source fixture and cannot be rendered as discovery content.
+    policy['size'] = 17
+    policy['lane_quotas'] = {'updates': 0, 'hot': 0, 'interested': 17, 'surprise': 0}
+
+    def row(rank, source):
+        return {'story_id': f'selection-contract-{rank}', 'primary_lane': 'interested',
+                'components': {'final_score': rank}, 'independent_source': source,
+                'is_aggregator': False, 'display_cluster_id': f'cluster-{rank}',
+                'topic_ids': [], 'history_source_count': None, 'history_story_count': None,
+                'raw_components': {'relevance': 1}, 'age_hours': 0, 'lane_scores': {'interested': 1}}
+
+    candidates = [row(30-index, 'source-over-cap') for index in range(3)]
+    candidates.extend(row(27-index, f'source-{index}') for index in range(15))
+    initial, _, _ = _select(candidates, policy)
+    initial_bands, _ = _bands(initial, policy, history_available=True)
+    assert next(b for b in initial_bands if b['band'] == 'source_diversity')['verdict'] == 'FAIL'
+
+    entries, _, rejected, bands, _ = _select_with_final_band_backfill(candidates, policy, True)
+    source_band = next(b for b in bands if b['band'] == 'source_diversity')
+    assert len(entries) == len(initial) == 17
+    assert source_band['verdict'] == 'PASS'
+    assert any(r['reason'] == 'source_diversity_cap' for r in rejected)
+    assert all(entry['primary_lane'] == 'interested' for entry in entries)
+
+
+def test_final_source_band_records_honest_shortfall_without_backfill(policy):
+    # Constraint-only rows isolate an exhausted primary lane from news content.
+    policy['size'] = 17
+    policy['lane_quotas'] = {'updates': 0, 'hot': 0, 'interested': 17, 'surprise': 0}
+
+    def row(rank, source):
+        return {'story_id': f'exhausted-selection-contract-{rank}', 'primary_lane': 'interested',
+                'components': {'final_score': rank}, 'independent_source': source,
+                'is_aggregator': False, 'display_cluster_id': f'exhausted-cluster-{rank}',
+                'topic_ids': [], 'history_source_count': None, 'history_story_count': None,
+                'raw_components': {'relevance': 1}, 'age_hours': 0, 'lane_scores': {'interested': 1}}
+
+    candidates = [row(30-index, 'source-over-cap') for index in range(3)]
+    candidates.extend(row(27-index, f'source-{index}') for index in range(14))
+    entries, shortfalls, rejected, bands, _ = _select_with_final_band_backfill(candidates, policy, True)
+    source_band = next(b for b in bands if b['band'] == 'source_diversity')
+    assert len(entries) == 16
+    assert shortfalls['interested'] == 1
+    assert source_band['verdict'] == 'PASS'
+    assert any(r['reason'] == 'source_diversity_cap' for r in rejected)
+
+
+def test_final_source_distinct_backfills_lowest_same_lane_duplicate(policy):
+    policy['size'] = 5
+    policy['lane_quotas'] = {'updates': 0, 'hot': 0, 'interested': 5, 'surprise': 0}
+    policy['bands']['source_diversity'].update({'cap': 1.0, 'min_distinct': 4})
+
+    def row(rank, source):
+        return {'story_id': f'distinct-selection-contract-{rank}', 'primary_lane': 'interested',
+                'components': {'final_score': rank}, 'independent_source': source,
+                'is_aggregator': False, 'display_cluster_id': f'distinct-cluster-{rank}',
+                'topic_ids': [], 'history_source_count': None, 'history_story_count': None,
+                'raw_components': {'relevance': 1}, 'age_hours': 0, 'lane_scores': {'interested': 1}}
+
+    candidates = [row(5, 'source-a'), row(4, 'source-a'), row(3, 'source-b'),
+                  row(2, 'source-b'), row(1, 'source-c'), row(0, 'source-d')]
+    entries, _, rejected, bands, _ = _select_with_final_band_backfill(candidates, policy, True)
+    source_band = next(b for b in bands if b['band'] == 'source_diversity')
+    assert source_band['verdict'] == 'PASS'
+    assert source_band['distinct'] == 4
+    assert any(r['reason'] == 'source_diversity_distinct' for r in rejected)
+    assert any(r['story_id'] == 'distinct-selection-contract-0' and r['backfilled'] for r in entries)
+
+
+def test_final_topic_distinct_backfills_lowest_same_lane_duplicate(policy):
+    policy['size'] = 5
+    policy['lane_quotas'] = {'updates': 0, 'hot': 0, 'interested': 5, 'surprise': 0}
+    policy['bands']['source_diversity'].update({'cap': 1.0, 'min_distinct': 0})
+    policy['bands']['topic_diversity'].update({'cap': 1.0, 'min_distinct': 4})
+
+    def row(rank, topic):
+        return {'story_id': f'topic-distinct-contract-{rank}', 'primary_lane': 'interested',
+                'components': {'final_score': rank}, 'independent_source': f'source-{rank}',
+                'is_aggregator': False, 'display_cluster_id': f'topic-cluster-{rank}',
+                'topic_ids': [topic], 'history_source_count': None, 'history_story_count': None,
+                'raw_components': {'relevance': 1}, 'age_hours': 0, 'lane_scores': {'interested': 1}}
+
+    candidates = [row(5, 'a'), row(4, 'a'), row(3, 'b'), row(2, 'b'), row(1, 'c'), row(0, 'd')]
+    entries, _, rejected, bands, _ = _select_with_final_band_backfill(candidates, policy, True)
+    topic_band = next(b for b in bands if b['band'] == 'topic_diversity')
+    assert topic_band['verdict'] == 'PASS'
+    assert topic_band['distinct'] == 4
+    assert any(r['reason'] == 'topic_diversity_distinct' for r in rejected)
+    assert any(r['story_id'] == 'topic-distinct-contract-0' and r['backfilled'] for r in entries)
+
+
+def test_zero_topic_share_cap_rejects_tagged_rows_without_relaxation(policy):
+    policy['size'] = 2
+    policy['lane_quotas'] = {'updates': 0, 'hot': 0, 'interested': 2, 'surprise': 0}
+    policy['bands']['source_diversity'].update({'cap': 1.0, 'min_distinct': 0})
+    policy['bands']['topic_diversity'].update({'cap': 0.0, 'min_distinct': 0})
+    candidates = [
+        {'story_id': 'zero-topic-tagged', 'primary_lane': 'interested',
+         'components': {'final_score': 2}, 'independent_source': 'source-a',
+         'is_aggregator': False, 'display_cluster_id': 'tagged', 'topic_ids': ['topic-a'],
+         'history_source_count': None, 'history_story_count': None,
+         'raw_components': {'relevance': 1}, 'age_hours': 0, 'lane_scores': {'interested': 1}},
+        {'story_id': 'zero-topic-untagged', 'primary_lane': 'interested',
+         'components': {'final_score': 1}, 'independent_source': 'source-b',
+         'is_aggregator': False, 'display_cluster_id': 'untagged', 'topic_ids': [],
+         'history_source_count': None, 'history_story_count': None,
+         'raw_components': {'relevance': 1}, 'age_hours': 0, 'lane_scores': {'interested': 1}},
+    ]
+    entries, shortfalls, rejected, bands, _ = _select_with_final_band_backfill(candidates, policy, True)
+    topic_band = next(b for b in bands if b['band'] == 'topic_diversity')
+    assert [row['story_id'] for row in entries] == ['zero-topic-untagged']
+    assert shortfalls['interested'] == 1
+    assert topic_band['verdict'] == 'PASS'
+    assert any(r['reason'] == 'topic_diversity_cap' for r in rejected)
 
 
 def test_local_selected_edition_history_blocks_repeat_surprise(tmp_path, capture, cfg, policy):
