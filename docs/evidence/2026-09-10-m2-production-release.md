@@ -44,4 +44,14 @@ Independent selection analysis has not proven a safe fix or a viable passing own
 
 The local full suite completed with 2,279 passed, 29 optional-runtime skips, and zero failures or errors. The final focused suite completed with 78 passed. CI supplied the PostgreSQL runtime proof for the retry migration. Independent security and correctness reviews passed before merge and production application.
 
-Production completion still requires a genuine configured-owner PASS settlement, activated-page verification, and authenticated owner read/save testing. Account-specific browser authorization is still pending. No account was selected and no test reading state was changed. M2 is not done, and M1 learning completion is not inferred from source tests or public-page checks.
+Production completion still requires a genuine configured-owner PASS settlement, activated-page verification, and authenticated owner read/save testing. Account-specific authorization and normal browser sign-in subsequently passed, as recorded below. No test reading state was changed. M2 is not done, and M1 learning completion is not inferred from source tests or public-page checks.
+
+## Authorized account follow-up
+
+JJ authorized a specific Google account for M2 testing. Normal Google account selection succeeded in a background browser, and the production signed-in dashboard loaded. No password, verification code, additional consent, token extraction, or native-login workaround was required. No reading, saved, or interest state was changed. Discovery remained disabled, so this proves login and dashboard access, not M2 lane behavior.
+
+A read-only diagnostic used that account's actual saved preferences and signals, the failed activation's original current and prior source captures, and a fixed diagnostic evaluation clock. This is not a stored production receipt or proof of the exact internal production evaluation clock. The existing engine selected 14 of 24 candidates. Relevance was 0.000, and Surprise was 0.429 against its 0.250 cap; the other five bands passed. None of the 24 candidates met the relevance threshold, so no unchanged-policy subset could pass relevance. All 73 possible same-primary single replacements were also checked without finding a PASS.
+
+The automated production run's 21 selected stories and six primary Interested entries differ from this account's diagnostic. The hidden automated-owner binding remains unverified; the difference does not identify another account. No production owner setting was replaced.
+
+The pending user choices are which real interests to save for the test and whether the authorized account should receive ongoing M2 editions or be used only temporarily. Do not invent interests, lower quality thresholds, infer another account's identity, or claim M2 end-to-end completion from the successful login. Once those choices are supplied, verify the protected account routing, build a genuine PASS edition, and complete the private lane/read/save/reload/logout tests while restoring temporary reading state. M1 learning remains separate.
