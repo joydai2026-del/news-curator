@@ -1,6 +1,6 @@
 # M2 production release evidence
 
-Status: release verification in progress. M1 learning remains separate and unchanged.
+Status: M2 is live in production and ready for JJ's authenticated end-to-end testing. The first protected edition and exact deployed page are verified. M1 learning remains separate. The historical recovery notes below are retained in chronological order; the latest release evidence is at the end.
 
 ## Deployed foundation
 
@@ -78,3 +78,33 @@ Activation [34487953820](https://github.com/joydai2026-del/news-curator/actions/
 The final-diversity selection loop compared its new caps with the already-updated caps, allowing premature termination after a reselection reduced the edition size. This could leave a previously computed topic count above the same unchanged share cap when divided by the smaller edition. The repair must continue until the counts and denominator stabilize. Qualified shortfalls must also be excluded from failure-only diagnostics.
 
 The narrow selector and diagnostic repair passed independent review and 102 focused tests across the discovery engine, qualified-shortfall policy, and protected adapter. The new regression exercises repeated cap tightening after the denominator shrinks. It does not relax production policy or substitute for a stored owner receipt.
+
+## Verified denominator repair
+
+A read-only before-and-after replay used the failed activation's captured source observation at `2026-09-10T14:18:31.134789Z`, prior observation at `2026-09-09T14:29:09.256490Z`, and evaluation clock `2026-09-10T14:21:28Z`. The authorized profile was unchanged since that run. The old selector reproduced 18 stories with topic share 7/18 and FAIL. The repaired selector produced 17 stories (Updates 8, Hot 3, Interested 6, Surprise 0), topic share 6/17, 14 distinct sources, and 8 distinct topics. All six ordinary bands passed; Deliberate Surprise was an approved qualified shortfall. Receipt replay completed. This was a captured-data diagnostic, not production settlement.
+
+PR [24](https://github.com/joydai2026-del/news-curator/pull/24) merged as `c2778ee0103a840ed20a7381607cb5e9ddcd72fc`. Exact-head CI [34491303005](https://github.com/joydai2026-del/news-curator/actions/runs/34491303005) and post-merge CI [34491504478](https://github.com/joydai2026-del/news-curator/actions/runs/34491504478) passed all four jobs. Production activation [34491757702](https://github.com/joydai2026-del/news-curator/actions/runs/34491757702) was dispatched on the merge commit after the flag was enabled.
+
+## Live protected edition
+
+Activation [34491757702](https://github.com/joydai2026-del/news-curator/actions/runs/34491757702) completed protected materialization at `2026-09-10T14:57:06Z`; its failure-report step was skipped. Independent database readback returned `SETTLED_PASS`: exactly one new edition, 19 entries (Updates 8, Hot 5, Interested 6, Surprise 0), matching the authorized account and code revision `c2778ee0103a840ed20a7381607cb5e9ddcd72fc`. Six quality bands passed; Deliberate Surprise correctly returned `QUALIFIED_SHORTFALL`. Forced row-level security, anonymous read denial, authenticated owner-derived reads, the owner-edition foreign key, and absence of orphan entries all passed. Account identifiers and profile contents were not exported.
+
+The account's earlier normal browser sign-in and preference save/reload were verified before activation. The earlier browser session later became unavailable, and Google rejected a fresh headless sign-in with its generic error. No credentials or session storage were extracted and no sign-in block was bypassed. Actual signed-in lane, read/save, reload, and logout testing on this activated release remains for JJ. Production settlement and anonymous browser checks do not stand in for that user test.
+
+
+## Live page and handoff
+
+The activated workflow completed successfully, including Pages deployment, repository-state persistence, and archive finalization. The live response from https://news.joydong.org/ returned HTTP 200 and matched the activated run's public archive candidate byte-for-byte: SHA-256 `56dc4a65071418d708b71bf6239297d86571d9cb3c4695fcb3d79d5f8f312712`, bound to commit `c2778ee0103a840ed20a7381607cb5e9ddcd72fc`. The page has no full commit marker, so revision verification used the deployment candidate's content hash, not an assumed DOM field.
+
+The live page contains all four Discovery lane controls and hides them while signed out. An independent silent browser check passed public topic filtering, signed-out dashboard navigation, absence of private cards/status content, a 390-pixel viewport without horizontal overflow, and no browser console errors. An earlier filter concern was corrected after waiting for the visible enabled control; it was a timing/locator observation, not a product defect.
+
+`NEWS_CURATOR_DISCOVERY_ENABLED` was read back as true. Ongoing generation uses the existing hourly GitHub workflow, scheduled at minute 17 on a best-effort basis. A future edition that fails unchanged quality limits is withheld; the existing private edition is preserved subject to its freshness limit. No extra automation was created.
+
+JJ's remaining user acceptance check:
+
+1. Open the live reader and sign in with the authorized Google account.
+2. Open Updates, Hot, Interested, and Surprise. The first edition has 19 stories; Surprise reports the approved qualified-story shortage.
+3. Mark a story read and save one, then reload and confirm the state persists.
+4. Sign out and confirm private stories disappear.
+
+The M2 production build and live settlement are complete and ready for this user test. Authenticated browser acceptance is still pending. M1 learning remains separate; M3 through M5 were not added to this release. The changes serve the approved ongoing discovery use case without changing the locked editorial limits beyond the explicitly approved qualified shortages.
