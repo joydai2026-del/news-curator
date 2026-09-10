@@ -482,7 +482,8 @@ def _derive(observations, earlier, topic_matches, p, profile_input, history_rows
 
 def build_discovery(cfg, current_snapshot, policy: Mapping, *, previous_snapshot=None,
                     interest_artifact=None, history: Sequence[Mapping] | None = None,
-                    now: datetime | None = None, language='en', first_edition: bool | None = None) -> dict:
+                    now: datetime | None = None, language='en', first_edition: bool | None = None,
+                    ranking_interpretation_mode='literal-v1') -> dict:
     """Build independent lanes then merge once, score, constrain and verify.
 
     ``history=None`` means unavailable. ``[]`` declares this privacy scope has
@@ -507,7 +508,7 @@ def build_discovery(cfg, current_snapshot, policy: Mapping, *, previous_snapshot
     allowed = {story_id_for_item(i) for result in current_snapshot.results for i in result.items if not i.is_newsletter}
     if interest_artifact is not None:
         a = interest_artifact
-        if a.source_snapshot_digest != current_snapshot.content_digest or a.configuration_digest != ranking_config_digest(cfg) or a.newsletter_input_digest != EMPTY_NEWSLETTER_INPUT_DIGEST:
+        if a.source_snapshot_digest != current_snapshot.content_digest or a.configuration_digest != ranking_config_digest(cfg, interpretation_mode=ranking_interpretation_mode) or a.newsletter_input_digest != EMPTY_NEWSLETTER_INPUT_DIGEST:
             raise DiscoveryError('discovery_interest_binding')
         _number(a.preference_revision, integer=True)
         _number(a.interest_count, integer=True)
@@ -549,7 +550,7 @@ def build_discovery(cfg, current_snapshot, policy: Mapping, *, previous_snapshot
                 'previous_observation_clock': _stamp(previous_snapshot.generated_at) if previous_snapshot else None,
                 'topic_matches_digest': _digest(topic_matches),
                 'configuration_digest': current_snapshot.configuration_digest,
-                'ranking_configuration_digest': ranking_config_digest(cfg),
+                'ranking_configuration_digest': ranking_config_digest(cfg, interpretation_mode=ranking_interpretation_mode),
                 'display_dedup_digest': _digest({'threshold': threshold, 'time_bucket_hours': bucket_hours}),
                 'previous_snapshot_digest': previous_snapshot.content_digest if previous_snapshot else None,
                 'profile_digest': _digest(asdict(interest_artifact)) if interest_artifact else None,

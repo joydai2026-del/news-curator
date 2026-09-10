@@ -629,3 +629,38 @@ def test_surprise_novelty_covers_history_beyond_repetition_window(tmp_path, capt
     second = build_discovery(cfg, current, policy, now=NOW, history=history, first_edition=False)
     assert not member(second, 'surprise')
     assert replay_discovery(second, expected_bindings=second['bindings'])
+
+
+def test_category_interest_artifact_is_bound_to_m2_mode_and_names(capture, cfg, policy):
+    from curator.personalization.ranking import (
+        InterestArtifact, InterestProfile, build_interest_artifact, ranking_config_digest,
+    )
+
+    mode = 'category-v1'
+    expected = ranking_config_digest(cfg, interpretation_mode=mode)
+    payload = build_interest_artifact(
+        InterestProfile(1, tuple(c.name for c in cfg.categories)),
+        [item for result in capture.results for item in result.items],
+        source_snapshot_digest=capture.content_digest,
+        configuration_digest=expected, generated_at=NOW,
+        categories=cfg.categories, interpretation_mode=mode,
+    )
+    artifact = InterestArtifact(**{key: value for key, value in payload.items() if key != 'schema_version'})
+    receipt = build_discovery(cfg, capture, policy, interest_artifact=artifact,
+                              now=NOW, history=[], ranking_interpretation_mode=mode)
+    assert receipt['profile_available']
+    assert any(row['raw_components']['relevance'] > 0 for row in receipt['candidates'])
+    assert receipt['bindings']['ranking_configuration_digest'] == expected
+    assert replay_discovery(receipt, expected_bindings=receipt['bindings'])
+    with pytest.raises(DiscoveryError, match='discovery_interest_binding'):
+        build_discovery(cfg, capture, policy, interest_artifact=artifact, now=NOW, history=[])
+    renamed = deepcopy(cfg)
+    renamed.categories[0].name = 'Changed category contract label'
+    with pytest.raises(DiscoveryError, match='discovery_interest_binding'):
+        build_discovery(renamed, capture, policy, interest_artifact=artifact,
+                        now=NOW, history=[], ranking_interpretation_mode=mode)
+    tampered = deepcopy(receipt)
+    tampered['bindings']['ranking_configuration_digest'] = ranking_config_digest(cfg)
+    _resign(tampered)
+    with pytest.raises(DiscoveryError):
+        replay_discovery(tampered, expected_bindings=receipt['bindings'])
