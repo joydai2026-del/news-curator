@@ -204,6 +204,19 @@ def _existing_identity(client, config, edition_id, now):
     return _validate_identity(value, edition_id, now)
 
 
+def _retry_identity(client, config, *, snapshot_digest, profile_revision, profile_fingerprint,
+                    policy_digest, code_revision, language, ranking_configuration_digest,
+                    display_dedup_digest, code_digest, now):
+    value = _rpc(client, config, 'private_discovery_retry_identity', {
+        'p_owner_user_id': config.owner_user_id, 'p_snapshot_digest': snapshot_digest,
+        'p_profile_revision': profile_revision, 'p_profile_fingerprint': profile_fingerprint,
+        'p_policy_digest': policy_digest, 'p_code_revision': code_revision, 'p_language': language,
+        'p_ranking_configuration_digest': ranking_configuration_digest,
+        'p_display_dedup_digest': display_dedup_digest, 'p_code_digest': code_digest,
+    })
+    return None if value is None else _validate_identity(value, value.get('edition_id'), now)
+
+
 def _already_stored(identity):
     # Metadata proves the existing commit. Its entry count is not in this
     # bounded response, so a retry must not invent the current build's count.
@@ -213,7 +226,7 @@ def _already_stored(identity):
 
 def materialize_private_discovery(cfg, snapshot, policy, secret_config: SecretPreferenceConfig, *,
                                   previous_snapshot=None, code_revision: str, now=None,
-                                  language='en', transport=None):
+                                  language='en', transport=None, baseline_loader=None):
     """Fetch a real subject's own inputs, then settle only a replay-verified PASS."""
     _require(isinstance(code_revision, str) and bool(_GIT.fullmatch(code_revision)))
     now = _time(now or datetime.now(timezone.utc))
@@ -227,17 +240,31 @@ def materialize_private_discovery(cfg, snapshot, policy, secret_config: SecretPr
     if isinstance(client, DiscoveryTransport):
         client.limits = limits
     _require(language in ('en', 'zh'))
+    _require(previous_snapshot is None or baseline_loader is None)
     # Identity follows immutable observed inputs, not evaluation time or the
     # history that the first successful commit itself creates. Full fetched
     # profile content is included because max(preference, signal revision) is
     # not unique when the smaller of those independent counters changes.
     profile_fingerprint = digest(asdict(profile))
+    policy_digest = digest(p)
+    ranking_digest = ranking_config_digest(cfg)
+    dedup_digest = digest({'threshold': cfg.dedup.get('title_similarity_threshold', 0.90),
+                           'time_bucket_hours': cfg.dedup.get('time_bucket_hours', 36.0)})
+    code_digest = hashlib.sha256(Path(discovery.__file__).read_bytes()).hexdigest()
+    if baseline_loader is not None:
+        retry = _retry_identity(client, secret_config, snapshot_digest=snapshot.content_digest,
+            profile_revision=profile.revision, profile_fingerprint=profile_fingerprint,
+            policy_digest=policy_digest, code_revision=code_revision, language=language,
+            ranking_configuration_digest=ranking_digest, display_dedup_digest=dedup_digest,
+            code_digest=code_digest, now=now)
+        if retry is not None:
+            return _already_stored(retry)
+        anchor = None if context['latest'] is None else _time(context['latest']['generated_at'])
+        previous_snapshot = baseline_loader(anchor)
     edition_id = 'm2:' + digest([secret_config.owner_user_id, snapshot.content_digest,
         previous_snapshot.content_digest if previous_snapshot else None,
-        profile.revision, profile_fingerprint, digest(p), code_revision, language,
-        ranking_config_digest(cfg), digest({'threshold': cfg.dedup.get('title_similarity_threshold', 0.90),
-                                           'time_bucket_hours': cfg.dedup.get('time_bucket_hours', 36.0)}),
-        hashlib.sha256(Path(discovery.__file__).read_bytes()).hexdigest()])
+        profile.revision, profile_fingerprint, policy_digest, code_revision, language,
+        ranking_digest, dedup_digest, code_digest])
     if context['latest'] is not None and context['latest']['edition_id'] == edition_id:
         return _already_stored(_validate_identity(context['latest'], edition_id, now))
     existing = _existing_identity(client, secret_config, edition_id, now)
@@ -271,17 +298,21 @@ def materialize_private_discovery(cfg, snapshot, policy, secret_config: SecretPr
         'ranking_configuration_digest': ranking_config_digest(cfg),
         'previous_snapshot_digest': previous_snapshot.content_digest if previous_snapshot else None,
         'profile_digest': digest(asdict(artifact)), 'profile_revision': profile.revision,
-        'history_digest': digest(context['history']), 'policy_digest': digest(p),
+        'history_digest': digest(context['history']), 'policy_digest': policy_digest,
         'observations_digest': digest(discovery.extract_observations(snapshot, language)),
-        'code_digest': hashlib.sha256(Path(discovery.__file__).read_bytes()).hexdigest(),
-        'display_dedup_digest': digest({'threshold': cfg.dedup.get('title_similarity_threshold', 0.90),
-                                      'time_bucket_hours': cfg.dedup.get('time_bucket_hours', 36.0)}),
+        'code_digest': code_digest, 'display_dedup_digest': dedup_digest,
     }
     _require(set(receipt['bindings']) == set(expected))
     discovery.replay_discovery(receipt, expected_bindings=expected)
     if receipt['verdict'] != 'PASS':
+        failed_bands = [
+            {'band': band['band'], 'verdict': band['verdict']}
+            for band in receipt['bands']
+            if band['verdict'] not in ('PASS', 'DISABLED')
+        ]
         return {'schema_version': 1, 'status': 'not_settled', 'reason_code': 'edition_bands_failed',
-                'selected_count': len(receipt['entries']), 'shortfalls': receipt['shortfalls']}
+                'selected_count': len(receipt['entries']), 'shortfalls': receipt['shortfalls'],
+                'failed_bands': failed_bands}
     _require(receipt['profile_status'] in ('settled', 'settled_empty'))
     _require(0 < len(receipt['entries']) <= limits.max_entries)
     envelope = {'schema_version': 1, 'kind': 'owned_private_discovery',

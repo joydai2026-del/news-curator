@@ -226,7 +226,9 @@ def _updated(rows, before, observed_at, now, hours):
         if len({r['text_digest'] for r in older}) != 1 or len({r['text_digest'] for r in current}) != 1:
             continue
         a, b = older[0], current[0]
-        if a['text_digest'] != b['text_digest'] and _time(a['observed_at']) < _time(b['observed_at']):
+        prior_age = (now - _time(a['observed_at'])).total_seconds()/3600
+        if (a['text_digest'] != b['text_digest'] and _time(a['observed_at']) < _time(b['observed_at'])
+                and 0 <= prior_age <= hours):
             changes.append({'publisher': key[1], 'url': key[0], 'before': a, 'after': b})
     return sorted(changes, key=lambda x: (x['url'], x['publisher']))
 

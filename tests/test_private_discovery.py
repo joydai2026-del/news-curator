@@ -68,6 +68,7 @@ class Transport:
         self.profile_revision = 3
         self.topic_adjustment = 0.0
         self.commit_then_timeout = False
+        self.retry_identity_status = 200
 
     def context(self):
         latest = None if self.envelope is None else {
@@ -93,6 +94,28 @@ class Transport:
         if url.endswith('/private_discovery_context'):
             assert body == {'p_owner_user_id': OWNER}
             return 200, self.context()
+        if url.endswith('/private_discovery_retry_identity'):
+            if self.retry_identity_status != 200:
+                return self.retry_identity_status, None
+            for envelope, payload_digest in self.stored.values():
+                receipt = envelope['receipt']
+                expected = {
+                    'p_owner_user_id': envelope['owner_user_id'],
+                    'p_snapshot_digest': receipt['bindings']['snapshot_digest'],
+                    'p_profile_revision': receipt['bindings']['profile_revision'],
+                    'p_profile_fingerprint': envelope['profile_fingerprint'],
+                    'p_policy_digest': receipt['bindings']['policy_digest'],
+                    'p_code_revision': envelope['code_revision'],
+                    'p_language': receipt['language'],
+                    'p_ranking_configuration_digest': receipt['bindings']['ranking_configuration_digest'],
+                    'p_display_dedup_digest': receipt['bindings']['display_dedup_digest'],
+                    'p_code_digest': receipt['bindings']['code_digest'],
+                }
+                if body == expected:
+                    return 200, {'edition_id': envelope['edition_id'], 'payload_digest': payload_digest,
+                                 'receipt_digest': receipt['receipt_digest'],
+                                 'generated_at': receipt['generated_at']}
+            return 200, None
         if url.endswith('/private_discovery_identity'):
             assert body['p_owner_user_id'] == OWNER
             found = self.stored.get(body['p_edition_id'])
@@ -176,6 +199,11 @@ def test_failed_bands_keep_previous_edition(inputs):
     transport = Transport()
     result = build((cfg, snapshot, policy), transport)
     assert result['status'] == 'not_settled'
+    assert set(result) == {'schema_version', 'status', 'reason_code', 'selected_count',
+                           'shortfalls', 'failed_bands'}
+    assert result['failed_bands']
+    assert all(set(band) == {'band', 'verdict'} for band in result['failed_bands'])
+    assert all(band['verdict'] == 'FAIL' for band in result['failed_bands'])
     assert transport.envelope is None
 
 
@@ -414,6 +442,97 @@ def test_updates_eligible_retry_is_one_settlement(inputs, tmp_path):
         previous_snapshot=previous, now=NOW + timedelta(seconds=1), transport=transport)
     assert retry['status'] == 'already_stored' and retry['edition_id'] == first['edition_id']
     assert len([call for call in transport.calls if call[1].endswith('/finalize_private_discovery')]) == 1
+
+
+def test_automatic_baseline_first_edition_and_retry_skip_second_lookup(inputs):
+    cfg, snapshot, policy = inputs
+    transport = Transport()
+    anchors = []
+
+    def first_loader(anchor):
+        anchors.append(anchor)
+        return None
+
+    first = materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+        now=NOW, transport=transport, baseline_loader=first_loader)
+    assert anchors == [None]
+
+    def forbidden_loader(anchor):
+        raise AssertionError('an exact retry must not depend on baseline artifacts')
+
+    retry = materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+        now=NOW + timedelta(seconds=1), transport=transport, baseline_loader=forbidden_loader)
+    assert retry['status'] == 'already_stored' and retry['edition_id'] == first['edition_id']
+    assert len([call for call in transport.calls if call[1].endswith('/finalize_private_discovery')]) == 1
+
+
+def test_automatic_retry_finds_matching_edition_older_than_latest(inputs):
+    cfg, snapshot, policy = inputs
+    transport = Transport()
+    first = materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+        now=NOW, transport=transport, baseline_loader=lambda anchor: None)
+    older_envelope = deepcopy(transport.envelope)
+    newer_envelope = deepcopy(older_envelope)
+    newer_envelope['edition_id'] = 'm2:' + 'f' * 64
+    newer_envelope['code_revision'] = 'e' * 40
+    newer_envelope['receipt']['generated_at'] = (NOW + timedelta(seconds=1)).isoformat()
+    newer_digest = 'd' * 64
+    transport.envelope = newer_envelope
+    transport.payload_digest = newer_digest
+    transport.stored[newer_envelope['edition_id']] = (newer_envelope, newer_digest)
+
+    def forbidden_loader(anchor):
+        raise AssertionError('an older exact retry must not depend on baseline artifacts')
+
+    retry = materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+        now=NOW + timedelta(seconds=2), transport=transport, baseline_loader=forbidden_loader)
+    assert retry['status'] == 'already_stored' and retry['edition_id'] == first['edition_id']
+
+
+def test_automatic_baseline_tuple_change_uses_latest_generation_anchor(inputs):
+    cfg, snapshot, policy = inputs
+    transport = Transport()
+    materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+        now=NOW, transport=transport, baseline_loader=lambda anchor: None)
+    transport.topic_adjustment = 0.25
+    anchors = []
+    result = materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+        now=NOW + timedelta(seconds=1), transport=transport,
+        baseline_loader=lambda anchor: anchors.append(anchor) or None)
+    assert anchors == [NOW]
+    assert result['status'] != 'already_stored'
+
+
+def test_automatic_baseline_failure_preserves_existing_state(inputs):
+    cfg, snapshot, policy = inputs
+    transport = Transport()
+    first = build(inputs, transport)
+    transport.topic_adjustment = 0.25
+
+    def unavailable(anchor):
+        raise OSError('controlled baseline transport failure')
+
+    with pytest.raises(OSError, match='controlled baseline transport failure'):
+        materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+            now=NOW + timedelta(seconds=1), transport=transport, baseline_loader=unavailable)
+    assert list(transport.stored) == [first['edition_id']]
+    assert len([call for call in transport.calls if call[1].endswith('/finalize_private_discovery')]) == 1
+
+
+def test_automatic_retry_identity_ambiguity_fails_before_baseline_or_write(inputs):
+    cfg, snapshot, policy = inputs
+    transport = Transport()
+    transport.retry_identity_status = 409
+    called = False
+
+    def loader(anchor):
+        nonlocal called
+        called = True
+
+    with pytest.raises(PrivateDiscoveryError):
+        materialize_private_discovery(cfg, snapshot, policy, SECRET, code_revision=GIT,
+            now=NOW, transport=transport, baseline_loader=loader)
+    assert called is False and transport.envelope is None
 
 
 
