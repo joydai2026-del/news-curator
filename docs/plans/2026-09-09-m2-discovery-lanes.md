@@ -43,3 +43,11 @@ Lane controls separate from topic chips; new visits Updates; one card per story;
 6. Commit exact files and push prepared branch/draft PR after reviews. Release/production acceptance separate; do not mark Notion Done from build alone.
 
 Baseline: selected existing rank/pipeline/render/contract tests passed before edits. Full suite and meaningful new negative tests required. Avoid new installations; reuse existing Python venv and installed Playwright. Bound all browser and test processes; inspect disk/runtime availability before running. Local cloud-file eviction may require hydration without replacing tracked content.
+
+## September 10 approved release amendment
+
+JJ authorized publication to the existing public repository, production deployment, normal Google account selection, authenticated testing, and ongoing M2 delivery. This supersedes the earlier build-only and no-account-mutation boundaries for the scoped M2 release. M1 learning and later milestones remain separate. Account identifiers and preferences stay out of public repository artifacts.
+
+JJ approved showing qualified stories with clear Hot and Surprise shortage notices instead of withholding the entire edition solely for those lower-share targets. Versioned R3 records an explicit `QUALIFIED_SHORTFALL` verdict only for the configured Trend/Hot and Deliberate Surprise/Surprise mappings, with the original achieved share, target, and actual primary-lane shortage retained. Per-story eligibility, all upper caps, all other quality bands, lane priority, and quotas remain unchanged. The database recomputes those shares from entry memberships and verifies the exception's policy and receipt fields. Strict R2 remains available unchanged.
+
+Dependency map: engine/policy/storage tests and reader notices run in parallel after plan review; final review and captured-source replay follow the implementation; exact-commit CI follows the reviewed commit; additive migration and deployment follow passing CI; live owner lane/read/save/reload/logout checks follow a real protected-job settlement. Completion requires the live reader ready for JJ's own acceptance test.

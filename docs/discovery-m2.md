@@ -33,16 +33,16 @@ This CLI uses the existing AgentAuth and macOS Keychain session. Topic-free Surp
 
 ## Configuration and release
 
-- Ranking and lanes: `config/discovery-policy-r2.yaml`. R1 remains frozen. A failed band never silently becomes an exception or a filled quota.
+- Production ranking and lanes: `config/discovery-policy-r3.yaml`. R1 and strict R2 remain unchanged. R3 explicitly permits below-target Hot and Surprise shares when the corresponding primary lane has a recorded shortage; the receipt says `QUALIFIED_SHORTFALL` and retains its achieved share and original target. Upper caps, all other bands, and per-story evidence rules remain strict. The reader shows the selected stories with shortage notices. The offline CLI retains strict R2 by default; pass `--policy config/discovery-policy-r3.yaml` to replay R3.
 - Cold-start affinity contract: configured non-subject topic IDs, initially `trending`, do not grant interest affinity. Their topic matches remain available for topic chips and evidence, so this rule does not remove or rewrite topic labels.
 - Source/topic share limits use the actual selected edition as their denominator. Deterministic same-lane backfill preserves quality constraints and records honest shortages; eligible same-lane replacements repair minimum source/topic variety.
 - Database storage: `discovery_storage_policy`. Normal quotas and limits remain configurable within the common 100-entry, 1 MiB read safety envelope. The larger private evidence payload has its own limit.
-- Deployment migrations: `supabase/migrations/202609090001_discovery_lanes.sql`, then `202609100001_discovery_retry_identity.sql`, after the existing M1 migrations.
+- Deployment migrations: `supabase/migrations/202609090001_discovery_lanes.sql`, then `202609100001_discovery_retry_identity.sql` and `202609100002_discovery_qualified_shortfalls.sql`, after the existing M1 migrations.
 - Feature switch: repository variable `NEWS_CURATOR_DISCOVERY_ENABLED=true`, together with existing `NEWS_CURATOR_PERSONALIZATION_ENABLED=true`. Defaults off. Browser rendering can be tested locally with `--discovery-enabled`.
 - Owner routing: the protected M2 step uses `NEWS_CURATOR_DISCOVERY_OWNER_USER_ID` when configured and otherwise falls back to the existing M1 owner. The M1 ranking step continues to use only its original owner setting.
 - Baseline recovery controls: the materializer CLI accepts `--baseline-attempts` and `--baseline-timeout`; incomplete or inconsistent run listings fail closed. Failed editions report only band names and verdicts, with an explicit workflow warning.
 - Rollback: disable the discovery feature switch and rebuild the existing public M1 page. Keep private tables and receipts for recovery. Do not delete records as a rollback shortcut.
 
-Release is separate from build completion. Require reviewed code, PostgreSQL17.11 CI, a genuine owner-bound passing edition and live owner read/save verification before acceptance. The latest captured source-only local edition in the build record passes all seven unchanged bands. That engine proof is separate from a real owner settlement and release acceptance.
+Release is separate from build completion. Require reviewed code, PostgreSQL17.11 CI, a genuine owner-bound passing edition and live owner read/save verification before acceptance. Historical source-only replays establish engine behavior, not current owner settlement or release acceptance. Production evidence is recorded in `docs/evidence/2026-09-10-m2-production-release.md`.
 
 Baseline retrieval uses GitHub's documented [workflow runs API](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow) and [artifact download command](https://cli.github.com/manual/gh_run_download).

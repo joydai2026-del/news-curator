@@ -42,8 +42,8 @@ def inputs(tmp_path):
     write_source_snapshot([TierResult('sources', rows)], path, generated_at=NOW, configuration_digest=snapshot_config_digest(cfg))
     snapshot = load_source_snapshot(path, current_time=NOW)
     policy = load_discovery_policy(REPO / 'config/discovery-policy-r2.yaml')
-    policy['revision'] = 3
-    policy['policy_id'] = 'private-adapter-contract-r3'
+    policy['revision'] = 4
+    policy['policy_id'] = 'private-adapter-contract-r4'
     # Explicit scoped policy exceptions isolate adapter finalization behavior.
     # Production r2 retains all seven bands and is separately tested failing.
     for name, band in policy['bands'].items():

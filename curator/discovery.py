@@ -78,8 +78,10 @@ def _stamp(value):
 
 def _validate_discovery_policy(value: Mapping) -> dict:
     """Reject unknown/missing keys and ambiguous numeric policy values."""
-    _keys(value, ('revision', 'policy_id', 'size', 'lane_priority', 'lane_quotas', 'windows',
-                  'gates', 'constraints', 'components', 'bands', 'band_exceptions', 'disclosures'))
+    base_keys = {'revision', 'policy_id', 'size', 'lane_priority', 'lane_quotas', 'windows',
+                 'gates', 'constraints', 'components', 'bands', 'band_exceptions', 'disclosures'}
+    if not isinstance(value, Mapping) or set(value) not in (base_keys, base_keys | {'qualified_shortfalls'}):
+        raise DiscoveryError('discovery_schema')
     p = deepcopy(dict(value))
     _number(p['revision'], low=1, integer=True)
     if not isinstance(p['policy_id'], str) or not p['policy_id'].strip():
@@ -128,6 +130,13 @@ def _validate_discovery_policy(value: Mapping) -> dict:
     _keys(p['bands'], BANDS)
     if not isinstance(p['band_exceptions'], dict) or not set(p['band_exceptions']) <= set(BANDS):
         raise DiscoveryError('discovery_band_exceptions')
+    qualified_shortfalls = p.get('qualified_shortfalls', {})
+    expected_shortfalls = {'trend': 'hot', 'deliberate_surprise': 'surprise'}
+    reserved_r3 = ('qualified_shortfalls' in p or p['revision'] == 3
+                   or p['policy_id'] == 'discovery-policy-r3')
+    if reserved_r3 and (p['revision'] != 3 or p['policy_id'] != 'discovery-policy-r3'
+                        or qualified_shortfalls != expected_shortfalls):
+        raise DiscoveryError('discovery_qualified_shortfalls')
     for name, band in p['bands'].items():
         _keys(band, ('active', 'floor', 'cap', 'min_distinct'))
         if type(band['active']) is not bool:
@@ -356,7 +365,7 @@ def _final_diversity_caps(entries, bands):
 def _select_with_final_band_backfill(candidates, policy, history_available):
     """Backfill final share-band rejections from each story's primary lane."""
     entries, shortfalls, rejected = _select(candidates, policy)
-    bands, verdict = _bands(entries, policy, history_available)
+    bands, verdict = _bands(entries, policy, history_available, shortfalls)
     applied = {'source': None, 'topic': None}
     for _ in range(policy['size']):
         proposed = _final_diversity_caps(entries, bands)
@@ -367,17 +376,18 @@ def _select_with_final_band_backfill(candidates, policy, history_available):
             entries, shortfalls, rejected = _select(
                 candidates, policy, source_diversity_cap=applied['source'],
                 topic_diversity_cap=applied['topic'])
-            bands, verdict = _bands(entries, policy, history_available)
+            bands, verdict = _bands(entries, policy, history_available, shortfalls)
         entries, rejected, swapped = _backfill_distinct(
             entries, candidates, policy, rejected, bands,
             source_diversity_cap=applied['source'], topic_diversity_cap=applied['topic'])
         if not swapped and not any(applied[name] != value for name, value in next_caps.items()):
             return entries, shortfalls, rejected, bands, verdict
-        bands, verdict = _bands(entries, policy, history_available)
+        bands, verdict = _bands(entries, policy, history_available, shortfalls)
     return entries, shortfalls, rejected, bands, verdict
 
 
-def _bands(entries, policy, history_available):
+def _bands(entries, policy, history_available, shortfalls=None):
+    shortfalls = shortfalls or {lane: 0 for lane in LANES}
     size = len(entries)
     sources = Counter(r['independent_source'] for r in entries)
     topics = Counter(t for r in entries for t in r['topic_ids'])
@@ -394,10 +404,16 @@ def _bands(entries, policy, history_available):
     for name in BANDS:
         rule, value = policy['bands'][name], achieved[name]
         distinct = len(sources) if name == 'source_diversity' else len(topics) if name == 'topic_diversity' else 0
-        verdict = 'DISABLED' if not rule['active'] else 'UNKNOWN' if value is None else 'PASS' if rule['floor'] <= value <= rule['cap'] and distinct >= rule['min_distinct'] else 'FAIL'
+        qualified_lane = policy.get('qualified_shortfalls', {}).get(name)
+        qualified = (value is not None and value < rule['floor'] and value <= rule['cap']
+                     and distinct >= rule['min_distinct'] and qualified_lane is not None
+                     and shortfalls[qualified_lane] > 0)
+        verdict = ('DISABLED' if not rule['active'] else 'UNKNOWN' if value is None
+                   else 'PASS' if rule['floor'] <= value <= rule['cap'] and distinct >= rule['min_distinct']
+                   else 'QUALIFIED_SHORTFALL' if qualified else 'FAIL')
         results.append({'band': name, **rule, 'achieved': value, 'distinct': distinct,
                         'verdict': verdict, 'exception_reason': policy['band_exceptions'].get(name, '')})
-    return results, 'PASS' if size and all(b['verdict'] in ('PASS', 'DISABLED') for b in results) else 'FAIL'
+    return results, 'PASS' if size and all(b['verdict'] in ('PASS', 'DISABLED', 'QUALIFIED_SHORTFALL') for b in results) else 'FAIL'
 
 
 def _derive(observations, earlier, topic_matches, p, profile_input, history_rows, now, observed_at, display_dedup):
