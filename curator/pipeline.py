@@ -572,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="curator", description="Build the news page.")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="where topics.yaml lives")
     parser.add_argument("--out", type=Path, default=None, help="output dir (default: <root>/site)")
+    parser.add_argument("--discovery-enabled", action="store_true", help="enable signed-in private discovery controls")
     parser.add_argument("--offline", action="store_true", help="skip all network calls")
     parser.add_argument("--site-name", default=None)
     parser.add_argument(
@@ -951,6 +952,7 @@ def main(argv: list[str] | None = None) -> int:
         timezone_name=cfg.display_timezone,
         cname_source=args.root / "CNAME",
         require_summaries=summary_policy_enabled,
+        discovery_enabled=args.discovery_enabled,
         topic_ids_by_name={category.name: category.id for category in en_categories},
     )
     log.info(

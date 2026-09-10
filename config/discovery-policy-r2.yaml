@@ -1,0 +1,52 @@
+# Discovery r2 preserves the r1 weights and bands. This is a local preview
+# policy, not authority to publish. Unmeasured history fails its active band.
+# Updates means observed publisher text change, never another platform mention.
+# Surprise importance is a coverage proxy in 48h, distinct from Hot's 24h.
+revision: 2
+policy_id: discovery-policy-r2
+size: 24
+lane_priority: [updates, hot, interested, surprise]
+lane_quotas: {updates: 8, hot: 6, interested: 6, surprise: 4}
+windows: {updates: 24, hot: 24, interested: 48, surprise: 48, repetition: 72, source_fatigue: 24}
+gates:
+  hot_min_sources: 2
+  surprise_min_sources: 2
+  min_source_weight: 1.0
+  interest_threshold: 0.35
+  freshness_half_life_hours: 12
+  cold_start: topic_config_match
+  cold_start_excluded_topic_ids: [trending]
+constraints:
+  max_per_source: 3
+  max_per_aggregator: 2
+  max_per_topic: 9
+  max_per_source_window: 6
+  max_appearances: 1
+components:
+  relevance: {enabled: true, weight: 0.30, cap: 1.0}
+  freshness: {enabled: true, weight: 0.22, cap: 1.0}
+  trend: {enabled: true, weight: 0.16, cap: 1.0}
+  editor_consensus: {enabled: false, weight: 0.12, cap: 1.0}
+  deliberate_surprise: {enabled: true, weight: 0.10, cap: 1.0}
+  diversity: {enabled: true, weight: 0.10, cap: 1.0}
+  repetition_penalty: {enabled: true, weight: 0.25, cap: 1.0}
+  source_fatigue_penalty: {enabled: true, weight: 0.18, cap: 1.0}
+# Each share uses the actually selected edition as denominator. An empty
+# edition fails, and short editions may fail. Bounds are never relaxed to fit.
+bands:
+  relevance: {active: true, floor: 0.55, cap: 1.0, min_distinct: 0}
+  freshness: {active: true, floor: 0.50, cap: 1.0, min_distinct: 0}
+  trend: {active: true, floor: 0.15, cap: 0.60, min_distinct: 0}
+  deliberate_surprise: {active: true, floor: 0.10, cap: 0.25, min_distinct: 0}
+  source_diversity: {active: true, floor: 0.0, cap: 0.125, min_distinct: 10}
+  topic_diversity: {active: true, floor: 0.0, cap: 0.375, min_distinct: 4}
+  repetition: {active: true, floor: 0.0, cap: 0.10, min_distinct: 0}
+# Any disabled band requires a nonempty reason keyed by its exact band name.
+band_exceptions: {}
+# Bound newsletter consensus is unavailable in source-only snapshots; explicit
+# disablement avoids pretending an absent editorial input is measured zero.
+disclosures:
+  - editor_consensus_unavailable_source_only
+  - geography_diversity_unavailable
+  - explanation_type_diversity_unavailable
+  - unknown_history_penalties_unmeasured_not_zero

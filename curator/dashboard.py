@@ -143,7 +143,7 @@ def _validate_card(value: Any) -> dict[str, Any]:
     if value["page_order_mode"] != "saved_at" or not _validate_cursor(value["next_cursor"]):
         raise AuthError("The saved response was invalid.")
     topics = value["topic_ids"]
-    if not isinstance(topics, list) or not 1 <= len(topics) <= 20 or not all(isinstance(item, str) and _TOPIC_RE.fullmatch(item) for item in topics):
+    if not isinstance(topics, list) or not 0 <= len(topics) <= 20 or not all(isinstance(item, str) and _TOPIC_RE.fullmatch(item) for item in topics):
         raise AuthError("The saved response was invalid.")
     coverage = value["coverage_mentions"]
     if (

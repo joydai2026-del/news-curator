@@ -197,6 +197,14 @@ weaker than direct ingestion and slower by hours. It is not a substitute.
 
 ---
 
+## Private discovery (M2)
+
+The private signed-in reader adds Updates, Hot, Interested and Surprise with shared
+browser/agent access, owner-only editions and explicit quality gates. It remains
+disabled until the separate release checks pass. See [the M2 guide](docs/discovery-m2.md)
+for commands, policy and rollout, and [the build evidence](docs/evidence/2026-09-09-m2-build.md)
+for the real-source result and remaining acceptance checks.
+
 ## How ranking works
 
 Six signals, all tunable in `sources.yaml` under `ranking:`.

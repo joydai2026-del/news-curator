@@ -330,6 +330,12 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .state-action[hidden]{display:none}
 .state-action,.load-more,.updates-button{border:1px solid var(--line);cursor:pointer}
 .state-action[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.discovery-controls{margin:1rem 0;padding:1rem;border:1px solid var(--line);border-radius:1rem;background:var(--card)}
+.discovery-controls nav{display:flex;gap:.5rem;flex-wrap:wrap}
+.discovery-controls button{font:inherit;border:1px solid var(--line);border-radius:.7rem;padding:.5rem .8rem;background:var(--card);color:var(--fg);cursor:pointer}
+.discovery-controls button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.discovery-controls p{font-size:.8rem;color:var(--muted);margin:.7rem 0 0}
+.secondary-reason{font-size:.8rem}
 .reader-status{min-height:1.5rem;color:var(--muted);font-size:.78rem}
 /* Updates float outside document flow so a polling result never moves the feed. */
 .updates-status{position:absolute;top:calc(100% + .5rem);left:50%;transform:translateX(-50%);z-index:31;width:max-content;max-width:calc(100% - 2rem);text-align:center;margin:0;pointer-events:none}
@@ -418,19 +424,21 @@ JS = """
     var shown=0;
     index.forEach(function(e){
       var belongs=tab==='__all__'||(tab==='__saved__'&&e.el.classList.contains('is-saved'))||e.topics.indexOf(' '+tab+' ')>=0;
-      var on=belongs&&(!q||e.text.indexOf(q)>=0);
+      var lane=e.el.closest('[data-discovery-selected-lane]');
+      var laneMatch=!lane||e.el.dataset.discoveryLane===lane.dataset.discoverySelectedLane;
+      var on=belongs&&laneMatch&&(!q||e.text.indexOf(q)>=0);
       e.el.hidden=!on;
       if(on){
         // CSS order does the per-tab reordering. One DOM node per story, exact
         // ranking per category, and nothing moves in the document.
         var r=e.el.getAttribute(attr);
-        e.el.style.order=(r===null)?'0':r;
+        e.el.style.order=e.el.dataset.discoveryPosition||((r===null)?'0':r);
         shown++;
       }else if(e.el.classList.contains('open')){
         collapse(e.el);
       }
     });
-    sections.forEach(function(section){
+    [].slice.call(document.querySelectorAll('.topic-section')).forEach(function(section){
       section.hidden=!section.querySelector('.card:not([hidden])');
     });
     if(grid){grid.classList.toggle('filtered',tab!=='__all__');}
@@ -507,7 +515,7 @@ JS = """
   var saved='__all__';
   try{saved=localStorage.getItem('nc-tab')||'__all__';}catch(e){}
   setTab(chips.some(function(c){return c.dataset.filter===saved;})?saved:'__all__');
-  window.NewsCuratorView=Object.freeze({addCard:addCard,removeCard:removeCard,apply:apply,currentTab:function(){return tab;}});
+  window.NewsCuratorView=Object.freeze({addCard:addCard,removeCard:removeCard,apply:apply,setTab:setTab,currentTab:function(){return tab;}});
 
   // Staleness is a property of WHEN YOU LOOK, so it is measured here rather
   // than baked in at build time (where it would always read as zero).
@@ -939,6 +947,7 @@ def render_html(
     timezone_name: str = DISPLAY_TIMEZONE,
     require_summaries: bool = True,
     topic_ids_by_name: dict[str, str] | None = None,
+    discovery_enabled: bool = False,
 ) -> str:
     built = built_at or now
     stamp = _display_time(built, timezone_name)
@@ -1015,6 +1024,7 @@ def render_html(
         else ""
     )
 
+    discovery_markup = '    <div id="discovery-controls" class="discovery-controls" hidden>\n      <nav aria-label="Discovery lanes">\n        <button type="button" data-discovery-lane="updates" aria-pressed="false">Updates</button>\n        <button type="button" data-discovery-lane="hot" aria-pressed="false">Hot</button>\n        <button type="button" data-discovery-lane="interested" aria-pressed="false">Interested</button>\n        <button type="button" data-discovery-lane="surprise" aria-pressed="false">Surprise</button>\n        <button type="button" data-discovery-public>Public stories</button>\n      </nav>\n      <p id="discovery-status" role="status" aria-live="polite"></p>\n      <div id="discovery-notice" hidden><button id="discovery-accept" type="button">A new private edition is ready</button></div>\n    </div>\n' if discovery_enabled else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1048,10 +1058,11 @@ def render_html(
       <div class="eyebrow">Today's edition</div>
       <h1>Your reading companion</h1>
       <p>Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.</p>
-      <div class="edition-meta">
+      <div class="edition-meta" data-timezone="{_e(timezone_name)}">
         <span>Built {_e(stamp)}</span><span>scheduled hourly</span><span>{total} stories</span>{stale}
       </div>
     </header>
+    {discovery_markup}
     <div class="tools">
       <nav class="mobiletopics" aria-label="Categories">{''.join(chips)}</nav>
       <div class="find">
@@ -1096,6 +1107,7 @@ def render_site(
     cname_source: Path | None = None,
     require_summaries: bool = True,
     topic_ids_by_name: dict[str, str] | None = None,
+    discovery_enabled: bool = False,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
@@ -1118,6 +1130,7 @@ def render_site(
         timezone_name=timezone_name,
         require_summaries=require_summaries,
         topic_ids_by_name=topic_ids_by_name,
+        discovery_enabled=discovery_enabled,
     )
     payload = payload.replace(
         '<script src="auth/client.js" defer></script>',
