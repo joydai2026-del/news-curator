@@ -174,6 +174,44 @@ def test_ranking_config_digest_is_available() -> None:
     assert len(ranking_config_digest(cfg)) == 64
 
 
+def test_category_interest_uses_full_matcher_and_deduplicates_name_and_id(now) -> None:
+    category = Category(name="Clean Energy", id="clean-energy", keywords=["grid"], exclude=["sports"])
+    native = make_item("A publisher-only headline")
+    native.native_categories = ["clean-energy"]
+    excluded = make_item("Grid sports roundup")
+    payload = build_interest_artifact(
+        InterestProfile(revision=1, interests=("Clean Energy", "clean-energy")),
+        [native, excluded], categories=[category], source_snapshot_digest=SNAPSHOT_DIGEST,
+        configuration_digest=CONFIG_DIGEST, generated_at=now,
+        interpretation_mode="category-v1",
+    )
+    assert payload["scores"] == {story_key(native): 0.5}
+    assert payload["interest_count"] == 2
+
+
+def test_category_mode_digest_binds_name_and_rejects_ambiguous_resolver(now) -> None:
+    first = Category(name="Climate Tech", id="climate", keywords=["grid"])
+    renamed = Category(name="Climate Systems", id="climate", keywords=["grid"])
+    cfg_first = Config([first], [], {}, {}, {}, {}, {})
+    cfg_renamed = Config([renamed], [], {}, {}, {}, {}, {})
+    assert ranking_config_digest(cfg_first) == ranking_config_digest(cfg_renamed)
+    assert ranking_config_digest(cfg_first, interpretation_mode="category-v1") != ranking_config_digest(cfg_renamed, interpretation_mode="category-v1")
+    collision = Category(name="climate", id="other", keywords=["other"])
+    with pytest.raises(ValueError, match="ambiguous category"):
+        build_interest_artifact(InterestProfile(1, ("climate",)), [make_item("Grid")],
+            categories=[first, collision], source_snapshot_digest=SNAPSHOT_DIGEST,
+            configuration_digest=CONFIG_DIGEST, generated_at=now,
+            interpretation_mode="category-v1")
+    with pytest.raises(ValueError, match="ambiguous category"):
+        build_interest_artifact(InterestProfile(1, ("climate",)), [],
+            categories=[first, collision], source_snapshot_digest=SNAPSHOT_DIGEST,
+            configuration_digest=CONFIG_DIGEST, generated_at=now,
+            interpretation_mode="category-v1")
+    with pytest.raises(ValueError, match="unknown interest interpretation"):
+        build_interest_artifact(InterestProfile(1, ()), [], source_snapshot_digest=SNAPSHOT_DIGEST,
+            configuration_digest=CONFIG_DIGEST, generated_at=now, interpretation_mode="unknown")
+
+
 def test_more_like_topic_signal_materializes_and_changes_next_rank(now) -> None:
     topic = Category(name="Energy", id="energy", keywords=["grid"])
     old_match = make_item("Grid storage expands", "https://example.com/grid", hours_ago=12)

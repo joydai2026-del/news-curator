@@ -754,7 +754,12 @@
       view.apply();
       const count = discoveryEdition?.entries.filter((entry) => entry.primary_lane === lane).length || 0;
       const emptyReasons = { updates: "No verified publisher changes are available in this edition.", hot: "No stories met the recent independent-coverage threshold.", interested: "No fresh stories matched your settled interests.", surprise: "No unseen stories outside your interests met the quality and importance checks." };
-      discoveryMessage(count ? `${count} ${count === 1 ? "story" : "stories"} in ${lane}.${discoveryEdition.stale ? " This edition is older than usual." : ""}` : emptyReasons[lane]);
+      const shortageNotice = ["hot", "surprise"].includes(lane) && discoveryEdition?.shortfalls[lane] > 0
+        ? ` Fewer qualified ${lane === "hot" ? "Hot" : "Surprise"} stories were selected for this edition.`
+        : "";
+      discoveryMessage(count
+        ? `${count} ${count === 1 ? "story" : "stories"} in ${lane}.${shortageNotice}${discoveryEdition.stale ? " This edition is older than usual." : ""}`
+        : `${shortageNotice.trim() || emptyReasons[lane]}`);
     }
     function leaveDiscovery(clearEdition = false) {
       discoveryRequest += 1;

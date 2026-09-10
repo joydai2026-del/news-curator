@@ -247,7 +247,8 @@ def materialize_private_discovery(cfg, snapshot, policy, secret_config: SecretPr
     # not unique when the smaller of those independent counters changes.
     profile_fingerprint = digest(asdict(profile))
     policy_digest = digest(p)
-    ranking_digest = ranking_config_digest(cfg)
+    ranking_mode = 'category-v1'
+    ranking_digest = ranking_config_digest(cfg, interpretation_mode=ranking_mode)
     dedup_digest = digest({'threshold': cfg.dedup.get('title_similarity_threshold', 0.90),
                            'time_bucket_hours': cfg.dedup.get('time_bucket_hours', 36.0)})
     code_digest = hashlib.sha256(Path(discovery.__file__).read_bytes()).hexdigest()
@@ -274,10 +275,12 @@ def materialize_private_discovery(cfg, snapshot, policy, secret_config: SecretPr
     profile_payload = build_interest_artifact(profile,
         [i for result in snapshot.results for i in result.items],
         source_snapshot_digest=snapshot.content_digest,
-        configuration_digest=ranking_config_digest(cfg), generated_at=now, categories=cfg.categories)
+        configuration_digest=ranking_digest, generated_at=now, categories=cfg.categories,
+        interpretation_mode=ranking_mode)
     artifact = InterestArtifact(**{k: v for k, v in profile_payload.items() if k != 'schema_version'})
     receipt = discovery.build_discovery(cfg, snapshot, p, previous_snapshot=previous_snapshot,
-                                       interest_artifact=artifact, history=context['history'], first_edition=context['first_edition'], now=now, language=language)
+                                       interest_artifact=artifact, history=context['history'], first_edition=context['first_edition'], now=now, language=language,
+                                       ranking_interpretation_mode=ranking_mode)
     item_groups = defaultdict(list)
     for result in snapshot.results:
         for item in result.items:
@@ -295,7 +298,7 @@ def materialize_private_discovery(cfg, snapshot, policy, secret_config: SecretPr
         'topic_matches_digest': digest(topic_matches),
         'snapshot_digest': snapshot.content_digest,
         'configuration_digest': snapshot.configuration_digest,
-        'ranking_configuration_digest': ranking_config_digest(cfg),
+        'ranking_configuration_digest': ranking_digest,
         'previous_snapshot_digest': previous_snapshot.content_digest if previous_snapshot else None,
         'profile_digest': digest(asdict(artifact)), 'profile_revision': profile.revision,
         'history_digest': digest(context['history']), 'policy_digest': policy_digest,

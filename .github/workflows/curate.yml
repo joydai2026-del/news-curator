@@ -298,7 +298,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          NEWS_CURATOR_OWNER_USER_ID: ${{ secrets.NEWS_CURATOR_OWNER_USER_ID }}
+          NEWS_CURATOR_OWNER_USER_ID: ${{ secrets.NEWS_CURATOR_DISCOVERY_OWNER_USER_ID || secrets.NEWS_CURATOR_OWNER_USER_ID }}
           NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
           NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
         run: |

@@ -27,6 +27,7 @@ from curator.source_snapshot import load_source_snapshot, write_source_snapshot,
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / 'supabase/migrations/202609090001_discovery_lanes.sql'
 RETRY_MIGRATION = ROOT / 'supabase/migrations/202609100001_discovery_retry_identity.sql'
+SHORTFALL_MIGRATION = ROOT / 'supabase/migrations/202609100002_discovery_qualified_shortfalls.sql'
 IMAGE = 'postgres:17.11'
 OWNER = '11111111-1111-4111-8111-111111111111'
 OTHER = '22222222-2222-4222-8222-222222222222'
@@ -89,6 +90,7 @@ def db():
         _sql(container, (ROOT / 'supabase/migrations/202609080001_dashboard_summary.sql').read_text())
         _sql(container, MIGRATION.read_text())
         _sql(container, RETRY_MIGRATION.read_text())
+        _sql(container, SHORTFALL_MIGRATION.read_text())
         _sql(container, f"""
           insert into auth.users values('{OWNER}'),('{OTHER}');
           insert into public.user_preferences(user_id,revision,interests) values('{OWNER}',1,array['OpenAI']),('{OTHER}',1,array['OpenAI']);
@@ -98,7 +100,7 @@ def db():
         _run('docker', 'stop', container, check=False)
 
 
-def _payload(tmp_path, owner=OWNER, edition_id='db-contract-1'):
+def _payload(tmp_path, owner=OWNER, edition_id='db-contract-1', hot_window=6, lane_quotas=None):
     cfg = Config(categories=[Category('AI', ['OpenAI'])], rss=[], settings={}, ranking={}, dedup={}, hackernews={}, reddit={})
     path = ROOT / 'tests/fixtures/discovery-captured.json'
     raw = json.loads(path.read_text())
@@ -116,7 +118,10 @@ def _payload(tmp_path, owner=OWNER, edition_id='db-contract-1'):
     snapshot = load_source_snapshot(rebound, current_time=now)
     policy = load_discovery_policy(ROOT / 'config/discovery-policy-r2.yaml')
     policy['policy_id'] = 'captured-db-access-control-transform'
-    policy['windows']['hot'] = 6
+    policy['windows']['hot'] = hot_window
+    if lane_quotas is not None:
+        policy['lane_quotas'] = lane_quotas
+        policy['size'] = sum(lane_quotas.values())
     # These tests measure storage/access, not editorial calibration. Exceptions are explicit.
     for name in policy['bands']:
         policy['bands'][name]['active'] = False
@@ -155,6 +160,53 @@ def _payload(tmp_path, owner=OWNER, edition_id='db-contract-1'):
 def _wire(payload):
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
     return text, hashlib.sha256(text.encode()).hexdigest()
+
+
+def _rebind_payload(payload):
+    receipt = payload['receipt']
+    receipt['bindings']['policy_digest'] = hashlib.sha256(json.dumps(
+        receipt['policy'], sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+    receipt.pop('receipt_digest', None)
+    receipt['receipt_digest'] = hashlib.sha256(json.dumps(
+        receipt, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+    bindings = receipt['bindings']
+    identity = [payload['owner_user_id'], bindings['snapshot_digest'], bindings['previous_snapshot_digest'],
+                bindings['profile_revision'], payload['profile_fingerprint'], bindings['policy_digest'],
+                payload['code_revision'], receipt['language'], bindings['ranking_configuration_digest'],
+                bindings['display_dedup_digest'], bindings['code_digest']]
+    payload['edition_id'] = 'm2:' + hashlib.sha256(json.dumps(
+        identity, separators=(',', ':')).encode()).hexdigest()
+    return payload
+
+
+def _qualified_payload(tmp_path):
+    payload = _payload(tmp_path, edition_id='qualified-shortfall', hot_window=24,
+                       lane_quotas={'updates': 0, 'hot': 6, 'interested': 1, 'surprise': 0})
+    receipt = payload['receipt']
+    receipt['policy']['revision'] = 3
+    receipt['policy']['policy_id'] = 'discovery-policy-r3'
+    receipt['policy']['qualified_shortfalls'] = {'trend': 'hot', 'deliberate_surprise': 'surprise'}
+    choices = [('trend', 'hot'), ('deliberate_surprise', 'surprise')]
+    band_name, lane = next((band, lane) for band, lane in choices if receipt['shortfalls'][lane] > 0)
+    achieved = sum(lane in row['lane_scores'] for row in receipt['entries']) / len(receipt['entries'])
+    assert len(receipt['entries']) == 3 and achieved == 2 / 3
+    rule = receipt['policy']['bands'][band_name]
+    rule.update(active=True, floor=(achieved + 1) / 2, cap=1.0, min_distinct=0)
+    receipt['policy']['band_exceptions'].pop(band_name, None)
+    band = next(row for row in receipt['bands'] if row['band'] == band_name)
+    band.update(active=True, floor=rule['floor'], cap=1.0, min_distinct=0, achieved=achieved,
+                distinct=0, verdict='QUALIFIED_SHORTFALL', exception_reason='')
+    return _rebind_payload(payload), band_name, lane
+
+
+def test_qualified_shortfall_fixture_has_real_repeating_share(tmp_path):
+    payload, band_name, lane = _qualified_payload(tmp_path)
+    receipt = payload['receipt']
+    band = next(row for row in receipt['bands'] if row['band'] == band_name)
+    assert len(receipt['entries']) == 3
+    assert sum(lane in row['lane_scores'] for row in receipt['entries']) == 2
+    assert band['achieved'] == 2 / 3
+    assert receipt['shortfalls'][lane] == 4
 
 
 def _finalize_expression(payload, digest=None):
@@ -280,6 +332,53 @@ def test_retry_identity_is_service_only_bounded_and_ambiguous_fail_closed(db, tm
     ambiguous = _sql(db, f'set role service_role; select {_retry_expression(payload)};', check=False)
     assert ambiguous.returncode and 'retry identity ambiguous' in ambiguous.stderr
     _sql(db, f"delete from public.private_discovery_editions where edition_id in ('{duplicate_id}','{payload['edition_id']}');")
+
+
+def test_qualified_shortfall_settlement_recomputes_share_and_rejects_tampering(db, tmp_path):
+    payload, band_name, lane = _qualified_payload(tmp_path)
+    band = next(row for row in payload['receipt']['bands'] if row['band'] == band_name)
+    assert 0 < band['achieved'] < 1
+    stored = _json_call(db, _finalize_expression(payload))
+    assert stored['status'] == 'stored'
+    _sql(db, f"delete from public.private_discovery_editions where edition_id='{payload['edition_id']}';")
+
+    mutations = []
+    forged = deepcopy(payload)
+    next(row for row in forged['receipt']['bands'] if row['band'] == band_name)['achieved'] += .01
+    mutations.append(_rebind_payload(forged))
+    forged_target = deepcopy(payload)
+    next(row for row in forged_target['receipt']['bands'] if row['band'] == band_name)['floor'] += .01
+    mutations.append(_rebind_payload(forged_target))
+    above_cap = deepcopy(payload)
+    above_cap['receipt']['policy']['bands'][band_name]['cap'] = band['achieved'] / 2
+    next(row for row in above_cap['receipt']['bands'] if row['band'] == band_name)['cap'] = band['achieved'] / 2
+    mutations.append(_rebind_payload(above_cap))
+    zero_shortfall = deepcopy(payload)
+    zero_shortfall['receipt']['shortfalls'][lane] = 0
+    mutations.append(_rebind_payload(zero_shortfall))
+    missing_revision = deepcopy(payload)
+    missing_revision['receipt']['policy'].pop('revision')
+    mutations.append(_rebind_payload(missing_revision))
+    malformed_mapping = deepcopy(payload)
+    malformed_mapping['receipt']['policy']['qualified_shortfalls'] = {'trend': 'hot'}
+    for row in malformed_mapping['receipt']['bands']:
+        if row['verdict'] == 'QUALIFIED_SHORTFALL':
+            row['verdict'] = 'PASS'
+            row['floor'] = 0.0
+            malformed_mapping['receipt']['policy']['bands'][row['band']]['floor'] = 0.0
+    mutations.append(_rebind_payload(malformed_mapping))
+    missing_mapping = deepcopy(payload)
+    missing_mapping['receipt']['policy'].pop('qualified_shortfalls')
+    for row in missing_mapping['receipt']['bands']:
+        if row['verdict'] == 'QUALIFIED_SHORTFALL':
+            row['verdict'] = 'PASS'
+            row['floor'] = 0.0
+            missing_mapping['receipt']['policy']['bands'][row['band']]['floor'] = 0.0
+    mutations.append(_rebind_payload(missing_mapping))
+    for invalid in mutations:
+        rejected = _sql(db, 'set role service_role; select ' + _finalize_expression(invalid) + ';', check=False)
+        assert rejected.returncode
+    assert _sql(db, f"select count(*) from public.private_discovery_editions where owner_user_id='{OWNER}';").stdout.strip() == '0'
 
 
 @pytest.mark.parametrize('mutation', ['failed','unknown_band','missing_profile','invalid_source_fact','duplicate','stale_history'])

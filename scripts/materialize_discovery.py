@@ -41,7 +41,7 @@ def main(argv=None):
         expected = snapshot_config_digest(cfg)
         snapshot = load_source_snapshot(args.source_snapshot, expected_configuration_digest=expected,
                                         current_time=now, max_age_seconds=cfg.source_snapshot_max_age_seconds)
-        policy = load_discovery_policy(args.policy or args.root / 'config' / 'discovery-policy-r2.yaml')
+        policy = load_discovery_policy(args.policy or args.root / 'config' / 'discovery-policy-r3.yaml')
         previous = None if args.previous_source_snapshot is None else load_source_snapshot(
             args.previous_source_snapshot, expected_configuration_digest=expected, current_time=now,
             max_age_seconds=int(max(policy['windows'].values()) * 3600))

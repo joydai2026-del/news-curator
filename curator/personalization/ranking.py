@@ -96,7 +96,7 @@ def story_key(item: Item) -> str:
     return story_id_for_item(item)
 
 
-def ranking_config_digest(cfg: "Config") -> str:
+def ranking_config_digest(cfg: "Config", *, interpretation_mode: str = "literal-v1") -> str:
     """Bind an artifact to every editable input used by the ranker."""
 
     payload = {
@@ -112,6 +112,16 @@ def ranking_config_digest(cfg: "Config") -> str:
             for category in cfg.categories
         ],
     }
+    if interpretation_mode == "category-v1":
+        payload["interest_interpretation"] = {
+            "version": interpretation_mode,
+            "categories": [
+                {"id": category.id, "name": category.name}
+                for category in cfg.categories
+            ],
+        }
+    elif interpretation_mode != "literal-v1":
+        raise ValueError("unknown interest interpretation mode")
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -132,6 +142,37 @@ def interest_score(item: Item, interests: Sequence[str]) -> float:
     if not hits:
         return 0.0
     return min(1.0, math.log1p(len(hits)) / math.log1p(3))
+
+
+def _category_interest_resolver(categories: Sequence["Category"]) -> dict[str, "Category"]:
+    resolver: dict[str, "Category"] = {}
+    for category in categories:
+        for label in (category.id, category.name):
+            key = fold_text(label).casefold()
+            if key in resolver and resolver[key].id != category.id:
+                raise ValueError("ambiguous category interest resolver")
+            resolver[key] = category
+    return resolver
+
+
+def category_interest_score(item: Item, interests: Sequence[str], categories: Sequence["Category"], *,
+                            resolver: dict[str, "Category"] | None = None) -> float:
+    """Score literal interests and distinct configured category concepts."""
+    resolver = resolver if resolver is not None else _category_interest_resolver(categories)
+    matched_categories = {}
+    literal_interests = []
+    for interest in interests:
+        category = resolver.get(fold_text(interest).casefold())
+        if category is None:
+            literal_interests.append(interest)
+        else:
+            matched_categories[category.id] = category
+    literal_hits = {fold_text(term).casefold() for term in literal_interests if _find_interest(item.title, term)}
+    from ..filter import topic_match
+    category_hits = {category_id for category_id, category in matched_categories.items()
+                     if topic_match(item, category) is not None}
+    hit_count = len(literal_hits) + len(category_hits)
+    return 0.0 if not hit_count else min(1.0, math.log1p(hit_count) / math.log1p(3))
 
 
 def _is_cjk(character: str) -> bool:
@@ -201,12 +242,16 @@ def build_interest_artifact(
     newsletter_digest: str = EMPTY_NEWSLETTER_INPUT_DIGEST,
     generated_at: datetime | None = None,
     categories: Sequence["Category"] = (),
+    interpretation_mode: str = "literal-v1",
 ) -> dict[str, object]:
     """Build a score-only artifact. Raw interests and user identity never leave the job."""
 
     when = generated_at or datetime.now(timezone.utc)
     if when.tzinfo is None:
         raise ValueError("generated_at must be timezone-aware")
+    if interpretation_mode not in ("literal-v1", "category-v1"):
+        raise ValueError("unknown interest interpretation mode")
+    category_resolver = _category_interest_resolver(categories) if interpretation_mode == "category-v1" else None
     scores: dict[str, float] = {}
     topic_adjustments: dict[str, float] = {}
     for topic_id, signal in profile.topic_signals:
@@ -215,7 +260,10 @@ def build_interest_artifact(
     for topic_id, adjustment in profile.topic_adjustments:
         topic_adjustments[topic_id] = topic_adjustments.get(topic_id, 0.0) + adjustment
     for item in items:
-        score = interest_score(item, profile.interests)
+        if interpretation_mode == "literal-v1":
+            score = interest_score(item, profile.interests)
+        elif interpretation_mode == "category-v1":
+            score = category_interest_score(item, profile.interests, categories, resolver=category_resolver)
         for category in categories:
             if category.id not in topic_adjustments:
                 continue

@@ -96,6 +96,12 @@ def test_discovery_materializer_failure_is_explicit_without_breaking_fallback():
     assert materialize["id"] == "materialize_discovery"
     assert materialize["continue-on-error"] is True
     assert materialize["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert materialize["env"]["NEWS_CURATOR_OWNER_USER_ID"] == (
+        "${{ secrets.NEWS_CURATOR_DISCOVERY_OWNER_USER_ID || secrets.NEWS_CURATOR_OWNER_USER_ID }}"
+    )
+    assert _step_named(build, "Materialize saved-interest ranking")["env"]["NEWS_CURATOR_OWNER_USER_ID"] == (
+        "${{ secrets.NEWS_CURATOR_OWNER_USER_ID }}"
+    )
     assert "--previous-source-snapshot" not in str(materialize["run"])
     assert not any(step.get("name") == "Restore public discovery baseline" for step in _steps(build))
     assert notice["if"] == "${{ steps.materialize_discovery.outcome == 'failure' }}"

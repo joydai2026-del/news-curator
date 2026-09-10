@@ -28,8 +28,36 @@ Failure diagnostics expose only failed band names and verdicts. The workflow exp
 
 GitHub's documented [workflow run filters](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow) provide the bounded creation-time query. Actual source capture clocks and configuration digests remain the final evidence checks.
 
+PR [22](https://github.com/joydai2026-del/news-curator/pull/22) merged these corrections as `3c86e4be1dee46fa0da801342c8cfa226b3a3cd4`. Its exact-head CI run [34471062086](https://github.com/joydai2026-del/news-curator/actions/runs/34471062086) tested `34fd962bf5472615f2876b452df10275a3941cda`; all four jobs passed, including PostgreSQL 17.11. Post-merge CI [34471193286](https://github.com/joydai2026-del/news-curator/actions/runs/34471193286) also passed at `3c86e4be1dee46fa0da801342c8cfa226b3a3cd4`.
+
+Migration `202609100001_discovery_retry_identity.sql` was then applied to production with SHA-256 `0347e5d23db3a2445f2d95c40da1bab6266215722d25851ba6c53e9dbe3ea6da`. Production readback confirmed the migration, one functional lookup index, service-role-only execution, rejected null input, and zero private editions.
+
+## Second activation and recovery
+
+Activation [34471393133](https://github.com/joydai2026-del/news-curator/actions/runs/34471393133) ran at `3c86e4be1dee46fa0da801342c8cfa226b3a3cd4`. The repaired public baseline helper passed against the actual GitHub API and selected the oldest eligible validated capture. The owner-bound candidate selected 21 stories with shortfalls Updates 0, Hot 1, Interested 0, Surprise 2. Relevance and Deliberate Surprise returned FAIL, and the materializer exited 3 without storing an edition. The diagnostics did not expose achieved values or direction, so the shortfalls do not prove how many stories qualified for either failed band.
+
+Discovery was restored to false. The run ended terminal-cancelled before deploy, persistence, or archive finalization. Production readback confirmed zero private editions. The latest public revision is `3c86e4be1dee46fa0da801342c8cfa226b3a3cd4`, serving the M1 behavior from the earlier flag-off release.
+
+Independent selection analysis has not proven a safe fix or a viable passing owner edition. The unresolved next investigation is to distinguish failure direction with safe aggregate achieved and eligible-count evidence from the protected candidate pool, then assess whether eligible same-primary-lane replacements exist. Quality thresholds remain unchanged.
+
 ## Verification boundary
 
-The local full suite completed with 2,279 passed, 29 optional-runtime skips, and zero failures or errors. Focused checks cover the later query and clock corrections. PostgreSQL execution for the new retry migration must pass in CI before application; local Docker was unavailable. Independent security and correctness review findings are being resolved before the next release.
+The local full suite completed with 2,279 passed, 29 optional-runtime skips, and zero failures or errors. The final focused suite completed with 78 passed. CI supplied the PostgreSQL runtime proof for the retry migration. Independent security and correctness reviews passed before merge and production application.
 
-Production completion still requires the retry migration, a genuine configured-owner PASS settlement, activated-page verification, and authenticated owner read/save testing. The browser approval gate requires account-specific authorization before selecting a Google account. No account was selected and no test reading state was changed. M2 acceptance and M1 learning completion are not inferred from source tests or public-page checks.
+Production completion still requires a genuine configured-owner PASS settlement, activated-page verification, and authenticated owner read/save testing. Account-specific authorization and normal browser sign-in subsequently passed, as recorded below. No test reading state was changed. M2 is not done, and M1 learning completion is not inferred from source tests or public-page checks.
+
+## Authorized account follow-up
+
+JJ authorized a specific Google account for M2 testing. Normal Google account selection succeeded in a background browser, and the production signed-in dashboard loaded. No password, verification code, additional consent, token extraction, or native-login workaround was required. No reading, saved, or interest state was changed. Discovery remained disabled, so this proves login and dashboard access, not M2 lane behavior.
+
+A read-only diagnostic used that account's actual saved preferences and signals, the failed activation's original current and prior source captures, and a fixed diagnostic evaluation clock. This is not a stored production receipt or proof of the exact internal production evaluation clock. The existing engine selected 14 of 24 candidates. Relevance was 0.000, and Surprise was 0.429 against its 0.250 cap; the other five bands passed. None of the 24 candidates met the relevance threshold, so no unchanged-policy subset could pass relevance. All 73 possible same-primary single replacements were also checked without finding a PASS.
+
+The automated production run's 21 selected stories and six primary Interested entries differ from this account's diagnostic. The hidden automated-owner binding remains unverified; the difference does not identify another account. No production owner setting was replaced.
+
+The user approved ongoing M2 delivery for the authorized account. Its category preferences were saved through the production UI and reloaded successfully. A dedicated protected M2 owner setting was configured from an exact one-account administrative lookup; the existing M1 owner setting was not changed. The account identifier and profile contents remain outside this evidence file.
+
+The M2-only category interpretation maps a saved configured category name or id to the full existing category matcher. It does not generate keywords or synthetic story signals. M1 retains literal ranking behavior. The mode and canonical category mapping are bound into the M2 ranking digest and receipt identity.
+
+A read-only replay against the original failed activation capture after the saved-interest update selected 18 stories. Relevance passed at 1.000, while Deliberate Surprise failed at 0.000; the other five bands passed. A separate production-method readiness check used the latest successful scheduled capture and the chronology-selected validated prior capture. It selected 16 stories: Relevance passed at 1.000, Deliberate Surprise failed at 0.000, and Trend failed at 0.125; the other four bands passed. These two captured pools contained no Surprise-qualified candidates. They do not prove that future captures cannot pass.
+
+No further activation occurred. Discovery remains disabled and production still has zero private editions. Completion still requires a genuine protected-job PASS followed by private lane, read, save, reload, and logout verification. Quality bands, quotas, lane priority, and evidence rules remain unchanged. M1 learning remains separate.
