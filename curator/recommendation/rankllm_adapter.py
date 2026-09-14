@@ -247,6 +247,19 @@ class RankLLMAdapter:
             best = replace(best, history_events_omitted=best_omitted)
         return best
 
+    def prepare_with_reason(self, request: RankingRequest):
+        """Return a prepared request or a stable, known pre-call fallback reason."""
+        if (self._policy.input_cost_per_million_tokens_usd is None or
+                self._policy.output_cost_per_million_tokens_usd is None):
+            return None, "unknown_provider_pricing"
+        if getattr(self._engine, "prepare", None) is None:
+            return None, "provider_preparation_unavailable"
+        try:
+            prepared = self.prepare(request)
+        except (ValueError, ImportError):
+            return None, "provider_preparation_failed"
+        return (prepared, "" if prepared is not None else "request_cost_limit")
+
     def observed_cost(self, *, input_tokens: int, output_tokens: int) -> float | None:
         return self._estimated_cost(input_tokens, output_tokens)
 

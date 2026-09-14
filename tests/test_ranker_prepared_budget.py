@@ -197,6 +197,49 @@ def test_definite_pre_call_fallback_releases_zero_charge_reservation(
     assert store.frozen['bindings']['execution']['cost_basis']=='released_no_provider_call'
 
 
+@pytest.mark.parametrize(('case','expected_reason','expected_reserve_calls'), [
+    ('missing_pricing', 'unknown_provider_pricing', 0),
+    ('missing_prepare', 'provider_preparation_unavailable', 0),
+    ('prepare_error', 'provider_preparation_failed', 0),
+    ('request_limit', 'request_cost_limit', 0),
+    ('store_refusal', 'budget_reservation_failed', 1),
+])
+def test_service_reports_truthful_pre_call_fallback_reason(case, expected_reason, expected_reserve_calls):
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    from curator.recommendation.service import RankingService, ServicePolicy
+    rows=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'][:1]
+    class Store:
+        reserve_calls=0
+        def history_snapshot(self, token): return dict(history_revision=0,included_history_revision=0,
+            history_generation=1,consent_revision=1,learning_enabled=True,provider_processing_enabled=True,
+            provider_policy_id='test-policy',events=[])
+        def retained_candidates(self, **kwargs): return rows
+        def reserve_budget(self, **kwargs): self.reserve_calls+=1; return case!='store_refusal'
+        def settle_budget(self, **kwargs): pytest.fail('pre-call rejection has no reservation to settle')
+        def owner_states(self, token, story_ids): return {}
+        def save_frozen_order(self, **kwargs): self.frozen=kwargs; return 'local-frozen'
+    class Engine:
+        def prepare(self, model_input):
+            if case=='prepare_error': raise ValueError('known prompt preparation failure')
+            return type('Prepared',(),{'input_tokens_bound':100,'output_tokens_budget':100})()
+        def rerank_prepared(self, prepared, timeout_seconds): pytest.fail('pre-call fallback must not invoke engine')
+    engine=object() if case=='missing_prepare' else Engine()
+    input_price=None if case=='missing_pricing' else .25
+    request_limit=.0001 if case=='request_limit' else .02
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+        max_retries=0,request_cost_limit_usd=request_limit,input_cost_per_million_tokens_usd=input_price,
+        output_cost_per_million_tokens_usd=2),engine=engine)
+    store=Store(); service=RankingService(auth=type('Auth',(),{'get_user':lambda self,token:{'id':'local-owner'}})(),
+        store=store,adapter=adapter,policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),
+        cursor_key=b'x'*32)
+    response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
+        history_generation=1,consent_revision=1))
+    assert response['fallback_reason']==expected_reason
+    assert store.reserve_calls==expected_reserve_calls
+    assert store.frozen['bindings']['execution']['attempts_started']==0
+    assert store.frozen['bindings']['execution']['cost_basis']=='no_provider_call'
+
+
 def test_observed_retry_settlement_retains_only_unknown_attempt_ceiling():
     from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',

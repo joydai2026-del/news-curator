@@ -118,16 +118,20 @@ class RankingService:
         def record_attempt(attempt, elapsed):
             nonlocal attempts_started
             attempts_started += 1
-        try:
-            prepared = self._adapter.prepare(request) if processing_allowed and request.candidates else None
-        except (ValueError, ImportError):
+        preparation_reason = ""
+        if processing_allowed and request.candidates:
+            prepared, preparation_reason = self._adapter.prepare_with_reason(request)
+        else:
             prepared = None
         estimate = None if prepared is None else self._adapter.reservation_estimate(
             estimated_input_tokens=prepared.input_tokens_bound, estimated_output_tokens=prepared.output_tokens_budget)
-        if estimate is None or not self._store.reserve_budget(user_id=owner.user_id, request_id=request_id,
-                amount_usd=estimate, daily_limit_usd=self._policy.daily_cost_limit_usd):
+        reservation_created = estimate is not None and self._store.reserve_budget(
+            user_id=owner.user_id, request_id=request_id, amount_usd=estimate,
+            daily_limit_usd=self._policy.daily_cost_limit_usd)
+        if not reservation_created:
             receipt = self._adapter.fallback(request, "no_candidates" if not request.candidates else
-                "provider_processing_consent_required" if not processing_allowed else "budget_reservation_failed")
+                "provider_processing_consent_required" if not processing_allowed else preparation_reason or
+                "budget_reservation_failed")
         else:
             try:
                 receipt = self._adapter.rank(request, provider_processing_consent=processing_allowed,
@@ -168,8 +172,8 @@ class RankingService:
                 "history_events_included": getattr(prepared, "history_events_included", 0) if prepared else 0,
                 "history_events_omitted": getattr(prepared, "history_events_omitted", 0) if prepared else 0,
                 "cost_basis": "observed_with_unknown_attempt_reserves" if observed_usage else
-                    "unknown_provider_charge_reserved" if estimate and attempts_started else
-                    "released_no_provider_call" if estimate else "no_provider_call",
+                    "unknown_provider_charge_reserved" if reservation_created and attempts_started else
+                    "released_no_provider_call" if reservation_created else "no_provider_call",
                 "newest_event_id": receipt.newest_event_id}})
         frozen_id = self._store.save_frozen_order(user_id=owner.user_id, request_id=request_id,
             bindings=bindings, cards=cards, page_size=page_size, expires_at=expires_at)
