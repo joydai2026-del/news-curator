@@ -1517,6 +1517,8 @@ def test_action_matrix_denies_an_action_absent_from_the_matrix():
 #: not a private RECORD. Encoded as data so adding an exemption is a visible,
 #: reasoned edit rather than a quiet omission.
 OWNERSHIP_EXEMPT = {
+    "AuthenticatedOwner": "server-supplied authorization context in flight, never persisted as a row",
+    "RankingRequest": "an authenticated request in flight, never persisted as a row",
     "Tenant": "the isolation boundary itself; it cannot be owned by one",
     "User": "the identity record a user_id points AT",
     "Actor": "the identity record an actor_id points AT",

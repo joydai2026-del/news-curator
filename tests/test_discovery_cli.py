@@ -13,6 +13,9 @@ CAPTURE = ROOT / 'tests' / 'fixtures' / 'discovery-captured.json'
 
 
 def call(*args):
+    if args and args[0] == 'build':
+        args = (*args, '--root', ROOT / 'tests/fixtures/discovery-capture-config',
+                '--policy', ROOT / 'config/discovery-policy-r2.yaml')
     return subprocess.run([sys.executable, str(CLI), *map(str, args)],
                           cwd=ROOT, capture_output=True, text=True, timeout=30)
 

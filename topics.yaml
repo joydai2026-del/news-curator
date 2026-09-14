@@ -538,6 +538,7 @@ categories:
       - {id: bbc-world,      name: BBC World,             url: "https://feeds.bbci.co.uk/news/world/rss.xml", language: en, max_age_hours: 6, weight: 1.05}
       - {id: guardian-world, name: The Guardian World,    url: "https://www.theguardian.com/world/rss",      language: en, max_age_hours: 6, weight: 1.0}
       - {id: rfi-zh,         name: RFI Chinese,           url: "https://www.rfi.fr/cn/rss",                  language: zh, max_age_hours: 8, weight: 1.0}
+      - {id: bbc-zh,         name: BBC Chinese,           url: "https://feeds.bbci.co.uk/zhongwen/simp/rss.xml", language: zh, max_age_hours: 8, weight: 1.0}
       - {id: cna-zh,         name: CNA International,     url: "https://feeds.feedburner.com/rsscna/intworld", language: zh, max_age_hours: 8, weight: 1.0}
       - {id: udn-zh,         name: UDN World,             url: "https://udn.com/rssfeed/news/2/6638?ch=news", language: zh, max_age_hours: 12, weight: 0.9, enabled: false}  # empty feed; disabled 2026-09-01 per JJ, Gate 0c D3
       - {id: dw-zh,          name: DW Chinese,            url: "https://rss.dw.com/rdf/rss-chi-all",         language: zh, max_age_hours: 12, weight: 1.0}
@@ -562,6 +563,8 @@ categories:
     hn_queries:
       - United States
       - US policy
+    sources:
+      - {id: npr-us, name: NPR US, url: "https://www.npr.org/rss/rss.php?id=1014", language: en, max_age_hours: 6, weight: 1.0}
   # ==========================================================================
   - id: business
     name: Business

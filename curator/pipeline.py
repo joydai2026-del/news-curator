@@ -21,7 +21,7 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from .config import Category, Config, ConfigError, RssSource, load_config
 from .dedup import dedupe
@@ -108,7 +108,12 @@ def _hackernews_source_row(cfg: Config) -> dict | None:
     }
 
 
-def configured_source_specs(cfg: Config, registry=None):
+def configured_source_specs(
+    cfg: Config,
+    registry=None,
+    *,
+    source_ids: Iterable[str] | None = None,
+):
     """Return validated source specs in stable config order.
 
     RSS, Atom, news sitemap, and JSON Feed additions need only one config row.
@@ -122,13 +127,26 @@ def configured_source_specs(cfg: Config, registry=None):
     hackernews = _hackernews_source_row(cfg)
     if hackernews is not None:
         rows.append(hackernews)
-    return selected_registry.parse_specs(rows)
+    specs = selected_registry.parse_specs(rows)
+    if source_ids is None:
+        return specs
+    requested = tuple(source_ids)
+    if not requested or any(not isinstance(source_id, str) or not source_id for source_id in requested):
+        raise ConfigError("source selection must contain one or more source IDs")
+    if len(requested) != len(set(requested)):
+        raise ConfigError("source selection contains duplicate source IDs")
+    configured = {spec.id for spec in specs}
+    unknown = sorted(set(requested) - configured)
+    if unknown:
+        raise ConfigError(f"source selection contains unconfigured source IDs: {', '.join(unknown)}")
+    return tuple(spec for spec in specs if spec.id in set(requested))
 
 
 def collect(
     cfg: Config,
     *,
     offline: bool = False,
+    source_ids: Iterable[str] | None = None,
     registry=None,
     transport=None,
     clock=None,
@@ -169,7 +187,7 @@ def collect(
         default_max_age_hours=cfg.default_source_max_age_hours,
     )
     source_results = collect_sources(
-        configured_source_specs(cfg, selected_registry),
+        configured_source_specs(cfg, selected_registry, source_ids=source_ids),
         context,
         max_workers=cfg.fetch_workers,
     )

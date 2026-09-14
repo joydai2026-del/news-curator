@@ -105,6 +105,22 @@ class EventType(str, Enum):
     IMPORTED_BROWSER_VISIT = "imported_browser_visit"
 
 
+class M2HistoryEventType(str, Enum):
+    """M2 interaction semantics added without changing phase-1 policy rows."""
+
+    OPEN_ORIGINAL = "open_original"
+    SEARCH_QUERY = "search_query"
+    SEARCH_ZERO_RESULTS = "search_zero_results"
+    SEARCH_RESULT_CLICK = "search_result_click"
+
+
+class RankingResultMode(str, Enum):
+    """How a ranking response was produced."""
+
+    MODEL = "model"
+    FALLBACK = "fallback"
+
+
 class ArtifactType(str, Enum):
     """Knowledge artifact classes."""
 

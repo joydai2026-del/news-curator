@@ -1,0 +1,100 @@
+"""Validated composition root shared by local ASGI tests and Modal."""
+
+from __future__ import annotations
+
+import os
+import json
+import hashlib
+from pathlib import Path
+
+import httpx
+import yaml
+
+from .asgi import RankingASGI
+from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder
+from .rankllm_adapter import RankLLMAdapter, RankerPolicy
+from .service import RankingService, ServicePolicy
+from .supabase_http import SupabaseHTTP
+
+
+def configured_token_counter(policy, env):
+    """Load only the reviewed, locally cached encoding. Never download at startup."""
+    encoding_name = _required(policy, "tokenizer_encoding")
+    # The encoding data is an adapter dependency, pinned alongside its wheel.
+    reviewed = {"o200k_base": (
+        "fb374d419588a4632f3f557e76b4b70aebbca790",
+        "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d")}
+    if encoding_name not in reviewed:
+        raise ValueError("unreviewed tokenizer encoding")
+    filename, expected_hash = reviewed[encoding_name]
+    cache_dir = _required(env, "TIKTOKEN_CACHE_DIR")
+    cache_file = Path(cache_dir) / filename
+    if not cache_file.is_file() or hashlib.sha256(cache_file.read_bytes()).hexdigest() != expected_hash:
+        raise ValueError("reviewed tokenizer cache missing or changed")
+    # tiktoken reads this process-level path. Refuse a divergent injected path
+    # rather than changing global state across application instances.
+    if os.environ.get("TIKTOKEN_CACHE_DIR") != cache_dir:
+        raise ValueError("tokenizer cache environment mismatch")
+    import tiktoken
+    try:
+        if tiktoken.encoding_name_for_model(_required(policy, "model")) != encoding_name:
+            raise ValueError("model tokenizer mismatch")
+    except KeyError as error:
+        raise ValueError("unknown model tokenizer") from error
+    encoding = tiktoken.get_encoding(encoding_name)
+    return lambda value: len(encoding.encode(value, disallowed_special=()))
+
+
+def build_application(*, environ=None, policy_path: str | None = None):
+    env = os.environ if environ is None else environ
+    path = Path(policy_path or env.get("NEWS_CURATOR_RANKER_POLICY", "config/ranker-policy-r1.yaml"))
+    policy = yaml.safe_load(path.read_text())
+    if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+        raise ValueError("invalid ranker policy")
+    enabled = policy.get("service_enabled") is True
+    reader_origin = _required(env, "NEWS_CURATOR_READER_ORIGIN")
+    supabase_origin = _required(env, "NEWS_CURATOR_SUPABASE_URL")
+    publishable = _required(env, "NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY")
+    service_key = _required(env, "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY")
+    cursor_key = _required(env, "NEWS_CURATOR_CURSOR_SIGNING_KEY").encode()
+    tenant_id = _required(env, "NEWS_CURATOR_TENANT_ID")
+    preview_ids = json.loads(env.get("NEWS_CURATOR_PREVIEW_OWNER_IDS", "[]"))
+    if not isinstance(preview_ids, list) or any(not isinstance(value, str) or not value for value in preview_ids):
+        raise ValueError("invalid preview owner allowlist")
+    provider_key = env.get("NEWS_CURATOR_MODEL_API_KEY", "")
+    if enabled and not provider_key:
+        raise ValueError("enabled ranker requires a scoped model key")
+    ranker_policy = RankerPolicy(provider_id=_required(policy, "provider"), model_id=_required(policy, "model"),
+        endpoint=_required(policy, "endpoint"), prompt_revision=_required(policy, "prompt_revision"),
+        deadline_seconds=policy["deadline_seconds"], max_retries=policy["max_retries"],
+        request_cost_limit_usd=policy["request_cost_limit_usd"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
+        input_cost_per_million_tokens_usd=policy.get("input_cost_per_million_tokens_usd"),
+        output_cost_per_million_tokens_usd=policy.get("output_cost_per_million_tokens_usd"))
+    prompt = ReviewedRankLLMPromptBuilder(_required(env, "NEWS_CURATOR_RANKLLM_TEMPLATE"))
+    engine = OpenAIRankLLMEngine(prompt_builder=prompt, endpoint=ranker_policy.endpoint, api_key=provider_key or "disabled",
+        model=ranker_policy.model_id, maximum_output_tokens=policy["maximum_output_tokens"],
+        reasoning_token_allowance=policy["reasoning_token_allowance"],
+        prompt_framing_token_allowance=policy["prompt_framing_token_allowance"],
+        prompt_framing_tokens_per_message=policy["prompt_framing_tokens_per_message"],
+        token_counter=configured_token_counter(policy, env),
+        reasoning_effort=policy["reasoning_effort"], verbosity=policy["verbosity"],
+        client_factory=lambda: httpx.AsyncClient(timeout=None, follow_redirects=False))
+    adapter = RankLLMAdapter(policy=ranker_policy, engine=engine)
+    transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key)
+    service_policy = ServicePolicy(policy_version=_required(policy, "prompt_revision"),
+        model_version=_required(policy, "model"), provider_policy_id=_required(policy, "prompt_revision"),
+        tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
+        maximum_excluded_story_ids=policy["maximum_excluded_story_ids"],
+        cursor_ttl_seconds=policy["cursor_ttl_seconds"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
+        preview_owner_ids=tuple(preview_ids), enabled=enabled)
+    service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
+        cursor_key=cursor_key)
+    return RankingASGI(service=service, reader_origin=reader_origin,
+        maximum_body_bytes=policy["maximum_request_body_bytes"])
+
+
+def _required(values, key):
+    value = values.get(key)
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise ValueError(f"{key} must be configured")
+    return value
