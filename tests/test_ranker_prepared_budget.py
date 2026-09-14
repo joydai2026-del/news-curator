@@ -200,7 +200,11 @@ def test_definite_pre_call_fallback_releases_zero_charge_reservation(
 @pytest.mark.parametrize(('case','expected_reason','expected_reserve_calls'), [
     ('missing_pricing', 'unknown_provider_pricing', 0),
     ('missing_prepare', 'provider_preparation_unavailable', 0),
+    ('noncallable_prepare', 'provider_preparation_unavailable', 0),
     ('prepare_error', 'provider_preparation_failed', 0),
+    ('prepare_os_error', 'provider_preparation_failed', 0),
+    ('prepare_runtime_error', 'provider_preparation_failed', 0),
+    ('prepare_type_error', 'provider_preparation_failed', 0),
     ('request_limit', 'request_cost_limit', 0),
     ('store_refusal', 'budget_reservation_failed', 1),
 ])
@@ -220,10 +224,13 @@ def test_service_reports_truthful_pre_call_fallback_reason(case, expected_reason
         def save_frozen_order(self, **kwargs): self.frozen=kwargs; return 'local-frozen'
     class Engine:
         def prepare(self, model_input):
-            if case=='prepare_error': raise ValueError('known prompt preparation failure')
+            errors={'prepare_error':ValueError, 'prepare_os_error':OSError,
+                'prepare_runtime_error':RuntimeError, 'prepare_type_error':TypeError}
+            if case in errors: raise errors[case]('known prompt preparation failure')
             return type('Prepared',(),{'input_tokens_bound':100,'output_tokens_budget':100})()
         def rerank_prepared(self, prepared, timeout_seconds): pytest.fail('pre-call fallback must not invoke engine')
-    engine=object() if case=='missing_prepare' else Engine()
+    engine=(object() if case=='missing_prepare' else
+        type('NoncallableEngine',(),{'prepare':None})() if case=='noncallable_prepare' else Engine())
     input_price=None if case=='missing_pricing' else .25
     request_limit=.0001 if case=='request_limit' else .02
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
@@ -238,6 +245,20 @@ def test_service_reports_truthful_pre_call_fallback_reason(case, expected_reason
     assert store.reserve_calls==expected_reserve_calls
     assert store.frozen['bindings']['execution']['attempts_started']==0
     assert store.frozen['bindings']['execution']['cost_basis']=='no_provider_call'
+
+
+def test_prepare_with_reason_does_not_swallow_process_control():
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    class Engine:
+        def prepare(self, model_input): raise KeyboardInterrupt()
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+        max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=Engine())
+    model_input=captured_input()
+    request=RankingRequest(1,'process-control-request',AuthenticatedOwner('tenant','user','principal',ActorKind.HUMAN),
+        model_input.candidates,tuple(c.candidate_id for c in model_input.candidates),(),0,0,1,1,
+        'test-policy','test-model')
+    with pytest.raises(KeyboardInterrupt):
+        adapter.prepare_with_reason(request)
 
 
 def test_observed_retry_settlement_retains_only_unknown_attempt_ceiling():

@@ -252,11 +252,11 @@ class RankLLMAdapter:
         if (self._policy.input_cost_per_million_tokens_usd is None or
                 self._policy.output_cost_per_million_tokens_usd is None):
             return None, "unknown_provider_pricing"
-        if getattr(self._engine, "prepare", None) is None:
+        if not callable(getattr(self._engine, "prepare", None)):
             return None, "provider_preparation_unavailable"
         try:
             prepared = self.prepare(request)
-        except (ValueError, ImportError):
+        except Exception:
             return None, "provider_preparation_failed"
         return (prepared, "" if prepared is not None else "request_cost_limit")
 
