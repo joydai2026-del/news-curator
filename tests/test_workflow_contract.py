@@ -339,14 +339,20 @@ def test_build_materializes_auth_callback_without_overwriting_it() -> None:
     assert steps.index(materialize) < steps.index(copy)
     assert materialize["env"] == {
         "NEWS_CURATOR_PERSONALIZATION_ENABLED": "${{ vars.NEWS_CURATOR_PERSONALIZATION_ENABLED }}",
+        "NEWS_CURATOR_M2_ENABLED": "${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && vars.NEWS_CURATOR_M2_ENABLED == 'true' }}",
+        "NEWS_CURATOR_M2_READER_CONFIG_JSON": "${{ vars.NEWS_CURATOR_M2_READER_CONFIG_JSON }}",
         "NEWS_CURATOR_SUPABASE_URL": "${{ vars.NEWS_CURATOR_SUPABASE_URL }}",
         "NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY": "${{ vars.NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY }}",
     }
     command = str(materialize["run"])
     assert "python scripts/build_auth_callback.py" in command
     assert 'if [ "$NEWS_CURATOR_PERSONALIZATION_ENABLED" = "true" ]' in command
+    assert 'if [ "$NEWS_CURATOR_M2_ENABLED" = "true" ]' in command
+    assert 'm2_config_path="$RUNNER_TEMP/m2-reader-config.json"' in command
+    assert '${{ vars.' not in command
     assert "personalization_link_args=(--site-index ./site/index.html)" in command
     assert '"${personalization_link_args[@]}"' in command
+    assert '--m2-config "$m2_config_path"' in command
     assert '--output ./site/auth/callback/index.html' in command
     assert 'if [ -z "$NEWS_CURATOR_SUPABASE_URL" ] && [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]' in command
     assert 'elif [ -z "$NEWS_CURATOR_SUPABASE_URL" ] || [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]' in command

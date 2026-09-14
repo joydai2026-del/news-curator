@@ -115,13 +115,13 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         policy=RankerPolicy('test-provider','test-model','https://provider.example','test-prompt'),engine=NoProvider()),
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
-    requests=[]; page_errors=[]
+    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
         if request.url.startswith(READER):
             if parsed.path=='/auth/client.js':
-                script='''window.__localSession={access_token:"local-auth-token"}; window.NewsCuratorAuth={
+                script='''window.__localSession={access_token:"local-auth-token",user_id:"'''+OWNER+'''"}; window.NewsCuratorAuth={
                     config:()=>({url:"'''+DATABASE+'''",key:"sb_publishable_localtest"}),
                     sessionForRequest:async()=>window.__localSession, hasSessionCandidate:()=>!!window.__localSession,
                     isConfirmed:()=>true,confirmSession:()=>{},clearSession:()=>{window.__localSession=null;},
@@ -162,6 +162,19 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             elif name=='clear_behavior_history':
                 store.events=[];store.generation+=1
                 payload={'events_deleted':0,'profiles_deleted':0,'history_revision':0,'history_generation':store.generation}
+            elif name=='m2_owner_export_page':
+                export_requests.append(copy.deepcopy(body))
+                export_rows=([{'section':'behavior_events','key':str(index+1).zfill(20),
+                    'value':{'controlled_payload':'x'*600000}} for index in range(3)] if export_mode['oversized'] else
+                    [{'section':'behavior_events','key':str(index+1).zfill(20),'value':copy.deepcopy(event)}
+                        for index,event in enumerate(store.events)])
+                offset=int(body['p_cursor'].split('-')[-1]) if body.get('p_cursor') else 0
+                fence='a'*64
+                assert body.get('p_expected_fence') in (None,fence)
+                payload={'schema_version':1,'owner_id':OWNER,'fence':fence,'offset':offset,
+                    'total_rows':len(export_rows),'max_download_bytes':1048576,
+                    'rows':export_rows[offset:offset+1],
+                    'next_cursor':f'cursor-{offset+1}' if offset+1<len(export_rows) else None}
             elif name in ('feed_page','saved_page'):payload=[]
             elif name=='discovery_edition':payload={'schema_version':1,'status':'unavailable','reason_code':'no_private_edition','edition':None}
             else:raise AssertionError(name)
@@ -172,9 +185,13 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         context=browser.new_context(viewport={'width':390,'height':844})
         context.add_init_script('''(() => {
             const originalFetch=window.fetch.bind(window);
-            window.fetch=(url,options)=>window.__stallM2 && String(url).startsWith("https://ranker.example")
+            window.fetch=(url,options)=>{
+              if(window.__stallExport && String(url).endsWith("/m2_owner_export_page"))
+                return new Promise((resolve,reject)=>{window.__releaseExport=()=>originalFetch(url,options).then(resolve,reject);});
+              return window.__stallM2 && String(url).startsWith("https://ranker.example")
                 ?new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}))
                 :originalFetch(url,options);
+            };
         })();''')
         context.route('**/*',route_handler)
         page=context.new_page();page.on('pageerror',lambda error:page_errors.append(str(error)))
@@ -250,9 +267,27 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 card.locator('.less-interest-action').click()
             page.wait_for_function('() => document.querySelector("[data-m2-card=true] .less-interest-action").getAttribute("aria-pressed")==="true"')
             assert any(event['event_type']=='less_like_this' for event in store.events)
+            with page.expect_download() as download_info:
+                page.locator('#m2-download-data').click()
+            export_file=tmp_path/'owner-export.json';download_info.value.save_as(export_file)
+            exported=json.loads(export_file.read_text())
+            assert exported['owner_id']==OWNER and exported['total_rows']==len(store.events)
+            assert len(exported['rows'])==len(store.events)>1
+            assert requests.count('/rest/v1/rpc/m2_owner_export_page')>=3
+            completed_downloads=[];page.on('download',lambda download:completed_downloads.append(download))
+            export_mode['oversized']=True;export_requests.clear()
+            page.locator('#m2-download-data').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("could not be downloaded")')
+            assert len(export_requests)==2 and not completed_downloads
+            export_mode['oversized']=False
+            page.evaluate('window.__stallExport=true')
+            page.locator('#m2-download-data').click()
+            page.wait_for_function('() => typeof window.__releaseExport === "function"')
             page.locator('#m2-clear-history').click()
+            page.evaluate('window.__stallExport=false;window.__releaseExport()')
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0 && document.querySelector("#reader-status").textContent.includes("stories loaded")')
             assert store.generation==2 and not store.events
+            assert not completed_downloads
             page.locator('#m2-local-learning').uncheck()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0 && !document.querySelector("#m2-local-learning").checked')
             assert store.learning is False
@@ -273,9 +308,13 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert page.locator('.card:not([hidden])').count()>0
             assert page.locator('[data-m2-card=true]').count()==0
             assert page.locator('.edition-meta').is_visible()
+            page.evaluate('window.__stallExport=true;document.querySelector("#m2-download-data").click()')
+            page.wait_for_function('() => typeof window.__releaseExport === "function"')
             page.evaluate('window.__localSession=null;window.dispatchEvent(new Event("news-curator:auth-changed"))')
+            page.evaluate('window.__stallExport=false;window.__releaseExport()')
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===0')
             assert page.locator('#m2-controls').is_hidden()
+            assert not completed_downloads
             assert not page_errors,page_errors
         except BaseException:
             print({"reader_status":page.locator('#reader-status').inner_text(), "page_errors":page_errors,

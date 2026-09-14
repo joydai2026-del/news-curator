@@ -51,19 +51,22 @@ class AsyncOpenAIResponses:
         self._max_output_tokens, self._reasoning_effort, self._verbosity = max_output_tokens, reasoning_effort, verbosity
 
     async def create(self, prompt: object) -> Mapping[str, object]:
+        # wait_for preserves the repository's Python 3.10 CI support while
+        # cancelling the whole request on the same total deadline.
+        async def request():
+            response = await self._client.post(self._endpoint + "/responses",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={"model": self._model, "input": prompt, "store": False,
+                    "max_output_tokens": self._max_output_tokens,
+                    "reasoning": {"effort": self._reasoning_effort}, "text": {"verbosity": self._verbosity}})
+            response.raise_for_status()
+            value = response.json()
+            if not isinstance(value, Mapping):
+                raise ValueError("provider response must be an object")
+            return value
         try:
-            async with asyncio.timeout(self._total):
-                response = await self._client.post(self._endpoint + "/responses",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    json={"model": self._model, "input": prompt, "store": False,
-                        "max_output_tokens": self._max_output_tokens,
-                        "reasoning": {"effort": self._reasoning_effort}, "text": {"verbosity": self._verbosity}})
-                response.raise_for_status()
-                value = response.json()
-                if not isinstance(value, Mapping):
-                    raise ValueError("provider response must be an object")
-                return value
-        except TimeoutError as exc:
+            return await asyncio.wait_for(request(), timeout=self._total)
+        except asyncio.TimeoutError as exc:
             await self._client.aclose()
             raise ProviderTimeout("provider total deadline exceeded") from exc
 

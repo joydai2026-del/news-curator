@@ -1085,6 +1085,7 @@ def render_html(
         <label><input id="m2-provider-processing" type="checkbox"> Use my history for model ranking</label>
         <a id="m2-provider-retention" href="" target="_blank" rel="noopener noreferrer" hidden>Provider data policy</a>
         <button id="m2-refresh" type="button">Refresh feed</button>
+        <button id="m2-download-data" type="button">Download my data</button>
         <button id="m2-clear-history" type="button">Clear learning history</button>
         </details>
         <p id="m2-mode" role="status" aria-live="polite"></p>
@@ -1136,7 +1137,7 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
         raise ValueError("invalid M2 reader configuration")
     if type(config["page_size"]) is not int or not 1 <= config["page_size"] <= 25:
         raise ValueError("invalid M2 page size")
-    if type(config["request_timeout_ms"]) is not int or not 1 <= config["request_timeout_ms"] <= 30000:
+    if type(config["request_timeout_ms"]) is not int or not 1 <= config["request_timeout_ms"] <= 8000:
         raise ValueError("invalid M2 request deadline")
     for key in fields - {"enabled", "page_size", "request_timeout_ms"}:
         value = config[key]

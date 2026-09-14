@@ -6,6 +6,13 @@ import pytest
 from curator.recommendation.async_provider import AsyncOpenAIResponses, AsyncRankLLMProvider, ProviderTimeout
 
 
+@pytest.fixture(autouse=True)
+def supported_asyncio_api(monkeypatch):
+    # Python 3.10 has wait_for but not asyncio.timeout. Exercise the transport
+    # without the newer API, including the actual stalled-connection case.
+    monkeypatch.delattr(asyncio, "timeout", raising=False)
+
+
 class Prompt:
     def create_prompt(self, *, query, passages):
         return [{"role": "user", "content": query + "\n" + "\n".join(passages)}]

@@ -29,6 +29,8 @@ from curator.pipeline import configured_source_specs
 from curator.retained_corpus import public_ingest_rows, retain
 from curator.source_snapshot import load_source_snapshot, snapshot_config_digest
 
+HISTORICAL_REHEARSAL_MAX_SNAPSHOT_AGE_SECONDS = 30 * 24 * 60 * 60
+
 
 def validate_local_socket(host: str, port: int) -> Path:
     path = Path(host)
@@ -40,8 +42,12 @@ def validate_local_socket(host: str, port: int) -> Path:
     return path
 
 
-def _sql_literal(value: object) -> str:
+def _sql_json(value: object) -> str:
     return "'" + json.dumps(value, ensure_ascii=False).replace("'", "''") + "'"
+
+
+def _sql_text(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def normalize_timestamp(value: str) -> str:
@@ -67,7 +73,9 @@ def select_rows(snapshot_path: Path, *, root: Path, limit: int) -> tuple[dict[st
     if limit < 1 or limit > 50:
         raise ValueError("limit must be between 1 and 50")
     cfg = load_config(root)
-    snapshot = load_source_snapshot(snapshot_path)
+    # This bounded rehearsal intentionally uses a recorded historical artifact.
+    # Production collection continues to use the source snapshot's two-hour default.
+    snapshot = load_source_snapshot(snapshot_path, max_age_seconds=HISTORICAL_REHEARSAL_MAX_SNAPSHOT_AGE_SECONDS)
     if snapshot.configuration_digest != snapshot_config_digest(cfg):
         raise ValueError("snapshot configuration digest does not match current configured sources")
     allowed = {spec.id for spec in configured_source_specs(cfg)}
@@ -88,32 +96,40 @@ def select_rows(snapshot_path: Path, *, root: Path, limit: int) -> tuple[dict[st
         "criterion": "NC2-A10",
         "environment": "local isolated PostgreSQL only",
         "scope_exclusions": ["newsletter", "mailbox", "browser_history", "private_history", "production"],
-        "source_artifact": {"path": str(snapshot_path), "sha256": hashlib.sha256(artifact_bytes).hexdigest(), "content_digest": snapshot.content_digest, "configuration_digest": snapshot.configuration_digest, "generated_at": snapshot.generated_at.isoformat()},
+        "source_artifact": {"path": str(snapshot_path), "sha256": hashlib.sha256(artifact_bytes).hexdigest(), "content_digest": snapshot.content_digest, "configuration_digest": snapshot.configuration_digest, "generated_at": snapshot.generated_at.isoformat(), "historical_rehearsal_max_age_seconds": HISTORICAL_REHEARSAL_MAX_SNAPSHOT_AGE_SECONDS, "production_freshness_evaluated": False},
         "selection": {"historical_cutoff_utc": normalize_timestamp(cutoff.isoformat()), "source_item_count": len(all_items), "historical_candidate_count": len(historical), "selected_count": len(selected), "unaffected_count": len(unaffected), "selected_story_ids": [str(row["story_id"]) for row in selected], "selected_published_at": {str(row["story_id"]): normalize_timestamp(str(row["published_at"])) for row in selected}, "excluded": {"unconfigured_source": len(unexpected), "newsletter": sum(item.is_newsletter for item in all_items), "not_older_than_24_hours": sum(item.source_id in allowed and not item.is_newsletter and item.published_at >= cutoff for item in all_items), "outside_bounded_selection": len(remainder) - 1}},
     }, selected, unaffected
 
 
-def _transaction_sql(selected_json: str, unaffected_story: str, expected_ids: list[str], expected_timestamps: dict[str, str]) -> str:
-    ids = ",".join(_sql_literal(value) for value in expected_ids)
-    expected = _sql_literal(json.dumps(sorted(expected_ids + [unaffected_story])))
-    timestamp_values = ",".join(f"({_sql_literal(story)}, {_sql_literal(timestamp)}::timestamptz)" for story, timestamp in expected_timestamps.items())
+def _transaction_sql(selected_rows: list[dict[str, object]], unaffected_story: str, expected_ids: list[str], expected_timestamps: dict[str, str]) -> str:
+    ids = ",".join(_sql_text(value) for value in expected_ids)
+    expected = _sql_json(sorted(expected_ids + [unaffected_story]))
+    timestamp_values = ",".join(f"({_sql_text(story)}, {_sql_text(timestamp)}::timestamptz)" for story, timestamp in expected_timestamps.items())
+    selected_json = _sql_json(selected_rows)
     service = "set role service_role; set request.jwt.claims = '{\"role\":\"service_role\"}'; "
-    return service + f"""
+    return f"""
 begin;
+{service}
 create temporary table rehearsal_checks(name text primary key, passed boolean not null) on commit drop;
-with imported as (select public.m2_ingest_retained_corpus({_sql_literal(selected_json)}::jsonb) as count)
+with imported as (select public.m2_ingest_retained_corpus({selected_json}::jsonb) as count)
 insert into rehearsal_checks select 'initial bounded import', count={len(expected_ids)} from imported;
-with replay as (select public.m2_ingest_retained_corpus({_sql_literal(selected_json)}::jsonb) as count)
+with replay as (select public.m2_ingest_retained_corpus({selected_json}::jsonb) as count)
 insert into rehearsal_checks select 'identical reimport idempotent', count=0 from replay;
+reset role;
 insert into rehearsal_checks
-select 'original publication timestamps preserved', bool_and(extract(epoch from o.published_at)=extract(epoch from expected_rows.expected_at))
+select 'original publication timestamps preserved', coalesce(bool_and(extract(epoch from o.published_at)=extract(epoch from expected_rows.expected_at)),false)
 from public.retained_corpus_observations o join (values {timestamp_values}) as expected_rows(story_id,expected_at) using(story_id);
+delete from public.retained_corpus_source_categories where story_id in ({ids});
 delete from public.retained_corpus_categories where story_id in ({ids});
 delete from public.retained_corpus_observations where story_id in ({ids});
-insert into rehearsal_checks select 'bounded removal deletes selected rows', count(*)=0 from public.retained_corpus_observations where story_id in ({ids});
-insert into rehearsal_checks select 'unaffected row survives removal', exists(select 1 from public.retained_corpus_observations where story_id={_sql_literal(unaffected_story)});
-with rebuilt as (select public.m2_ingest_retained_corpus({_sql_literal(selected_json)}::jsonb) as count)
+insert into rehearsal_checks select 'bounded removal deletes selected observations and source categories',
+  (select count(*)=0 from public.retained_corpus_observations where story_id in ({ids})) and
+  (select count(*)=0 from public.retained_corpus_source_categories where story_id in ({ids}));
+insert into rehearsal_checks select 'unaffected row survives removal', exists(select 1 from public.retained_corpus_observations where story_id={_sql_text(unaffected_story)});
+{service}
+with rebuilt as (select public.m2_ingest_retained_corpus({selected_json}::jsonb) as count)
 insert into rehearsal_checks select 'clean rebuild restores selected count', count={len(expected_ids)} from rebuilt;
+reset role;
 insert into rehearsal_checks select 'clean rebuild restores exact expected set', coalesce(jsonb_agg(story_id order by story_id), '[]'::jsonb)={expected}::jsonb from public.retained_corpus_observations;
 select coalesce(jsonb_agg(jsonb_build_object('name',name,'passed',passed) order by name),'[]'::jsonb) from rehearsal_checks;
 rollback;
@@ -143,25 +159,32 @@ def main() -> int:
             raise RuntimeError("psql unavailable")
         database = "nc_m2_import_" + uuid.uuid4().hex[:12]
         receipt["database"] = database
+        receipt["phase"] = "create_database"
         _run_sql(psql, "postgres", "create database " + database, host=host, port=args.port)
         receipt["database_created"] = True
+        receipt["phase"] = "bootstrap_schema"
         _run_sql(psql, database, """create schema auth; create schema extensions; create extension pgcrypto with schema extensions; create table auth.users(id uuid primary key); create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims',true),'')::jsonb,'{}'::jsonb) $$; grant usage on schema auth to anon,authenticated,service_role; grant execute on all functions in schema auth to anon,authenticated,service_role;""", host=host, port=args.port)
         migrations = []
+        receipt["phase"] = "apply_migrations"
         for path in sorted((args.root / "supabase/migrations").glob("*.sql")):
             data = path.read_text(encoding="utf-8")
             _run_sql(psql, database, data, host=host, port=args.port)
             migrations.append({"file": path.name, "sha256": hashlib.sha256(data.encode()).hexdigest()})
         receipt["migrations"] = migrations
         service = "set role service_role; set request.jwt.claims = '{\"role\":\"service_role\"}'; "
-        _run_sql(psql, database, service + f"select public.m2_ingest_retained_corpus({_sql_literal(json.dumps(unaffected, ensure_ascii=False))}::jsonb);", host=host, port=args.port)
-        output = _run_sql(psql, database, _transaction_sql(json.dumps(selected, ensure_ascii=False), str(unaffected[0]["story_id"]), [str(row["story_id"]) for row in selected], receipt["selection"]["selected_published_at"]), host=host, port=args.port)
+        receipt["phase"] = "seed_unaffected_public_row"
+        _run_sql(psql, database, service + f"select public.m2_ingest_retained_corpus({_sql_json(unaffected)}::jsonb);", host=host, port=args.port)
+        receipt["phase"] = "transactional_import_rehearsal"
+        output = _run_sql(psql, database, _transaction_sql(selected, str(unaffected[0]["story_id"]), [str(row["story_id"]) for row in selected], receipt["selection"]["selected_published_at"]), host=host, port=args.port)
         checks = json.loads(output.splitlines()[-2])
         receipt["checks"] = checks
-        selected_ids = ",".join(_sql_literal(str(row["story_id"])) for row in selected)
+        selected_ids = ",".join(_sql_text(str(row["story_id"])) for row in selected)
+        receipt["phase"] = "verify_rollback"
         rollback = _run_sql(psql, database, f"select count(*)=0 from public.retained_corpus_observations where story_id in ({selected_ids});", host=host, port=args.port)
-        anchor = _run_sql(psql, database, f"select exists(select 1 from public.retained_corpus_observations where story_id={_sql_literal(unaffected[0]['story_id'])});", host=host, port=args.port)
+        anchor = _run_sql(psql, database, f"select exists(select 1 from public.retained_corpus_observations where story_id={_sql_text(str(unaffected[0]['story_id']))});", host=host, port=args.port)
         receipt["cleanup"]["completed"] = rollback.splitlines()[-1:] == ["t"] and anchor.splitlines()[-1:] == ["t"]
         receipt["status"] = "pass" if all(check["passed"] for check in checks) and receipt["cleanup"]["completed"] else "fail"
+        receipt["phase"] = "complete"
     except Exception as exc:
         receipt["status"] = "fail"
         receipt["error_class"] = type(exc).__name__

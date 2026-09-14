@@ -462,6 +462,8 @@ jobs:
       - name: Materialize auth callback
         env:
           NEWS_CURATOR_PERSONALIZATION_ENABLED: ${{ vars.NEWS_CURATOR_PERSONALIZATION_ENABLED }}
+          NEWS_CURATOR_M2_ENABLED: ${{ github.ref == 'refs/heads/main' && vars.NEWS_CURATOR_PERSONALIZATION_ENABLED == 'true' && vars.NEWS_CURATOR_M2_ENABLED == 'true' }}
+          NEWS_CURATOR_M2_READER_CONFIG_JSON: ${{ vars.NEWS_CURATOR_M2_READER_CONFIG_JSON }}
           NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
           NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY: ${{ vars.NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY }}
         run: |
@@ -475,11 +477,24 @@ jobs:
             if [ "$NEWS_CURATOR_PERSONALIZATION_ENABLED" = "true" ]; then
               personalization_link_args=(--site-index ./site/index.html)
             fi
-            python scripts/build_auth_callback.py \
-              --supabase-url "$NEWS_CURATOR_SUPABASE_URL" \
-              --publishable-key "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" \
-              --output ./site/auth/callback/index.html \
-              "${personalization_link_args[@]}"
+            if [ "$NEWS_CURATOR_M2_ENABLED" = "true" ]; then
+              python -c 'import json,os,sys; from pathlib import Path; raw=os.environ.get("NEWS_CURATOR_M2_READER_CONFIG_JSON", ""); value=json.loads(raw) if raw else sys.exit("M2 reader configuration is required when enabled"); sys.exit("M2 reader configuration is invalid") if not isinstance(value,dict) else None; (Path(os.environ["RUNNER_TEMP"])/"m2-reader-config.json").write_text(json.dumps(value,separators=(",",":")),encoding="utf-8")'
+              m2_config_path="$RUNNER_TEMP/m2-reader-config.json"
+            fi
+            if [ "$NEWS_CURATOR_M2_ENABLED" = "true" ]; then
+              python scripts/build_auth_callback.py \
+                --supabase-url "$NEWS_CURATOR_SUPABASE_URL" \
+                --publishable-key "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" \
+                --output ./site/auth/callback/index.html \
+                "${personalization_link_args[@]}" \
+                --m2-config "$m2_config_path"
+            else
+              python scripts/build_auth_callback.py \
+                --supabase-url "$NEWS_CURATOR_SUPABASE_URL" \
+                --publishable-key "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" \
+                --output ./site/auth/callback/index.html \
+                "${personalization_link_args[@]}"
+            fi
           fi
 
       - name: Copy static pages

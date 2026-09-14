@@ -110,10 +110,14 @@ class RankingService:
         request = self._request(request_id, owner, snapshot, rows, query)
         processing_allowed = bool(snapshot.get("learning_enabled") and snapshot.get("provider_processing_enabled"))
         observed_usage = {}
+        attempts_started = 0
         settled_cost = 0.0
         def record_usage(outcome, unknown_attempts, elapsed):
             observed_usage.update(input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens,
                 unknown_attempts=unknown_attempts, provider_elapsed_seconds=elapsed)
+        def record_attempt(attempt, elapsed):
+            nonlocal attempts_started
+            attempts_started += 1
         try:
             prepared = self._adapter.prepare(request) if processing_allowed and request.candidates else None
         except (ValueError, ImportError):
@@ -128,19 +132,22 @@ class RankingService:
             try:
                 receipt = self._adapter.rank(request, provider_processing_consent=processing_allowed,
                     budget=BudgetState(0), estimated_input_tokens=prepared.input_tokens_bound,
-                    estimated_output_tokens=prepared.output_tokens_budget, prepared=prepared, usage_observer=record_usage)
+                    estimated_output_tokens=prepared.output_tokens_budget, prepared=prepared,
+                    usage_observer=record_usage, attempt_observer=record_attempt)
                 if observed_usage:
                     settled_cost = self._adapter.settle_observed_cost(
                         input_tokens=observed_usage["input_tokens"], output_tokens=observed_usage["output_tokens"],
                         unknown_attempts=observed_usage["unknown_attempts"], reserved_usd=estimate)
                     self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
                         actual_usd=settled_cost, status="settled")
-                elif receipt.fallback_reason in {"model_policy_mismatch", "provider_processing_consent_required"}:
+                elif attempts_started == 0:
                     self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
                         actual_usd=0.0, status="released")
                 else:
-                    # A transport/parser failure without trustworthy usage is
-                    # ambiguous. Leave the durable reservation intact.
+                    # Once an attempt starts, transport/parser failure cannot
+                    # prove zero provider charge. Retain the ceiling reservation.
+                    # SQL003 scopes capacity by UTC statement_date, so an
+                    # unresolved prior-day reservation cannot consume a new day.
                     settled_cost = 0.0
             except Exception:
                 # An ambiguous settlement retains the durable reservation.
@@ -157,11 +164,11 @@ class RankingService:
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
             "corpus_start": dict(corpus_cursor), "excluded_story_ids": list(excluded_set),
             "execution": {**observed_usage, "settled_cost_usd": settled_cost,
+                "attempts_started": attempts_started,
                 "history_events_included": getattr(prepared, "history_events_included", 0) if prepared else 0,
                 "history_events_omitted": getattr(prepared, "history_events_omitted", 0) if prepared else 0,
                 "cost_basis": "observed_with_unknown_attempt_reserves" if observed_usage else
-                    "unknown_provider_charge_reserved" if estimate and receipt.fallback_reason not in {
-                        "model_policy_mismatch", "provider_processing_consent_required"} else
+                    "unknown_provider_charge_reserved" if estimate and attempts_started else
                     "released_no_provider_call" if estimate else "no_provider_call",
                 "newest_event_id": receipt.newest_event_id}})
         frozen_id = self._store.save_frozen_order(user_id=owner.user_id, request_id=request_id,

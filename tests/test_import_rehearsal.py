@@ -35,7 +35,8 @@ def test_selector_excludes_fresh_and_uses_deterministic_bounded_public_rows(monk
     item = lambda story, age: SimpleNamespace(source_id="public", is_newsletter=False, published_at=now - timedelta(hours=age), canonical_url=story, story=story)
     snapshot = SimpleNamespace(generated_at=now, configuration_digest="config", content_digest="content", results=(SimpleNamespace(items=(item("old-a", 48), item("old-b", 30), item("fresh", 1))),))
     monkeypatch.setattr(rehearsal, "load_config", lambda root: SimpleNamespace(categories=()))
-    monkeypatch.setattr(rehearsal, "load_source_snapshot", lambda path: snapshot)
+    loader_calls = []
+    monkeypatch.setattr(rehearsal, "load_source_snapshot", lambda path, **kwargs: loader_calls.append(kwargs) or snapshot)
     monkeypatch.setattr(rehearsal, "snapshot_config_digest", lambda cfg: "config")
     monkeypatch.setattr(rehearsal, "configured_source_specs", lambda cfg: (SimpleNamespace(id="public"),))
     monkeypatch.setattr(rehearsal, "retain", lambda rows, **kwargs: tuple(rows))
@@ -45,13 +46,23 @@ def test_selector_excludes_fresh_and_uses_deterministic_bounded_public_rows(monk
     assert [row["story_id"] for row in selected] == ["old-a"]
     assert [row["story_id"] for row in unaffected] == ["old-b"]
     assert metadata["selection"]["excluded"]["not_older_than_24_hours"] == 1
+    assert loader_calls == [{"max_age_seconds": rehearsal.HISTORICAL_REHEARSAL_MAX_SNAPSHOT_AGE_SECONDS}]
+    assert metadata["source_artifact"]["production_freshness_evaluated"] is False
 
 
 def test_transaction_uses_epoch_timestamp_comparison_and_rollback() -> None:
-    sql = rehearsal._transaction_sql("[]", "unaffected", ["selected"], {"selected": "2026-09-14T00:00:00Z"})
+    sql = rehearsal._transaction_sql([], "unaffected", ["selected"], {"selected": "2026-09-14T00:00:00Z"})
     assert "extract(epoch from o.published_at)" in sql
     assert "begin;" in sql and "rollback;" in sql
+    assert sql.count("reset role;") == 2
     assert "delete from public.retained_corpus_observations" in sql
+
+def test_transaction_passes_json_array_not_json_string_to_ingest() -> None:
+    sql = rehearsal._transaction_sql([{"story_id": "protocol-story"}], "unaffected", ["selected"], {"selected": "2026-09-14T00:00:00Z"})
+    assert "m2_ingest_retained_corpus('[{\"story_id\": \"protocol-story\"}]'::jsonb)" in sql
+    assert "story_id in ('selected')" in sql
+    assert "story_id='unaffected'" in sql
+    assert "'\"selected\"'" not in sql
 
 
 def test_timestamp_normalization_compares_instants_not_postgres_display_format() -> None:

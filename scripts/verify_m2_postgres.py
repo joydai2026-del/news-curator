@@ -101,12 +101,28 @@ sql(f"insert into auth.users values('{action_owner}'); insert into public.user_s
 def call(statement, ok=True): return sql(authenticated(action_owner,statement),ok=ok)
 def result(statement): return json.loads(call(statement).splitlines()[-1])
 def event_id():return 'event:'+uuid.uuid4().hex+uuid.uuid4().hex
-def mutation(kind,key,event,revision,generation,signal='more_like'):
+def mutation(kind,key,event,revision,generation,*,read=True,saved=True,event_type='save',signal='more_like'):
     when="'2026-09-01T00:00:00Z'"
     if kind=='state':
-        return f"select public.set_story_state_with_event({literal(story)},true,true,{revision},{literal(key)},{literal(event)},'save','local-test',{when},{generation});"
+        return f"select public.set_story_state_with_event({literal(story)},{str(read).lower()},{str(saved).lower()},{revision},{literal(key)},{literal(event)},{literal(event_type)},'local-test',{when},{generation});"
     return f"select public.set_story_interest_with_event({literal(story)},{literal(topic)},{literal(signal)},{revision},{literal(key)},{literal(event)},'local-test',{when},{generation});"
 def event_count():return int(sql(f"select count(*) from public.user_behavior_events where user_id='{action_owner}';"))
+def event_record(event_key):
+    return json.loads(sql(f"select jsonb_build_object('event_type',event_type,'payload',payload) from public.user_behavior_events where user_id='{action_owner}' and event_id={literal(event_key)};"))
+def current_revision(kind):
+    table='user_story_state' if kind=='state' else 'user_story_interests'
+    return int(sql(f"select revision from public.{table} where user_id='{action_owner}' and story_id={literal(story)};"))
+
+def combined_branch(label,kind,revision,generation,**mutation_values):
+    key=uuid.uuid4().hex; event_key=event_id(); statement=mutation(kind,key,event_key,revision,generation,**mutation_values)
+    before=event_count()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        first,replay=list(pool.map(result,[statement,statement]))
+    check(label+' same key same event replays complete original receipt',first==replay and event_count()==before+1)
+    check(label+' same key different event rejects without append',call(mutation(kind,key,event_id(),revision,generation,**mutation_values),ok=False).returncode!=0 and event_count()==before+1)
+    repeated=result(mutation(kind,uuid.uuid4().hex,event_id(),first['revision'],generation,**mutation_values))
+    check(label+' distinct action records distinct event',repeated['revision']==first['revision']+1 and event_count()==before+2)
+    return event_key
 
 call("select public.set_behavior_consent(true,true,'local-policy');")
 for kind,revision in [('state',1),('interest',0)]:
@@ -130,6 +146,28 @@ for kind,revision in [('state',1),('interest',0)]:
         f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',{revision},{literal(plain_key)});")
     result(plain)
     check(kind+' M1 receipt cannot be promoted to combined event',call(mutation(kind,plain_key,event_id(),revision,generation),ok=False).returncode!=0 and event_count()==before+2)
+
+# Controlled local identities exercise native RPC branches that differ by event
+# payload and mapped event type. These are not owner-history or production data.
+generation=snapshot(action_owner)['history_generation']
+unsave_event=combined_branch('unsave', 'state', current_revision('state'), generation, read=True, saved=False, event_type='save')
+unsave_payload=event_record(unsave_event)
+check('unsave stores explicit saved false payload',unsave_payload['event_type']=='save' and unsave_payload['payload'].get('saved') is False)
+# Restore the saved state through M1 so read_more proves its own transition and
+# payload shape rather than relying on an unchanged state.
+resave_revision=current_revision('state')
+result(f"select public.set_story_state({literal(story)},true,true,{resave_revision},{literal(uuid.uuid4().hex)});")
+generation=snapshot(action_owner)['history_generation']
+read_more_event=combined_branch('read_more', 'state', current_revision('state'), generation, read=True, saved=False, event_type='read_more')
+read_more_payload=event_record(read_more_event)
+check('read_more omits saved payload key',read_more_payload['event_type']=='read_more' and 'saved' not in read_more_payload['payload'])
+# Restore the pre-existing saved state without appending a behavior event so the
+# original withdrawal invariant remains exercised without alteration.
+restore_revision=current_revision('state')
+result(f"select public.set_story_state({literal(story)},true,true,{restore_revision},{literal(uuid.uuid4().hex)});")
+generation=snapshot(action_owner)['history_generation']
+less_like_event=combined_branch('less_like', 'interest', current_revision('interest'), generation, signal='less_like')
+check('less_like maps to negative behavior event',event_record(less_like_event)['event_type']=='less_like_this')
 
 # Provider-only withdrawal retains raw events and M1 state, deletes derivatives.
 before=event_count(); old=snapshot(action_owner)

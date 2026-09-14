@@ -25,6 +25,9 @@ function response(value, url) { return { ok: true, redirected: false, url,
 
 (async () => {
   assert.deepEqual(reader.validateM2Config({ enabled: false }), { enabled: false });
+  assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000 }).request_timeout_ms, 8000);
+  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8001 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 30000 }), /configuration/);
   let token = "token-a";
   const calls = [];
   const service = reader.createM2Service(config, async () => ({ access_token: token }),

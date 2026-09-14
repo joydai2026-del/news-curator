@@ -76,6 +76,21 @@ def test_missing_consent_blocks_before_engine_call():
     assert engine.calls == 0
 
 
+def test_attempt_observer_marks_boundary_immediately_before_engine_invocation():
+    events = []
+    class ObservedEngine(Engine):
+        def rerank(self, model_input, *, timeout_seconds):
+            events.append("engine")
+            return super().rerank(model_input, timeout_seconds=timeout_seconds)
+    engine = ObservedEngine()
+    RankLLMAdapter(policy=policy(), engine=engine).rank(
+        request(), provider_processing_consent=True, budget=BudgetState(0),
+        estimated_input_tokens=100, estimated_output_tokens=10,
+        attempt_observer=lambda attempt, elapsed: events.append(("attempt", attempt)),
+    )
+    assert events == [("attempt", 0), "engine"]
+
+
 def test_retry_reservation_must_fit_request_cap_before_engine_call():
     engine = Engine()
     result = RankLLMAdapter(

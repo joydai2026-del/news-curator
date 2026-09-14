@@ -157,7 +157,44 @@ def test_ambiguous_provider_failure_keeps_reservation_unsettled():
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
         history_generation=1,consent_revision=1))
     assert response['fallback_reason']=='provider_failure'
+    assert store.frozen['bindings']['execution']['attempts_started']==1
     assert store.frozen['bindings']['execution']['cost_basis']=='unknown_provider_charge_reserved'
+
+
+@pytest.mark.parametrize(('adapter_model','adapter_clock','expected_reason'), [
+    ('different-model', None, 'model_policy_mismatch'),
+    ('test-model', iter((0.0, 7.0)).__next__, 'provider_deadline'),
+])
+def test_definite_pre_call_fallback_releases_zero_charge_reservation(
+        adapter_model, adapter_clock, expected_reason):
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    from curator.recommendation.service import RankingService, ServicePolicy
+    rows=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'][:1]
+    class Store:
+        def history_snapshot(self, token): return dict(history_revision=0,included_history_revision=0,
+            history_generation=1,consent_revision=1,learning_enabled=True,provider_processing_enabled=True,
+            provider_policy_id='test-policy',events=[])
+        def retained_candidates(self, **kwargs): return rows
+        def reserve_budget(self, **kwargs): return True
+        def settle_budget(self, **kwargs): self.settlement=kwargs
+        def owner_states(self, token, story_ids): return {}
+        def save_frozen_order(self, **kwargs): self.frozen=kwargs; return 'local-frozen'
+    class Engine:
+        def prepare(self, model_input): return type('Prepared',(),{'input_tokens_bound':100,'output_tokens_budget':100})()
+        def rerank_prepared(self, prepared, timeout_seconds): pytest.fail('pre-call fallback must not invoke engine')
+    class Auth:
+        def get_user(self, token): return {'id':'local-owner'}
+    kwargs={} if adapter_clock is None else {'clock':adapter_clock}
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider',adapter_model,'https://provider.example','test-policy',
+        max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=Engine(),**kwargs)
+    store=Store(); service=RankingService(auth=Auth(),store=store,adapter=adapter,
+        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),cursor_key=b'x'*32)
+    response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
+        history_generation=1,consent_revision=1))
+    assert response['fallback_reason']==expected_reason
+    assert store.settlement['actual_usd']==0.0 and store.settlement['status']=='released'
+    assert store.frozen['bindings']['execution']['attempts_started']==0
+    assert store.frozen['bindings']['execution']['cost_basis']=='released_no_provider_call'
 
 
 def test_observed_retry_settlement_retains_only_unknown_attempt_ceiling():

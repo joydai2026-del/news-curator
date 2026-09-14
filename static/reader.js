@@ -269,6 +269,29 @@
         !Number.isSafeInteger(value.event_revision) || value.event_revision < 1)) fail("The learning response was invalid.");
     return value;
   }
+  function validateOwnerExportPage(value, _signedIn, session) {
+    const fields = ["fence", "max_download_bytes", "next_cursor", "offset", "owner_id",
+      "rows", "schema_version", "total_rows"];
+    if (!exactFields(value, fields) || value.schema_version !== 1 ||
+        !session || !boundedString(session.user_id, 128) || value.owner_id !== session.user_id ||
+        !/^[0-9a-f]{64}$/.test(value.fence) || !Number.isSafeInteger(value.offset) || value.offset < 0 ||
+        !Number.isSafeInteger(value.total_rows) || value.total_rows < 0 ||
+        !Number.isSafeInteger(value.max_download_bytes) || value.max_download_bytes < 1048576 ||
+        value.max_download_bytes > 134217728 || value.total_rows > value.max_download_bytes ||
+        !Array.isArray(value.rows) || value.rows.length > 500 ||
+        !(value.next_cursor === null || boundedString(value.next_cursor, 2048))) {
+      fail("The data export response was invalid.");
+    }
+    const rows = value.rows.map((row) => {
+      if (!exactFields(row, ["key", "section", "value"]) || !boundedString(row.section, 80) ||
+          !boundedString(row.key, 512) || !isObject(row.value)) fail("The data export response was invalid.");
+      return row;
+    });
+    if (value.offset + rows.length > value.total_rows || (value.next_cursor && !rows.length)) {
+      fail("The data export response was invalid.");
+    }
+    return { ...value, rows };
+  }
   function validateAtomic(value, validator) {
     if (!isObject(value)) fail("The reading response was invalid.");
     const { behavior_event: event, ...state } = value;
@@ -315,7 +338,7 @@
         }
         fail("The reader request failed.");
       }
-      const result = validator(payload, Boolean(session));
+      const result = validator(payload, Boolean(session), session);
       if (session && ["feed_page", "saved_page", "discovery_edition", "m2_history_snapshot"].includes(name) && typeof window !== "undefined") {
         window.NewsCuratorAuth?.confirmSession?.(session);
       }
@@ -362,6 +385,9 @@
         p_provider_policy_id: providerPolicyId,
       }, (value) => value, true),
       clearBehaviorHistory: () => rpc("clear_behavior_history", {}, (value) => value, true),
+      ownerExportPage: (cursor = null, expectedFence = null) => rpc("m2_owner_export_page", {
+        p_cursor: cursor, p_expected_fence: expectedFence,
+      }, validateOwnerExportPage, true, MAX_DISCOVERY_BYTES),
       appendBehaviorEvent: (event) => rpc("append_behavior_event", event, validateBehaviorReceipt, true),
       setStoryStateWithEvent: (storyId, read, saved, revision, key, event) => rpc("set_story_state_with_event", {
         p_story_id: storyId, p_read: read, p_saved: saved, p_expected_revision: revision,
@@ -685,7 +711,7 @@
       !boundedString(value.provider_policy_id, 256) ||
       !boundedString(value.model_version, 256) || !safeDestination(value.provider_retention_url) ||
       !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
-      !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 30000) {
+      !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000) {
       fail("M2 reader configuration is invalid.");
     }
     const endpoint = safeDestination(value.url);
@@ -793,6 +819,7 @@
     const savedTabs = document.querySelectorAll('.chip[data-filter="__saved__"]');
     let api;
     let authEpoch = 0;
+    let ownerExportEpoch = 0;
     try { api = createApi(auth.config(), () => auth.sessionForRequest()); } catch (_) {
       loadButton.hidden = true;
       if (view.currentTab() === "__saved__") {
@@ -1189,10 +1216,12 @@
     }));
     document.getElementById("m2-refresh")?.addEventListener("click", () => { void loadM2(); });
     document.getElementById("m2-clear-history")?.addEventListener("click", () => {
+      abortOwnerExport();
       m2Sequence += 1; clearM2Cards(); m2Cursor = null; m2Binding = null;
       void enqueueBehavior(() => api.clearBehaviorHistory()).then(() => loadM2())
         .catch(() => announce("Learning history could not be cleared. Try again."));
     });
+    document.getElementById("m2-download-data")?.addEventListener("click", () => { void downloadOwnerData(); });
     searchBox?.addEventListener("input", () => {
       if (!usesM2()) return;
       m2Sequence += 1; clearTimeout(m2SearchTimer);
@@ -1200,6 +1229,66 @@
     });
 
     function announce(message) { status.textContent = message; }
+    function abortOwnerExport() {
+      ownerExportEpoch += 1;
+      const button = document.getElementById("m2-download-data");
+      if (button) button.disabled = false;
+    }
+    async function downloadOwnerData() {
+      const button = document.getElementById("m2-download-data");
+      if (!button || button.disabled || !requireSignIn()) return;
+      const runEpoch = ++ownerExportEpoch, accountEpoch = authEpoch;
+      button.disabled = true;
+      let rows = [];
+      let rowBytes = 0;
+      try {
+        const initialSession = await auth.sessionForRequest();
+        if (!initialSession || !boundedString(initialSession.user_id, 128)) fail("Sign in to continue.");
+        let cursor = null, fence = null, ownerId = null, totalRows = null, maximumBytes = null;
+        const seen = new Set();
+        do {
+          if (runEpoch !== ownerExportEpoch || accountEpoch !== authEpoch) fail("The data export was canceled.");
+          const page = await api.ownerExportPage(cursor, fence);
+          if (runEpoch !== ownerExportEpoch || accountEpoch !== authEpoch) fail("The data export was canceled.");
+          if (ownerId === null) {
+            ownerId = page.owner_id; fence = page.fence; totalRows = page.total_rows;
+            maximumBytes = page.max_download_bytes;
+            if (ownerId !== initialSession.user_id || page.offset !== 0) fail("The signed-in account changed.");
+          } else if (page.owner_id !== ownerId || page.fence !== fence || page.total_rows !== totalRows ||
+              page.max_download_bytes !== maximumBytes || page.offset !== rows.length) {
+            fail("The data export changed. Try again.");
+          }
+          for (const row of page.rows) {
+            const identity = `${row.section}\u0000${row.key}`;
+            if (seen.has(identity)) fail("The data export response was invalid.");
+            const encodedBytes = encoder.encode(JSON.stringify(row)).length + 2;
+            if (rowBytes + encodedBytes > maximumBytes) fail("The data export is too large.");
+            rowBytes += encodedBytes; seen.add(identity); rows.push(row);
+          }
+          if (rows.length > totalRows || rows.length > maximumBytes) fail("The data export is too large.");
+          cursor = page.next_cursor;
+        } while (cursor !== null);
+        if (rows.length !== totalRows) fail("The data export was incomplete.");
+        const finalFence = await api.ownerExportPage(null, fence);
+        const currentSession = await auth.sessionForRequest();
+        if (runEpoch !== ownerExportEpoch || accountEpoch !== authEpoch || !currentSession ||
+            currentSession.user_id !== ownerId || finalFence.owner_id !== ownerId || finalFence.fence !== fence ||
+            finalFence.total_rows !== totalRows) fail("The data export changed. Try again.");
+        const content = JSON.stringify({ schema_version: 1, kind: "news_curator_owner_export",
+          owner_id: ownerId, fence, total_rows: totalRows, rows });
+        if (encoder.encode(content).length > maximumBytes) fail("The data export is too large.");
+        const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+        const link = document.createElement("a");
+        link.href = url; link.download = "news-curator-my-data.json"; link.click(); URL.revokeObjectURL(url);
+        announce("Your data download is ready.");
+      } catch (_) {
+        rows = [];
+        if (runEpoch === ownerExportEpoch && accountEpoch === authEpoch) announce("Your data could not be downloaded. Try again.");
+      } finally {
+        rows = [];
+        if (runEpoch === ownerExportEpoch) button.disabled = false;
+      }
+    }
     function signedIn() { try { return auth.hasSessionCandidate(); } catch (_) { return false; } }
     let sessionWasPresent = signedIn();
     function requireSignIn() {
@@ -1306,6 +1395,7 @@
     }
     async function handleLogout() {
       sessionWasPresent = false;
+      abortOwnerExport();
       authEpoch += 1;
       leaveM2();
       leaveDiscovery(true);
@@ -1349,6 +1439,7 @@
       }
     }
     function invalidateHydrationForSession() {
+      abortOwnerExport();
       authEpoch += 1;
       leaveM2();
       leaveDiscovery(true);

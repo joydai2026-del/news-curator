@@ -104,6 +104,7 @@ class RankLLMAdapter:
         estimated_output_tokens: int,
         prepared=None,
         usage_observer=None,
+        attempt_observer=None,
     ) -> RankingResponseReceipt:
         validate_ranking_request(request)
         if request.model_version != self._policy.model_id:
@@ -126,6 +127,11 @@ class RankLLMAdapter:
             if remaining <= 0:
                 return self._fallback(request, "provider_deadline")
             try:
+                # This is the exact uncertainty boundary: before this callback
+                # no provider attempt exists; after it, any unconfirmed call may
+                # have been charged and must retain its reservation.
+                if attempt_observer is not None:
+                    attempt_observer(attempt, self._clock() - started)
                 outcome = (self._engine.rerank_prepared(prepared, timeout_seconds=remaining) if prepared is not None
                     else self._engine.rerank(request.model_input(), timeout_seconds=remaining))
                 break
