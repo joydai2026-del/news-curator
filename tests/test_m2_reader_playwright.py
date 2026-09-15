@@ -364,6 +364,28 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert page.locator('.card:not([hidden])').count()>0
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             assert 'Ranked using' in page.locator('#m2-mode').inner_text()
+            # Saved navigation makes M2 ineligible while this original request is
+            # still delayed. Its timers must not mutate the selected surface.
+            page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            page.locator('.chip[data-filter="__saved__"]:visible').click()
+            page.wait_for_function("() => document.querySelector(\".chip[data-filter='__saved__']\").getAttribute('aria-pressed')==='true' && document.querySelectorAll('.card:not([hidden])').length===1")
+            saved_surface=page.evaluate('''() => ({
+                status:document.querySelector("#reader-status").textContent,
+                controlsHidden:document.querySelector("#m2-controls").hidden,
+                visibleCards:document.querySelectorAll(".card:not([hidden])").length,
+              })''')
+            page.wait_for_timeout(350)
+            assert page.locator('.chip[data-filter="__saved__"]:visible').get_attribute('aria-pressed')=='true'
+            assert page.evaluate('''() => ({
+                status:document.querySelector("#reader-status").textContent,
+                controlsHidden:document.querySelector("#m2-controls").hidden,
+                visibleCards:document.querySelectorAll(".card:not([hidden])").length,
+              })''')==saved_surface
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+            page.locator('.chip[data-filter="__all__"]:visible').click()
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             preceding_ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
             page.locator('#load-more').click()
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading")')

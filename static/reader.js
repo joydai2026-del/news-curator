@@ -1193,7 +1193,7 @@
       pageRequests.add(pageRequest); refreshLoadButton();
       let baselineShown = false;
       const showBaseline = () => {
-        if (epoch !== authEpoch || request !== m2Sequence) return;
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         baselineShown = true;
         if (!append || !m2Active) leaveM2(false);
         if (m2Controls) m2Controls.hidden = false;
@@ -1202,7 +1202,7 @@
         announce("Personalized feed is still loading.");
       };
       const terminalFallback = () => {
-        if (epoch !== authEpoch || request !== m2Sequence) return;
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         const retainedPage = append && m2Active;
         showBaseline();
         if (request !== m2Sequence) return;
