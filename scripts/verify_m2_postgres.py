@@ -39,11 +39,11 @@ def authenticated(user, statement):
 def snapshot(user):
     return json.loads(sql(authenticated(user,'select public.m2_history_snapshot();')).splitlines()[-1])
 
-def frozen_insert(user, bindings=None, cards=None):
+def frozen_insert(user, bindings=None, cards=None, expires_at="now()+interval '1 hour'"):
     if bindings is None:
         current=snapshot(user)
         bindings={key:current[key] for key in ('history_generation','consent_revision','server_commit_revision')}
-    return f"insert into public.m2_frozen_rankings(request_id,user_id,bindings,cards,page_size,expires_at) values('{uuid.uuid4()}','{user}',{literal(json.dumps(bindings))},{literal(json.dumps(cards or []))},20,now()+interval '1 hour');"
+    return f"insert into public.m2_frozen_rankings(request_id,user_id,bindings,cards,page_size,expires_at) values('{uuid.uuid4()}','{user}',{literal(json.dumps(bindings))},{literal(json.dumps(cards or []))},20,{expires_at});"
 
 sql('create database '+DB, database='postgres')
 sql("""create schema auth; create schema extensions;
@@ -118,6 +118,19 @@ def current_revision(kind):
     table='user_story_state' if kind=='state' else 'user_story_interests'
     return int(sql(f"select revision from public.{table} where user_id='{action_owner}' and story_id={literal(story)};"))
 
+def action_side_effects(user, story_id):
+    return json.loads(sql(f"""select jsonb_build_object(
+      'events',(select count(*) from public.user_behavior_events where user_id='{user}'),
+      'states',(select count(*) from public.user_story_state where user_id='{user}' and story_id={literal(story_id)}),
+      'interests',(select count(*) from public.user_story_interests where user_id='{user}' and story_id={literal(story_id)}),
+      'receipts',(select count(*) from public.user_action_receipts where user_id='{user}')
+    );"""))
+
+def rejects_without_side_effects(label, user, story_id, statements):
+    before=action_side_effects(user,story_id)
+    rejected=all(sql(authenticated(user,statement),ok=False).returncode!=0 for statement in statements)
+    check(label,rejected and action_side_effects(user,story_id)==before)
+
 def combined_branch(label,kind,revision,generation,**mutation_values):
     key=uuid.uuid4().hex; event_key=event_id(); statement=mutation(kind,key,event_key,revision,generation,**mutation_values)
     before=event_count()
@@ -131,6 +144,27 @@ def combined_branch(label,kind,revision,generation,**mutation_values):
 
 call("select public.set_behavior_consent(true,true,'local-policy');")
 sql(frozen_insert(action_owner,cards=[{'story_id':story}]))
+# Captured retained stories must be actionable only while the owner has a live
+# frozen order. Expired orders, cross-owner attempts, and unseen retained rows
+# cannot create state, interest, behavior, or idempotency side effects.
+expired_owner=str(uuid.uuid4())
+sql(f"insert into auth.users values('{expired_owner}');")
+sql(frozen_insert(expired_owner,cards=[{'story_id':story}],expires_at="now()-interval '1 second'"))
+rejects_without_side_effects('expired own frozen retained story rejects actions without side effects',expired_owner,story,[
+    f"select public.set_story_state({literal(story)},true,true,0,'expired-state');",
+    f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',0,'expired-interest');",
+])
+rejects_without_side_effects('other owner read save plus minus combined actions deny without side effects',other,story,[
+    f"select public.set_story_state_with_event({literal(story)},true,false,0,'other-read',{literal(event_id())},'read_more','local-test','2026-09-01T00:00:00Z',1);",
+    f"select public.set_story_state_with_event({literal(story)},true,true,0,'other-save',{literal(event_id())},'save','local-test','2026-09-01T00:00:00Z',1);",
+    f"select public.set_story_interest_with_event({literal(story)},{literal(topic)},'more_like',0,'other-plus',{literal(event_id())},'local-test','2026-09-01T00:00:00Z',1);",
+    f"select public.set_story_interest_with_event({literal(story)},{literal(topic)},'less_like',0,'other-minus',{literal(event_id())},'local-test','2026-09-01T00:00:00Z',1);",
+])
+generation=snapshot(action_owner)['history_generation']
+rejects_without_side_effects('unseen retained story combined actions deny without side effects',action_owner,unseen_story,[
+    f"select public.set_story_state_with_event({literal(unseen_story)},true,true,0,'unseen-state-event',{literal(event_id())},'save','local-test','2026-09-01T00:00:00Z',{generation});",
+    f"select public.set_story_interest_with_event({literal(unseen_story)},{literal(topic)},'more_like',0,'unseen-interest-event',{literal(event_id())},'local-test','2026-09-01T00:00:00Z',{generation});",
+])
 check('unseen retained story is unavailable',call(f"select public.set_story_state({literal(unseen_story)},true,true,0,'unseen');",ok=False).returncode!=0)
 check('other owner cannot use ranked story',sql(authenticated(other,f"select public.set_story_state({literal(story)},true,true,0,'cross-owner');"),ok=False).returncode!=0)
 check('unassigned retained category is unavailable',call(f"select public.set_story_interest({literal(story)},'not-assigned','more_like',0,'bad-topic');",ok=False).returncode!=0)
@@ -211,6 +245,15 @@ for kind in ('state','interest'):
     call('select public.set_behavior_consent(false,false,null);')
 check('explicit clear removes raw history',event_count()==0)
 check('clear tombstone blocks old M1 interest replay',result(first_interest_plain)=={'status':'conflict','revision':0} and sql(f"select count(*)=0 from public.user_story_interests where user_id='{action_owner}';")=='t')
+# Reset deletes the owner's populated frozen order. A retained row that was never
+# acted on must immediately become unavailable again.
+sql(frozen_insert(action_owner,cards=[{'story_id':unseen_story}]))
+check('reset fixture has populated own frozen retained story',sql(f"select count(*)=1 from public.m2_frozen_rankings where user_id='{action_owner}';")=='t')
+call('select public.clear_behavior_history();')
+check('reset removes populated own frozen order',sql(f"select count(*)=0 from public.m2_frozen_rankings where user_id='{action_owner}';")=='t')
+rejects_without_side_effects('reset makes unacted retained story unavailable',action_owner,unseen_story,[
+    f"select public.set_story_state({literal(unseen_story)},true,true,0,'reset-unseen');",
+])
 
 # Deterministic concurrent interleaving: revocation holds the owner lock while
 # an old completed provider response tries to persist. The insert must wait,
@@ -232,6 +275,23 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
     revoke.result(timeout=5); inserted=late.result(timeout=5)
 check('pending frozen write rejects after concurrent revocation',inserted.returncode!=0 and 'stale frozen ranking bindings' in inserted.stderr)
 check('concurrent revocation leaves no frozen cards',sql(f"select count(*)=0 from public.m2_frozen_rankings where user_id='{action_owner}';")=='t')
+
+# A saved interest is its own owner-access grant. Expiring its original frozen
+# card cannot erase that interest or create a read-state. Category retraction
+# removes current feed eligibility while preserving historical topic integrity.
+interest_owner=str(uuid.uuid4())
+sql(f"insert into auth.users values('{interest_owner}');")
+sql(frozen_insert(interest_owner,cards=[{'story_id':story}]))
+first_interest=json.loads(sql(authenticated(interest_owner,f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',0,'interest-only-first');")).splitlines()[-1])
+sql(f"update public.m2_frozen_rankings set expires_at=now()-interval '1 second' where user_id='{interest_owner}';")
+second_interest=json.loads(sql(authenticated(interest_owner,f"select public.set_story_interest({literal(story)},{literal(topic)},'less_like',{first_interest['revision']},'interest-only-after-expiry');")).splitlines()[-1])
+check('expired frozen interest-only owner preserves and updates own interest without read state',second_interest['status']=='updated' and sql(f"select count(*)=1 and (select signal='less_like' from public.user_story_interests where user_id='{interest_owner}' and story_id={literal(story)}) and not exists(select 1 from public.user_story_state where user_id='{interest_owner}' and story_id={literal(story)});")=='t')
+sql(f"delete from public.retained_corpus_categories where story_id={literal(story)} and category_id={literal(topic)};")
+check('category retraction preserves historical topic and interest but excludes current M2 category candidates',sql(f"select exists(select 1 from public.user_story_interests where user_id='{interest_owner}' and story_id={literal(story)}) and exists(select 1 from public.story_topics where story_id={literal(story)} and topic_id={literal(topic)}) and not exists(select 1 from public.m2_retained_candidates({literal(topic)},null,null,null,50) row where row->>'story_id'={literal(story)});")=='t')
+sql(authenticated(interest_owner,'select public.clear_behavior_history();'))
+rejects_without_side_effects('reset removes interest-only access after frozen expiry',interest_owner,story,[
+    f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',0,'interest-only-after-reset');",
+])
 receipt={'database':DB,'environment':'local PostgreSQL only, no production claims','migrations':migrations,'checks':checks}
 args.receipt.write_text(json.dumps(receipt,indent=2)+'\n')
 print(json.dumps({'database':DB,'passed':sum(c['passed'] for c in checks),'failed':[c['name'] for c in checks if not c['passed']]}))
