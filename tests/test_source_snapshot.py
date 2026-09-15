@@ -11,7 +11,7 @@ import pytest
 
 from curator.config import ConfigError, load_config
 from curator.models import Item, SourceHealth, TierResult
-from curator.pipeline import main
+from curator.pipeline import collect, configured_source_specs, main
 from curator.source_snapshot import (
     SourceSnapshotError,
     load_source_snapshot,
@@ -77,6 +77,35 @@ def _results() -> list[TierResult]:
             ],
         )
     ]
+
+
+def test_configured_source_selection_is_validated_and_reuses_collector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _root(tmp_path)
+    (root / "sources.yaml").write_text(
+        "settings: {max_age_hours: 48}\n"
+        "sources:\n"
+        "  - {id: fast-source, name: Fast, url: https://example.com/fast.xml}\n"
+        "  - {id: scheduled-source, name: Scheduled, url: https://example.com/scheduled.xml}\n"
+        "hackernews: {enabled: false}\n"
+        "images: {enabled: false}\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(root)
+    assert [spec.id for spec in configured_source_specs(cfg, source_ids=["fast-source"])] == ["fast-source"]
+    with pytest.raises(ConfigError, match="unconfigured source IDs"):
+        configured_source_specs(cfg, source_ids=["missing-source"])
+
+    observed: list[str] = []
+
+    def fake_collect(specs, *_args, **_kwargs):
+        observed.extend(spec.id for spec in specs)
+        return []
+
+    monkeypatch.setattr("curator.sources.collect_sources", fake_collect)
+    collect(cfg, source_ids=["fast-source"])
+    assert observed == ["fast-source"]
 
 
 def test_snapshot_accepts_a_normal_source_volume_spike(tmp_path: Path) -> None:

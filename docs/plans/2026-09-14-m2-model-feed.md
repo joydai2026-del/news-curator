@@ -1,0 +1,85 @@
+# News Curator M2 updated execution plan
+
+Status: **reviewed source implementation on `feat/m2-discovery-lanes`, awaiting integration, deployment, owner-preview validation, and seven-day qualification.** The reviewed source baseline is `293bdcf7906b862e381381a748d7b7b881364a3f`; the working tree also contains an active, uncommitted 50-candidate RankLLM batch implementation that remains separate until its tests and code gate pass. No production behavior or quality target is claimed from source state.
+
+This plan supersedes older M2 statements that require Nostr, fix every page at 30 items, or describe M2 as deterministic. Nostr remains optional for M2. Page size and candidate batch size remain separate validated configuration: the current candidate batch is being changed to 50, while user pagination is not fixed to 50. This does not alter the preserved M1, M3, M4, or M5 commitments below.
+
+## What happens next
+
+M2 will deliver a deep main feed, category feeds, and retained-corpus search across every configured category, in English and Chinese. US politics and China politics will be inspected separately. Feed ranking and search will use the same pretrained model engine, with the optional current query and the owner's ordered repeated behavior serialized into each request. The sequence includes read, save, open-original, searches including zero-result searches, result clicks, and explicit negative actions. The next eligible request must read the newest committed history.
+
+Use a narrow RankLLM-style adapter as the lowest incremental-effort candidate for this exact contract. This is a source-level engineering judgment, not a runtime benchmark. RankLLM supplies a listwise reranking loop and provider adapters; News Curator still owns authentication, candidates, history, search, deletion, policy, receipts, and evaluation. Keep the adapter tiny and replaceable. Provider, model, prompt revision, context/window size, page size, timeouts, retry count, cost ceiling, history limits, and ranking policies live in validated configuration. Do not install the full local retrieval/server stack or train a sequence model in M2.
+
+Nostr becomes an optional later source rather than an M2 completion dependency. Preserve accepted M1. Preserve M3 grounded Q&A and wiki QA, M4's real-data-trained shared sequence model plus second-client obligation, and M5 proactive delivery. Existing Next Session and Notion text that says Nostr is required in M2, page size is fixed at 30, or M2 is deterministic is stale and must be reconciled when this reviewed plan is published. This execution addendum supersedes those three conflicting requirements in the parent roadmap, measurement policy and QA checklist. Other existing metrics and hard gates remain in force. A small authorized historical-import rehearsal remains in M2; unavailable routes remain visibly incomplete.
+
+## Parallel execution map
+
+| Workstream | Depends on | Parallel with | Done when |
+|---|---|---|---|
+| 0. Restore isolated checkout and prove source pin | none | none | existing work preserved; isolated `feat/m2-discovery-lanes` checkout verified; authentication and deployment preflight pass; no stale-main edits |
+| A. Define content and event identities and model-call contracts | 0 | none | add missing search-query, zero-result and original-open semantics; reuse existing feedback types where they fit; migration/schema/config tests pass |
+| B1. First source and retained-corpus path | A | C, D | one real cohort supplies feed candidates and retained search |
+| B2. Broader source coverage and authorized historical import rehearsal | B1 | E, C, D | every configured category and both languages covered; US and China politics separately assessed; one small authorized import demonstrated |
+| C. Owner history and interaction capture | A | B1/B2, D | ordered repeated read/save/open-original/search/zero-result/click/negative events commit idempotently and remain owner-isolated |
+| D. Tiny reranker adapter and model policy | A | B1/B2, C | same engine ranks feed and search; current query is optional; output is a valid candidate permutation; model is swappable by config |
+| E. First integrated slice | B1, C, D | B2 continues | one signed-in feed and one search path prove action commit, newest-history input receipt, rerank, stable pagination, and UI response |
+| F. Agent-run full-scope validation and hard gates | E, B2 | measurement harness preparation | agent completes live journey and all technical gates on the handoff revision: denial, deletion/rebuild, responsive/accessibility, CLI/API/UI parity, rollback |
+| Owner acceptance E2E | F | G when inputs are stable | owner completes the 15 to 20 minute usefulness check; no unfinished functional scope |
+| G. Seven-day qualification | stable relevant code, policy, schema, source cohort, and metrics | post-ship loop rehearsal | compatible evidence meets sample floors and headline targets |
+
+## Engineering and safety contract
+
+The online path is currently incomplete. Add a News Curator-owned authenticated request-time service or function that reads owner-bound history after the action commit, assembles eligible candidates, calls the reranker, validates exact candidate-set equality and uniqueness, and returns a stable page. Freshness-ready time and true viewport time are separate fields and separate reports.
+
+Initial proposed targets are **model-assisted response p95 at most 5 seconds**, a **6-second hard model deadline**, and a usable baseline response within **8 seconds** on timeout. Permit at most one retry inside the same deadline. Measure cold and warm requests separately across at least 200 real end-to-end requests; targets are not measured facts. A proposed, unmeasured acceptance target is at least 95% model-path success on eligible, consented requests while budget is available, with fallback rate reported separately; a fast baseline cannot conceal a broken model path. Start the owner trial with proposed configurable ceilings of **$0.02 per request and $2 per day**. Preflight token estimates and observed usage must enforce both; unknown provider pricing blocks model calls until configured. Budget exhaustion uses the transparent baseline. The baseline remains available for timeout, malformed output, provider failure, or exhausted budget, but a fallback response is labeled as fallback and can never count as a model-quality pass.
+
+Reject unknown, duplicate, missing, or ineligible IDs. Require consent for model-provider processing of history, retain event order and repeated actions within a configurable context budget, and redact unnecessary identifiers before model submission; never log raw prompts in public receipts. Limit and redact history before model submission, keep owner identity and private metadata out of prompts, and treat article text as untrusted data so prompt-like text cannot change ranking instructions. Receipts bind source revision, policy, prompt/model revision, candidate IDs, newest included event ID, latency, cost, result mode, and fallback reason. Test stale-history races, timeouts, invalid IDs, cross-owner access, deletion, cache invalidation, prompt injection, zero results, repeated actions, explicit-negative precedence, and current-query-over-inferred-history precedence. Use frozen real query/candidate cases with conflicting history: explicit query constraints must remain satisfied and clearly query-relevant stories must not be displaced by off-topic history matches. History may personalize among query-relevant choices; identical ranking to a neutral profile is not required. The current search query takes priority over inferred past interests. Do not deduplicate distinct repeated actions when deduplicating retry delivery. Reject old cached rankings when their history revision predates the required committed revision.
+
+## Success metrics
+
+The five headline targets remain proposed and `unmeasured` until bound evidence exists:
+
+| ID | Target |
+|---|---|
+| F1 | readiness p95 within 15 minutes for fast streams and 45 minutes for scheduled feeds |
+| F3 | independently sampled fresh recall at least 85% overall and 95% for must-surface items |
+| R1 | feed P@20 at least 0.75 |
+| R6 | retained-search nDCG@20 at least 0.80 |
+| L1/L2 | profile update p95 at most 60 seconds, and next eligible request uses newest committed history |
+
+US and China politics receive separate source-diversity, omission and relevance reports, with independent sources distinguished from syndicated copies. Coverage percentages describe the independently sampled source cohort, never all internet news. A ready item is searchable/rankable; report time offered and actually viewed separately. Every configured category and each language separately must have at least 30 judged items and worst-slice P@20 at least 0.60. The shared qualification window spans at least seven independent days with at least 50 judged feed slates, 50 real search queries (historical only where genuine records exist), 50 settled profile events, and 100 independently sampled sentinel items per evaluated source class. Missing, unknown, failed-source, and unjudged cases stay visible. Model judges require calibration against owner-authorized human judgments; until calibrated, their results remain diagnostic and unmeasured. The owner does not need to complete 50 queries before the first functional E2E.
+
+Report every rate with its sample size and Wilson 95% confidence interval, separately for hard gates, quality outcomes, and the worst slice. The stated sample floors remain unchanged. A wide interval means `insufficient_evidence`, not permission to invent a larger M2 requirement. Maintain a regression set of real failures and compare model or prompt changes on the same cases before promotion.
+
+## Testing and release gates
+
+Before owner E2E: static analysis; unit and integration tests; migrations; contract tests for configuration and exact permutations; chronological replay; explicit query-over-history precedence checks on the model path; language/category coverage checks; authenticated live feed and search; newest-event receipt assertion; stable configurable pagination; true viewport capture; mobile widths, keyboard focus, and touch targets; anonymous and cross-owner denial; consent, reset, deletion/rebuild; provider timeout and malformed-output drills; cost cutoff; off switch; and a rehearsed rollback within five minutes.
+
+Before full production, complete the AI release layers: define acceptable output bands and degraded-tail behavior; record pre-decided actions for relevance, omission, source, UX, privacy, tenancy, latency, cost, and unsafe-content failures; connect each tripwire to a real alert destination; rehearse rollback and retain its timestamped receipt; and configure recurring review that samples random production rankings plus every flagged case back into the regression suite. None may be marked green from prose alone.
+
+Automate coverage, receipts, pagination, fallback, consent, denial and deletion checks before handoff. The owner's acceptance pass is a **15 to 20 minute usefulness check**, using preselected genuine stories and observed cases, after agent evidence is green:
+
+1. Open main feed and one category feed in each language, including separate US-politics and China-politics checks.
+2. Save, read, open an original, search successfully, run a zero-result search, click a result, and give a negative signal.
+3. Confirm hidden stories stay hidden and recommendations respond sensibly over the agreed real learning cases. A random action need not reorder every result. The agent verifies newest-history receipts; the owner judges usefulness.
+4. Try an older story search and judge whether the results and explanations make sense. Technical regression checks, including forced fallback, are the agent's job.
+
+## Provisional time range
+
+Allow **7 to 12 active build-and-verification days with the parallel work above** to reach the owner's first complete functional E2E, assuming existing authentication and Supabase infrastructure remain usable and no provider or deployment blocker appears. This is a planning range, not a promised date. The estimate starts after workstream 0 preflight passes; report its elapsed time separately and name any checkout, authentication, deployment or migration blocker. The first integrated slice should land after roughly **2 to 3 active days**; reforecast then using measured deployment, model latency, and event-path findings. Full quality qualification needs a separate **minimum seven independent-day evidence window** after relevant definitions stabilize. That measurement window does not delay the first owner E2E, but it does block a full M2 production claim.
+
+## Qualification and handoff
+
+The first owner E2E uses the live production-shaped site, restricted to the owner and labeled internal owner preview; all functional M2 scope and pre-handoff gates are complete before owner acceptance. The later seven-day window qualifies production quality and does not leave functional build scope unfinished. It is not yet a full M2 quality-completion claim. The agent first exercises the same deployed revision through the real signed-in surface. The handoff includes the live URL, revision, passed technical checklist, measured versus insufficient-evidence metrics, fallback status, and a short owner checklist. The seven-day window can overlap the owner test after inputs stabilize; insufficient volume or failed quality may extend qualification beyond seven days. Final promotion requires real quality results, independent code review, and the full applicable QA gates.
+
+The model trial is time-boxed within workstream D. If its latency, cost or quality fails, tune or replace only the adapter/provider and reforecast; do not silently ship deterministic-only M2. Use the existing baseline as safe recovery. On privacy or consent failure, disable the affected data path, not merely model ranking. Keep failure triage in the existing workflow with agent-owned actions and user-visible health. After launch, continue source-health checks and weekly quality review, with a rehearsed off switch and rollback. No new dashboard platform is required.
+
+## Sampling, privacy and traceability details
+
+Freeze the source registry, eligible source classes, source-family/category assignments, query mix, judging rubric, independent sampling procedure and seed, candidate/history snapshots and denominators before observing rankings. Independently sample source pages against the collector so missing stories can be found. Syndicated copies share an event cluster and do not count as independent source coverage. Publish exclusions and missingness; never remove failing sources mid-window. Keep the existing policy formulas for P@20 (missing required slots fail), tied grades and nDCG (retrieval misses earn zero), and zero-result searches (a miss is a failure when the frozen pool contains relevant items; truly unanswerable cases are reported separately, never fake perfect nDCG). Unjudged items cannot establish a pass. Category and language minimums are separate marginal slices, not the category-language cross-product. Human owner-authorized labels are primary; an automated judge must be independent of the ranking output and calibrated before counting as quality evidence.
+
+The existing deterministic fallback may use only locally stored history permitted by the active learning consent. Without provider-processing consent, send no history or query to a model provider. Learning disable or reset removes behavioral personalization; a public/category baseline may remain only if its own access checks pass. Record the selected provider's explicit retention and training-use policy revision before enabling it. Verify withdrawal stops subsequent submissions, local deletion rebuilds derived state, and caches are invalidated. Do not promise remote deletion unless supported by the provider contract/API receipt; surface retention limits at consent. A privacy breach disables affected personalization/read/write paths until revalidated.
+
+The companion traceability appendix retains all 25 metric IDs and 40 QA IDs, source definitions, evidence producers and release stages. The only scope substitutions are optional M2 Nostr ingestion (M4 second client retained), configurable page size, and pretrained model-led M2 ranking with deterministic recovery. Named diagnostic cutoffs such as P@20/top-30 remain measurement definitions rather than page-size mandates. New model latency, budget, consent and success-rate criteria above are supplemental proposed targets, not measured achievements.
+
+The day 2 to 3 slice is available as an optional early look once its applicable safety gates pass; it is not a substitute for the user's requested complete M2 E2E handoff after F. No owner task is required at that early checkpoint. Source expansion and technical QA continue toward the complete scope. M1 learning can continue independently throughout.

@@ -16,6 +16,7 @@ from .enums import (
     EvidenceClass,
     EvidenceOrigin,
     EventType,
+    M2HistoryEventType,
 )
 from .tenant import Ownership
 
@@ -30,7 +31,7 @@ class LearningEvent(Ownership):
     """
 
     event_id: str
-    event_type: EventType
+    event_type: EventType | M2HistoryEventType
     occurred_at: datetime
     recorded_at: datetime
     surface: str
@@ -48,6 +49,13 @@ class LearningEvent(Ownership):
     # never on its own mark a story read.
     duration_ms: int | None = None
     retracted_by_event_id: str | None = None
+    # Monotonic owner-history revision. Delivery retries keep the same event
+    # identity and revision; a distinct repeated action receives a new pair.
+    event_revision: int = 1
+    query_text: str | None = None
+    result_count: int | None = None
+    result_position: int | None = None
+    exposure_event_id: str | None = None
 
 
 @dataclass(frozen=True)

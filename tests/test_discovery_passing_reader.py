@@ -20,6 +20,7 @@ from curator.source_snapshot import load_source_snapshot, snapshot_config_digest
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT = ROOT / 'tests' / 'fixtures' / 'discovery-passing-current.json'
 PREVIOUS = ROOT / 'tests' / 'fixtures' / 'discovery-passing-previous.json'
+CAPTURE_CONFIG = ROOT / 'tests' / 'fixtures' / 'discovery-capture-config'
 SCRIPT = ROOT / 'tests' / 'discovery_passing_reader_browser.js'
 
 
@@ -30,7 +31,7 @@ def _snapshot(path, digest):
 
 
 def _envelope(tmp_path):
-    cfg = load_config(ROOT)
+    cfg = load_config(CAPTURE_CONFIG)
     digest = snapshot_config_digest(cfg)
     current = _snapshot(CURRENT, digest)
     previous = _snapshot(PREVIOUS, digest)

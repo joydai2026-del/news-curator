@@ -23,7 +23,7 @@ def _snapshot(path, digest):
 
 
 def test_compact_real_capture_passes_all_active_bands_and_replays():
-    cfg = load_config(ROOT)
+    cfg = load_config(ROOT / 'tests/fixtures/discovery-capture-config')
     digest = snapshot_config_digest(cfg)
     policy = load_discovery_policy(ROOT / 'config' / 'discovery-policy-r2.yaml')
     assert all(band['active'] for band in policy['bands'].values())

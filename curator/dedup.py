@@ -30,7 +30,7 @@ import re
 from difflib import SequenceMatcher
 
 from .models import Item
-from .normalize import fold_text
+from .normalize import canonical_url, fold_text
 
 # How many alternate addresses one story may carry. This is display data on an
 # unfolded card, and six named outlets is already more than anyone reads. It is
@@ -228,7 +228,10 @@ def dedupe(items: list[Item], *, threshold: float = 0.90, time_bucket_hours: flo
     for item in ordered:
         if not item.canonical_url:
             continue
-        key = (item.language, item.canonical_url)
+        # Story identity normalizes URL aliases before hashing.  Use that same
+        # canonical form here, otherwise aliases can survive as duplicate
+        # durable story IDs after this exact-link pass.
+        key = (canonical_url(item.canonical_url) or item.canonical_url, item.language)
         if key in by_url:
             _merge(by_url[key], item, count_echo=True)
         else:
@@ -236,13 +239,28 @@ def dedupe(items: list[Item], *, threshold: float = 0.90, time_bucket_hours: flo
 
     # Pass 2: similar title. Collapses a row, contributes nothing to the badge.
     survivors: list[Item] = []
+    # ``same_story`` is intentionally conservative, but replaying a public
+    # snapshot can contain thousands of unrelated headlines.  These cached
+    # upper-bound checks only skip pairs that SequenceMatcher cannot possibly
+    # score at the configured threshold; every remaining pair still takes the
+    # established ``same_story`` decision path.
+    normalized_titles = {id(item): normalize_title(item.title) for item in by_url.values()}
     for item in by_url.values():
         match = None
+        item_title = normalized_titles[id(item)]
         for kept in survivors:
             # Scope by time so this stays cheap and so two genuinely different
             # stories months apart can never collide.
             gap = abs((kept.published_at - item.published_at).total_seconds()) / 3600.0
             if gap > time_bucket_hours:
+                continue
+            kept_title = normalized_titles[id(kept)]
+            if not item_title or not kept_title:
+                continue
+            maximum_ratio = (2 * min(len(item_title), len(kept_title))) / (len(item_title) + len(kept_title))
+            if maximum_ratio < threshold:
+                continue
+            if SequenceMatcher(None, item_title, kept_title).quick_ratio() < threshold:
                 continue
             if same_story(kept, item, threshold):
                 match = kept

@@ -21,6 +21,16 @@ class TestUrlDedup:
         ]
         assert len(dedupe(items)[0].echo_platforms) == 2
 
+    def test_real_capture_cnn_and_hackernews_aliases_coalesce(self):
+        """Regression from the 2026-09-14 public capture, with bounded titles."""
+        path = "business/video/anderson-cooper-anthropic-ceo-dario-amodei-could-ai-kill-humans-digvid"
+        items = [
+            make_item("Exclusive: Anderson Cooper asks Anthropic CEO", f"https://cnn.com/{path}", source_id="cnn-news", platform="cnn"),
+            make_item("Asking Anthropic CEO: could AI kill all humans?", f"https://www.cnn.com/{path}", source_id="hackernews", platform="hackernews"),
+        ]
+        items[1].is_aggregator = True
+        assert len(dedupe(items)) == 1
+
     def test_different_urls_stay_separate(self):
         items = [
             make_item("One thing", "https://example.com/1"),

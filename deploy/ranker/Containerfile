@@ -1,0 +1,14 @@
+FROM python:3.12.12-slim@sha256:42f1689d6d6b906c7e829f9d9ec38491550344ac9adc01e464ff9a08df1ffb48
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/opt/vendor:/opt/news-curator TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
+WORKDIR /opt/news-curator
+COPY wheels/ /opt/wheels/
+COPY requirements.lock /opt/requirements.lock
+RUN python -m pip install --no-index --no-deps --only-binary=:all: --require-hashes --find-links=/opt/wheels -r /opt/requirements.lock && rm -rf /opt/wheels
+COPY vendor/ /opt/vendor/
+COPY tiktoken-cache/ /opt/tiktoken-cache/
+COPY vendor-manifest.json /opt/vendor-manifest.json
+COPY curator/ /opt/news-curator/curator/
+COPY config/ranker-policy-r1.yaml /opt/news-curator/config/ranker-policy-r1.yaml
+COPY config/rankllm-news-curator-json.yaml /opt/news-curator/config/rankllm-news-curator-json.yaml
+COPY smoke-public-200.json /opt/news-curator/smoke-public-200.json
+USER 65532:65532

@@ -1,0 +1,6 @@
+# Runtime input only. Linux wheels and hashes must pass the two-reviewer gate
+# before this file is used in a Modal image.
+httpx==0.28.1
+
+# RankLLM is pinned by immutable source commit and local archive hash in the M2
+# security receipt. It is not fetched from an unpinned package index here.

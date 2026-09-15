@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -64,6 +66,7 @@ def activate_personalization_link(
     *,
     supabase_url: str | None = None,
     publishable_key: str | None = None,
+    m2_config: dict[str, object] | None = None,
 ) -> None:
     """Expose the settings entry point only in a configured site build."""
     page = site_index.read_text(encoding="utf-8")
@@ -84,6 +87,9 @@ def activate_personalization_link(
             configured_dashboard = _configure_page(dashboard.read_text(encoding="utf-8"), config)
             dashboard.write_text(configured_dashboard, encoding="utf-8")
     site_index.write_text(page, encoding="utf-8")
+    if m2_config is not None:
+        from curator.render import configure_m2_reader
+        configure_m2_reader(site_index, m2_config)
 
 
 def main() -> int:
@@ -92,6 +98,8 @@ def main() -> int:
     parser.add_argument("--publishable-key", required=True, help="Public publishable or legacy anon key.")
     parser.add_argument("--output", required=True, type=Path, help="Generated callback HTML path.")
     parser.add_argument("--site-index", type=Path, help="Rendered site index whose personalization link should be activated.")
+    parser.add_argument("--m2-config", type=Path, default=os.environ.get("NEWS_CURATOR_M2_READER_CONFIG"),
+                        help="Optional validated public M2 reader configuration JSON path; disabled when absent.")
     args = parser.parse_args()
     try:
         materialize_callback(
@@ -104,6 +112,7 @@ def main() -> int:
                 args.site_index,
                 supabase_url=args.supabase_url,
                 publishable_key=args.publishable_key,
+                m2_config=json.loads(args.m2_config.read_text()) if args.m2_config else None,
             )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

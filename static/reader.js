@@ -247,6 +247,58 @@
     }
     return { status: "updated", interest_signal: value.signal, interest_revision: value.revision };
   }
+  function validateHistorySnapshot(value) {
+    const fields = ["consent_revision", "events", "history_generation", "history_revision",
+      "included_history_revision", "learning_enabled", "newest_event_id",
+      "provider_policy_id", "provider_processing_enabled", "server_commit_revision"];
+    if (!exactFields(value, fields) || !Number.isSafeInteger(value.history_generation) ||
+        value.history_generation < 1 || !Number.isSafeInteger(value.history_revision) ||
+        !Number.isSafeInteger(value.included_history_revision) ||
+        value.server_commit_revision !== value.history_revision ||
+        !Number.isSafeInteger(value.consent_revision) || typeof value.learning_enabled !== "boolean" ||
+        typeof value.provider_processing_enabled !== "boolean" || !Array.isArray(value.events) ||
+        !(value.newest_event_id === null || boundedString(value.newest_event_id, 128)) ||
+        !(value.provider_policy_id === null || boundedString(value.provider_policy_id, 512))) {
+      fail("The behavior history response was invalid.");
+    }
+    return value;
+  }
+  function validateBehaviorReceipt(value) {
+    if (!isObject(value) || !["recorded", "replayed", "learning_disabled"].includes(value.status)) fail("The learning response was invalid.");
+    if (value.status !== "learning_disabled" && (!/^event:[0-9a-f]{64}$/.test(value.event_id) ||
+        !Number.isSafeInteger(value.event_revision) || value.event_revision < 1)) fail("The learning response was invalid.");
+    return value;
+  }
+  function validateOwnerExportPage(value, _signedIn, session) {
+    const fields = ["fence", "max_download_bytes", "next_cursor", "offset", "owner_id",
+      "rows", "schema_version", "total_rows"];
+    if (!exactFields(value, fields) || value.schema_version !== 1 ||
+        !session || !boundedString(session.user_id, 128) || value.owner_id !== session.user_id ||
+        !/^[0-9a-f]{64}$/.test(value.fence) || !Number.isSafeInteger(value.offset) || value.offset < 0 ||
+        !Number.isSafeInteger(value.total_rows) || value.total_rows < 0 ||
+        !Number.isSafeInteger(value.max_download_bytes) || value.max_download_bytes < 1048576 ||
+        value.max_download_bytes > 134217728 || value.total_rows > value.max_download_bytes ||
+        !Array.isArray(value.rows) || value.rows.length > 500 ||
+        !(value.next_cursor === null || boundedString(value.next_cursor, 2048))) {
+      fail("The data export response was invalid.");
+    }
+    const rows = value.rows.map((row) => {
+      if (!exactFields(row, ["key", "section", "value"]) || !boundedString(row.section, 80) ||
+          !boundedString(row.key, 512) || !isObject(row.value)) fail("The data export response was invalid.");
+      return row;
+    });
+    if (value.offset + rows.length > value.total_rows || (value.next_cursor && !rows.length)) {
+      fail("The data export response was invalid.");
+    }
+    return { ...value, rows };
+  }
+  function validateAtomic(value, validator) {
+    if (!isObject(value)) fail("The reading response was invalid.");
+    const { behavior_event: event, ...state } = value;
+    const result = validator(state);
+    if (result.status !== "conflict") validateBehaviorReceipt(event);
+    return result;
+  }
   async function boundedJson(response, message, byteLimit = MAX_RESPONSE_BYTES) {
     const text = await response.text();
     if (encoder.encode(text).length > byteLimit) fail(message);
@@ -286,8 +338,8 @@
         }
         fail("The reader request failed.");
       }
-      const result = validator(payload, Boolean(session));
-      if (session && ["feed_page", "saved_page", "discovery_edition"].includes(name) && typeof window !== "undefined") {
+      const result = validator(payload, Boolean(session), session);
+      if (session && ["feed_page", "saved_page", "discovery_edition", "m2_history_snapshot"].includes(name) && typeof window !== "undefined") {
         window.NewsCuratorAuth?.confirmSession?.(session);
       }
       return result;
@@ -327,6 +379,27 @@
         p_story_id: storyId, p_topic_id: topicId, p_signal: "more_like",
         p_expected_revision: revision, p_idempotency_key: idempotencyKey,
       }, validateInterest, true),
+      historySnapshot: (limit = null) => rpc("m2_history_snapshot", { p_limit: limit }, validateHistorySnapshot, true),
+      setBehaviorConsent: (learning, providerProcessing, providerPolicyId) => rpc("set_behavior_consent", {
+        p_learning_enabled: learning, p_provider_processing_enabled: providerProcessing,
+        p_provider_policy_id: providerPolicyId,
+      }, (value) => value, true),
+      clearBehaviorHistory: () => rpc("clear_behavior_history", {}, (value) => value, true),
+      ownerExportPage: (cursor = null, expectedFence = null) => rpc("m2_owner_export_page", {
+        p_cursor: cursor, p_expected_fence: expectedFence,
+      }, validateOwnerExportPage, true, MAX_DISCOVERY_BYTES),
+      appendBehaviorEvent: (event) => rpc("append_behavior_event", event, validateBehaviorReceipt, true),
+      setStoryStateWithEvent: (storyId, read, saved, revision, key, event) => rpc("set_story_state_with_event", {
+        p_story_id: storyId, p_read: read, p_saved: saved, p_expected_revision: revision,
+        p_idempotency_key: key, ...event,
+      }, (value) => validateAtomic(value, validateStoryState), true),
+      setStoryInterestWithEvent: (storyId, topicId, signal, revision, key, event) => rpc("set_story_interest_with_event", {
+        p_story_id: storyId, p_topic_id: topicId, p_signal: signal, p_expected_revision: revision,
+        p_idempotency_key: key, ...event,
+      }, (value) => validateAtomic(value, (state) => {
+        if (state.signal === "less_like") return { ...validateInterest({ ...state, signal: "more_like" }), interest_signal: "less_like" };
+        return validateInterest(state);
+      }), true),
     });
   }
   function mergeTopicMembership(card, topicIds) {
@@ -403,6 +476,13 @@
     interestButton.textContent = interested ? "More like this added" : "More like this";
     interestButton.setAttribute("aria-pressed", String(interested));
     card.classList.toggle("is-more-like", interested);
+    const less = card.querySelector(".less-interest-action");
+    if (less) {
+      const reduced = state.signal === "less_like";
+      less.textContent = reduced ? "Less like this added" : "Less like this";
+      less.setAttribute("aria-pressed", String(reduced));
+      card.classList.toggle("is-less-like", reduced);
+    }
     card.dataset.interestRevision = String(state.revision);
   }
   function setReadPresentation(card, read) {
@@ -617,10 +697,97 @@
     return { rows: collected, cursor: nextCursor, drained: false };
   }
 
+  const M2_CARD_FIELDS = ["card_schema_version", "published_at", "source_name", "story_id", "summary", "title", "url",
+    "source_id", "language", "category_ids", "read_at", "saved_at", "state_revision", "interests"];
+  const M2_RESPONSE_FIELDS = ["cards", "consent_revision", "fallback_reason", "history_generation",
+    "history_revision", "model_version", "next_cursor", "policy_version", "request_id",
+    "result_mode", "schema_version", "server_commit_revision"];
+  function validateM2Config(value) {
+    if (!isObject(value) || typeof value.enabled !== "boolean") fail("M2 reader configuration is invalid.");
+    if (!value.enabled) return Object.freeze({ enabled: false });
+    value = { request_timeout_ms: 8000, ...value };
+    if (!exactFields(value, ["enabled", "model_version", "page_size", "policy_version",
+      "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms"]) || !boundedString(value.policy_version, 256) ||
+      !boundedString(value.provider_policy_id, 256) ||
+      !boundedString(value.model_version, 256) || !safeDestination(value.provider_retention_url) ||
+      !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
+      !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000) {
+      fail("M2 reader configuration is invalid.");
+    }
+    const endpoint = safeDestination(value.url);
+    if (!endpoint) fail("M2 reader configuration is invalid.");
+    return Object.freeze({ ...value, url: endpoint.replace(/\/$/, "") });
+  }
+  function validateM2Response(value, expected) {
+    if (!exactFields(value, M2_RESPONSE_FIELDS) || value.schema_version !== 1 ||
+        value.policy_version !== expected.policy_version || value.model_version !== expected.model_version ||
+        value.history_revision !== expected.history_revision ||
+        value.server_commit_revision !== expected.server_commit_revision ||
+        value.history_generation !== expected.history_generation ||
+        value.consent_revision !== expected.consent_revision ||
+        !["model", "fallback"].includes(value.result_mode) || typeof value.fallback_reason !== "string" ||
+        (value.result_mode === "model" && value.fallback_reason !== "") ||
+        (value.result_mode === "fallback" && !boundedString(value.fallback_reason, 256)) ||
+        !Array.isArray(value.cards) || value.cards.length > expected.page_size ||
+        !(value.next_cursor === null || boundedString(value.next_cursor, 4096))) fail("The M2 feed response was invalid.");
+    const seen = new Set();
+    value.cards.forEach((card) => {
+      if (!exactFields(card, M2_CARD_FIELDS) || card.card_schema_version !== 1 || !STORY_ID.test(card.story_id) ||
+          !boundedString(card.title, 2000) || typeof card.summary !== "string" ||
+          !boundedString(card.source_name, 200) || !validTimestamp(card.published_at) ||
+          !safeDestination(card.url) || !boundedString(card.source_id, 512) || !["en", "zh"].includes(card.language) ||
+          !Array.isArray(card.category_ids) || !card.category_ids.every((id) => TOPIC_ID.test(id)) ||
+          !validNullableTimestamp(card.read_at) || !validNullableTimestamp(card.saved_at) ||
+          !Number.isSafeInteger(card.state_revision) || card.state_revision < 0 || !Array.isArray(card.interests) ||
+          !card.interests.every((interest) => exactFields(interest, ["topic_id", "signal", "revision"]) &&
+            TOPIC_ID.test(interest.topic_id) && ["more_like", "less_like"].includes(interest.signal) &&
+            Number.isSafeInteger(interest.revision) && interest.revision >= 0) ||
+          seen.has(card.story_id)) fail("The M2 feed response was invalid.");
+      seen.add(card.story_id);
+    });
+    return value;
+  }
+  function createM2Service(rawConfig, sessionProvider, fetchImpl = fetch) {
+    const config = validateM2Config(rawConfig);
+    if (!config.enabled) return Object.freeze({ enabled: false });
+    async function request(path, method, body, expected) {
+      const before = await sessionProvider();
+      if (!before || !boundedString(before.access_token, 16384)) fail("Sign in to continue.");
+      const url = `${config.url}${path}`;
+      const response = await fetchImpl(url, { method, headers: {
+        accept: "application/json", "content-type": "application/json",
+        authorization: `Bearer ${before.access_token}`,
+      }, body: body === null ? undefined : JSON.stringify(body), credentials: "omit",
+      redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(config.request_timeout_ms) });
+      const payload = await boundedJson(response, "The M2 reader response was invalid.");
+      if (response.redirected !== false || response.url !== url) fail("The M2 endpoint redirected unexpectedly.");
+      const after = await sessionProvider();
+      if (!after || after.access_token !== before.access_token) fail("The signed-in account changed.");
+      if (!response.ok) fail("The M2 reader request failed.");
+      return validateM2Response(payload, expected);
+    }
+    return Object.freeze({
+      enabled: true,
+      retentionUrl: config.provider_retention_url,
+      rank: (history, eligibility, excludeStoryIds = []) => request("/rank", "POST", {
+        schema_version: 1, policy_version: config.policy_version, model_version: config.model_version,
+        history_revision: history.included_history_revision,
+        server_commit_revision: history.history_revision,
+        history_generation: history.history_generation, consent_revision: history.consent_revision,
+        page_size: config.page_size, eligibility, exclude_story_ids: excludeStoryIds,
+      }, { ...history, policy_version: config.policy_version, model_version: config.model_version,
+        page_size: config.page_size, server_commit_revision: history.history_revision,
+        history_revision: history.included_history_revision }),
+      page: (cursor, binding) => request(`/page?cursor=${encodeURIComponent(cursor)}`, "GET", null,
+        { ...binding, policy_version: config.policy_version, model_version: config.model_version,
+          page_size: config.page_size }),
+    });
+  }
+
   const contract = {
-    actionTopic, applyInterestTopic, applyServerRank, applyServerState, beginStateMutation, createApi, createStoryCard, drainUpdates, effectiveTopic, finishStateMutation, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
+    actionTopic, applyInterestTopic, applyServerRank, applyServerState, beginStateMutation, createApi, createM2Service, createStoryCard, drainUpdates, effectiveTopic, finishStateMutation, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
     rankingReason, run, safeDestination,
-    validateDiscovery, validateFeedPage, validateSavedPage, validateLatestPublication, validateUpdates,
+    validateDiscovery, validateFeedPage, validateM2Config, validateM2Response, validateSavedPage, validateLatestPublication, validateUpdates,
   };
   const commonJs = typeof module !== "undefined" && module.exports;
   if (commonJs) {
@@ -651,6 +818,8 @@
     if (!auth || !view || !status || !loadButton || !updatesStatus || !updatesButton) return;
     const savedTabs = document.querySelectorAll('.chip[data-filter="__saved__"]');
     let api;
+    let authEpoch = 0;
+    let ownerExportEpoch = 0;
     try { api = createApi(auth.config(), () => auth.sessionForRequest()); } catch (_) {
       loadButton.hidden = true;
       if (view.currentTab() === "__saved__") {
@@ -662,6 +831,24 @@
       tab.hidden = false;
       tab.disabled = false;
     });
+    const m2Controls = document.getElementById("m2-controls");
+    const meta = (name) => document.querySelector(`meta[name="news-curator-m2-${name}"]`)?.content || "";
+    let m2 = null;
+    let m2Config = null;
+    try {
+      m2Config = validateM2Config(meta("enabled") === "true" ? {
+        enabled: true, url: meta("endpoint"), policy_version: meta("policy-version"),
+        model_version: meta("model-version"), provider_policy_id: meta("provider-policy-id"),
+        provider_retention_url: meta("provider-retention-url"), page_size: Number(meta("page-size")),
+        request_timeout_ms: Number(meta("request-timeout-ms") || 8000),
+      } : { enabled: false });
+      m2 = createM2Service(m2Config, () => auth.sessionForRequest());
+    } catch (_) { announce("Personalized feed configuration is unavailable. Public stories remain available."); }
+    let m2Active = false, m2Sequence = 0, m2Cursor = null, m2Binding = null, m2Key = null;
+    let m2Section = null, m2PublicCards = [], m2Position = 0;
+    let behaviorWrites = Promise.resolve();
+    let m2SearchTimer = null;
+    const searchBox = document.getElementById("q");
     document.querySelectorAll(".state-action:not(.read-action)").forEach((button) => { button.hidden = false; });
     const cards = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => {
@@ -690,7 +877,6 @@
     let pollTimer = null;
     let updateCursor = null;
     let nextHistoryAllRank = HISTORY_RANK_OFFSET;
-    let authEpoch = 0;
     const authoritativeAllHistoryOrder = [];
     const authoritativeAllHistoryIds = new Set();
     const pendingUpdates = new Map();
@@ -706,6 +892,8 @@
     let publicCards = [];
     let discoverySection = null;
     const editionMeta = document.querySelector('.edition-meta');
+    const editionLabels = [...document.querySelectorAll('.crumb, .eyebrow, .railnote, .brand small')]
+      .map((node) => ({ node, text: node.textContent }));
     const editionMetaSpans = editionMeta ? [...editionMeta.querySelectorAll('span')] : [];
     const publicEditionMeta = editionMetaSpans.map((span) => span.textContent);
     const publicStoryCount = editionMetaSpans.find((span) => / stories?$/.test(span.textContent.trim()));
@@ -818,7 +1006,7 @@
       setDiscoveryLane(discoveryLane); refreshStateControls(); refreshInterestControls(); refreshLoadButton();
     }
     async function fetchDiscovery(initial = false) {
-      if (!discoveryControls || !signedIn()) return;
+      if (!discoveryControls || !signedIn() || m2Active) return;
       const epoch = authEpoch, request = ++discoveryRequest;
       try {
         const response = await api.discoveryEdition();
@@ -872,7 +1060,235 @@
     });
     discoveryAccept?.addEventListener("click", () => { if (pendingDiscovery) void openStoredDiscovery(pendingDiscovery.edition_id, discoveryLane); });
 
+    function usesM2() { return Boolean(m2?.enabled && signedIn() && selectedTopic() !== "__saved__"); }
+    function m2Eligibility() {
+      const topic = selectedTopic();
+      return { category: topic === "__all__" ? null : topicIdForSlug(topic), query: searchBox?.value.trim() || null };
+    }
+    function enqueueBehavior(operation) {
+      const epoch = authEpoch;
+      const pending = behaviorWrites.catch(() => {}).then(async () => {
+        if (epoch !== authEpoch || !signedIn()) fail("The signed-in account changed.");
+        const snapshot = await api.historySnapshot();
+        if (epoch !== authEpoch) fail("The signed-in account changed.");
+        const value = await operation(snapshot);
+        if (epoch !== authEpoch) fail("The signed-in account changed.");
+        return value;
+      });
+      behaviorWrites = pending;
+      return pending;
+    }
+    async function behaviorIdentity(snapshot) {
+      const bytes = await crypto.subtle.digest("SHA-256", encoder.encode(idempotencyKey()));
+      return { p_event_id: "event:" + [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join(""),
+        p_occurred_at: new Date().toISOString(), p_expected_history_generation: snapshot.history_generation };
+    }
+    function recordBehavior(type, payload) {
+      if (!m2?.enabled || !signedIn()) return Promise.resolve();
+      return enqueueBehavior(async (snapshot) => {
+        if (!snapshot.learning_enabled) return;
+        return api.appendBehaviorEvent({ ...await behaviorIdentity(snapshot), p_event_type: type,
+          p_payload: { ...payload, surface: "reader" }, p_schema_version: 1 });
+      });
+    }
+    function clearM2Cards() {
+      cards.forEach((card, id) => {
+        if (card.dataset.m2Card !== "true") return;
+        clearPrivateCardState(card); view.removeCard(card); card.replaceChildren(); card.remove(); cards.delete(id);
+      });
+      m2Section?.remove(); m2Section = null; m2Position = 0;
+    }
+    function leaveM2() {
+      m2Sequence += 1; m2Cursor = null; m2Binding = null; m2Key = null;
+      clearTimeout(m2SearchTimer);
+      if (m2Active) {
+        clearM2Cards();
+        m2PublicCards.forEach(({ card, parent }) => { parent.append(card); cards.set(card.dataset.storyId, card); view.addCard(card); });
+        m2PublicCards = [];
+      }
+      m2Active = false;
+      if (editionMeta) editionMeta.style.display = "";
+      editionLabels.forEach(({ node, text }) => { node.textContent = text; });
+      if (m2Controls) m2Controls.hidden = true;
+      if (searchBox) searchBox.placeholder = "Search this edition";
+      restorePublicEditionMeta();
+      view.apply();
+    }
+    function applyM2Page(response, append, eligibility) {
+      if (!m2Active) {
+        leaveDiscovery(true);
+        m2PublicCards = [...cards.values()].map((card) => ({ card, parent: card.parentNode }));
+        m2PublicCards.forEach(({ card }) => { clearPrivateCardState(card); view.removeCard(card); card.remove(); });
+        cards.clear(); m2Active = true;
+        if (editionMeta) editionMeta.style.display = "none";
+        editionLabels.forEach(({ node, text }) => {
+          node.textContent = node.matches('.crumb') ? text.replace(/Today's edition/i, "Reading feed")
+            : node.matches('.eyebrow') ? "Reading feed"
+            : node.matches('.railnote') ? "Refresh the feed for the latest available stories."
+            : "Reading Companion";
+        });
+      }
+      if (!append) clearM2Cards();
+      if (!m2Section) {
+        m2Section = element("section", "topic-section"); m2Section.dataset.section = "__m2__";
+        m2Section.append(element("div", "grid")); document.getElementById("sections").append(m2Section);
+      }
+      const reason = response.result_mode === "model" ? "Ranked using your current query and permitted reading history." : "Freshness order. Model ranking was not used.";
+      response.cards.forEach((entry) => {
+        if (cards.has(entry.story_id)) return;
+        const row = { ...entry, canonical_url: entry.url, topic_ids: entry.category_ids,
+          source_kind: "outlet", coverage_mentions: [], topic_ranks: {}, ranking_explanation: reason };
+        const card = createStoryCard(row, selectedTopic(), topicSlugForId, topicIdForSlug(selectedTopic()));
+        card.dataset.m2Card = "true"; card.dataset.m2Position = String(++m2Position);
+        card.dataset.m2Query = (eligibility.query || "").toLowerCase();
+        const interest = card.querySelector(".interest-action");
+        if (interest) {
+          const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
+          interest.after(less);
+        }
+        cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
+        m2Section.querySelector(".grid").append(card); view.addCard(card);
+      });
+      m2Cursor = response.next_cursor; m2Binding = response;
+      document.getElementById("discovery-controls")?.setAttribute("hidden", "");
+      if (m2Controls) m2Controls.hidden = false;
+      if (searchBox) searchBox.placeholder = "Search all retained stories";
+      const mode = document.getElementById("m2-mode");
+      if (mode) mode.textContent = reason;
+      if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
+      view.apply(); refreshStateControls(); refreshInterestControls();
+    }
+    async function loadM2(append = false, searchEvent = false) {
+      if (!usesM2()) return;
+      const epoch = authEpoch, request = ++m2Sequence, eligibility = m2Eligibility();
+      const key = JSON.stringify(eligibility);
+      const pageRequest = { topic: selectedTopic(), epoch };
+      pageRequests.add(pageRequest); refreshLoadButton();
+      const showFallback = () => {
+        if (epoch !== authEpoch || request !== m2Sequence) return;
+        leaveM2();
+        if (m2Controls) m2Controls.hidden = false;
+        const mode = document.getElementById("m2-mode");
+        if (mode) mode.textContent = "Captured edition fallback. Live model ranking is unavailable.";
+        announce("Showing the captured edition. Live feed unavailable. Use Refresh feed to retry.");
+      };
+      // The usable reader deadline includes history and queued writes, not
+      // only the later model fetch. Late responses cannot replace fallback.
+      const deadline = setTimeout(showFallback, m2Config.request_timeout_ms);
+      try {
+        if (searchEvent && eligibility.query) await recordBehavior("search_query", { query: eligibility.query });
+        await behaviorWrites.catch(() => {});
+        const history = await api.historySnapshot();
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        const canContinue = append && key === m2Key && m2Cursor && m2Binding &&
+          history.history_generation === m2Binding.history_generation && history.consent_revision === m2Binding.consent_revision;
+        // A new eligible request always carries the committed history. The
+        // server freezes existing pages and re-ranks continuation windows.
+        const response = canContinue
+          ? await m2.page(m2Cursor, { ...m2Binding, history_revision: history.included_history_revision,
+              server_commit_revision: history.history_revision })
+          : await m2.rank(history, eligibility);
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        applyM2Page(response, Boolean(canContinue), eligibility); m2Key = key;
+        const local = document.getElementById("m2-local-learning"), provider = document.getElementById("m2-provider-processing");
+        if (local) local.checked = history.learning_enabled;
+        if (provider) { provider.checked = history.provider_processing_enabled; provider.disabled = !history.learning_enabled; }
+        const retention = document.getElementById("m2-provider-retention");
+        if (retention) { retention.href = m2Config.provider_retention_url; retention.hidden = false; }
+        announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
+        if (!append && eligibility.query && !response.cards.length) {
+          await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
+        }
+      } catch (_) {
+        showFallback();
+      } finally { clearTimeout(deadline); pageRequests.delete(pageRequest); refreshLoadButton(); }
+    }
+    const saveM2Consent = async () => {
+      const local = document.getElementById("m2-local-learning"), provider = document.getElementById("m2-provider-processing");
+      const learning = local.checked, processing = learning && provider.checked;
+      // Invalidate visible history-derived order immediately, before the write.
+      m2Sequence += 1; clearM2Cards(); m2Cursor = null; m2Binding = null;
+      await enqueueBehavior(() => api.setBehaviorConsent(learning, processing, processing ? m2Config.provider_policy_id : null));
+      await loadM2();
+    };
+    ["m2-local-learning", "m2-provider-processing"].forEach((id) => document.getElementById(id)?.addEventListener("change", () => {
+      void saveM2Consent().catch(() => announce("Consent could not be updated. Try again."));
+    }));
+    document.getElementById("m2-refresh")?.addEventListener("click", () => { void loadM2(); });
+    document.getElementById("m2-clear-history")?.addEventListener("click", () => {
+      abortOwnerExport();
+      m2Sequence += 1; clearM2Cards(); m2Cursor = null; m2Binding = null;
+      void enqueueBehavior(() => api.clearBehaviorHistory()).then(() => loadM2())
+        .catch(() => announce("Learning history could not be cleared. Try again."));
+    });
+    document.getElementById("m2-download-data")?.addEventListener("click", () => { void downloadOwnerData(); });
+    searchBox?.addEventListener("input", () => {
+      if (!usesM2()) return;
+      m2Sequence += 1; clearTimeout(m2SearchTimer);
+      m2SearchTimer = setTimeout(() => { void loadM2(false, true); }, 300);
+    });
+
     function announce(message) { status.textContent = message; }
+    function abortOwnerExport() {
+      ownerExportEpoch += 1;
+      const button = document.getElementById("m2-download-data");
+      if (button) button.disabled = false;
+    }
+    async function downloadOwnerData() {
+      const button = document.getElementById("m2-download-data");
+      if (!button || button.disabled || !requireSignIn()) return;
+      const runEpoch = ++ownerExportEpoch, accountEpoch = authEpoch;
+      button.disabled = true;
+      let rows = [];
+      let rowBytes = 0;
+      try {
+        const initialSession = await auth.sessionForRequest();
+        if (!initialSession || !boundedString(initialSession.user_id, 128)) fail("Sign in to continue.");
+        let cursor = null, fence = null, ownerId = null, totalRows = null, maximumBytes = null;
+        const seen = new Set();
+        do {
+          if (runEpoch !== ownerExportEpoch || accountEpoch !== authEpoch) fail("The data export was canceled.");
+          const page = await api.ownerExportPage(cursor, fence);
+          if (runEpoch !== ownerExportEpoch || accountEpoch !== authEpoch) fail("The data export was canceled.");
+          if (ownerId === null) {
+            ownerId = page.owner_id; fence = page.fence; totalRows = page.total_rows;
+            maximumBytes = page.max_download_bytes;
+            if (ownerId !== initialSession.user_id || page.offset !== 0) fail("The signed-in account changed.");
+          } else if (page.owner_id !== ownerId || page.fence !== fence || page.total_rows !== totalRows ||
+              page.max_download_bytes !== maximumBytes || page.offset !== rows.length) {
+            fail("The data export changed. Try again.");
+          }
+          for (const row of page.rows) {
+            const identity = `${row.section}\u0000${row.key}`;
+            if (seen.has(identity)) fail("The data export response was invalid.");
+            const encodedBytes = encoder.encode(JSON.stringify(row)).length + 2;
+            if (rowBytes + encodedBytes > maximumBytes) fail("The data export is too large.");
+            rowBytes += encodedBytes; seen.add(identity); rows.push(row);
+          }
+          if (rows.length > totalRows || rows.length > maximumBytes) fail("The data export is too large.");
+          cursor = page.next_cursor;
+        } while (cursor !== null);
+        if (rows.length !== totalRows) fail("The data export was incomplete.");
+        const finalFence = await api.ownerExportPage(null, fence);
+        const currentSession = await auth.sessionForRequest();
+        if (runEpoch !== ownerExportEpoch || accountEpoch !== authEpoch || !currentSession ||
+            currentSession.user_id !== ownerId || finalFence.owner_id !== ownerId || finalFence.fence !== fence ||
+            finalFence.total_rows !== totalRows) fail("The data export changed. Try again.");
+        const content = JSON.stringify({ schema_version: 1, kind: "news_curator_owner_export",
+          owner_id: ownerId, fence, total_rows: totalRows, rows });
+        if (encoder.encode(content).length > maximumBytes) fail("The data export is too large.");
+        const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+        const link = document.createElement("a");
+        link.href = url; link.download = "news-curator-my-data.json"; link.click(); URL.revokeObjectURL(url);
+        announce("Your data download is ready.");
+      } catch (_) {
+        rows = [];
+        if (runEpoch === ownerExportEpoch && accountEpoch === authEpoch) announce("Your data could not be downloaded. Try again.");
+      } finally {
+        rows = [];
+        if (runEpoch === ownerExportEpoch) button.disabled = false;
+      }
+    }
     function signedIn() { try { return auth.hasSessionCandidate(); } catch (_) { return false; } }
     let sessionWasPresent = signedIn();
     function requireSignIn() {
@@ -885,6 +1301,11 @@
     function selectedTopic() { return view.currentTab(); }
     function refreshLoadButton() {
       const topic = selectedTopic();
+      if (usesM2()) {
+        loadButton.hidden = initializing || !m2Active || !m2Cursor;
+        loadButton.disabled = [...pageRequests].some((request) => request.epoch === authEpoch);
+        return;
+      }
       loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
       loadButton.disabled = [...pageRequests].some((request) =>
@@ -905,7 +1326,7 @@
       }
       return card.newsCuratorHydratedTopics;
     }
-    function stateReady(card) { return (discoveryActive && Boolean(card.dataset.discoveryLane) && signedIn()) || hydratedTopics(card).has(selectedTopic()); }
+    function stateReady(card) { return (card.dataset.m2Card === "true" && signedIn()) || (discoveryActive && Boolean(card.dataset.discoveryLane) && signedIn()) || hydratedTopics(card).has(selectedTopic()); }
     function refreshStateControls() {
       cards.forEach((card) => {
         const ready = stateReady(card);
@@ -974,7 +1395,9 @@
     }
     async function handleLogout() {
       sessionWasPresent = false;
+      abortOwnerExport();
       authEpoch += 1;
+      leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
       discoveryMessage("");
@@ -1016,7 +1439,9 @@
       }
     }
     function invalidateHydrationForSession() {
+      abortOwnerExport();
       authEpoch += 1;
+      leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
       discoveryMessage("");
@@ -1178,8 +1603,14 @@
       });
     }
     async function hydrate(force = false) {
+      if (usesM2()) { await loadM2(); return; }
+      if (m2Active) leaveM2();
       if (discoveryActive) return;
       const topic = selectedTopic();
+      if (!latest) {
+        latest = await api.latestPublication();
+        if (!latest) { announce("No published edition is available yet."); return; }
+      }
       if (!force && hydrated.has(topic)) return;
       if (topic === "__saved__" && !signedIn()) {
         requireSignIn();
@@ -1211,6 +1642,7 @@
       }
     }
     async function loadMore() {
+      if (usesM2()) { if (!loadButton.disabled) await loadM2(true); return; }
       const topic = selectedTopic();
       if (!latest || initializing || loadButton.disabled || exhausted.has(topic)) return;
       if (topic === "__saved__" && !requireSignIn()) return;
@@ -1274,7 +1706,7 @@
       pending.previousRead = confirmedRead;
       applyServerState(card, { read_at: pending.read ? "local" : null });
     }
-    async function mutateState(card, read, saved, previousRead = card.classList.contains("is-read")) {
+    async function mutateState(card, read, saved, previousRead = card.classList.contains("is-read"), eventType = "read_more") {
       const focusedAction = document.activeElement;
       const restoreFocusOnRollback = Boolean(focusedAction && card.contains(focusedAction));
       const mutationToken = beginStateMutation(card);
@@ -1290,7 +1722,11 @@
       card.newsCuratorStateMutationBaseline = { token: mutationToken, ...previous };
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
-        const result = await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, idempotencyKey());
+        const key = idempotencyKey();
+        const result = m2?.enabled && signedIn() && (eventType !== "read_more" || read)
+          ? await enqueueBehavior(async (snapshot) => api.setStoryStateWithEvent(card.dataset.storyId, read, saved,
+              previous.state_revision, key, { ...await behaviorIdentity(snapshot), p_event_type: eventType, p_surface: "reader" }))
+          : await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, key);
         if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
         if (result.status === "conflict") fail("Story state changed in another session.");
         const baseline = card.newsCuratorStateMutationBaseline || previous;
@@ -1328,7 +1764,17 @@
     document.getElementById("sections").addEventListener("click", (event) => {
       const target = event.target.closest && event.target.closest("button");
       const card = event.target.closest && event.target.closest(".card[data-story-id]");
-      if (!target || !card) return;
+      if (!card) return;
+      const query = m2Active && card.dataset.m2Card === "true" ? (searchBox?.value.trim() || "") : "";
+      const original = event.target.closest?.(".acts a");
+      if (original && card.dataset.m2Card === "true") {
+        void recordBehavior("open_original", { story_id: card.dataset.storyId }).catch(() => announce("Original opened. Learning could not be saved."));
+      }
+      if (query && (original || target?.classList.contains("accordion-toggle"))) {
+        void recordBehavior("search_result_click", { query, story_id: card.dataset.storyId,
+          result_position: Number(card.dataset.m2Position) }).catch(() => announce("Search learning could not be saved."));
+      }
+      if (!target) return;
       let readIntent = card.newsCuratorReadIntent;
       if (readIntent) delete card.newsCuratorReadIntent;
       if (!readIntent && target.classList.contains("accordion-toggle") &&
@@ -1348,8 +1794,8 @@
       const stateAction = target.classList.contains("state-action");
       if (stateAction && !stateReady(card)) return;
       if (target.classList.contains("save-action") && requireSignIn()) {
-        void mutateState(card, card.classList.contains("is-read"), !card.classList.contains("is-saved"));
-      } else if (target.classList.contains("interest-action") && requireSignIn()) {
+        void mutateState(card, card.classList.contains("is-read"), !card.classList.contains("is-saved"), card.classList.contains("is-read"), "save");
+      } else if ((target.classList.contains("interest-action") || target.classList.contains("less-interest-action")) && requireSignIn()) {
         const topicIds = (card.dataset.topicApiIds || "").split(/\s+/).filter(Boolean);
         const topic = selectedTopic();
         const topicId = actionTopic(
@@ -1359,16 +1805,22 @@
           target.dataset.fallbackTopicId || target.dataset.topicId,
         );
         applyInterestTopic(card, topicId);
-        if (card.classList.contains("is-more-like")) return;
+        const signal = target.classList.contains("less-interest-action") ? "less_like" : "more_like";
+        if (signal === "more_like" && card.classList.contains("is-more-like")) return;
         const revision = Number(card.dataset.interestRevision || 0);
         const requestEpoch = authEpoch;
         target.disabled = true;
-        api.setStoryInterest(card.dataset.storyId, topicId, revision, idempotencyKey())
+        const key = idempotencyKey();
+        const operation = m2?.enabled
+          ? enqueueBehavior(async (snapshot) => api.setStoryInterestWithEvent(card.dataset.storyId, topicId,
+              signal, revision, key, { ...await behaviorIdentity(snapshot), p_surface: "reader" }))
+          : api.setStoryInterest(card.dataset.storyId, topicId, revision, key);
+        operation
           .then((result) => {
             if (requestEpoch !== authEpoch) return;
             if (result.status === "conflict") fail("Story interest changed in another session.");
             applyServerState(card, result, topicId);
-            announce("More like this was saved for future rankings.");
+            announce(`${signal === "less_like" ? "Less" : "More"} like this was saved for future rankings.`);
           })
           .catch(() => {
             if (requestEpoch === authEpoch) announce("More like this could not be saved. Try again.");
@@ -1397,7 +1849,7 @@
       }
       sessionWasPresent = true;
       invalidateHydrationForSession();
-      void fetchDiscovery(true);
+      if (!usesM2()) void fetchDiscovery(true);
       if (!latest) {
         if (!initializing) window.location.reload();
         return;
@@ -1415,7 +1867,7 @@
             auth.acceptSession(event.data.session);
             sessionWasPresent = true;
             invalidateHydrationForSession();
-            void fetchDiscovery(true);
+            if (!usesM2()) void fetchDiscovery(true);
             void hydrate(true).catch(() => {
               auth.accountUnavailable?.();
               announce("Sign-in could not be checked. Use Check sign-in again to retry.");
@@ -1438,8 +1890,13 @@
       syncReadIntent(card, intent);
     });
     try {
-      latest = await api.latestPublication();
-      void fetchDiscovery(true);
+      latest = usesM2() ? await api.latestPublication().catch(() => null) : await api.latestPublication();
+      if (!usesM2()) void fetchDiscovery(true);
+      if (usesM2()) {
+        loadButton.textContent = `Load ${m2Config.page_size} more`;
+        await loadM2();
+        return;
+      }
       if (!latest) {
         loadButton.hidden = true;
         auth.accountUnavailable?.();

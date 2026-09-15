@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from curator.config import ConfigError, load_config  # noqa: E402
-from curator.pipeline import collect  # noqa: E402
+from curator.pipeline import collect, configured_source_specs  # noqa: E402
 from curator.source_snapshot import (  # noqa: E402
     SourceSnapshotError,
     load_source_snapshot,
@@ -26,13 +26,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument(
+        "--source-id",
+        action="append",
+        default=None,
+        help="collect only this configured source ID; repeat for a configured batch",
+    )
     args = parser.parse_args(argv)
     try:
         cfg = load_config(args.root)
+        # Validate selected IDs even for `validate`. The snapshot remains bound
+        # to the complete configured source set through the full digest below.
+        if args.source_id is not None:
+            configured_source_specs(cfg, source_ids=args.source_id)
         digest = snapshot_config_digest(cfg)
         if args.command == "collect":
             now = datetime.now(timezone.utc)
-            results = collect(cfg, offline=args.offline)
+            results = collect(cfg, offline=args.offline, source_ids=args.source_id)
             write_source_snapshot(
                 results,
                 args.snapshot,

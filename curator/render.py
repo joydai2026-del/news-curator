@@ -51,6 +51,7 @@ from __future__ import annotations
 import html
 import base64
 import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -284,6 +285,12 @@ body{overflow-x:hidden;overflow-x:clip;background:
 .edition-meta{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:1.05rem}
 .edition-meta span{border:1px solid var(--line);border-radius:999px;background:var(--card);padding:.3rem .65rem;font-size:.7rem;color:var(--muted)}
 .tools{position:sticky;top:0;z-index:30;display:flex;gap:.75rem;align-items:center;margin:1rem 0;padding:.7rem;border:1px solid var(--line);border-radius:1rem;background:color-mix(in srgb,var(--bg) 91%,transparent);backdrop-filter:blur(16px)}
+#m2-controls:not([hidden]){display:flex;flex-wrap:wrap;gap:.65rem;align-items:center;margin:1rem 0;padding:1rem;border:1px solid var(--line);border-radius:1rem;background:var(--bg);font-size:.875rem}
+#m2-controls details,#m2-controls label,#m2-mode{flex-basis:100%}
+#m2-controls details{width:100%}#m2-controls summary{min-height:44px;line-height:44px;cursor:pointer;font-weight:650}
+#m2-controls label{display:flex;gap:.45rem;align-items:center;min-height:44px;cursor:pointer}
+#m2-controls button{min-width:44px;min-height:44px;font:inherit;color:var(--fg);border:1px solid var(--line);background:transparent;border-radius:100px;padding:.4rem .7rem;cursor:pointer}
+#m2-controls a{display:inline-flex;align-items:center;min-width:44px;min-height:44px;color:var(--fg)}#m2-mode{margin:.2rem 0 0;color:var(--muted)}
 .mobiletopics{display:none;flex-wrap:nowrap;gap:.45rem;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}
 .mobiletopics::-webkit-scrollbar{display:none}
 .mobiletopics .chip{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;border:1px solid var(--line);background:var(--card);padding:.5rem .8rem}
@@ -426,13 +433,14 @@ JS = """
       var belongs=tab==='__all__'||(tab==='__saved__'&&e.el.classList.contains('is-saved'))||e.topics.indexOf(' '+tab+' ')>=0;
       var lane=e.el.closest('[data-discovery-selected-lane]');
       var laneMatch=!lane||e.el.dataset.discoveryLane===lane.dataset.discoverySelectedLane;
-      var on=belongs&&laneMatch&&(!q||e.text.indexOf(q)>=0);
+      var remote=e.el.dataset.m2Card==='true';
+      var on=belongs&&laneMatch&&(remote?e.el.dataset.m2Query===q:(!q||e.text.indexOf(q)>=0));
       e.el.hidden=!on;
       if(on){
         // CSS order does the per-tab reordering. One DOM node per story, exact
         // ranking per category, and nothing moves in the document.
         var r=e.el.getAttribute(attr);
-        e.el.style.order=e.el.dataset.discoveryPosition||((r===null)?'0':r);
+        e.el.style.order=e.el.dataset.m2Position||e.el.dataset.discoveryPosition||((r===null)?'0':r);
         shown++;
       }else if(e.el.classList.contains('open')){
         collapse(e.el);
@@ -1038,6 +1046,14 @@ def render_html(
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-{script_hash}'; connect-src 'self'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
 <meta name="supabase-url" content="">
 <meta name="supabase-publishable-key" content="">
+<meta name="news-curator-m2-enabled" content="false">
+<meta name="news-curator-m2-endpoint" content="">
+<meta name="news-curator-m2-policy-version" content="">
+<meta name="news-curator-m2-model-version" content="">
+<meta name="news-curator-m2-provider-policy-id" content="">
+<meta name="news-curator-m2-provider-retention-url" content="">
+<meta name="news-curator-m2-page-size" content="">
+<meta name="news-curator-m2-request-timeout-ms" content="">
 <style>{CSS}</style>
 </head>
 <body>
@@ -1063,6 +1079,17 @@ def render_html(
       </div>
     </header>
     {discovery_markup}
+      <section id="m2-controls" aria-label="Personalized feed controls" hidden>
+        <details><summary>Feed preferences</summary>
+        <label><input id="m2-local-learning" type="checkbox"> Learn from my reading</label>
+        <label><input id="m2-provider-processing" type="checkbox"> Use my history for model ranking</label>
+        <a id="m2-provider-retention" href="" target="_blank" rel="noopener noreferrer" hidden>Provider data policy</a>
+        <button id="m2-refresh" type="button">Refresh feed</button>
+        <button id="m2-download-data" type="button">Download my data</button>
+        <button id="m2-clear-history" type="button">Clear learning history</button>
+        </details>
+        <p id="m2-mode" role="status" aria-live="polite"></p>
+      </section>
     <div class="tools">
       <nav class="mobiletopics" aria-label="Categories">{''.join(chips)}</nav>
       <div class="find">
@@ -1093,6 +1120,51 @@ def render_html(
 </body>
 </html>
 """
+
+
+def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
+    """Opt in one already rendered reader after its auth/CSP configuration.
+
+    Ordinary renders remain disabled. Endpoint and policy identifiers are
+    supplied by the deployment configuration, never by the reader source.
+    """
+    if config == {"enabled": False}:
+        return
+    config = {"request_timeout_ms": 8000, **config}
+    fields = {"enabled", "url", "policy_version", "model_version", "provider_policy_id",
+              "provider_retention_url", "page_size", "request_timeout_ms"}
+    if set(config) != fields or config["enabled"] is not True:
+        raise ValueError("invalid M2 reader configuration")
+    if type(config["page_size"]) is not int or not 1 <= config["page_size"] <= 25:
+        raise ValueError("invalid M2 page size")
+    if type(config["request_timeout_ms"]) is not int or not 1 <= config["request_timeout_ms"] <= 8000:
+        raise ValueError("invalid M2 request deadline")
+    for key in fields - {"enabled", "page_size", "request_timeout_ms"}:
+        value = config[key]
+        if not isinstance(value, str) or not value or value != value.strip() or len(value) > 2048:
+            raise ValueError("invalid M2 configuration value")
+    for key in ("url", "provider_retention_url"):
+        parsed = urlsplit(config[key])
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise ValueError("M2 URLs must use credential-free HTTPS")
+    endpoint = urlsplit(config["url"])
+    if endpoint.query:
+        raise ValueError("M2 endpoint cannot contain a query")
+    payload = path.read_text(encoding="utf-8")
+    values = {"enabled": "true", "endpoint": config["url"], "policy-version": config["policy_version"],
+              "model-version": config["model_version"], "provider-policy-id": config["provider_policy_id"],
+              "provider-retention-url": config["provider_retention_url"], "page-size": str(config["page_size"]),
+              "request-timeout-ms": str(config["request_timeout_ms"])}
+    for name, value in values.items():
+        payload, count = re.subn(r'(<meta name="news-curator-m2-' + re.escape(name) + r'" content=")[^"]*(">)',
+                                lambda match: match[1] + html.escape(value, quote=True) + match[2], payload)
+        if count != 1:
+            raise ValueError("rendered reader has no unique M2 configuration slot")
+    origin = html.escape(f"{endpoint.scheme}://{endpoint.netloc}", quote=True)
+    payload, count = re.subn(r"connect-src ([^;]+);", lambda match: "connect-src " + match[1] + " " + origin + ";", payload)
+    if count != 1:
+        raise ValueError("rendered reader has no unique connect policy")
+    path.write_text(payload, encoding="utf-8")
 
 
 def render_site(

@@ -1,0 +1,62 @@
+{
+  "rankllm_commit": "443adf3306102f11b85945d2a277fb6aa10ea0aa",
+  "source_archive_sha256": "834546cd94c9a73380941808ead234f2b74a3c553c8cd1d265ca4e9cfccaaed9",
+  "license": "Apache-2.0",
+  "packaging_note": "The two package __init__.py files are owned inert shims; every other file is byte-identical to the pinned archive.",
+  "files": [
+    {
+      "path": "RANKLLM-LICENSE",
+      "sha256": "e712c10d43239eb2b5493a60d82bd385fb8750a082171a12a33088180c79e8f9",
+      "source_status": "upstream_exact",
+      "upstream_path": "LICENSE"
+    },
+    {
+      "path": "rank_llm/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_status": "upstream_exact",
+      "upstream_path": "src/rank_llm/__init__.py"
+    },
+    {
+      "path": "rank_llm/data.py",
+      "sha256": "313fcf6b29c82e8511a7ff1cab2714d050d54ca81df4a2eeca45a271deae932d",
+      "source_status": "upstream_exact",
+      "upstream_path": "src/rank_llm/data.py"
+    },
+    {
+      "path": "rank_llm/rerank/__init__.py",
+      "sha256": "d8d7a2d67d36e04245808ba15e992d81bae41671e086918f5443853653cc97bb",
+      "source_status": "owned_packaging_shim",
+      "upstream_path": "src/rank_llm/rerank/__init__.py"
+    },
+    {
+      "path": "rank_llm/rerank/inference_handler.py",
+      "sha256": "dc93472146044e9df4c207390eff0d7d2468be091ba787963687478a96743c60",
+      "source_status": "upstream_exact",
+      "upstream_path": "src/rank_llm/rerank/inference_handler.py"
+    },
+    {
+      "path": "rank_llm/rerank/listwise/__init__.py",
+      "sha256": "58a886a64851ba4aad69215fab1c0fe0b65fa0883c7eff0161ef7ed0d3ad534f",
+      "source_status": "owned_packaging_shim",
+      "upstream_path": "src/rank_llm/rerank/listwise/__init__.py"
+    },
+    {
+      "path": "rank_llm/rerank/listwise/listwise_inference_handler.py",
+      "sha256": "f46fe1718346a17ff846e777b7086a621a479b0207363617162933228c1b5a0a",
+      "source_status": "upstream_exact",
+      "upstream_path": "src/rank_llm/rerank/listwise/listwise_inference_handler.py"
+    },
+    {
+      "path": "rank_llm/rerank/listwise/multiturn_listwise_inference_handler.py",
+      "sha256": "6dc14a938d72843e99385114060cce78e795d1d50c5c776c571fb2fd41558a86",
+      "source_status": "upstream_exact",
+      "upstream_path": "src/rank_llm/rerank/listwise/multiturn_listwise_inference_handler.py"
+    },
+    {
+      "path": "rank_llm/rerank/prompt_templates/rank_gpt_template.yaml",
+      "sha256": "14ac512117ffe91987e708d6c1531203737c3a379d96110c825e8f8dc07297fe",
+      "source_status": "upstream_exact",
+      "upstream_path": "src/rank_llm/rerank/prompt_templates/rank_gpt_template.yaml"
+    }
+  ]
+}
