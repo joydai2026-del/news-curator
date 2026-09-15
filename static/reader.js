@@ -18,6 +18,29 @@
     zh: { all:"全部", saved:"已收藏", topics:"主题", today:"今日新闻", companion:"你的阅读助手", intro:"打开标题即可查看可靠摘要、来源和入选原因。", rail:"每小时更新一期。打开任意标题，查看来源摘要和排序说明。", preferences:"新闻偏好", learn:"根据我的阅读学习", provider:"使用我的阅读记录进行模型排序", policy:"服务商数据政策", privacy:"隐私", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityUsed:"已使用最新活动", read:"标为已读", unread:"标为未读", save:"收藏", savedAction:"已收藏 ✓", moreLike:"更多类似内容", lessLike:"减少类似内容", close:"关闭", original:"阅读原文", source:"来源", newsletter:"新闻通讯", published:"发布时间", coverage:"其他报道", signals:"排序依据" },
   });
   function validLocale(value) { return value === "en" || value === "zh"; }
+  const MESSAGE_ZH = Object.freeze({
+    "Personalized feed configuration is unavailable. Public stories remain available.":"个性化新闻配置暂不可用。你仍可阅读公开新闻。",
+    "Sign in to use synced reading controls.":"登录后可使用同步阅读功能。",
+    "Personalized feed is still loading.":"个性化新闻仍在加载。",
+    "Showing the captured edition. Personalized ranking did not finish.":"正在显示已采集新闻。本次个性化排序未完成。",
+    "Could not load more. Your current stories are still available.":"无法加载更多。当前新闻仍可阅读。",
+    "No matching stories found in the retained corpus.":"已保留新闻中没有匹配结果。",
+    "Consent could not be updated. Try again.":"无法更新授权设置，请重试。",
+    "Learning history could not be cleared. Try again.":"无法清除学习记录，请重试。",
+    "This section could not be synced. Try again.":"无法同步此栏目，请重试。",
+    "Older stories could not be loaded. Try again.":"无法加载更早的新闻，请重试。",
+    "No older stories remain in this section.":"此栏目没有更早的新闻。",
+    "Load more to check older stories.":"加载更多以查看更早的新闻。",
+    "Saved. You can find it in Saved.":"已收藏。你可以在“已收藏”中找到它。",
+    "Removed from Saved.":"已取消收藏。",
+    "Could not save. Your previous state was restored. Try again.":"收藏失败，已恢复之前状态，请重试。",
+    "Could not remove from Saved. Your previous state was restored. Try again.":"取消收藏失败，已恢复之前状态，请重试。",
+    "Reading state saved.":"阅读状态已保存。",
+    "Reading state could not be saved. Try again.":"无法保存阅读状态，请重试。",
+    "Synced reading features are temporarily unavailable. Try checking sign-in again.":"同步阅读功能暂不可用，请重新检查登录状态。",
+    "No published edition is available yet.":"暂时没有已发布的新闻。",
+    "Checking sign-in. Reading state is syncing.":"正在检查登录状态并同步阅读记录。",
+  });
 
   function fail(message) { throw new Error(message); }
   function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
@@ -883,19 +906,17 @@
       document.querySelectorAll(".locale-switch").forEach((node) => node.setAttribute("aria-label", displayLanguage === "zh" ? "显示语言" : "Display language"));
     }
     let api;
+    let apiAvailable = true;
     let authEpoch = 0;
     let ownerExportEpoch = 0;
     try { api = createApi(auth.config(), () => auth.sessionForRequest()); } catch (_) {
+      apiAvailable = false;
       loadButton.hidden = true;
       if (view.currentTab() === "__saved__") {
         document.querySelector('.chip[data-filter="__all__"]')?.click();
       }
-      applyLocaleLabels();
-      const staticCards = [...document.querySelectorAll(".card[data-story-id]")];
-      if (staticCards.every((card) => card.dataset.language === displayLanguage)) document.body?.classList.remove("locale-pending");
-      return;
     }
-    savedTabs.forEach((tab) => {
+    if (apiAvailable) savedTabs.forEach((tab) => {
       tab.hidden = false;
       tab.disabled = false;
     });
@@ -956,19 +977,15 @@
       let response;
       try { response = await fetch(`/data/news-${displayLanguage}.json`, { credentials:"omit", cache:"no-store", redirect:"error" }); }
       catch (_) { response = null; }
-      if (!response || !response.ok || response.redirected) {
-        const legacyFixture = !document.querySelector("[data-locale]");
-        const allAlreadySelected = [...cards.values()].every((card) => card.dataset.language === displayLanguage);
-        if (legacyFixture || allAlreadySelected) return;
-        fail("Localized stories are unavailable.");
-      }
+      if (!response || !response.ok || response.redirected) fail("Localized stories are unavailable.");
       const payload = await boundedJson(response, "The localized story projection was invalid.", MAX_DISCOVERY_BYTES);
       if (!isObject(payload) || payload.schema_version !== 1 || payload.language !== displayLanguage || !Array.isArray(payload.categories)) fail("The localized story projection was invalid.");
       const projectionRows = [];
       payload.categories.forEach((category) => {
         if (!isObject(category) || !boundedString(category.id, 80) || !boundedString(category.name, 120) || !Array.isArray(category.items)) fail("The localized story projection was invalid.");
-        document.querySelectorAll(`[data-topic-id="${CSS.escape(category.id)}"]`).forEach((node) => { node.textContent = category.name; });
-        document.querySelectorAll(`.topic-section[data-topic-id="${CSS.escape(category.id)}"] .section-title`).forEach((node) => { node.textContent = category.name; });
+        const categoryName = category.id === "china-news" ? (displayLanguage === "zh" ? "中国新闻" : "China News") : category.name;
+        document.querySelectorAll(`[data-topic-id="${CSS.escape(category.id)}"]`).forEach((node) => { node.textContent = categoryName; });
+        document.querySelectorAll(`.topic-section[data-topic-id="${CSS.escape(category.id)}"] .section-title`).forEach((node) => { node.textContent = categoryName; });
         category.items.forEach((item) => {
           if (!isObject(item) || !STORY_ID.test(item.story_id) || item.display_language !== displayLanguage || !boundedString(item.title, 2000) || typeof item.description !== "string") fail("The localized story projection was invalid.");
           projectionRows.push({ story_id:item.story_id, title:item.title, summary:item.description,
@@ -1183,7 +1200,11 @@
     });
     discoveryAccept?.addEventListener("click", () => { if (pendingDiscovery) void openStoredDiscovery(pendingDiscovery.edition_id, discoveryLane); });
 
-    function usesM2() { return Boolean(m2?.enabled && signedIn() && selectedTopic() !== "__saved__"); }
+    function usesM2() {
+      const topic = selectedTopic();
+      return Boolean(m2?.enabled && signedIn() && topic !== "__saved__" &&
+        topic !== "newsletters" && topicIdForSlug(topic) !== "newsletters");
+    }
     function showM2Policy() {
       const retention = document.getElementById("m2-provider-retention");
       if (retention && m2Config?.enabled) {
@@ -1409,7 +1430,14 @@
       m2SearchTimer = setTimeout(() => { void loadM2(false, true); }, 300);
     });
 
-    function announce(message) { status.textContent = message; }
+    function announce(message) {
+      if (displayLanguage === "zh") {
+        message = MESSAGE_ZH[message] || message
+          .replace(/^(\d+) stories loaded\.$/, "$1 篇新闻已加载。")
+          .replace(/^Loading (\d+) more stories…$/, "正在加载 $1 篇更多新闻…");
+      }
+      status.textContent = message;
+    }
     function abortOwnerExport() {
       ownerExportEpoch += 1;
       const button = document.getElementById("m2-download-data");
@@ -1484,7 +1512,7 @@
       const topic = selectedTopic();
       if (usesM2()) {
         const busy = [...pageRequests].some((request) => request.epoch === authEpoch);
-        loadButton.textContent = busy ? `Loading ${m2Config.page_size} more…` : `Load ${m2Config.page_size} more`;
+        loadButton.textContent = busy ? `${localeCopy().loading} ${m2Config.page_size} ${localeCopy().more}…` : `${localeCopy().load} ${m2Config.page_size} ${localeCopy().more}`;
         loadButton.hidden = initializing || !m2Active || !m2Cursor;
         loadButton.disabled = busy;
         loadButton.toggleAttribute("aria-busy", busy);
@@ -1493,7 +1521,7 @@
       }
       const busy = [...pageRequests].some((request) =>
         request.topic === topic && request.epoch === authEpoch);
-      if (latest) loadButton.textContent = busy ? `Loading ${latest.page_size} more…` : `Load ${latest.page_size} more`;
+      if (latest) loadButton.textContent = busy ? `${localeCopy().loading} ${latest.page_size} ${localeCopy().more}…` : `${localeCopy().load} ${latest.page_size} ${localeCopy().more}`;
       loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
       loadButton.disabled = busy;
@@ -2144,6 +2172,7 @@
         announce(displayLanguage === "zh" ? "所选语言的新闻暂不可用。" : "Stories in the selected language are unavailable.");
         return;
       }
+      if (!apiAvailable) return;
       latest = usesM2() ? await api.latestPublication().catch(() => null) : await api.latestPublication();
       if (!usesM2()) void fetchDiscovery(true);
       if (usesM2()) {

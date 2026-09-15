@@ -126,7 +126,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         policy=RankerPolicy('test-provider','test-model','https://provider.example','test-prompt'),engine=NoProvider()),
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
-    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}
+    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}; response_locale={'value':'en'}
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
@@ -142,7 +142,10 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             return route.fulfill(status=200,content_type='text/javascript' if file.suffix=='.js' else 'text/html',body=file.read_bytes())
         if request.url.startswith(RANKER):
             status,payload=asgi_request(app,request)
-            return route.fulfill(status=status,content_type='application/json',body=payload)
+            decoded=json.loads(payload)
+            if parsed.path=='/rank': response_locale['value']=body.get('display_language','en')
+            decoded['display_language']=response_locale['value']
+            return route.fulfill(status=status,content_type='application/json',body=json.dumps(decoded))
         if request.url.startswith(DATABASE):
             name=parsed.path.rsplit('/',1)[-1]
             if name=='latest_publication':

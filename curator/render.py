@@ -51,6 +51,7 @@ from __future__ import annotations
 import html
 import base64
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -1231,6 +1232,25 @@ def render_site(
     tmp = path.with_suffix(".html.tmp")
     tmp.write_text(payload, encoding="utf-8")
     tmp.replace(path)
+
+    # Direct render callers still receive the two public locale projections.
+    # The full pipeline writes richer translated projections first, so these
+    # source-language-only fallbacks never overwrite reviewed translations.
+    data_dir = out_dir / "data"
+    data_dir.mkdir(exist_ok=True)
+    for language in ("en", "zh"):
+        projection = data_dir / f"news-{language}.json"
+        if projection.exists():
+            continue
+        categories = []
+        for name, items in ranked.items():
+            category_id = (topic_ids_by_name or {}).get(name, _slug(name))
+            categories.append({"id": category_id, "name": "中国新闻" if language == "zh" and category_id == "china-news" else name,
+                "items": [{"story_id": story_id_for_item(item), "title": item.title,
+                    "description": item.description, "display_language": language,
+                    "translation_available": True} for item in items if item.language == language]})
+        projection.write_text(json.dumps({"schema_version": 1, "generated_at": now.isoformat(),
+            "language": language, "categories": categories}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
     for relative_path in (
