@@ -885,14 +885,23 @@
       if (refresh) refresh.textContent = localeCopy().refresh;
       if (download) download.textContent = localeCopy().download;
       if (clear) clear.textContent = localeCopy().clear;
+      if (searchBox) searchBox.placeholder = localeCopy().search;
       const set = (selector, value) => { const node = document.querySelector(selector); if (node) node.textContent = value; };
       set(".rail > h2", localeCopy().topics); set(".railnote", localeCopy().rail);
+      set(".brand small", displayLanguage === "zh" ? "每小时阅读助手" : "Hourly Reading Companion");
+      set(".crumb", displayLanguage === "zh" ? "News Curator / 今日新闻" : "News Curator / Today's edition");
       set(".intro > .eyebrow", localeCopy().today); set(".intro > h1", localeCopy().companion);
       set(".intro > p", localeCopy().intro); set("#m2-controls summary", localeCopy().preferences);
       const consentLabels = document.querySelectorAll("#m2-controls label");
       if (consentLabels[0]) consentLabels[0].lastChild.textContent = ` ${localeCopy().learn}`;
       if (consentLabels[1]) consentLabels[1].lastChild.textContent = ` ${localeCopy().provider}`;
       set("#m2-provider-retention", localeCopy().policy); set("footer a", localeCopy().privacy);
+      const metaSpans = document.querySelectorAll(".edition-meta > span:not(.dot):not(.stale)");
+      if (metaSpans[0] && displayLanguage === "zh") metaSpans[0].textContent = metaSpans[0].textContent.replace(/^Built /, "生成于 ");
+      if (metaSpans[1]) metaSpans[1].textContent = displayLanguage === "zh" ? "每小时计划更新" : "scheduled hourly";
+      if (metaSpans[2]) { const count = parseInt(metaSpans[2].textContent, 10); if (Number.isFinite(count)) metaSpans[2].textContent = displayLanguage === "zh" ? `${count} 篇新闻` : `${count} ${count === 1 ? "story" : "stories"}`; }
+      const stale = document.getElementById("stale");
+      if (stale && displayLanguage === "zh" && /^last build /.test(stale.textContent)) stale.textContent = stale.textContent.replace(/^last build /, "上次生成于 ").replace(/ days? ago$/, " 天前");
       {
         document.querySelectorAll(".read-action").forEach((node) => { node.textContent = node.closest(".card")?.classList.contains("is-read") ? localeCopy().unread : localeCopy().read; });
         document.querySelectorAll(".save-action").forEach((node) => { if (!node.classList.contains("is-pending")) node.textContent = node.closest(".card")?.classList.contains("is-saved") ? localeCopy().savedAction : localeCopy().save; });
@@ -1003,7 +1012,12 @@
           language:item.original_language, topic_ids:[...new Set(ids)], topic_ranks:{}, coverage_mentions:[],
           ranking_explanation:displayLanguage === "zh" ? "来自所选语言的公开新闻。" : "Public story in the selected language.",
           read_at:null, saved_at:null, state_revision:0, interests:[] };
-        const section = document.querySelector(`.topic-section[data-topic-id="${CSS.escape(ids[0])}"] .grid`);
+        let section = document.querySelector(`.topic-section[data-topic-id="${CSS.escape(ids[0])}"] .grid`);
+        if (!section) {
+          const container = element("section", "topic-section"); container.dataset.section = topicSlugForId(ids[0]); container.dataset.topicId = ids[0];
+          container.append(element("h2", "section-title", ids[0] === "china-news" ? (displayLanguage === "zh" ? "中国新闻" : "China News") : ids[0]), element("div", "grid"));
+          document.getElementById("sections")?.append(container); section = container.querySelector(".grid");
+        }
         if (!section) return;
         const card = createStoryCard(row, topicSlugForId(ids[0]), topicSlugForId, ids[0]);
         card.newsCuratorStaticCard = true; cards.set(storyId, card); section.append(card); view.addCard(card);

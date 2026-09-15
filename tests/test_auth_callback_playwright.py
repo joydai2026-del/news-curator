@@ -571,6 +571,14 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 "expires_in": 3600,
                 "user": {"id": "user-a"},
             }
+        elif request.url.endswith("/m2_localized_story_text"):
+            requested = request.post_data_json
+            known_titles = {static_row["story_id"]: static_row["title"], public_row["story_id"]: public_row["title"],
+                _feed_story(51, "Private interest-ranked story")["story_id"]: "Private interest-ranked story",
+                _feed_story(777, "Private saved-only story")["story_id"]: "Private saved-only story"}
+            payload = [{"story_id": story_id, "title": known_titles.get(story_id, "Localized story"),
+                "summary": "Localized summary", "display_language": requested["p_locale"],
+                "translation_available": True} for story_id in requested["p_story_ids"]]
         elif "/rest/v1/user_preferences" in request.url:
             payload = [{
                 "user_id": "user-a",
