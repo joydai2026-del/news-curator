@@ -133,8 +133,8 @@ def test_stage_secret_uses_one_scoped_key_response_and_writes_private_output(tmp
     assert secret["NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY"] == "sb_publishable_protocol"
     assert secret["NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"] == "sb_secret_protocol"
     assert "protocol-model-value" not in receipt.out
-    assert "protocol-publishable-key" not in receipt.out
-    assert "protocol-service-key" not in receipt.out
+    assert "sb_publishable_protocol" not in receipt.out
+    assert "sb_secret_protocol" not in receipt.out
 
 
 @pytest.mark.parametrize("rows", [
