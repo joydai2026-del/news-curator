@@ -12,6 +12,8 @@ from pathlib import Path
 import urllib.parse
 import urllib.request
 
+import yaml
+
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -26,24 +28,40 @@ def _origin(value: str) -> str:
 
 
 def _get_rows(origin: str, key: str, since: datetime) -> list[dict[str, object]]:
-    query = urllib.parse.urlencode({"select": "created_at,bindings",
-        "created_at": "gte." + since.isoformat(), "order": "created_at.asc", "limit": "1001"})
+    rows: list[dict[str, object]] = []
     headers = {"apikey": key, "Accept": "application/json"}
     if not key.startswith("sb_secret_"):
         headers["Authorization"] = "Bearer " + key
-    request = urllib.request.Request(origin + "/rest/v1/m2_frozen_rankings?" + query, headers=headers)
-    with urllib.request.build_opener(_NoRedirect).open(request, timeout=10) as response:
-        raw = response.read(16_000_001)
-    if len(raw) > 16_000_000:
-        raise ValueError("operational response is too large")
-    value = json.loads(raw)
-    if not isinstance(value, list) or len(value) > 1000 or any(not isinstance(row, dict) for row in value):
-        raise ValueError("invalid operational response")
-    return value
+    opener = urllib.request.build_opener(_NoRedirect)
+    while len(rows) < 10_000:
+        query = urllib.parse.urlencode({"select": "created_at,bindings",
+            "created_at": "gte." + since.isoformat(), "order": "created_at.asc",
+            "limit": "1000", "offset": str(len(rows))})
+        request = urllib.request.Request(origin + "/rest/v1/m2_frozen_rankings?" + query, headers=headers)
+        with opener.open(request, timeout=10) as response:
+            raw = response.read(16_000_001)
+        if len(raw) > 16_000_000:
+            raise ValueError("operational response is too large")
+        value = json.loads(raw)
+        if not isinstance(value, list) or len(value) > 1000 or any(not isinstance(row, dict) for row in value):
+            raise ValueError("invalid operational response")
+        rows.extend(value)
+        if len(value) < 1000:
+            return rows
+    raise ValueError("operational response exceeds 10000 rows")
+
+
+def _category_ids(path: Path) -> list[str]:
+    document = yaml.safe_load(path.read_bytes())
+    categories = document.get("categories") if isinstance(document, dict) else None
+    values = [row.get("id") for row in categories] if isinstance(categories, list) else []
+    if not values or any(not isinstance(value, str) or not value for value in values) or len(values) != len(set(values)):
+        raise ValueError("invalid category registry")
+    return values
 
 
 def _receipt(rows: list[dict[str, object]], *, commit: str, policy_hash: str,
-             checklist_hash: str, observed_at: datetime) -> dict[str, object]:
+             checklist_hash: str, category_ids: list[str], observed_at: datetime) -> dict[str, object]:
     modes, fallbacks = Counter(), Counter()
     attempted = successful = 0
     for row in rows:
@@ -63,7 +81,7 @@ def _receipt(rows: list[dict[str, object]], *, commit: str, policy_hash: str,
         successful += mode == "model"
     return {"schema_version": 1, "git_commit_sha": commit,
         "policy_sha256": policy_hash, "checklist_sha256": checklist_hash,
-        "observed_at_utc": observed_at.isoformat(), "configured_category_ids": [],
+        "observed_at_utc": observed_at.isoformat(), "configured_category_ids": category_ids,
         "freshness": [], "coverage_sentinels": [], "ranked_slates": [], "search_queries": [],
         "slice_judgments": [], "profile_updates": [], "profile_visibility": [],
         "operational_model_path": {"window_days": 7, "frozen_responses": len(rows),
@@ -77,6 +95,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", required=True, type=Path)
     parser.add_argument("--checklist", required=True, type=Path)
+    parser.add_argument("--topics", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--commit", required=True)
     args = parser.parse_args()
@@ -87,7 +106,8 @@ def main() -> int:
         os.environ["NEWS_CURATOR_SUPABASE_SECRET_KEY"], now - timedelta(days=7))
     result = _receipt(rows, commit=args.commit,
         policy_hash=hashlib.sha256(args.policy.read_bytes()).hexdigest(),
-        checklist_hash=hashlib.sha256(args.checklist.read_bytes()).hexdigest(), observed_at=now)
+        checklist_hash=hashlib.sha256(args.checklist.read_bytes()).hexdigest(),
+        category_ids=_category_ids(args.topics), observed_at=now)
     args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
     return 0
 

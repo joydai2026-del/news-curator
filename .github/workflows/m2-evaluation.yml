@@ -25,6 +25,7 @@ jobs:
           python scripts/collect_m2_operational_receipt.py \
             --policy config/m2-evaluation/metrics-policy.yaml \
             --checklist config/m2-evaluation/qa-checklist.yaml \
+            --topics topics.yaml \
             --commit "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/m2-evaluation/operational.json"
       - name: Reduce bound receipts
