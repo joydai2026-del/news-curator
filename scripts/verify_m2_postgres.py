@@ -39,11 +39,22 @@ def authenticated(user, statement):
 def snapshot(user):
     return json.loads(sql(authenticated(user,'select public.m2_history_snapshot();')).splitlines()[-1])
 
-def frozen_insert(user, bindings=None):
+def frozen_insert(user, bindings=None, cards=None, expires_at="now()+interval '1 hour'"):
     if bindings is None:
         current=snapshot(user)
         bindings={key:current[key] for key in ('history_generation','consent_revision','server_commit_revision')}
-    return f"insert into public.m2_frozen_rankings(request_id,user_id,bindings,cards,page_size,expires_at) values('{uuid.uuid4()}','{user}',{literal(json.dumps(bindings))},'[]',20,now()+interval '1 hour');"
+    return f"insert into public.m2_frozen_rankings(request_id,user_id,bindings,cards,page_size,expires_at) values('{uuid.uuid4()}','{user}',{literal(json.dumps(bindings))},{literal(json.dumps(cards or []))},20,{expires_at});"
+
+fixture_rows=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows']
+pre_migration_rows=[row for row in fixture_rows if row['category_ids']]
+pre_backfill_row=pre_migration_rows[0]
+pre_dedup_row=next(row for row in pre_migration_rows if row['story_id'] != pre_backfill_row['story_id'])
+pre_seeded_story_ids={pre_backfill_row['story_id'],pre_dedup_row['story_id']}
+
+def seed_retained(row, topic_id):
+    sql('insert into public.canonical_stories(story_id,canonical_url,title,summary,language,source_kind,source_name,published_at) values ('+
+        ','.join(literal(value) for value in (row['story_id'],row['canonical_url'],row['title'],row['summary'],row['language'],'outlet',row['source_name'],row['published_at']))+');')
+    sql(f"insert into public.retained_corpus_observations(story_id,source_id,source_name,source_is_aggregator,language,title,summary,canonical_url,published_at,first_observed_at,source_observed_at) select story_id,'captured','Captured',false,language,title,summary,canonical_url,published_at,now(),now() from public.canonical_stories where story_id={literal(row['story_id'])}; insert into public.retained_corpus_categories(story_id,category_id) values({literal(row['story_id'])},{literal(topic_id)});")
 
 sql('create database '+DB, database='postgres')
 sql("""create schema auth; create schema extensions;
@@ -57,9 +68,18 @@ grant usage on schema auth to anon,authenticated,service_role;
 grant execute on all functions in schema auth to anon,authenticated,service_role;""")
 migrations=[]
 for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
+    if path.name == '202609150001_m2_ranked_story_access.sql':
+        # Captured public records are present before the registry migration.
+        # One pre-existing registry row proves the backfill's conflict path.
+        seed_retained(pre_backfill_row,pre_backfill_row['category_ids'][0])
+        seed_retained(pre_dedup_row,pre_dedup_row['category_ids'][0])
+        sql(f"insert into public.story_topics(story_id,topic_id,topic_name) values({literal(pre_dedup_row['story_id'])},{literal(pre_dedup_row['category_ids'][0])},{literal(pre_dedup_row['category_ids'][0])});")
     data=path.read_text()
     sql(data)
     migrations.append({'file':path.name,'sha256':hashlib.sha256(data.encode()).hexdigest()})
+    if path.name == '202609150001_m2_ranked_story_access.sql':
+        check('ranked access migration backfills nonempty captured retained category registry',sql(f"select count(*)=1 from public.story_topics where story_id={literal(pre_backfill_row['story_id'])} and topic_id={literal(pre_backfill_row['category_ids'][0])};")=='t')
+        check('ranked access migration backfill deduplicates existing captured registry row',sql(f"select count(*)=1 from public.story_topics where story_id={literal(pre_dedup_row['story_id'])} and topic_id={literal(pre_dedup_row['category_ids'][0])};")=='t')
 check('all migrations apply',True)
 owner, other = str(uuid.uuid4()), str(uuid.uuid4())
 sql(f"insert into auth.users values ('{owner}'),('{other}');")
@@ -91,13 +111,18 @@ for user,with_revision in [(owner,True),(other,False)]:
 check('clear preserves budget audit',sql(f"select count(*)=5 from public.m2_ranker_reservations where user_id='{owner}';")=='t')
 
 # Actual captured public article; all actions and identities below are isolated test inputs.
-row=next(r for r in json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'] if r['category_ids'])
+row=next(r for r in fixture_rows if r['category_ids'] and r['story_id'] not in pre_seeded_story_ids)
 story,topic=row['story_id'],row['category_ids'][0]
+unseen_row=next(r for r in fixture_rows if r['story_id'] not in pre_seeded_story_ids and r['story_id'] != story)
+unseen_story=unseen_row['story_id']
 sql('insert into public.canonical_stories(story_id,canonical_url,title,summary,language,source_kind,source_name,published_at) values ('+
     ','.join(literal(v) for v in (story,row['canonical_url'],row['title'],row['summary'],row['language'],'outlet',row['source_name'],row['published_at']))+');')
-sql(f"insert into public.story_topics(story_id,topic_id,topic_name) values({literal(story)},{literal(topic)},{literal(topic)});")
+sql(f"insert into public.retained_corpus_observations(story_id,source_id,source_name,source_is_aggregator,language,title,summary,canonical_url,published_at,first_observed_at,source_observed_at) select story_id,'captured','Captured',false,language,title,summary,canonical_url,published_at,now(),now() from public.canonical_stories where story_id={literal(story)}; insert into public.retained_corpus_categories(story_id,category_id) values({literal(story)},{literal(topic)});")
+sql('insert into public.canonical_stories(story_id,canonical_url,title,summary,language,source_kind,source_name,published_at) values ('+
+    ','.join(literal(v) for v in (unseen_story,unseen_row['canonical_url'],unseen_row['title'],unseen_row['summary'],unseen_row['language'],'outlet',unseen_row['source_name'],unseen_row['published_at']))+');')
+sql(f"insert into public.retained_corpus_observations(story_id,source_id,source_name,source_is_aggregator,language,title,summary,canonical_url,published_at,first_observed_at,source_observed_at) select story_id,'captured','Captured',false,language,title,summary,canonical_url,published_at,now(),now() from public.canonical_stories where story_id={literal(unseen_story)};")
 action_owner=str(uuid.uuid4())
-sql(f"insert into auth.users values('{action_owner}'); insert into public.user_story_state(user_id,story_id) values('{action_owner}',{literal(story)});")
+sql(f"insert into auth.users values('{action_owner}');")
 def call(statement, ok=True): return sql(authenticated(action_owner,statement),ok=ok)
 def result(statement): return json.loads(call(statement).splitlines()[-1])
 def event_id():return 'event:'+uuid.uuid4().hex+uuid.uuid4().hex
@@ -113,6 +138,19 @@ def current_revision(kind):
     table='user_story_state' if kind=='state' else 'user_story_interests'
     return int(sql(f"select revision from public.{table} where user_id='{action_owner}' and story_id={literal(story)};"))
 
+def action_side_effects(user, story_id):
+    return json.loads(sql(f"""select jsonb_build_object(
+      'events',(select count(*) from public.user_behavior_events where user_id='{user}'),
+      'states',(select count(*) from public.user_story_state where user_id='{user}' and story_id={literal(story_id)}),
+      'interests',(select count(*) from public.user_story_interests where user_id='{user}' and story_id={literal(story_id)}),
+      'receipts',(select count(*) from public.user_action_receipts where user_id='{user}')
+    );"""))
+
+def rejects_without_side_effects(label, user, story_id, statements):
+    before=action_side_effects(user,story_id)
+    rejected=all(sql(authenticated(user,statement),ok=False).returncode!=0 for statement in statements)
+    check(label,rejected and action_side_effects(user,story_id)==before)
+
 def combined_branch(label,kind,revision,generation,**mutation_values):
     key=uuid.uuid4().hex; event_key=event_id(); statement=mutation(kind,key,event_key,revision,generation,**mutation_values)
     before=event_count()
@@ -125,7 +163,32 @@ def combined_branch(label,kind,revision,generation,**mutation_values):
     return event_key
 
 call("select public.set_behavior_consent(true,true,'local-policy');")
-for kind,revision in [('state',1),('interest',0)]:
+sql(frozen_insert(action_owner,cards=[{'story_id':story}]))
+# Captured retained stories must be actionable only while the owner has a live
+# frozen order. Expired orders, cross-owner attempts, and unseen retained rows
+# cannot create state, interest, behavior, or idempotency side effects.
+expired_owner=str(uuid.uuid4())
+sql(f"insert into auth.users values('{expired_owner}');")
+sql(frozen_insert(expired_owner,cards=[{'story_id':story}],expires_at="now()-interval '1 second'"))
+rejects_without_side_effects('expired own frozen retained story rejects actions without side effects',expired_owner,story,[
+    f"select public.set_story_state({literal(story)},true,true,0,'expired-state');",
+    f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',0,'expired-interest');",
+])
+rejects_without_side_effects('other owner read save plus minus combined actions deny without side effects',other,story,[
+    f"select public.set_story_state_with_event({literal(story)},true,false,0,'other-read',{literal(event_id())},'read_more','local-test','2026-09-01T00:00:00Z',1);",
+    f"select public.set_story_state_with_event({literal(story)},true,true,0,'other-save',{literal(event_id())},'save','local-test','2026-09-01T00:00:00Z',1);",
+    f"select public.set_story_interest_with_event({literal(story)},{literal(topic)},'more_like',0,'other-plus',{literal(event_id())},'local-test','2026-09-01T00:00:00Z',1);",
+    f"select public.set_story_interest_with_event({literal(story)},{literal(topic)},'less_like',0,'other-minus',{literal(event_id())},'local-test','2026-09-01T00:00:00Z',1);",
+])
+generation=snapshot(action_owner)['history_generation']
+rejects_without_side_effects('unseen retained story combined actions deny without side effects',action_owner,unseen_story,[
+    f"select public.set_story_state_with_event({literal(unseen_story)},true,true,0,'unseen-state-event',{literal(event_id())},'save','local-test','2026-09-01T00:00:00Z',{generation});",
+    f"select public.set_story_interest_with_event({literal(unseen_story)},{literal(topic)},'more_like',0,'unseen-interest-event',{literal(event_id())},'local-test','2026-09-01T00:00:00Z',{generation});",
+])
+check('unseen retained story is unavailable',call(f"select public.set_story_state({literal(unseen_story)},true,true,0,'unseen');",ok=False).returncode!=0)
+check('other owner cannot use ranked story',sql(authenticated(other,f"select public.set_story_state({literal(story)},true,true,0,'cross-owner');"),ok=False).returncode!=0)
+check('unassigned retained category is unavailable',call(f"select public.set_story_interest({literal(story)},'not-assigned','more_like',0,'bad-topic');",ok=False).returncode!=0)
+for kind,revision in [('state',0),('interest',0)]:
     generation=snapshot(action_owner)['history_generation']; key=uuid.uuid4().hex; event=event_id()
     statement=mutation(kind,key,event,revision,generation)
     before=event_count()
@@ -202,6 +265,15 @@ for kind in ('state','interest'):
     call('select public.set_behavior_consent(false,false,null);')
 check('explicit clear removes raw history',event_count()==0)
 check('clear tombstone blocks old M1 interest replay',result(first_interest_plain)=={'status':'conflict','revision':0} and sql(f"select count(*)=0 from public.user_story_interests where user_id='{action_owner}';")=='t')
+# Reset deletes the owner's populated frozen order. A retained row that was never
+# acted on must immediately become unavailable again.
+sql(frozen_insert(action_owner,cards=[{'story_id':unseen_story}]))
+check('reset fixture has populated own frozen retained story',sql(f"select count(*)=1 from public.m2_frozen_rankings where user_id='{action_owner}';")=='t')
+call('select public.clear_behavior_history();')
+check('reset removes populated own frozen order',sql(f"select count(*)=0 from public.m2_frozen_rankings where user_id='{action_owner}';")=='t')
+rejects_without_side_effects('reset makes unacted retained story unavailable',action_owner,unseen_story,[
+    f"select public.set_story_state({literal(unseen_story)},true,true,0,'reset-unseen');",
+])
 
 # Deterministic concurrent interleaving: revocation holds the owner lock while
 # an old completed provider response tries to persist. The insert must wait,
@@ -223,6 +295,38 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
     revoke.result(timeout=5); inserted=late.result(timeout=5)
 check('pending frozen write rejects after concurrent revocation',inserted.returncode!=0 and 'stale frozen ranking bindings' in inserted.stderr)
 check('concurrent revocation leaves no frozen cards',sql(f"select count(*)=0 from public.m2_frozen_rankings where user_id='{action_owner}';")=='t')
+
+# A saved interest is its own owner-access grant. Expiring its original frozen
+# card cannot erase that interest or create a read-state. Category retraction
+# removes current feed eligibility while preserving historical topic integrity.
+interest_owner=str(uuid.uuid4())
+sql(f"insert into auth.users values('{interest_owner}');")
+sql(frozen_insert(interest_owner,cards=[{'story_id':story}]))
+first_interest=json.loads(sql(authenticated(interest_owner,f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',0,'interest-only-first');")).splitlines()[-1])
+sql(f"update public.m2_frozen_rankings set expires_at=now()-interval '1 second' where user_id='{interest_owner}';")
+second_interest=json.loads(sql(authenticated(interest_owner,f"select public.set_story_interest({literal(story)},{literal(topic)},'less_like',{first_interest['revision']},'interest-only-after-expiry');")).splitlines()[-1])
+check('expired frozen interest-only owner preserves and updates own interest without read state',second_interest['status']=='updated' and sql(f"select count(*)=1 and (select signal='less_like' from public.user_story_interests where user_id='{interest_owner}' and story_id={literal(story)}) and not exists(select 1 from public.user_story_state where user_id='{interest_owner}' and story_id={literal(story)});")=='t')
+sql(f"delete from public.retained_corpus_categories where story_id={literal(story)} and category_id={literal(topic)};")
+check('category retraction preserves historical topic and interest but excludes current M2 category candidates',sql(f"select exists(select 1 from public.user_story_interests where user_id='{interest_owner}' and story_id={literal(story)}) and exists(select 1 from public.story_topics where story_id={literal(story)} and topic_id={literal(topic)}) and not exists(select 1 from public.m2_retained_candidates({literal(topic)},null,null,null,50) row where row->>'story_id'={literal(story)});")=='t')
+sql(authenticated(interest_owner,'select public.clear_behavior_history();'))
+rejects_without_side_effects('reset removes interest-only access after frozen expiry',interest_owner,story,[
+    f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',0,'interest-only-after-reset');",
+])
+# The ranked-card addition preserves the two pre-existing M1 visibility paths.
+# Keep these fixtures after retained-only isolation checks, so final publication
+# never grants the stories used by the cross-owner and expiry assertions.
+m1_public_owner,m1_private_owner=str(uuid.uuid4()),str(uuid.uuid4())
+sql(f"insert into auth.users values('{m1_public_owner}'),('{m1_private_owner}');")
+publication_seq=int(sql("insert into public.publication_runs(build_nonce,commit_sha,deployed_url,built_at,candidate_digest,site_sha256) values("+','.join(literal(value) for value in (uuid.uuid4().hex,'a'*40,'https://example.test','2026-09-01T00:00:00Z','b'*64,'c'*64))+") returning publication_seq;").splitlines()[0])
+sql("insert into public.publication_topics(publication_seq,topic_id,topic_name,position) values("+','.join(literal(value) for value in (publication_seq,topic,topic,1))+");")
+sql("insert into public.publication_entries(publication_seq,story_id,topic_id,position,canonical_url,title,summary,language,published_at,score_components,ordering_mode,ordering_key,topic_ranks,source_kind,source_name,ranking_explanation) values("+','.join(literal(value) for value in (publication_seq,story,topic,1,row['canonical_url'],row['title'],row['summary'],row['language'],row['published_at'],'{}','weighted_total','{}','{}','outlet',row['source_name'],'captured fixture'))+");")
+public_result=json.loads(sql(authenticated(m1_public_owner,f"select public.set_story_state({literal(story)},true,true,0,'m1-finalized-publication');")).splitlines()[-1])
+check('M1 finalized publication-only state access survives ranked access migration',public_result['status']=='updated' and sql(f"select not exists(select 1 from public.private_discovery_entries where owner_user_id='{m1_public_owner}') and not exists(select 1 from public.m2_frozen_rankings where user_id='{m1_public_owner}');")=='t')
+private_edition='local-'+uuid.uuid4().hex
+sql("insert into public.private_discovery_editions(owner_user_id,edition_id,payload_digest,payload_text,payload,generated_at) values("+','.join(literal(value) for value in (m1_private_owner,private_edition,'d'*64,'{}','{}','2026-09-01T00:00:00Z'))+");")
+sql("insert into public.private_discovery_entries(owner_user_id,edition_id,story_id,position,source_id,primary_lane,placement,facts) values("+','.join(literal(value) for value in (m1_private_owner,private_edition,unseen_story,1,'captured','updates','{}','{}'))+");")
+private_result=json.loads(sql(authenticated(m1_private_owner,f"select public.set_story_state({literal(unseen_story)},true,true,0,'m1-private-discovery');")).splitlines()[-1])
+check('M1 private-discovery-only state access survives ranked access migration',private_result['status']=='updated' and sql(f"select not exists(select 1 from public.publication_entries where story_id={literal(unseen_story)}) and not exists(select 1 from public.m2_frozen_rankings where user_id='{m1_private_owner}');")=='t')
 receipt={'database':DB,'environment':'local PostgreSQL only, no production claims','migrations':migrations,'checks':checks}
 args.receipt.write_text(json.dumps(receipt,indent=2)+'\n')
 print(json.dumps({'database':DB,'passed':sum(c['passed'] for c in checks),'failed':[c['name'] for c in checks if not c['passed']]}))
