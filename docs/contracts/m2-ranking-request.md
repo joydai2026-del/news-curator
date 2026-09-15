@@ -11,5 +11,7 @@ This contract is the provider-neutral boundary shared by feed and search ranking
 - History events may include server-resolved story title, summary, and source context from the eligible public corpus. Owner identifiers remain outside model input.
 - A response is accepted only when every receipt binding matches the expected request and its ranked IDs are an exact unique permutation of the request candidate IDs.
 - Model and fallback responses are distinct modes. A fallback requires a reason and cannot be counted as model-path success.
+- The HTTP reader request accepts `display_language` (`en` or `zh`, default `en`). The server retrieves only candidates with native or current cached text in that language before pagination. Original candidate text and language remain the model input; the display title and summary are overlaid only when returning cards.
+- The response and frozen ranking bind `display_language`. Continuations preserve it. The reader starts a new request when the selected language changes and rejects incompatible in-flight responses. An older frozen ranking without a language binding requires a fresh request.
 
 The boundary validator checks protocol integrity only. Authentication, consent, owner isolation, persistence, provider calls, and policy enforcement remain responsibilities of the later event, index, and reranking paths.
