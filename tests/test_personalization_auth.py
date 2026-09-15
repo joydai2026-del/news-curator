@@ -560,11 +560,76 @@ def test_keychain_failure_is_closed_without_secret_in_process_args(monkeypatch) 
     with pytest.raises(AuthError, match="Protected token storage failed"):
         store.save(session)
     args, kwargs = calls[0]
-    assert "secret-access" not in " ".join(args)
-    assert "secret-refresh" not in " ".join(args)
-    assert args[-1] == "-w"
-    assert "secret-access" in kwargs["input"]
+    assert args[-1] == "-i"
+    assert "secret-access" not in " ".join(args) + kwargs["input"]
+    assert "secret-refresh" not in " ".join(args) + kwargs["input"]
+    assert "nc1:" in kwargs["input"]
 
+
+def test_keychain_interactive_save_roundtrips_without_secret_argv(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    stored = {"value": None}
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[-1] == "-i":
+            stored["value"] = kwargs["input"].split(" -w ", 1)[1].rstrip("\n")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[1] == "find-generic-password":
+            return subprocess.CompletedProcess(args, 0, stored["value"] + "\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    store = MacOSKeychainStorage(account="example.supabase.co")
+    session = Session("secret-access", "secret-refresh", expires_at=2000, user_id="owner")
+    store.save(session)
+
+    assert store.load() == session
+    interactive = calls[0]
+    assert interactive[0][-1] == "-i"
+    assert "secret-access" not in " ".join(interactive[0]) + interactive[1]["input"]
+    assert "secret-refresh" not in " ".join(interactive[0]) + interactive[1]["input"]
+    assert len(interactive[1]["input"].encode()) < 4096
+
+
+def test_keychain_save_rejects_readback_mismatch_and_clears(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls = []
+    different = MacOSKeychainStorage._PREFIX + base64.b64encode(Session("other-access", "other-refresh", 2000, "owner").to_json().encode()).decode()
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[-1] == "-i":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[1] == "find-generic-password":
+            return subprocess.CompletedProcess(args, 0, different + "\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(AuthError, match="Protected token storage failed"):
+        MacOSKeychainStorage(account="example.supabase.co").save(Session("access", "refresh", 2000, "owner"))
+    assert any(call[1] == "delete-generic-password" for call in calls)
+
+
+def test_keychain_rejects_oversized_interactive_line_before_write(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    session = Session("a" * 16_384, "b" * 16_384, 2000, "owner")
+    with pytest.raises(AuthError, match="Protected token storage failed"):
+        MacOSKeychainStorage(account="example.supabase.co").save(session)
+    assert calls == []
+
+
+def test_keychain_loads_legacy_raw_json_and_rejects_unsafe_parser_tokens(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    session = Session("access", "refresh", 2000, "owner")
+    store = MacOSKeychainStorage(account="example.supabase.co")
+    monkeypatch.setattr(store, "_run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, session.to_json() + "\n", ""))
+    assert store.load() == session
+    with pytest.raises(ValueError):
+        MacOSKeychainStorage(account="bad account")
 
 def test_malformed_keychain_json_has_no_token_in_exception_graph(monkeypatch) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
