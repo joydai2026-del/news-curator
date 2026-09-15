@@ -7,6 +7,8 @@ This keeps auth lifecycle tests local and prevents credentials from entering log
 from __future__ import annotations
 
 import base64
+import hmac
+import re
 import hashlib
 import json
 import math
@@ -276,11 +278,14 @@ class MacOSKeychainStorage:
     """Persist the session only in the current user's macOS Keychain."""
 
     SECURITY = "/usr/bin/security"
+    _PREFIX = "nc1:"
+    _MAX_INTERACTIVE_LINE_BYTES = 4096
+    _SAFE_ARGUMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$")
 
     def __init__(self, *, account: str, service: str = "news-curator.personalization") -> None:
         if sys.platform != "darwin":
             raise AuthError("Protected token storage is unavailable; use --memory-only explicitly.")
-        if not account or not service:
+        if not self._SAFE_ARGUMENT.fullmatch(account) or not self._SAFE_ARGUMENT.fullmatch(service):
             raise ValueError("Keychain account and service are required.")
         self.account = account
         self.service = service
@@ -298,22 +303,43 @@ class MacOSKeychainStorage:
         except (OSError, subprocess.SubprocessError) as exc:
             raise AuthError("Protected token storage failed.") from exc
 
-    def load(self) -> Session | None:
+    def _decode(self, raw: str) -> Session:
+        if raw.startswith(self._PREFIX):
+            encoded = raw[len(self._PREFIX):]
+            try:
+                raw = base64.b64decode(encoded, validate=True).decode("utf-8")
+            except (UnicodeDecodeError, ValueError):
+                raise AuthError("Protected session data was invalid.") from None
+        return Session.from_json(raw)
+
+    def _load_raw(self) -> str | None:
         result = self._run(["find-generic-password", "-a", self.account, "-s", self.service, "-w"])
         if result.returncode == 44:
             return None
         if result.returncode != 0:
             raise AuthError("Protected token storage failed.")
-        return Session.from_json(result.stdout.rstrip("\n"))
+        return result.stdout.rstrip("\n")
+
+    def load(self) -> Session | None:
+        raw = self._load_raw()
+        return None if raw is None else self._decode(raw)
 
     def save(self, session: Session) -> None:
-        # Keeping -w last makes the security tool read the secret from stdin,
-        # instead of exposing it in the process argument list.
-        result = self._run(
-            ["add-generic-password", "-a", self.account, "-s", self.service, "-U", "-w"],
-            input_text=session.to_json(),
-        )
+        # security -w prompts when it has no value. -i accepts one parser-safe,
+        # Base64-encoded command on stdin, keeping the session out of argv.
+        encoded = self._PREFIX + base64.b64encode(session.to_json().encode("utf-8")).decode("ascii")
+        command = f"add-generic-password -a {self.account} -s {self.service} -U -w {encoded}\n"
+        if len(command.encode("utf-8")) >= self._MAX_INTERACTIVE_LINE_BYTES:
+            raise AuthError("Protected token storage failed.")
+        result = self._run(["-i"], input_text=command)
         if result.returncode != 0:
+            raise AuthError("Protected token storage failed.")
+        stored = self._load_raw()
+        if stored is None or not hmac.compare_digest(stored, encoded):
+            try:
+                self.clear()
+            except AuthError:
+                pass
             raise AuthError("Protected token storage failed.")
 
     def clear(self) -> None:
