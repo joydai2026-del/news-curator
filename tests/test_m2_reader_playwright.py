@@ -252,6 +252,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
             assert len(ids)>200 and len(set(ids))==len(ids)
             card=page.locator('[data-m2-card=true]').first
+            saved_story_id=card.get_attribute('data-story-id')
             card.locator('.accordion-toggle').click()
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="1"')
             card.locator('.save-action').click()
@@ -263,9 +264,11 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.reload(wait_until='networkidle')
             assert page.locator('.chip[data-filter="__saved__"]:visible').get_attribute('aria-pressed')=='true'
             assert page.locator('.card:not([hidden])').count()==1
+            assert page.locator('.card:not([hidden])').get_attribute('data-story-id')==saved_story_id
             assert requests.count('/rest/v1/rpc/discovery_edition')==discovery_reads
             assert page.locator('#discovery-controls').is_hidden()
             assert page.locator('#load-more').inner_text()=='Load 20 more'
+            assert page.locator('#load-more').is_enabled()
             page.locator('.chip[data-filter="__all__"]:visible').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             assert requests.count('/rank')>rank_reads
@@ -401,6 +404,10 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===0')
             assert page.locator('#m2-controls').is_hidden()
             assert not completed_downloads
+            page.evaluate('window.__localSession={access_token:"local-auth-token",user_id:"'+OWNER+'"};window.dispatchEvent(new Event("news-curator:auth-changed"))')
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0')
+            assert page.locator('#m2-controls').is_visible()
+            assert page.locator('#discovery-controls').is_hidden()
             assert not page_errors,page_errors
         except BaseException:
             print({"reader_status":page.locator('#reader-status').inner_text(), "page_errors":page_errors,
