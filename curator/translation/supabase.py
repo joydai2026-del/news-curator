@@ -21,6 +21,8 @@ from .store import (
     AcquireResult,
     AcquireStatus,
     BudgetLimits,
+    MoneyLimits,
+    MoneyReservation,
     ReconciliationOutcome,
     Reservation,
     ReservationState,
@@ -104,6 +106,16 @@ class SupabaseTranslationStore:
             "month_limit": request.limits.month,
         }
         payload = self._rpc("translation_acquire", body)
+        if request.money is not None and payload.get("status") == "leased":
+            money = request.money
+            payload = self._rpc("translation_reserve_money", {
+                "idempotency_key": request.idempotency_key,
+                "charge_scope": money.charge_scope,
+                "reserved_microusd": money.reserved_microusd,
+                "run_limit_microusd": money.limits.run,
+                "day_limit_microusd": money.limits.day,
+                "month_limit_microusd": money.limits.month,
+            })
         raw_status = payload.get("status")
         status = {item.value: item for item in AcquireStatus}.get(raw_status) if isinstance(raw_status, str) else None
         if status is None:
@@ -176,7 +188,12 @@ class SupabaseTranslationStore:
         *,
         actual_characters: int,
         record: TranslationCacheRecord,
+        actual_microusd: int | None = None,
     ) -> Reservation:
+        if actual_microusd is not None:
+            if isinstance(actual_microusd, bool) or not isinstance(actual_microusd, int) or actual_microusd < 0:
+                raise TranslationStoreError(StoreErrorReason.INVALID_REQUEST)
+            self._reservation_rpc("translation_settle_money", {"idempotency_key": idempotency_key, "actual_microusd": actual_microusd}, expected_idempotency_key=idempotency_key)
         payload = self._rpc(
             "translation_settle",
             {
@@ -390,12 +407,24 @@ def _reservation_from_mapping(value: Mapping[str, object]) -> Reservation:
             _required_integer(value, "day_limit"),
             _required_integer(value, "month_limit"),
         )
+        money = None
+        if value.get("charge_scope") is not None:
+            money = MoneyReservation(
+                charge_scope=_required_string(value, "charge_scope"),
+                reserved_microusd=_required_integer(value, "reserved_microusd"),
+                limits=MoneyLimits(
+                    _required_integer(value, "run_limit_microusd"),
+                    _required_integer(value, "day_limit_microusd"),
+                    _required_integer(value, "month_limit_microusd"),
+                ),
+            )
         request = AcquireRequest(
             key=key,
             idempotency_key=_required_string(value, "idempotency_key"),
             run_id=_required_string(value, "run_id"),
             reserved_characters=_required_integer(value, "reserved_characters"),
             limits=limits,
+            money=money,
         )
         state = ReservationState(_required_string(value, "state"))
         actual = value.get("actual_characters")
@@ -407,6 +436,7 @@ def _reservation_from_mapping(value: Mapping[str, object]) -> Reservation:
             counter_day=_required_string(value, "counter_day"),
             counter_month=_required_string(value, "counter_month"),
             actual_characters=actual,
+            actual_microusd=_optional_integer(value.get("actual_microusd")),
             created_at=_optional_datetime(value.get("created_at")),
             sent_at=_optional_datetime(value.get("sent_at")),
             finalized_at=_optional_datetime(value.get("finalized_at")),
@@ -430,6 +460,14 @@ def _required_integer(value: Mapping[str, object], field_name: str) -> int:
     if isinstance(field_value, bool) or not isinstance(field_value, int):
         raise ValueError
     return field_value
+
+
+def _optional_integer(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError
+    return value
 
 
 def _optional_datetime(value: object) -> datetime | None:

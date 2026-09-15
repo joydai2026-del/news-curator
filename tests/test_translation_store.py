@@ -544,3 +544,17 @@ def test_migration_is_private_service_only_atomic_and_search_path_pinned() -> No
     assert "state = 'charge_unknown'" in lower
     assert "create or replace function public.translation_recover_stale" in lower
     assert lower.index("for update;\n  if not found then") < lower.index("select x.* into previous")
+
+
+def test_public_translation_money_cap_is_atomic_and_known_usage_releases_conservative_hold() -> None:
+    from curator.translation import MoneyLimits, MoneyReservation
+    backend, _ = store()
+    money = MoneyReservation("public_translation_openai_v1", 100, MoneyLimits(150, 150, 150))
+    first = request(cache_key("story:money-1"), idem="money:one", reserved=10, limits=BudgetLimits(50, 50, 50))
+    first = replace(first, money=money)
+    assert backend.acquire(first).status is AcquireStatus.LEASED
+    second = replace(request(cache_key("story:money-2"), idem="money:two", reserved=10, limits=BudgetLimits(50, 50, 50)), money=MoneyReservation("public_translation_openai_v1", 51, MoneyLimits(150, 150, 150)))
+    assert backend.acquire(second).status is AcquireStatus.BUDGET_EXHAUSTED
+    backend.mark_sent("money:one")
+    settled = backend.settle("money:one", actual_characters=8, actual_microusd=25, record=record(first.key, actual=8))
+    assert settled.actual_microusd == 25

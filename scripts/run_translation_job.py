@@ -39,8 +39,12 @@ from curator.translation import (  # noqa: E402
     AcquireRequest,
     AcquireStatus,
     BudgetLimits,
+    MoneyLimits,
+    MoneyReservation,
     GoogleTranslationAdapter,
     GoogleTranslationConfig,
+    OpenAITranslationAdapter,
+    OpenAITranslationConfig,
     ReservationState,
     SupabaseTranslationConfig,
     SupabaseTranslationStore,
@@ -121,6 +125,7 @@ def produce_translation_records(
         _positive_int(policy, "day_character_limit"),
         _positive_int(policy, "month_character_limit"),
     )
+    money = _money_policy(policy, provider)
     candidate_policy = TranslationCandidatePolicy(
         max_items=_positive_int(policy, "max_items_per_language"),
         max_characters=_positive_int(policy, "max_characters_per_language"),
@@ -184,6 +189,7 @@ def produce_translation_records(
                 run_id=safe_run_id,
                 reserved_characters=candidate.content.character_count,
                 limits=limits,
+                money=money,
             )
             try:
                 store.recover_stale(
@@ -293,6 +299,7 @@ def produce_translation_records(
                     idempotency_key,
                     actual_characters=candidate.content.character_count,
                     record=cache,
+                    actual_microusd=_actual_microusd(response, money, provider),
                 )
             except Exception:
                 counters["settlement_failed"] += 1
@@ -480,7 +487,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--google-access-token-file", type=Path, required=True)
+    parser.add_argument("--google-access-token-file", type=Path)
+    parser.add_argument("--openai-api-key-file", type=Path)
     parser.add_argument(
         "--source-snapshot",
         type=Path,
@@ -511,8 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         service_key = os.environ.get(
             _text(policy, "supabase_service_role_key_env"), ""
         )
-        project_id = os.environ.get(_text(policy, "project_id_env"), "")
-        token = _read_token_file(args.google_access_token_file)
+        project_id = os.environ.get(_text_with_default(policy, "project_id_env", ""), "")
         transport = SafeHttpTransport(
             policy=SafeHttpPolicy(
                 total_timeout_seconds=float(
@@ -528,31 +535,28 @@ def main(argv: list[str] | None = None) -> int:
         store = SupabaseTranslationStore(
             SupabaseTranslationConfig(url, service_key), transport=transport
         )
-        google = GoogleTranslationAdapter(
-            config=GoogleTranslationConfig(
-                project_id=project_id,
-                location=_text(policy, "location"),
-                model_version=_google_model_resource(policy, project_id),
-                max_characters=_positive_int(
-                    policy, "max_characters_per_language"
-                ),
-                max_response_bytes=_positive_int(policy, "max_response_bytes"),
-                max_output_title_chars=_positive_int_with_default(
-                    policy,
-                    "max_output_title_characters",
-                    DEFAULT_MAX_TRANSLATION_OUTPUT_TITLE_CHARS,
-                ),
-                max_output_description_chars=_positive_int_with_default(
-                    policy,
-                    "max_output_description_characters",
-                    DEFAULT_MAX_TRANSLATION_OUTPUT_DESCRIPTION_CHARS,
-                ),
-            ),
-            transport=transport,
-            access_token=lambda: token,
-        )
-        registry = TranslationProviderRegistry({google.provider_id: google})
-        provider = registry.get(_text(policy, "provider"))
+        provider_name = _text(policy, "provider")
+        providers = {}
+        if provider_name == "google":
+            if args.google_access_token_file is None:
+                raise ValueError("Google translation token file is required")
+            token = _read_token_file(args.google_access_token_file)
+            google = GoogleTranslationAdapter(
+                config=GoogleTranslationConfig(project_id=project_id, location=_text(policy, "location"), model_version=_google_model_resource(policy, project_id), max_characters=_positive_int(policy, "max_characters_per_language"), max_response_bytes=_positive_int(policy, "max_response_bytes"), max_output_title_chars=_positive_int_with_default(policy, "max_output_title_characters", DEFAULT_MAX_TRANSLATION_OUTPUT_TITLE_CHARS), max_output_description_chars=_positive_int_with_default(policy, "max_output_description_characters", DEFAULT_MAX_TRANSLATION_OUTPUT_DESCRIPTION_CHARS)),
+                transport=transport, access_token=lambda: token)
+            providers[google.provider_id] = google
+        elif provider_name == "openai":
+            key_env = _text(policy, "openai_api_key_env")
+            key = os.environ.get(key_env, "")
+            if args.openai_api_key_file is not None:
+                key = _read_token_file(args.openai_api_key_file)
+            openai = OpenAITranslationAdapter(
+                config=OpenAITranslationConfig(endpoint=_text_with_default(policy, "openai_endpoint", "https://api.openai.com/v1/responses"), model_version=_text_with_default(policy, "openai_model", "gpt-5-mini"), max_batch_items=_positive_int_with_default(policy, "openai_max_batch_items", 16), max_input_characters=_positive_int_with_default(policy, "openai_max_input_characters", 30000), max_request_bytes=_positive_int_with_default(policy, "openai_max_request_bytes", 131072), max_response_bytes=_positive_int(policy, "max_response_bytes"), max_output_tokens=_positive_int_with_default(policy, "openai_max_output_tokens", 4096), input_microusd_per_million_tokens=_positive_int_with_default(policy, "openai_input_microusd_per_million_tokens", 250), output_microusd_per_million_tokens=_positive_int_with_default(policy, "openai_output_microusd_per_million_tokens", 2000)),
+                transport=transport, api_key=lambda: key)
+            providers[openai.provider_id] = openai
+        else:
+            raise ValueError("translation provider is unsupported")
+        provider = TranslationProviderRegistry(providers).get(provider_name)
         results = authoritative_results if authoritative_results is not None else collect(cfg)
         ranked = {
             language: build_ranked_language(
@@ -586,6 +590,47 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("translation lane unavailable; wrote originals-only artifact", file=sys.stderr)
         return _empty(args.output, now)
+
+
+def _money_policy(policy: Mapping[str, object], provider: object) -> MoneyReservation | None:
+    if getattr(provider, "provider_id", None) != "openai":
+        return None
+    input_price, output_price = getattr(provider, "price_policy")
+    max_input = _positive_int_with_default(policy, "openai_max_input_tokens", 4096)
+    max_output = _positive_int_with_default(policy, "openai_max_output_tokens", 4096)
+    reserve = _microusd(max_input, input_price) + _microusd(max_output, output_price)
+    return MoneyReservation(
+        charge_scope=_text_with_default(policy, "openai_charge_scope", "public_translation_openai_v1"),
+        reserved_microusd=reserve,
+        limits=MoneyLimits(_positive_int(policy, "run_money_limit_microusd"), _positive_int(policy, "day_money_limit_microusd"), _positive_int(policy, "month_money_limit_microusd")),
+    )
+
+
+def _actual_microusd(response: object, money: MoneyReservation | None, provider: object) -> int | None:
+    if money is None:
+        return None
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        raise ValueError("OpenAI translation usage is required for settlement")
+    # The reservation is conservative. Exact provider tokens settle to integer micro-USD.
+    price_input, price_output = getattr(provider, "price_policy", (None, None))
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in (price_input, price_output)):
+        raise ValueError("OpenAI translation pricing is unavailable")
+    actual = _microusd(usage.input_tokens, price_input) + _microusd(usage.output_tokens, price_output)
+    if actual > money.reserved_microusd:
+        raise ValueError("provider usage exceeds conservative money reservation")
+    return actual
+
+
+def _microusd(tokens: int, microusd_per_million: int) -> int:
+    return (tokens * microusd_per_million + 999_999) // 1_000_000
+
+
+def _text_with_default(policy: Mapping[str, object], key: str, default: str) -> str:
+    value = policy.get(key, default)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"translation policy {key} is invalid")
+    return value
 
 
 def _timestamp_run(value: datetime) -> str:
