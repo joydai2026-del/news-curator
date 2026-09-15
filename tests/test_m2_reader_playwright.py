@@ -361,6 +361,10 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===0')
             assert page.locator('#m2-controls').is_hidden()
             assert not completed_downloads
+            page.evaluate('window.__localSession={access_token:"local-auth-token",user_id:"'+OWNER+'"};window.dispatchEvent(new Event("news-curator:auth-changed"))')
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0')
+            assert page.locator('#m2-controls').is_visible()
+            assert page.locator('#discovery-controls').is_hidden()
             assert not page_errors,page_errors
         except BaseException:
             print({"reader_status":page.locator('#reader-status').inner_text(), "page_errors":page_errors,
