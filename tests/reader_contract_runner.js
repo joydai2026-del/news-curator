@@ -650,6 +650,9 @@ async function main() {
   global.fetch = async (url, options) => {
     controllerHeaders.push(options.headers);
     controllerCalls += 1;
+    if (url.endsWith("/data/news-en.json")) return response(200, {
+      schema_version: 1, generated_at: "2026-09-07T12:00:00Z", language: "en", categories: [],
+    }, url);
     if (url.endsWith("/latest_publication")) return response(200, {
       publication_seq: 7, finalized_at: "2026-09-07T12:00:00Z",
       topics: [{ topic_id: "ai", name: "AI" }],
@@ -669,8 +672,8 @@ async function main() {
   assert.equal(configuredActions[0].hidden && configuredActions[0].disabled, true);
   assert.equal(configuredActions.slice(1).every((button) => !button.hidden && button.disabled), true);
   assert.equal(configuredSavedTab.hidden || configuredSavedTab.disabled, false);
-  assert.equal(controllerCalls, 2);
-  assert.equal(controllerHeaders[1].authorization, "Bearer refreshed-reader-token");
+  assert.equal(controllerCalls, 4);
+  assert.equal(controllerHeaders[3].authorization, "Bearer refreshed-reader-token");
   assert.equal(addedCards.length, 1);
   assert.equal(addedCards[0].querySelectorAll(".state-action").every((button) => !button.disabled), true);
   assert.equal(addedCards[0].attrs["data-rank-ai"], "2");

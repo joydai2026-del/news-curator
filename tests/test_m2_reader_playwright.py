@@ -107,6 +107,16 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
     site=tmp_path/'site'
     render_site(ranked,[],datetime.fromisoformat(capture['generated_at']),site,
         topic_ids_by_name={c:c for c in categories},require_summaries=False,discovery_enabled=True)
+    (site/'data').mkdir(exist_ok=True)
+    for locale in ('en','zh'):
+        projection={'schema_version':1,'generated_at':capture['generated_at'],'language':locale,'categories':[]}
+        for category in categories:
+            projection['categories'].append({'id':category,'name':category if locale=='en' else f'中文 {category}',
+                'items':[{'story_id':row['story_id'],'title':row['title'] if locale=='en' else f'中文 {row["title"]}',
+                    'description':row['summary'] if locale=='en' else f'中文 {row["summary"]}',
+                    'display_language':locale,'translation_available':True}
+                    for row in rows if category in row['category_ids']]})
+        (site/'data'/f'news-{locale}.json').write_text(json.dumps(projection),encoding='utf-8')
     activate_personalization_link(site/'index.html',supabase_url=DATABASE,publishable_key='sb_publishable_localtest',
         m2_config={'enabled':True,'url':RANKER,'policy_version':'test-policy',
         'model_version':'test-model','provider_policy_id':'test-policy','provider_retention_url':'https://policy.example',
@@ -142,6 +152,11 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 if history_mode['fail']:
                     return route.fulfill(status=500,content_type='application/json',body='{}')
                 payload=store.history_snapshot('local-auth-token')
+            elif name=='m2_localized_story_text':
+                locale=body['p_locale']; selected=set(body['p_story_ids'])
+                payload=[{'story_id':row['story_id'],'title':row['title'] if locale=='en' else f'中文 {row["title"]}',
+                    'summary':row['summary'] if locale=='en' else f'中文 {row["summary"]}',
+                    'display_language':locale,'translation_available':True} for row in rows if row['story_id'] in selected]
             elif name=='append_behavior_event':payload=store.event(body)
             elif name=='set_story_state_with_event':
                 sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]

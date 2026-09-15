@@ -621,7 +621,9 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             digest.locator('.chip[data-filter="__saved__"]').first.click()
             digest.get_by_text("Private saved-only story", exact=True).wait_for()
             assert digest.locator("article.is-saved").count() >= 1
-            assert digest.get_by_text("Unsave", exact=True).count() >= 1
+            saved_actions = digest.locator('.save-action[aria-label="Remove from Saved"][aria-pressed="true"]')
+            assert saved_actions.count() >= 1
+            assert saved_actions.first.inner_text() == "Saved ✓"
 
             for forged in (
                 {"type": "logout", "extra": True},
