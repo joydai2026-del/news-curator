@@ -1,9 +1,13 @@
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 
 import httpx
 import pytest
 
-from curator.recommendation.async_provider import AsyncOpenAIResponses, AsyncRankLLMProvider, ProviderTimeout
+from curator.recommendation.async_provider import (AsyncOpenAIResponses, AsyncRankLLMProvider, ProviderHTTPError,
+    ProviderResponseError, ProviderResponseInvalid, ProviderTimeout, ProviderTransportFailure)
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +20,17 @@ def supported_asyncio_api(monkeypatch):
 class Prompt:
     def create_prompt(self, *, query, passages):
         return [{"role": "user", "content": query + "\n" + "\n".join(passages)}]
+
+
+def test_provider_contract_imports_without_model_only_site_packages():
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import curator.recommendation.async_provider"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_exact_raw_permutation_and_usage_are_preserved():
@@ -52,6 +67,95 @@ def test_unvalidated_or_nonpermutation_output_is_rejected(raw):
             client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test", max_output_tokens=32))
         with pytest.raises(ValueError):
             await provider.rerank(query="policy", passages=["first", "second"])
+        await client.aclose()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(("response", "error", "reason"), [
+    (httpx.Response(302, json={"id": "private-response-marker", "output": [], "usage": {}}), ProviderResponseInvalid, None),
+    (httpx.Response(401, text="private-response-marker"), ProviderHTTPError, "provider_http_4xx"),
+    (httpx.Response(503, text="private-response-marker"), ProviderHTTPError, "provider_http_5xx"),
+    (httpx.Response(200, text="private-response-marker"), ProviderResponseInvalid, None),
+])
+def test_provider_failure_categories_do_not_retain_response_body(response, error, reason):
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response))
+        transport = AsyncOpenAIResponses(client=client, endpoint="https://provider.invalid/v1",
+            api_key="test", model="test", max_output_tokens=32)
+        with pytest.raises(error) as caught:
+            await transport.create([], candidate_count=1)
+        assert "private-response-marker" not in str(caught.value)
+        assert caught.value.__cause__ is None
+        if reason is not None:
+            assert caught.value.reason == reason
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_transport_failure_does_not_retain_exception_detail():
+    async def run():
+        def fail(request):
+            raise httpx.ConnectError("private-transport-marker", request=request)
+        client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
+        transport = AsyncOpenAIResponses(client=client, endpoint="https://provider.invalid/v1",
+            api_key="test", model="test", max_output_tokens=32)
+        with pytest.raises(ProviderTransportFailure) as caught:
+            await transport.create([], candidate_count=1)
+        assert "private-transport-marker" not in str(caught.value)
+        assert caught.value.__cause__ is None
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_missing_usage_is_classified_without_raw_response_detail():
+    async def run():
+        marker = "private-provider-marker"
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "id": marker, "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"order":[1]}' }]}]})))
+        provider = AsyncRankLLMProvider(prompt_builder=Prompt(), transport=AsyncOpenAIResponses(
+            client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test", max_output_tokens=32))
+        with pytest.raises(ProviderResponseInvalid) as caught:
+            await provider.rerank(query="policy", passages=["first"])
+        assert marker not in str(caught.value)
+        await client.aclose()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("output", [
+    [],
+    [{"type": "message", "content": []}],
+    [{"type": "message", "content": [{"type": "refusal", "refusal": "cannot comply"}]}],
+])
+def test_non_text_response_with_valid_usage_preserves_settlement_fields(output):
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "id": "response-1",
+            "output": output,
+            "usage": {"input_tokens": 12, "output_tokens": 5},
+        })))
+        provider = AsyncRankLLMProvider(prompt_builder=Prompt(), transport=AsyncOpenAIResponses(
+            client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test",
+            max_output_tokens=32))
+        with pytest.raises(ProviderResponseError) as caught:
+            await provider.rerank(query="policy", passages=["first"])
+        assert (caught.value.input_tokens, caught.value.output_tokens, caught.value.request_id) == (
+            12, 5, "response-1")
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_empty_response_with_invalid_usage_is_provider_response_invalid():
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "id": "response-1",
+            "output": [],
+            "usage": {"input_tokens": "12", "output_tokens": 5},
+        })))
+        provider = AsyncRankLLMProvider(prompt_builder=Prompt(), transport=AsyncOpenAIResponses(
+            client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test",
+            max_output_tokens=32))
+        with pytest.raises(ProviderResponseInvalid):
+            await provider.rerank(query="policy", passages=["first"])
         await client.aclose()
     asyncio.run(run())
 

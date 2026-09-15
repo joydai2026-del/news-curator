@@ -5,6 +5,8 @@ import pytest
 from curator.contracts.enums import ActorKind, RankingResultMode
 from curator.contracts.ranking_request import AuthenticatedOwner, RankingCandidate, RankingRequest
 from curator.recommendation.rankllm_adapter import BudgetState, ProviderOutcome, RankLLMAdapter, RankerPolicy
+from curator.recommendation.async_provider import (ProviderHTTPError, ProviderResponseInvalid,
+    ProviderTimeout, ProviderTransportFailure)
 
 
 SID1 = "story:" + "1" * 64
@@ -89,6 +91,22 @@ def test_attempt_observer_marks_boundary_immediately_before_engine_invocation():
         attempt_observer=lambda attempt, elapsed: events.append(("attempt", attempt)),
     )
     assert events == [("attempt", 0), "engine"]
+
+
+@pytest.mark.parametrize(("error", "reason"), [
+    (ProviderTimeout("private"), "provider_deadline"),
+    (ProviderHTTPError("provider_http_4xx"), "provider_http_4xx"),
+    (ProviderHTTPError("provider_http_5xx"), "provider_http_5xx"),
+    (ProviderTransportFailure("private"), "provider_transport_failure"),
+    (ProviderResponseInvalid("private"), "provider_response_invalid"),
+])
+def test_safe_provider_failure_categories_have_fixed_fallback_reasons(error, reason):
+    result = RankLLMAdapter(policy=policy(), engine=Engine(error=error)).rank(
+        request(), provider_processing_consent=True, budget=BudgetState(0),
+        estimated_input_tokens=100, estimated_output_tokens=10)
+    assert result.result_mode is RankingResultMode.FALLBACK
+    assert result.fallback_reason == reason
+    assert "private" not in result.fallback_reason
 
 
 def test_retry_reservation_must_fit_request_cap_before_engine_call():
