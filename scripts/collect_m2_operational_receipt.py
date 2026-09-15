@@ -20,6 +20,16 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+_RESULT_MODES = {"model", "fallback"}
+_FALLBACK_REASONS = {
+    "", "budget_reservation_failed", "daily_cost_limit", "invalid_provider_permutation",
+    "model_policy_mismatch", "no_candidates", "observed_cost_limit", "provider_deadline",
+    "provider_failure", "provider_preparation_failed", "provider_preparation_unavailable",
+    "provider_processing_consent_required", "provider_retry_exhausted", "request_cost_limit",
+    "unknown_provider_pricing",
+}
+
+
 def _origin(value: str) -> str:
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
@@ -71,6 +81,8 @@ def _receipt(rows: list[dict[str, object]], *, commit: str, policy_hash: str,
         mode, reason, execution = bindings.get("result_mode"), bindings.get("fallback_reason"), bindings.get("execution")
         if not isinstance(mode, str) or not isinstance(reason, str) or not isinstance(execution, dict):
             raise ValueError("incomplete frozen ranking bindings")
+        mode = mode if mode in _RESULT_MODES else "unknown"
+        reason = reason if reason in _FALLBACK_REASONS else "unknown"
         modes[mode] += 1
         if reason:
             fallbacks[reason] += 1

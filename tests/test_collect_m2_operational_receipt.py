@@ -25,6 +25,17 @@ def test_receipt_rejects_missing_execution_binding():
             category_ids=["world"], observed_at=datetime.now(timezone.utc))
 
 
+def test_receipt_buckets_untrusted_result_labels_without_emitting_them():
+    private = "private-owner-text"
+    result = _receipt([{"bindings": {"result_mode": private, "fallback_reason": private,
+        "execution": {"attempts_started": 0}}}], commit="a" * 40, policy_hash="b" * 64,
+        checklist_hash="c" * 64, category_ids=["world"], observed_at=datetime.now(timezone.utc))
+    serialized = __import__("json").dumps(result)
+    assert private not in serialized
+    assert result["operational_model_path"]["result_modes"] == {"unknown": 1}
+    assert result["operational_model_path"]["fallback_reasons"] == {"unknown": 1}
+
+
 @pytest.mark.parametrize("value", ["http://example.test", "https://user@example.test", "https://example.test/path"])
 def test_origin_is_fixed_https(value):
     with pytest.raises(ValueError):
