@@ -536,7 +536,9 @@ async function main() {
     addEventListener() {},
   };
   global.BroadcastChannel = undefined;
-  global.fetch = async (url) => response(200, {}, url);
+  global.fetch = async (url) => url.endsWith("/data/news-en.json")
+    ? response(200, { schema_version:1, generated_at:"2026-09-07T12:00:00Z", language:"en", categories:[] }, url)
+    : response(200, {}, url);
   await reader.run();
   assert.equal(controls.get("reader-status").textContent, "No published edition is available yet.");
   assert.equal(controls.get("load-more").hidden, true);
@@ -672,8 +674,8 @@ async function main() {
   assert.equal(configuredActions[0].hidden && configuredActions[0].disabled, true);
   assert.equal(configuredActions.slice(1).every((button) => !button.hidden && button.disabled), true);
   assert.equal(configuredSavedTab.hidden || configuredSavedTab.disabled, false);
-  assert.equal(controllerCalls, 4);
-  assert.equal(controllerHeaders[3].authorization, "Bearer refreshed-reader-token");
+  assert.equal(controllerCalls, 5);
+  assert.equal(controllerHeaders[4].authorization, "Bearer refreshed-reader-token");
   assert.equal(addedCards.length, 1);
   assert.equal(addedCards[0].querySelectorAll(".state-action").every((button) => !button.disabled), true);
   assert.equal(addedCards[0].attrs["data-rank-ai"], "2");

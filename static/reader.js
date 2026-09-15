@@ -899,7 +899,7 @@
         document.querySelectorAll(".interest-action").forEach((node) => { node.textContent = localeCopy().moreLike; });
         document.querySelectorAll(".less-interest-action").forEach((node) => { node.textContent = localeCopy().lessLike; });
         document.querySelectorAll(".shut").forEach((node) => { node.textContent = localeCopy().close; });
-        document.querySelectorAll(".acts a").forEach((node) => { if (/Read original/i.test(node.textContent)) node.textContent = localeCopy().original; });
+        document.querySelectorAll(".acts a").forEach((node) => { if (/Read original|阅读原文/i.test(node.textContent)) node.textContent = localeCopy().original; });
         const detailMap = {Source:"source",来源:"source",Newsletter:"newsletter",新闻通讯:"newsletter",Published:"published",发布时间:"published","Also covered by":"coverage",其他报道:"coverage","Ranking signals":"signals",排序依据:"signals"};
         document.querySelectorAll(".detail .row b,.signal b").forEach((node) => { const key = detailMap[node.textContent]; if (key) node.textContent = localeCopy()[key]; });
       }
@@ -972,15 +972,13 @@
       return true;
     }
     async function localizeVisibleCards(epoch) {
-      const ids = [...cards.keys()].slice(0, MAX_PAGE_SIZE);
-      if (!ids.length) return;
       let response;
       try { response = await fetch(`/data/news-${displayLanguage}.json`, { credentials:"omit", cache:"no-store", redirect:"error" }); }
       catch (_) { response = null; }
       if (!response || !response.ok || response.redirected) fail("Localized stories are unavailable.");
       const payload = await boundedJson(response, "The localized story projection was invalid.", MAX_DISCOVERY_BYTES);
       if (!isObject(payload) || payload.schema_version !== 1 || payload.language !== displayLanguage || !Array.isArray(payload.categories)) fail("The localized story projection was invalid.");
-      const projectionRows = [];
+      const projectionRows = [], projectionCategories = new Map();
       payload.categories.forEach((category) => {
         if (!isObject(category) || !boundedString(category.id, 80) || !boundedString(category.name, 120) || !Array.isArray(category.items)) fail("The localized story projection was invalid.");
         const categoryName = category.id === "china-news" ? (displayLanguage === "zh" ? "中国新闻" : "China News") : category.name;
@@ -990,18 +988,43 @@
           if (!isObject(item) || !STORY_ID.test(item.story_id) || item.display_language !== displayLanguage || !boundedString(item.title, 2000) || typeof item.description !== "string") fail("The localized story projection was invalid.");
           projectionRows.push({ story_id:item.story_id, title:item.title, summary:item.description,
             display_language:displayLanguage, translation_available:item.translation_available === true });
+          if (!projectionCategories.has(item.story_id)) projectionCategories.set(item.story_id, { item, ids:[] });
+          projectionCategories.get(item.story_id).ids.push(category.id);
         });
       });
+      projectionCategories.forEach(({ item, ids }, storyId) => {
+        if (cards.has(storyId) || !boundedString(item.source_name, 200) || !boundedString(item.source_id, 512) ||
+            !validTimestamp(item.published_at) || !["en", "zh"].includes(item.original_language)) return;
+        const destination = safeDestination(item.canonical_url || item.url || "");
+        if (!destination && !item.is_newsletter) return;
+        const row = { story_id:storyId, title:item.title, summary:item.description,
+          canonical_url:destination || "", source_name:item.source_name, source_id:item.source_id,
+          source_kind:item.is_newsletter ? "newsletter" : "outlet", published_at:item.published_at,
+          language:item.original_language, topic_ids:[...new Set(ids)], topic_ranks:{}, coverage_mentions:[],
+          ranking_explanation:displayLanguage === "zh" ? "来自所选语言的公开新闻。" : "Public story in the selected language.",
+          read_at:null, saved_at:null, state_revision:0, interests:[] };
+        const section = document.querySelector(`.topic-section[data-topic-id="${CSS.escape(ids[0])}"] .grid`);
+        if (!section) return;
+        const card = createStoryCard(row, topicSlugForId(ids[0]), topicSlugForId, ids[0]);
+        card.newsCuratorStaticCard = true; cards.set(storyId, card); section.append(card); view.addCard(card);
+      });
+      const ids = [...cards.keys()];
       if (signedIn()) {
-        const rows = await api.localizedStoryText(ids, displayLanguage);
-        if (!applyLocalizedRows(rows, epoch)) return;
-        const returned = new Set(rows.map((row) => row.story_id));
+        const localized = [];
+        for (let offset = 0; offset < ids.length; offset += MAX_PAGE_SIZE) {
+          localized.push(...await api.localizedStoryText(ids.slice(offset, offset + MAX_PAGE_SIZE), displayLanguage));
+          if (epoch !== localeEpoch) return;
+        }
+        const merged = new Map(projectionRows.map((row) => [row.story_id, row]));
+        localized.forEach((row) => merged.set(row.story_id, row));
+        const returned = new Set(localized.map((row) => row.story_id));
         cards.forEach((card, id) => {
           if (returned.has(id) || !card.classList.contains("is-saved")) return;
-          applyLocalizedRows([{ story_id:id, title:localeCopy().translationUnavailable,
+          merged.set(id, { story_id:id, title:localeCopy().translationUnavailable,
             summary:localeCopy().translationSummary, display_language:displayLanguage,
-            translation_available:false }], epoch);
+            translation_available:false });
         });
+        applyLocalizedRows([...merged.values()], epoch);
         return;
       }
       applyLocalizedRows(projectionRows, epoch);
@@ -1042,12 +1065,12 @@
       previousHidden: staleMeta.previousElementSibling?.hidden,
     } : null;
     function editionTime(iso) {
-      const formatted = new Intl.DateTimeFormat('en-US', {
+      const formatted = new Intl.DateTimeFormat(displayLanguage === "zh" ? "zh-CN" : "en-US", {
         month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric',
         minute: '2-digit', timeZoneName: 'short',
         timeZone: editionMeta?.dataset.timezone || 'America/New_York',
       }).format(new Date(iso));
-      return formatted.replace(/^([^,]+), (\d{4}), (.+)$/, '$1, $2 at $3');
+      return displayLanguage === "zh" ? formatted : formatted.replace(/^([^,]+), (\d{4}), (.+)$/, '$1, $2 at $3');
     }
     function showPrivateEditionMeta(edition) {
       if (editionMetaSpans[0]) editionMetaSpans[0].textContent = `Built ${editionTime(edition.generated_at)}`;
