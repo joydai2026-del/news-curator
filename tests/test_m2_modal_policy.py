@@ -113,6 +113,7 @@ def test_smoke_mode_does_not_require_or_resolve_a_secret(monkeypatch, tmp_path):
     values.pop("NEWS_CURATOR_RANKER_SECRET_NAME")
     module, captured = _load(monkeypatch, **values)
     assert hasattr(module, "smoke_rankllm_image")
+    assert captured["functions"][0]["scaledown_window"] == 1
     assert captured["functions"][0]["block_network"] is True
     assert captured["functions"][0]["include_source"] is False
     assert all(call[0] != "secret" for call in captured.values() if isinstance(call, tuple))
@@ -133,6 +134,7 @@ def test_context_mutation_is_rejected(monkeypatch, tmp_path):
         ("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", "6"),
         ("NEWS_CURATOR_MODAL_MAX_CONTAINERS", "0"),
         ("NEWS_CURATOR_MODAL_MAX_INPUTS_PER_CONTAINER", "33"),
+        ("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", "0"),
         ("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", "-1"),
     ],
 )
