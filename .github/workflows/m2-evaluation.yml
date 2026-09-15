@@ -27,7 +27,7 @@ jobs:
             --checklist config/m2-evaluation/qa-checklist.yaml \
             --topics topics.yaml \
             --environment production \
-            --commit "$GITHUB_SHA" \
+            --commit "${{ vars.NEWS_CURATOR_M2_DEPLOYED_REVISION }}" \
             --output "$RUNNER_TEMP/m2-evaluation/operational.json"
       - name: Reduce bound receipts
         id: reduce

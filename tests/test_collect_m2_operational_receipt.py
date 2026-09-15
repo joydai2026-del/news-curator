@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from scripts.collect_m2_operational_receipt import _category_ids, _current_revision_rows, _get_rows, _origin, _receipt
+from scripts.collect_m2_operational_receipt import _category_ids, _get_rows, _origin, _receipt
 
 
 def test_receipt_is_sanitized_and_refuses_to_claim_model_denominator():
@@ -47,13 +47,6 @@ def test_category_registry_comes_from_topics(tmp_path):
     path = tmp_path / "topics.yaml"
     path.write_text("categories:\n  - id: world\n  - id: ai\n")
     assert _category_ids(path) == ["world", "ai"]
-
-
-def test_current_revision_filters_older_deployments():
-    old = {"bindings": {"server_commit_revision": "a" * 40}}
-    current = {"bindings": {"server_commit_revision": "b" * 40}}
-    revision, rows = _current_revision_rows([old, current], "c" * 40)
-    assert revision == "b" * 40 and rows == [current]
 
 
 def test_get_rows_uses_fixed_projection_and_paginates(monkeypatch):

@@ -70,18 +70,6 @@ def _category_ids(path: Path) -> list[str]:
     return values
 
 
-def _current_revision_rows(rows: list[dict[str, object]], fallback: str) -> tuple[str, list[dict[str, object]]]:
-    if not rows:
-        return fallback, rows
-    latest = rows[-1].get("bindings")
-    revision = latest.get("server_commit_revision") if isinstance(latest, dict) else None
-    if not isinstance(revision, str) or not 7 <= len(revision) <= 64 or any(ch not in "0123456789abcdef" for ch in revision):
-        raise ValueError("invalid production revision binding")
-    selected = [row for row in rows if isinstance(row.get("bindings"), dict)
-        and row["bindings"].get("server_commit_revision") == revision]
-    return revision, selected
-
-
 def _receipt(rows: list[dict[str, object]], *, commit: str, policy_hash: str,
              checklist_hash: str, category_ids: list[str], environment: str,
              observed_at: datetime) -> dict[str, object]:
@@ -131,8 +119,7 @@ def main() -> int:
     now = datetime.now(timezone.utc)
     rows = _get_rows(_origin(os.environ["NEWS_CURATOR_SUPABASE_URL"]),
         os.environ["NEWS_CURATOR_SUPABASE_SECRET_KEY"], now - timedelta(days=7))
-    revision, rows = _current_revision_rows(rows, args.commit)
-    result = _receipt(rows, commit=revision,
+    result = _receipt(rows, commit=args.commit,
         policy_hash=hashlib.sha256(args.policy.read_bytes()).hexdigest(),
         checklist_hash=hashlib.sha256(args.checklist.read_bytes()).hexdigest(),
         category_ids=_category_ids(args.topics), environment=args.environment, observed_at=now)
