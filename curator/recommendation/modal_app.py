@@ -8,6 +8,9 @@ from pathlib import Path
 
 import modal
 
+from .modal_handlers import endpoint as _endpoint
+from .modal_handlers import smoke_rankllm_image as _smoke_rankllm_image
+
 
 def _enabled(name: str) -> bool:
     value = os.environ.get(name, "false")
@@ -81,14 +84,9 @@ if deployment_mode not in {"service", "smoke"}:
 function_timeout = _bounded_int("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", 15, 7, 60)
 max_containers = _bounded_int("NEWS_CURATOR_MODAL_MAX_CONTAINERS", 4, 1, 20)
 max_inputs = _bounded_int("NEWS_CURATOR_MODAL_MAX_INPUTS_PER_CONTAINER", 8, 1, 32)
-# Modal SDK 1.4.2 only rejects non-positive values, while the current
-# server contract and official guide require the inclusive range 2..3600.
+# Modal SDK 1.4.2 only rejects non-positive values. The observed server
+# enforces 2..3600; the cold-start guide also documents a two-second minimum.
 scaledown_window = _bounded_int("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", 60, 2, 3600)
-
-
-def _endpoint():
-    from .runtime import build_application
-    return build_application()
 
 
 if deployment_mode == "service":
@@ -96,58 +94,6 @@ if deployment_mode == "service":
     endpoint = app.function(image=image, secrets=[runtime_secret], timeout=function_timeout,
         max_containers=max_containers, scaledown_window=scaledown_window,
         restrict_modal_access=True)(modal.concurrent(max_inputs=max_inputs)(modal.asgi_app()(_endpoint)))
-
-
-def _smoke_rankllm_image():
-    """Credential-free image/import check using 200 captured public stories."""
-    import hashlib
-    import inspect
-    import json
-    import os
-    import re
-    from pathlib import Path
-
-    import yaml
-    import tiktoken_ext.openai_public
-    from .engine import ReviewedRankLLMPromptBuilder
-    from .runtime import configured_token_counter
-
-    cache = Path("/opt/tiktoken-cache/fb374d419588a4632f3f557e76b4b70aebbca790")
-    cache_hash = "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d"
-    source = inspect.getsource(tiktoken_ext.openai_public.o200k_base)
-    url = re.search(r'load_tiktoken_bpe\(\s*"([^"]+)"', source).group(1)
-    expected_hash = re.search(r'expected_hash="([0-9a-f]{64})"', source).group(1)
-    if hashlib.sha1(url.encode()).hexdigest() != cache.name or expected_hash != cache_hash:
-        raise RuntimeError("o200k tokenizer source metadata mismatch")
-    if hashlib.sha256(cache.read_bytes()).hexdigest() != cache_hash:
-        raise RuntimeError("o200k tokenizer cache mismatch")
-    stories = json.loads(Path("/opt/news-curator/smoke-public-200.json").read_text())
-    if not isinstance(stories, list) or len(stories) != 200:
-        raise RuntimeError("smoke fixture must contain exactly 200 public stories")
-    passages = [f"Title: {row['title']}\nSource: {row['source_id']}\nSummary: {row['summary']}"
-                for row in stories]
-    builder = ReviewedRankLLMPromptBuilder("/opt/vendor/rank_llm/rerank/prompt_templates/rank_gpt_template.yaml")
-    prompt = builder.create_prompt(query="personalized news", passages=passages)
-    serialized = json.dumps(prompt, ensure_ascii=False, separators=(",", ":"))
-    policy = yaml.safe_load(Path("/opt/news-curator/config/ranker-policy-r1.yaml").read_text())
-    counter = configured_token_counter(policy, os.environ)
-    unknown_encoding_rejected = unknown_model_rejected = False
-    try:
-        configured_token_counter({**policy, "tokenizer_encoding": "unreviewed"}, os.environ)
-    except ValueError:
-        unknown_encoding_rejected = True
-    try:
-        configured_token_counter({**policy, "model": "unknown-model"}, os.environ)
-    except ValueError:
-        unknown_model_rejected = True
-    if not unknown_encoding_rejected or not unknown_model_rejected:
-        raise RuntimeError("tokenizer negative guard failed")
-    return {"stories": 200, "messages": len(prompt),
-            "o200k_tokens": counter(serialized), "cache_key_derived": True,
-            "unknown_encoding_rejected": unknown_encoding_rejected,
-            "unknown_model_rejected": unknown_model_rejected,
-            "prompt_sha256": hashlib.sha256(serialized.encode()).hexdigest()}
-
 
 if deployment_mode == "smoke":
     smoke_rankllm_image = app.function(image=image, timeout=function_timeout, max_containers=1,

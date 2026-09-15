@@ -1,5 +1,6 @@
 import importlib
 import hashlib
+import os
 import sys
 import types
 import ast
@@ -12,6 +13,7 @@ import pytest
 
 
 MODULE = "curator.recommendation.modal_app"
+HANDLERS_MODULE = "curator.recommendation.modal_handlers"
 
 
 class _Resource:
@@ -80,6 +82,16 @@ def test_modal_deployment_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("NEWS_CURATOR_MODAL_DEPLOYMENT_ENABLED", raising=False)
     with pytest.raises(RuntimeError, match="disabled by policy"):
         _load(monkeypatch)
+
+
+def test_remote_handlers_import_without_deployment_environment(monkeypatch):
+    for name in tuple(os.environ):
+        if name.startswith("NEWS_CURATOR_MODAL_") or name.startswith("NEWS_CURATOR_RANKER_"):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.delitem(sys.modules, HANDLERS_MODULE, raising=False)
+    module = importlib.import_module(HANDLERS_MODULE)
+    assert callable(module.endpoint)
+    assert callable(module.smoke_rankllm_image)
 
 
 def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(monkeypatch, tmp_path):
