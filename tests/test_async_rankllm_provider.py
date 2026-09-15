@@ -1,4 +1,7 @@
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 
 import httpx
 import pytest
@@ -17,6 +20,17 @@ def supported_asyncio_api(monkeypatch):
 class Prompt:
     def create_prompt(self, *, query, passages):
         return [{"role": "user", "content": query + "\n" + "\n".join(passages)}]
+
+
+def test_provider_contract_imports_without_model_only_site_packages():
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import curator.recommendation.async_provider"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_exact_raw_permutation_and_usage_are_preserved():

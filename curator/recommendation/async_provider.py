@@ -7,8 +7,6 @@ import json
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence
 
-import httpx
-
 
 class PromptBuilder(Protocol):
     """Adapter over the pinned RankLLM create_prompt implementation."""
@@ -80,6 +78,10 @@ class AsyncOpenAIResponses:
         self._max_output_tokens, self._reasoning_effort, self._verbosity = max_output_tokens, reasoning_effort, verbosity
 
     async def create(self, prompt: object, *, candidate_count: int) -> Mapping[str, object]:
+        # The base ingestion environment imports this contract without installing
+        # model-only HTTP dependencies. Load HTTPX only on an actual provider call.
+        import httpx
+
         # wait_for preserves the repository's Python 3.10 CI support while
         # cancelling the whole request on the same total deadline.
         async def request():
