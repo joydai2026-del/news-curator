@@ -39,11 +39,11 @@ def authenticated(user, statement):
 def snapshot(user):
     return json.loads(sql(authenticated(user,'select public.m2_history_snapshot();')).splitlines()[-1])
 
-def frozen_insert(user, bindings=None):
+def frozen_insert(user, bindings=None, cards=None):
     if bindings is None:
         current=snapshot(user)
         bindings={key:current[key] for key in ('history_generation','consent_revision','server_commit_revision')}
-    return f"insert into public.m2_frozen_rankings(request_id,user_id,bindings,cards,page_size,expires_at) values('{uuid.uuid4()}','{user}',{literal(json.dumps(bindings))},'[]',20,now()+interval '1 hour');"
+    return f"insert into public.m2_frozen_rankings(request_id,user_id,bindings,cards,page_size,expires_at) values('{uuid.uuid4()}','{user}',{literal(json.dumps(bindings))},{literal(json.dumps(cards or []))},20,now()+interval '1 hour');"
 
 sql('create database '+DB, database='postgres')
 sql("""create schema auth; create schema extensions;
@@ -93,11 +93,16 @@ check('clear preserves budget audit',sql(f"select count(*)=5 from public.m2_rank
 # Actual captured public article; all actions and identities below are isolated test inputs.
 row=next(r for r in json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'] if r['category_ids'])
 story,topic=row['story_id'],row['category_ids'][0]
+unseen_row=next(r for r in json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'] if r['story_id'] != story)
+unseen_story=unseen_row['story_id']
 sql('insert into public.canonical_stories(story_id,canonical_url,title,summary,language,source_kind,source_name,published_at) values ('+
     ','.join(literal(v) for v in (story,row['canonical_url'],row['title'],row['summary'],row['language'],'outlet',row['source_name'],row['published_at']))+');')
-sql(f"insert into public.story_topics(story_id,topic_id,topic_name) values({literal(story)},{literal(topic)},{literal(topic)});")
+sql(f"insert into public.retained_corpus_observations(story_id,source_id,source_name,source_is_aggregator,language,title,summary,canonical_url,published_at,first_observed_at,source_observed_at) select story_id,'captured','Captured',false,language,title,summary,canonical_url,published_at,now(),now() from public.canonical_stories where story_id={literal(story)}; insert into public.retained_corpus_categories(story_id,category_id) values({literal(story)},{literal(topic)});")
+sql('insert into public.canonical_stories(story_id,canonical_url,title,summary,language,source_kind,source_name,published_at) values ('+
+    ','.join(literal(v) for v in (unseen_story,unseen_row['canonical_url'],unseen_row['title'],unseen_row['summary'],unseen_row['language'],'outlet',unseen_row['source_name'],unseen_row['published_at']))+');')
+sql(f"insert into public.retained_corpus_observations(story_id,source_id,source_name,source_is_aggregator,language,title,summary,canonical_url,published_at,first_observed_at,source_observed_at) select story_id,'captured','Captured',false,language,title,summary,canonical_url,published_at,now(),now() from public.canonical_stories where story_id={literal(unseen_story)};")
 action_owner=str(uuid.uuid4())
-sql(f"insert into auth.users values('{action_owner}'); insert into public.user_story_state(user_id,story_id) values('{action_owner}',{literal(story)});")
+sql(f"insert into auth.users values('{action_owner}');")
 def call(statement, ok=True): return sql(authenticated(action_owner,statement),ok=ok)
 def result(statement): return json.loads(call(statement).splitlines()[-1])
 def event_id():return 'event:'+uuid.uuid4().hex+uuid.uuid4().hex
@@ -125,7 +130,11 @@ def combined_branch(label,kind,revision,generation,**mutation_values):
     return event_key
 
 call("select public.set_behavior_consent(true,true,'local-policy');")
-for kind,revision in [('state',1),('interest',0)]:
+sql(frozen_insert(action_owner,cards=[{'story_id':story}]))
+check('unseen retained story is unavailable',call(f"select public.set_story_state({literal(unseen_story)},true,true,0,'unseen');",ok=False).returncode!=0)
+check('other owner cannot use ranked story',sql(authenticated(other,f"select public.set_story_state({literal(story)},true,true,0,'cross-owner');"),ok=False).returncode!=0)
+check('unassigned retained category is unavailable',call(f"select public.set_story_interest({literal(story)},'not-assigned','more_like',0,'bad-topic');",ok=False).returncode!=0)
+for kind,revision in [('state',0),('interest',0)]:
     generation=snapshot(action_owner)['history_generation']; key=uuid.uuid4().hex; event=event_id()
     statement=mutation(kind,key,event,revision,generation)
     before=event_count()
