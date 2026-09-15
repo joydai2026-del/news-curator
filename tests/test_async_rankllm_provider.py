@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from curator.recommendation.async_provider import (AsyncOpenAIResponses, AsyncRankLLMProvider, ProviderHTTPError,
-    ProviderResponseInvalid, ProviderTimeout, ProviderTransportFailure)
+    ProviderResponseError, ProviderResponseInvalid, ProviderTimeout, ProviderTransportFailure)
 
 
 @pytest.fixture(autouse=True)
@@ -117,6 +117,45 @@ def test_missing_usage_is_classified_without_raw_response_detail():
         with pytest.raises(ProviderResponseInvalid) as caught:
             await provider.rerank(query="policy", passages=["first"])
         assert marker not in str(caught.value)
+        await client.aclose()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("output", [
+    [],
+    [{"type": "message", "content": []}],
+    [{"type": "message", "content": [{"type": "refusal", "refusal": "cannot comply"}]}],
+])
+def test_non_text_response_with_valid_usage_preserves_settlement_fields(output):
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "id": "response-1",
+            "output": output,
+            "usage": {"input_tokens": 12, "output_tokens": 5},
+        })))
+        provider = AsyncRankLLMProvider(prompt_builder=Prompt(), transport=AsyncOpenAIResponses(
+            client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test",
+            max_output_tokens=32))
+        with pytest.raises(ProviderResponseError) as caught:
+            await provider.rerank(query="policy", passages=["first"])
+        assert (caught.value.input_tokens, caught.value.output_tokens, caught.value.request_id) == (
+            12, 5, "response-1")
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_empty_response_with_invalid_usage_is_provider_response_invalid():
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "id": "response-1",
+            "output": [],
+            "usage": {"input_tokens": "12", "output_tokens": 5},
+        })))
+        provider = AsyncRankLLMProvider(prompt_builder=Prompt(), transport=AsyncOpenAIResponses(
+            client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test",
+            max_output_tokens=32))
+        with pytest.raises(ProviderResponseInvalid):
+            await provider.rerank(query="policy", passages=["first"])
         await client.aclose()
     asyncio.run(run())
 
