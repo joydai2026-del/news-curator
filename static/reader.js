@@ -977,7 +977,7 @@
       view.apply(); refreshLoadButton();
     }
     function showDiscovery(edition) {
-      if (!signedIn() || !discoveryControls) return;
+      if (!signedIn() || !discoveryControls || m2?.enabled) return;
       leaveDiscovery();
       discoveryEdition = edition;
       showPrivateEditionMeta(edition);
@@ -1006,7 +1006,7 @@
       setDiscoveryLane(discoveryLane); refreshStateControls(); refreshInterestControls(); refreshLoadButton();
     }
     async function fetchDiscovery(initial = false) {
-      if (!discoveryControls || !signedIn() || m2Active) return;
+      if (!discoveryControls || !signedIn() || m2Active || m2?.enabled) return;
       const epoch = authEpoch, request = ++discoveryRequest;
       try {
         const response = await api.discoveryEdition();
@@ -1031,6 +1031,7 @@
       }
     }
     async function openStoredDiscovery(editionId, lane) {
+      if (m2?.enabled) return;
       const epoch = authEpoch, request = ++discoveryRequest;
       try {
         const response = await api.discoveryEdition(editionId);
@@ -1061,6 +1062,27 @@
     discoveryAccept?.addEventListener("click", () => { if (pendingDiscovery) void openStoredDiscovery(pendingDiscovery.edition_id, discoveryLane); });
 
     function usesM2() { return Boolean(m2?.enabled && signedIn() && selectedTopic() !== "__saved__"); }
+    function showM2Policy() {
+      const retention = document.getElementById("m2-provider-retention");
+      if (retention && m2Config?.enabled) {
+        retention.href = m2Config.provider_retention_url;
+        retention.hidden = false;
+      }
+    }
+    function unknownM2Consent() {
+      const local = document.getElementById("m2-local-learning"), provider = document.getElementById("m2-provider-processing");
+      if (local) { local.indeterminate = true; local.disabled = true; }
+      if (provider) { provider.indeterminate = true; provider.disabled = true; }
+    }
+    function syncM2Consent(history) {
+      const local = document.getElementById("m2-local-learning"), provider = document.getElementById("m2-provider-processing");
+      if (local) { local.indeterminate = false; local.checked = history.learning_enabled; local.disabled = false; }
+      if (provider) {
+        provider.indeterminate = false;
+        provider.checked = history.provider_processing_enabled;
+        provider.disabled = !history.learning_enabled;
+      }
+    }
     function m2Eligibility() {
       const topic = selectedTopic();
       return { category: topic === "__all__" ? null : topicIdForSlug(topic), query: searchBox?.value.trim() || null };
@@ -1160,6 +1182,7 @@
     }
     async function loadM2(append = false, searchEvent = false) {
       if (!usesM2()) return;
+      unknownM2Consent(); showM2Policy();
       const epoch = authEpoch, request = ++m2Sequence, eligibility = m2Eligibility();
       const key = JSON.stringify(eligibility);
       const pageRequest = { topic: selectedTopic(), epoch };
@@ -1180,6 +1203,7 @@
         await behaviorWrites.catch(() => {});
         const history = await api.historySnapshot();
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        syncM2Consent(history);
         const canContinue = append && key === m2Key && m2Cursor && m2Binding &&
           history.history_generation === m2Binding.history_generation && history.consent_revision === m2Binding.consent_revision;
         // A new eligible request always carries the committed history. The
@@ -1190,11 +1214,6 @@
           : await m2.rank(history, eligibility);
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         applyM2Page(response, Boolean(canContinue), eligibility); m2Key = key;
-        const local = document.getElementById("m2-local-learning"), provider = document.getElementById("m2-provider-processing");
-        if (local) local.checked = history.learning_enabled;
-        if (provider) { provider.checked = history.provider_processing_enabled; provider.disabled = !history.learning_enabled; }
-        const retention = document.getElementById("m2-provider-retention");
-        if (retention) { retention.href = m2Config.provider_retention_url; retention.hidden = false; }
         announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
         if (!append && eligibility.query && !response.cards.length) {
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
@@ -1302,10 +1321,12 @@
     function refreshLoadButton() {
       const topic = selectedTopic();
       if (usesM2()) {
+        loadButton.textContent = `Load ${m2Config.page_size} more`;
         loadButton.hidden = initializing || !m2Active || !m2Cursor;
         loadButton.disabled = [...pageRequests].some((request) => request.epoch === authEpoch);
         return;
       }
+      if (latest) loadButton.textContent = `Load ${latest.page_size} more`;
       loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
       loadButton.disabled = [...pageRequests].some((request) =>
