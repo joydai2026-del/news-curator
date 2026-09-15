@@ -443,6 +443,14 @@ jobs:
             "${interest_args[@]}" \
             "${translation_args[@]}"
 
+      - name: Export retained localized public projections
+        env:
+          NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
+          NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python scripts/retained_translation_pipeline.py export --root . --locale en --output ./site/data/news-en.json
+          python scripts/retained_translation_pipeline.py export --root . --locale zh --output ./site/data/news-zh.json
+
       - name: Report source freshness
         if: ${{ always() }}
         continue-on-error: true
