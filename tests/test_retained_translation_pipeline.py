@@ -48,9 +48,9 @@ def test_bearer_key_keeps_both_scoped_headers():
     assert [credential.header_name for credential in transport.credentials] == ["Authorization", "apikey"]
 
 @pytest.mark.parametrize("policy", [
-    {"queue_limit": 0, "translation_workers": 1, "queue_time_budget_seconds": 240},
-    {"queue_limit": 12, "translation_workers": 5, "queue_time_budget_seconds": 240},
-    {"queue_limit": 12, "translation_workers": 1, "queue_time_budget_seconds": 241},
+    {"queue_limit": 0, "translation_workers": 1, "queue_dispatch_budget_seconds": 240},
+    {"queue_limit": 12, "translation_workers": 5, "queue_dispatch_budget_seconds": 240},
+    {"queue_limit": 12, "translation_workers": 1, "queue_dispatch_budget_seconds": 241},
 ])
 def test_queue_policy_rejects_unbounded_work(policy):
     with pytest.raises(ValueError):
@@ -94,7 +94,7 @@ def test_fair_tasks_alternate_language_before_second_item_from_same_language(mon
 
 
 def test_queue_policy_accepts_bounded_four_worker_configuration():
-    assert module._queue_policy({"queue_limit":60,"translation_workers":4,"queue_time_budget_seconds":240}) == (60,4,240)
+    assert module._queue_policy({"queue_limit":60,"translation_workers":4,"queue_dispatch_budget_seconds":240}) == (60,4,240)
 
 
 def test_deadline_stops_queued_provider_dispatch_and_preserves_one_run_id(monkeypatch, tmp_path):
@@ -102,7 +102,7 @@ def test_deadline_stops_queued_provider_dispatch_and_preserves_one_run_id(monkey
     from threading import Lock
     rows=json.loads((ROOT/"tests/fixtures/m2-retained-public.json").read_text())["rows"]
     rows=[r for r in rows if r["category_ids"]][:2]
-    cfg=SimpleNamespace(translation={"enabled":True,"provider":"openai","queue_limit":2,"translation_workers":1,"queue_time_budget_seconds":1,"supabase_url_env":"URL","supabase_service_role_key_env":"KEY","openai_api_key_env":"API"},categories=[SimpleNamespace(id=k,name=k) for k in set(k for r in rows for k in r["category_ids"])])
+    cfg=SimpleNamespace(translation={"enabled":True,"provider":"openai","queue_limit":2,"translation_workers":1,"queue_dispatch_budget_seconds":1,"supabase_url_env":"URL","supabase_service_role_key_env":"KEY","openai_api_key_env":"API"},categories=[SimpleNamespace(id=k,name=k) for k in set(k for r in rows for k in r["category_ids"])])
     monkeypatch.setattr(module,"load_config",lambda _:cfg)
     monkeypatch.setattr(module,"_rpc",lambda *_args:rows)
     monkeypatch.setattr(module,"_provider_store",lambda *_args:(object(),object()))
@@ -122,7 +122,7 @@ def test_background_workers_share_whole_job_budget_identity(monkeypatch,tmp_path
     from types import SimpleNamespace
     rows=json.loads((ROOT/"tests/fixtures/m2-retained-public.json").read_text())["rows"]
     rows=[r for r in rows if r["category_ids"]][:3]
-    cfg=SimpleNamespace(translation={"enabled":True,"provider":"openai","queue_limit":3,"translation_workers":2,"queue_time_budget_seconds":10,"supabase_url_env":"URL","supabase_service_role_key_env":"KEY","openai_api_key_env":"API"},categories=[SimpleNamespace(id=k,name=k) for k in set(k for r in rows for k in r["category_ids"])])
+    cfg=SimpleNamespace(translation={"enabled":True,"provider":"openai","queue_limit":3,"translation_workers":2,"queue_dispatch_budget_seconds":10,"supabase_url_env":"URL","supabase_service_role_key_env":"KEY","openai_api_key_env":"API"},categories=[SimpleNamespace(id=k,name=k) for k in set(k for r in rows for k in r["category_ids"])])
     monkeypatch.setattr(module,"load_config",lambda _:cfg); monkeypatch.setattr(module,"_rpc",lambda *_args:rows)
     stores=[]; calls=[]
     def factory(*args):
@@ -135,3 +135,34 @@ def test_background_workers_share_whole_job_budget_identity(monkeypatch,tmp_path
     assert module.translate(tmp_path,3)==0
     assert len(calls)==3 and len({call["run_id"] for call in calls})==1
     assert len(set(stores))==3
+
+
+def test_multicategory_queue_deduplicates_after_each_category_gets_a_turn():
+    rows=json.loads((ROOT/"tests/fixtures/m2-retained-public.json").read_text())["rows"]
+    rows=[dict(r) for r in rows[:4]]
+    rows[0]["category_ids"]=["ai","world"]
+    rows[1]["category_ids"]=["ai"]
+    rows[2]["category_ids"]=["world"]
+    rows[3]["category_ids"]=[]
+    tasks=module._fair_tasks(rows,{"ai":"AI","world":"World"})
+    assert len(tasks)==len({module.story_id_for_item(t[2]) for t in tasks})==4
+    assert {t[1] for t in tasks} >= {"AI","World","All"}
+
+
+def test_public_export_preserves_existing_sanitized_newsletters_without_provider(monkeypatch,tmp_path):
+    from types import SimpleNamespace
+    cfg=SimpleNamespace(translation={"supabase_url_env":"URL","supabase_service_role_key_env":"KEY"},categories=[])
+    monkeypatch.setattr(module,"load_config",lambda _:cfg)
+    monkeypatch.setenv("URL","https://example.supabase.co");monkeypatch.setenv("KEY","sb_secret_test")
+    # Empty native lane is a real supported M1 state; no invented newsletter prose.
+    newsletter={"id":"newsletters","name":"Newsletters","items":[]}
+    output=tmp_path/"news-en.json"
+    output.write_text(json.dumps({"schema_version":1,"language":"en","categories":[newsletter]}))
+    monkeypatch.setattr(module,"_rpc",lambda *args:pytest.fail("no category/provider call expected"))
+    assert module.export(tmp_path,output,"en")==0
+    assert json.loads(output.read_text())["categories"] == [newsletter]
+
+def test_newsletter_projection_rejects_cross_language_or_nonprivate_injection(tmp_path):
+    path=tmp_path/"news-zh.json"
+    path.write_text(json.dumps({"schema_version":1,"language":"en","categories":[]}))
+    with pytest.raises(ValueError): module._preserved_newsletters(path,"zh")

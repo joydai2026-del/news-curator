@@ -23,14 +23,15 @@ def _origin(value: str) -> str:
     return validate_https_origin(value).rstrip("/")
 
 def _queue_policy(policy: Mapping[str, object]) -> tuple[int, int, int]:
-    values = (policy.get("queue_limit", 12), policy.get("translation_workers", 1), policy.get("queue_time_budget_seconds", 240))
+    values = (policy.get("queue_limit", 12), policy.get("translation_workers", 1), policy.get("queue_dispatch_budget_seconds", 240))
     if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
         raise ValueError("retained translation queue policy is invalid")
     limit, workers, budget = values
     if not 1 <= limit <= 1000 or not 1 <= workers <= 4 or not 1 <= budget <= 240:
         raise ValueError("retained translation queue policy is out of bounds")
-    # One worker preserves the existing store/transport transition order. The queue cap
-    # bounds worst-case dispatch below the configured background budget; no retry occurs.
+    # Stop NEW dispatch at the deadline. Already-started paid work finishes its
+    # bounded provider/store calls (up to 50s grace) so charge evidence is not lost.
+    # Hard cancellation here would create avoidable unknown charges.
     return limit, workers, budget
 
 
@@ -57,31 +58,33 @@ def _item(row: Mapping[str, object]) -> tuple[Item, tuple[str,...], str]:
 def _provider_store(policy: Mapping[str, object], origin: str, service_key: str, api_key: str):
     provider_transport = _transport(policy, timeout_seconds=float(policy.get("request_timeout_seconds", 20)))
     store_transport = _transport(policy, timeout_seconds=3.0)
-    provider = OpenAITranslationAdapter(config=OpenAITranslationConfig(endpoint=str(policy["openai_endpoint"]),model_version=str(policy["openai_model"]),max_output_tokens=int(policy["openai_max_output_tokens"]),input_microusd_per_million_tokens=int(policy["openai_input_microusd_per_million_tokens"]),output_microusd_per_million_tokens=int(policy["openai_output_microusd_per_million_tokens"])),transport=provider_transport,api_key=lambda:api_key)
+    provider = OpenAITranslationAdapter(config=OpenAITranslationConfig(endpoint=str(policy["openai_endpoint"]),model_version=str(policy["openai_model"]),max_output_tokens=int(policy["openai_max_output_tokens"]),max_request_bytes=int(policy.get("openai_max_request_bytes",131072)),reasoning_effort=str(policy.get("openai_reasoning_effort","minimal")),input_microusd_per_million_tokens=int(policy["openai_input_microusd_per_million_tokens"]),output_microusd_per_million_tokens=int(policy["openai_output_microusd_per_million_tokens"])),transport=provider_transport,api_key=lambda:api_key)
     return provider, SupabaseTranslationStore(SupabaseTranslationConfig(origin,service_key),transport=store_transport)
 
 
 def _fair_tasks(rows, categories: Mapping[str, str]):
-    buckets: dict[tuple[str, str], list[Item]] = {}
-    seen: set[tuple[str, str]] = set()
+    from collections import deque
+    buckets = {}
     for row in rows:
         item, category_ids, story_id = _item(row)
-        if item.language not in {"en", "zh"}: continue
-        for category_id in (category_ids or ("__all__",)):
-            name = categories.get(category_id) or ("All" if category_id == "__all__" else None)
-            key = (item.language, name) if name else None
-            if key and (item.language, story_id) not in seen:
-                buckets.setdefault(key, []).append(item); seen.add((item.language, story_id)); break
-    for value in buckets.values(): value.sort(key=lambda item: (item.published_at, item.canonical_url), reverse=True)
-    ordered=[]; index=0
+        names = [categories[key] for key in category_ids if key in categories] or ["All"]
+        for name in names:
+            buckets.setdefault((item.language, name), []).append((story_id, item))
+    queues = {key: deque(sorted(values, key=lambda pair: (pair[1].published_at, pair[0]), reverse=True))
+              for key, values in buckets.items()}
+    seen, ordered = set(), []
+    keys = sorted(queues)
+    # Every category gets a turn. Deduplicate on selection, not on first tag,
+    # so a multi-topic story can represent any of its categories without copies.
     while True:
-        added=False
-        for language in ("en", "zh"):
-            for key in sorted(key for key in buckets if key[0] == language):
-                values=buckets[key]
-                if index < len(values): ordered.append((language, key[1], values[index])); added=True
+        added = False
+        for key in keys:
+            queue = queues[key]
+            while queue and queue[0][0] in seen: queue.popleft()
+            if queue:
+                story_id, item = queue.popleft(); seen.add(story_id)
+                ordered.append((key[0], key[1], item)); added = True
         if not added: return ordered
-        index += 1
 
 
 def translate(root: Path, limit: int) -> int:
@@ -116,8 +119,31 @@ def translate(root: Path, limit: int) -> int:
     print(json.dumps({"queue_rows":len(rows),"dispatched":len(futures),"run_id":run_id,**totals},separators=(",",":")))
     return 1 if totals["fatal"] or (totals["failed"] and not totals["translated"]) else 0
 
+def _preserved_newsletters(output: Path, locale: str):
+    """Keep the existing sanitized M1 lane local; it never enters the provider queue."""
+    if not output.exists(): return []
+    if output.is_symlink() or output.stat().st_size > 8_000_000: raise ValueError("invalid existing projection")
+    payload=json.loads(output.read_text(encoding="utf-8"))
+    if not isinstance(payload,dict) or payload.get("schema_version") != 1 or payload.get("language") != locale or not isinstance(payload.get("categories"),list):
+        raise ValueError("invalid existing projection")
+    from curator.pipeline import NEWSLETTER_CATEGORY_ID
+    preserved=[]
+    for category in payload["categories"]:
+        if not isinstance(category,dict): raise ValueError("invalid existing category")
+        if category.get("id") != NEWSLETTER_CATEGORY_ID: continue
+        if not isinstance(category.get("items"),list) or len(preserved): raise ValueError("invalid newsletter projection")
+        for item in category["items"]:
+            if (not isinstance(item,dict) or item.get("is_newsletter") is not True
+                or item.get("display_language") != locale or item.get("original_language") != locale
+                or item.get("translated") is not False or item.get("image_url")):
+                raise ValueError("newsletter projection boundary mismatch")
+        preserved.append(category)
+    return preserved
+
+
 def export(root: Path, output: Path, locale: str) -> int:
     if locale not in {"en","zh"}: raise ValueError("locale is invalid")
+    preserved=_preserved_newsletters(output,locale)
     cfg=load_config(root); policy=cfg.translation; origin=_origin(os.environ.get(str(policy["supabase_url_env"]),"")); key=os.environ.get(str(policy["supabase_service_role_key_env"]),"")
     if not key: raise ValueError("localized projection credentials unavailable")
     transport=_transport(policy); categories=[]
@@ -131,7 +157,7 @@ def export(root: Path, output: Path, locale: str) -> int:
             if display_language != locale or not title.strip(): raise ValueError("mixed or empty locale projection")
             items.append({"story_id":story_id,"title":title,"description":summary,"url":item.url,"canonical_url":item.canonical_url,"source_id":item.source_id,"source_name":item.source_name,"published_at":item.published_at.astimezone(timezone.utc).isoformat(),"original_language":item.language,"display_language":display_language,"translated":item.language != locale,"translation_available":available,"translation_source_language":item.language if available else "","translation_provider":"","translation_model_version":"","image_url":"","is_newsletter":False})
         categories.append({"id":category.id,"name":category.name,"items":items})
-    payload={"schema_version":1,"generated_at":datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),"language":locale,"categories":categories}
+    payload={"schema_version":1,"generated_at":datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),"language":locale,"categories":categories+preserved}
     output.parent.mkdir(parents=True,exist_ok=True); temp=output.with_suffix(output.suffix+".tmp"); temp.write_text(json.dumps(payload,ensure_ascii=False,separators=(",",":")),encoding="utf-8"); temp.replace(output)
     return 0
 
