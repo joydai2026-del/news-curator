@@ -2,7 +2,7 @@ schema_version: 1
 provider: openai
 model: gpt-5-mini
 endpoint: https://api.openai.com/v1
-prompt_revision: m2-rankllm-listwise-r1
+prompt_revision: m2-rankllm-listwise-r2
 maximum_output_tokens: 4096
 reasoning_token_allowance: 2048
 prompt_framing_token_allowance: 1024

@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 import yaml
-from curator.contracts.enums import ActorKind, EventType
+from curator.contracts.enums import ActorKind, EventType, M2HistoryEventType
 from curator.contracts.ranking_request import (AuthenticatedOwner, ModelRankingInput, OrderedHistoryEvent,
     RankingCandidate, RankingRequest)
 from curator.recommendation.engine import OpenAIRankLLMEngine
@@ -25,6 +25,26 @@ def captured_input():
     candidates=tuple(RankingCandidate(row['story_id'],row['story_id'],row['story_id'],row['title'],
         row['summary'],row['source_id'],row['language'],datetime.fromisoformat(row['published_at'])) for row in rows)
     return ModelRankingInput(None,candidates,(),0,0,1,1,'test-policy','test-model')
+
+
+def test_prompt_includes_fixture_publication_times_and_current_query_precedence():
+    model_input=captured_input()
+    older, newer=model_input.candidates[-1],model_input.candidates[0]
+    history=(OrderedHistoryEvent('event-query',M2HistoryEventType.SEARCH_QUERY,newer.published_at,1,
+        query_text='fashion week'),)
+    prompt=InstrumentedPrompt()
+    engine=OpenAIRankLLMEngine(prompt_builder=prompt,endpoint='https://provider.example/v1',api_key='unused',
+        model='test-model',maximum_output_tokens=4096,reasoning_effort='minimal',verbosity='low',
+        client_factory=lambda:pytest.fail('provider must not be called'))
+    prepared=engine.prepare(ModelRankingInput('bitcoin',(older,newer),history,1,1,1,1,'test-policy','test-model'))
+    prompt_text=prepared.prompt[-1]['content']
+    assert f'Published: {older.published_at.isoformat()}' in prompt_text
+    assert f'Published: {newer.published_at.isoformat()}' in prompt_text
+    assert prompt_text.index(older.published_at.isoformat()) < prompt_text.index(newer.published_at.isoformat())
+    assert 'The current query is the primary intent.' in prompt_text
+    assert 'only to personalize among candidates relevant to the current query' in prompt_text
+    assert 'preserving explicit negative feedback constraints' in prompt_text
+    assert 'Current query: bitcoin' in prompt_text and '"query":"fashion week"' in prompt_text
 
 
 def test_two_hundred_candidate_preparation_reserves_configured_output_and_sends_identical_prompt():
