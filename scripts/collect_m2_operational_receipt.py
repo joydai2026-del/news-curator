@@ -62,6 +62,39 @@ def _get_rows(origin: str, key: str, since: datetime) -> list[dict[str, object]]
     raise ValueError("operational response exceeds 10000 rows")
 
 
+def _get_health_rows(origin: str, key: str, since: datetime) -> list[dict[str, object]]:
+    headers = {"apikey": key, "Accept": "application/json"}
+    if not key.startswith("sb_secret_"): headers["Authorization"] = "Bearer " + key
+    query = urllib.parse.urlencode({"select":"bucket_start,endpoint,outcome,latency_band,request_count,latest_input_match_count",
+        "bucket_start":"gte."+since.isoformat(),"order":"bucket_start.asc","limit":"10000"})
+    with urllib.request.build_opener(_NoRedirect).open(urllib.request.Request(
+            origin+"/rest/v1/m2_request_health_buckets?"+query,headers=headers),timeout=10) as response:
+        raw=response.read(4_000_001)
+    if len(raw)>4_000_000: raise ValueError("health response is too large")
+    value=json.loads(raw)
+    if not isinstance(value,list) or len(value)>10000 or any(not isinstance(row,dict) for row in value):
+        raise ValueError("invalid health response")
+    return value
+
+
+def _health(rows, policy):
+    allowed_endpoints={"rank","page"}; allowed_outcomes={"model","fallback","auth_denied","invalid_request","stale","disabled","server_error","timeout"}
+    allowed_bands={"lt1s","1to3s","3to6s","6to8s","8to20s","gt20s"}
+    total=failures=latest=0
+    for row in rows:
+        if row.get("endpoint") not in allowed_endpoints or row.get("outcome") not in allowed_outcomes or row.get("latency_band") not in allowed_bands:
+            raise ValueError("invalid health dimension")
+        count,matched=row.get("request_count"),row.get("latest_input_match_count")
+        if type(count) is not int or count<1 or type(matched) is not int or not 0<=matched<=count: raise ValueError("invalid health count")
+        total+=count; latest+=matched
+        if row["outcome"] not in {"model","fallback"}: failures+=count
+    minimum=policy["minimum_requests"]
+    status="idle" if total==0 else "insufficient_volume" if total<minimum else "fail" if failures/total>policy["maximum_failure_rate"] else "pass"
+    return {"status":status,"population_scope":"all handled rank and page requests; not per owner",
+        "measurement_coverage":"in_process_handled_requests_only","request_count":total,"failure_count":failures,
+        "latest_input_match_count":latest}
+
+
 def _category_ids(path: Path) -> list[str]:
     document = yaml.safe_load(path.read_bytes())
     categories = document.get("categories") if isinstance(document, dict) else None
@@ -115,17 +148,21 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--runtime-revision", required=True)
     parser.add_argument("--environment", required=True, choices=("production",))
+    parser.add_argument("--operational-policy", required=True, type=Path)
     args = parser.parse_args()
     if (not args.runtime_revision or any(ch not in "0123456789abcdef" for ch in args.runtime_revision)
             or not 7 <= len(args.runtime_revision) <= 64):
         raise ValueError("invalid runtime revision")
     now = datetime.now(timezone.utc)
-    rows = _get_rows(_origin(os.environ["NEWS_CURATOR_SUPABASE_URL"]),
-        os.environ["NEWS_CURATOR_SUPABASE_SECRET_KEY"], now - timedelta(days=7))
+    origin=_origin(os.environ["NEWS_CURATOR_SUPABASE_URL"]); key=os.environ["NEWS_CURATOR_SUPABASE_SECRET_KEY"]
+    operational=yaml.safe_load(args.operational_policy.read_bytes())
+    if not isinstance(operational,dict) or operational.get("schema_version")!=1: raise ValueError("invalid operational policy")
+    rows = _get_rows(origin,key,now-timedelta(days=7))
     result = _receipt(rows, runtime_revision=args.runtime_revision,
         policy_hash=hashlib.sha256(args.policy.read_bytes()).hexdigest(),
         checklist_hash=hashlib.sha256(args.checklist.read_bytes()).hexdigest(),
         category_ids=_category_ids(args.topics), environment=args.environment, observed_at=now)
+    result["operational_health"]=_health(_get_health_rows(origin,key,now-timedelta(minutes=operational["window_minutes"])),operational)
     args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
     return 0
 

@@ -2,7 +2,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-from scripts.collect_m2_operational_receipt import _category_ids, _get_rows, _origin, _receipt
+from scripts.collect_m2_operational_receipt import _category_ids, _get_rows, _health, _origin, _receipt
+
+def test_health_distinguishes_idle_volume_pass_and_fail_without_owner_claims():
+    policy={"minimum_requests":5,"maximum_failure_rate":.5}
+    assert _health([],policy)["status"]=='idle'
+    row={"endpoint":"rank","outcome":"model","latency_band":"1to3s","request_count":4,"latest_input_match_count":4}
+    assert _health([row],policy)["status"]=='insufficient_volume'
+    assert _health([{**row,"request_count":5,"latest_input_match_count":5}],policy)["status"]=='pass'
+    assert _health([{**row,"outcome":"timeout","request_count":5,"latest_input_match_count":0}],policy)["status"]=='fail'
+    assert 'not per owner' in _health([row],policy)['population_scope']
 
 
 def test_receipt_is_sanitized_and_refuses_to_claim_model_denominator():
