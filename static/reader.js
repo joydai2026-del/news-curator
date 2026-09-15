@@ -977,7 +977,7 @@
       view.apply(); refreshLoadButton();
     }
     function showDiscovery(edition) {
-      if (!signedIn() || !discoveryControls) return;
+      if (!signedIn() || !discoveryControls || m2?.enabled) return;
       leaveDiscovery();
       discoveryEdition = edition;
       showPrivateEditionMeta(edition);
@@ -1006,7 +1006,7 @@
       setDiscoveryLane(discoveryLane); refreshStateControls(); refreshInterestControls(); refreshLoadButton();
     }
     async function fetchDiscovery(initial = false) {
-      if (!discoveryControls || !signedIn() || m2Active) return;
+      if (!discoveryControls || !signedIn() || m2Active || m2?.enabled) return;
       const epoch = authEpoch, request = ++discoveryRequest;
       try {
         const response = await api.discoveryEdition();
@@ -1031,6 +1031,7 @@
       }
     }
     async function openStoredDiscovery(editionId, lane) {
+      if (m2?.enabled) return;
       const epoch = authEpoch, request = ++discoveryRequest;
       try {
         const response = await api.discoveryEdition(editionId);

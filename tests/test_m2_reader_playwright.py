@@ -178,7 +178,20 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                     'total_rows':len(export_rows),'max_download_bytes':1048576,
                     'rows':export_rows[offset:offset+1],
                     'next_cursor':f'cursor-{offset+1}' if offset+1<len(export_rows) else None}
-            elif name in ('feed_page','saved_page'):payload=[]
+            elif name=='saved_page':
+                payload=[]
+                for row in rows:
+                    state=store.states.get(row['story_id'])
+                    if not state or not state['saved_at']:continue
+                    payload.append({'story_id':row['story_id'],'canonical_url':row['canonical_url'],
+                        'title':row['title'],'summary':row['summary'],'language':row['language'],
+                        'published_at':row['published_at'],'publication_seq':0,'position':0,
+                        'ordering_mode':'preference_then_freshness','ordering_key':{},'page_order_mode':'saved_at',
+                        'next_cursor':{'before_saved_at':state['saved_at'],'before_story_id':row['story_id']},
+                        'score_components':{},'topic_ids':row['category_ids'],'topic_ranks':{},
+                        'source_kind':row['source_kind'],'source_name':row['source_name'],
+                        'ranking_explanation':'Saved story','coverage_mentions':[],**copy.deepcopy(state)})
+            elif name=='feed_page':payload=[]
             elif name=='discovery_edition':payload={'schema_version':1,'status':'unavailable','reason_code':'no_private_edition','edition':None}
             else:raise AssertionError(name)
             return route.fulfill(status=200,content_type='application/json',body=json.dumps(payload))
@@ -231,11 +244,25 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="1"')
             card.locator('.save-action').click()
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="2"')
+            discovery_reads=requests.count('/rest/v1/rpc/discovery_edition')
+            rank_reads=requests.count('/rank')
+            page.locator('.chip[data-filter="__saved__"]:visible').click()
+            page.wait_for_function('() => document.querySelectorAll(".card:not([hidden])").length===1')
+            page.reload(wait_until='networkidle')
+            assert page.locator('.chip[data-filter="__saved__"]:visible').get_attribute('aria-pressed')=='true'
+            assert page.locator('.card:not([hidden])').count()==1
+            assert requests.count('/rest/v1/rpc/discovery_edition')==discovery_reads
+            assert page.locator('#discovery-controls').is_hidden()
+            page.locator('.chip[data-filter="__all__"]:visible').click()
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+            assert requests.count('/rank')>rank_reads
+            assert page.locator('#load-more').inner_text()=='Load 25 more'
+            page.locator('#m2-controls summary').click()
             assert [e['event_type'] for e in store.events[:2]]==['read_more','save']
             page.locator('#load-more').click()
-            page.wait_for_function('(count)=>document.querySelectorAll("[data-m2-card=true]").length===count',arg=len(rows))
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')
             ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
-            assert len(set(ids))==len(rows)
+            assert len(ids)==len(set(ids))==50
             assert store.rank_reads[-1][2]==2
             # Search hits are real captured publisher titles; no fabricated news.
             query=next(row['title'] for row in rows if row['language']=='zh')[:6]
