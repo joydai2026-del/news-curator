@@ -81,7 +81,9 @@ if deployment_mode not in {"service", "smoke"}:
 function_timeout = _bounded_int("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", 15, 7, 60)
 max_containers = _bounded_int("NEWS_CURATOR_MODAL_MAX_CONTAINERS", 4, 1, 20)
 max_inputs = _bounded_int("NEWS_CURATOR_MODAL_MAX_INPUTS_PER_CONTAINER", 8, 1, 32)
-scaledown_window = _bounded_int("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", 60, 1, 3600)
+# Modal SDK 1.4.2 only rejects non-positive values, while the current
+# server contract and official guide require the inclusive range 2..3600.
+scaledown_window = _bounded_int("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", 60, 2, 3600)
 
 
 def _endpoint():
@@ -149,5 +151,5 @@ def _smoke_rankllm_image():
 
 if deployment_mode == "smoke":
     smoke_rankllm_image = app.function(image=image, timeout=function_timeout, max_containers=1,
-        scaledown_window=1, restrict_modal_access=True, block_network=True,
+        scaledown_window=2, restrict_modal_access=True, block_network=True,
         include_source=False)(_smoke_rankllm_image)
