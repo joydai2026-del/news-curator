@@ -66,7 +66,7 @@ class RankingASGI:
             await self._reply(send, 503, {"error": "provider_deadline"})
             self._record(endpoint, "timeout", started)
         except RuntimeError as exc:
-            await self._reply(send, 503, {"error": str(exc)})
+            await self._reply(send, 503, {"error": "ranking_disabled" if str(exc) == "ranking_disabled" else "service_unavailable"})
             self._record(endpoint, "disabled" if str(exc) == "ranking_disabled" else "server_error", started)
         except Exception:
             await self._reply(send, 500, {"error": "server_error"})

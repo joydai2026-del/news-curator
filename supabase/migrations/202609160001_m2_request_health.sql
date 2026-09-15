@@ -30,3 +30,18 @@ begin
 end $$;
 revoke execute on function public.m2_record_request_health(text,text,text,boolean) from public,anon,authenticated;
 grant execute on function public.m2_record_request_health(text,text,text,boolean) to service_role;
+
+-- Service-only retention for non-identifying counters, called by the collector.
+create or replace function public.m2_prune_request_health(p_retention_days integer)
+returns integer language plpgsql security definer set search_path=pg_catalog,public as $$
+declare removed integer;
+begin
+  if p_retention_days is null or p_retention_days < 1 or p_retention_days > 90 then
+    raise exception 'invalid health retention'; end if;
+  delete from public.m2_request_health_buckets
+    where bucket_start < statement_timestamp() - make_interval(days => p_retention_days);
+  get diagnostics removed = row_count;
+  return removed;
+end $$;
+revoke execute on function public.m2_prune_request_health(integer) from public,anon,authenticated;
+grant execute on function public.m2_prune_request_health(integer) to service_role;

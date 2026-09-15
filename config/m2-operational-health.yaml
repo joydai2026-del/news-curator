@@ -3,4 +3,3 @@ window_minutes: 60
 minimum_requests: 5
 maximum_failure_rate: 0.50
 retention_days: 14
-cadence_minutes: 15

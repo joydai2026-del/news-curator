@@ -164,7 +164,7 @@ def _rank(config: AuthConfig, session, args: argparse.Namespace) -> Any:
     body = {"schema_version": 1, "policy_version": policy, "model_version": model,
             "history_revision": history["included_history_revision"], "server_commit_revision": history["history_revision"],
             "history_generation": history["history_generation"], "consent_revision": history["consent_revision"],
-            "page_size": args.page_size, "eligibility": {"category": args.category, "query": args.query},
+            "page_size": args.page_size, "display_language": args.locale, "eligibility": {"category": args.category, "query": args.query},
             "exclude_story_ids": args.exclude_story_id}
     status, payload = JsonRestTransport().request("POST", f"{origin}/rank", headers={"authorization": f"Bearer {session.access_token}", "accept": "application/json", "content-type": "application/json"}, body=body, timeout=args.timeout)
     if status != 200:
@@ -211,6 +211,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-version")
     parser.add_argument("--model-version")
     parser.add_argument("--page-size", type=int, default=25)
+    parser.add_argument("--locale", choices=("en", "zh"), default="en")
     parser.add_argument("--category")
     parser.add_argument("--query")
     parser.add_argument("--exclude-story-id", action="append", default=[])

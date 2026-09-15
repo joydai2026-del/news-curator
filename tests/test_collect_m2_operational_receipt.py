@@ -80,3 +80,17 @@ def test_get_rows_uses_fixed_projection_and_paginates(monkeypatch):
     assert first.path == "/rest/v1/m2_frozen_rankings"
     assert query["select"] == ["created_at,bindings"] and query["offset"] == ["0"]
     assert "user_id" not in opened[0][0].full_url
+
+
+def test_operational_policy_rejects_unbounded_or_wrong_type_values():
+    from scripts.collect_m2_operational_receipt import _validate_operational_policy
+    policy={"schema_version":1,"window_minutes":60,"minimum_requests":5,"maximum_failure_rate":.5,"retention_days":14}
+    assert _validate_operational_policy(policy) == policy
+    for key,bad in (("window_minutes",0),("minimum_requests",True),("maximum_failure_rate",float("nan")),("retention_days",91)):
+        with pytest.raises(ValueError): _validate_operational_policy({**policy,key:bad})
+
+def test_delivery_health_does_not_hide_fallback_or_latency_counts():
+    row={"endpoint":"rank","outcome":"fallback","latency_band":"8to20s","request_count":5,"latest_input_match_count":0}
+    report=_health([row],{"minimum_requests":5,"maximum_failure_rate":.5})
+    assert report["status_scope"] == "request_delivery_only_not_recommendation_quality"
+    assert report["outcome_counts"]["fallback"] == report["latency_counts"]["8to20s"] == 5

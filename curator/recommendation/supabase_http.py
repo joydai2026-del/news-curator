@@ -56,13 +56,13 @@ class SupabaseHTTP:
         return self._request("POST", "/rest/v1/rpc/m2_history_snapshot", token=access_token,
             key=self._publishable, body={"p_limit": None})
 
-    def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int,
+    def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int, display_language: str = "en",
                             before_published_at: str | None = None, before_story_id: str | None = None):
         rows, before_published, before_story = [], before_published_at, before_story_id
         while len(rows) < limit:
             take = min(100, limit - len(rows))
-            page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates", token=self._service_token(),
-                key=self._service, body={"p_category_id": category_id, "p_query": query,
+            page = self._request("POST", "/rest/v1/rpc/m2_localized_candidates", token=self._service_token(),
+                key=self._service, body={"p_category_id": category_id, "p_query": query, "p_locale": display_language,
                     "p_before_published_at": before_published, "p_before_story_id": before_story, "p_limit": take})
             if not isinstance(page, list):
                 raise SupabaseHTTPError("candidate RPC returned a non-list")
