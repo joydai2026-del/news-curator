@@ -706,12 +706,14 @@
     if (!isObject(value) || typeof value.enabled !== "boolean") fail("M2 reader configuration is invalid.");
     if (!value.enabled) return Object.freeze({ enabled: false });
     value = { request_timeout_ms: 8000, ...value };
+    value = { transport_timeout_ms: value.request_timeout_ms, ...value };
     if (!exactFields(value, ["enabled", "model_version", "page_size", "policy_version",
-      "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms"]) || !boundedString(value.policy_version, 256) ||
+      "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms", "transport_timeout_ms"]) || !boundedString(value.policy_version, 256) ||
       !boundedString(value.provider_policy_id, 256) ||
       !boundedString(value.model_version, 256) || !safeDestination(value.provider_retention_url) ||
       !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
-      !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000) {
+      !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000 ||
+      !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < value.request_timeout_ms || value.transport_timeout_ms > 20000) {
       fail("M2 reader configuration is invalid.");
     }
     const endpoint = safeDestination(value.url);
@@ -758,7 +760,7 @@
         accept: "application/json", "content-type": "application/json",
         authorization: `Bearer ${before.access_token}`,
       }, body: body === null ? undefined : JSON.stringify(body), credentials: "omit",
-      redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(config.request_timeout_ms) });
+      redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(config.transport_timeout_ms) });
       const payload = await boundedJson(response, "The M2 reader response was invalid.");
       if (response.redirected !== false || response.url !== url) fail("The M2 endpoint redirected unexpectedly.");
       const after = await sessionProvider();
@@ -841,10 +843,11 @@
         model_version: meta("model-version"), provider_policy_id: meta("provider-policy-id"),
         provider_retention_url: meta("provider-retention-url"), page_size: Number(meta("page-size")),
         request_timeout_ms: Number(meta("request-timeout-ms") || 8000),
+        transport_timeout_ms: Number(meta("transport-timeout-ms") || meta("request-timeout-ms") || 8000),
       } : { enabled: false });
       m2 = createM2Service(m2Config, () => auth.sessionForRequest());
     } catch (_) { announce("Personalized feed configuration is unavailable. Public stories remain available."); }
-    let m2Active = false, m2Sequence = 0, m2Cursor = null, m2Binding = null, m2Key = null;
+    let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null;
     let m2Section = null, m2PublicCards = [], m2Position = 0;
     let behaviorWrites = Promise.resolve();
     let m2SearchTimer = null;
@@ -1120,8 +1123,9 @@
       });
       m2Section?.remove(); m2Section = null; m2Position = 0;
     }
-    function leaveM2() {
-      m2Sequence += 1; m2Cursor = null; m2Binding = null; m2Key = null;
+    function leaveM2(invalidate = true) {
+      if (invalidate) m2Sequence += 1;
+      m2Cursor = null; m2Binding = null; m2Key = null;
       clearTimeout(m2SearchTimer);
       if (m2Active) {
         clearM2Cards();
@@ -1183,21 +1187,40 @@
     async function loadM2(append = false, searchEvent = false) {
       if (!usesM2()) return;
       unknownM2Consent(); showM2Policy();
-      const epoch = authEpoch, request = ++m2Sequence, eligibility = m2Eligibility();
+      const epoch = authEpoch, request = ++m2Sequence, interactionEpoch = m2InteractionEpoch, eligibility = m2Eligibility();
       const key = JSON.stringify(eligibility);
       const pageRequest = { topic: selectedTopic(), epoch };
       pageRequests.add(pageRequest); refreshLoadButton();
-      const showFallback = () => {
-        if (epoch !== authEpoch || request !== m2Sequence) return;
-        leaveM2();
+      let baselineShown = false;
+      const showBaseline = () => {
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        baselineShown = true;
+        if (!append || !m2Active) leaveM2(false);
         if (m2Controls) m2Controls.hidden = false;
         const mode = document.getElementById("m2-mode");
-        if (mode) mode.textContent = "Captured edition fallback. Live model ranking is unavailable.";
-        announce("Showing the captured edition. Live feed unavailable. Use Refresh feed to retry.");
+        if (mode) mode.textContent = "Personalized feed is still loading.";
+        announce("Personalized feed is still loading.");
       };
-      // The usable reader deadline includes history and queued writes, not
-      // only the later model fetch. Late responses cannot replace fallback.
-      const deadline = setTimeout(showFallback, m2Config.request_timeout_ms);
+      const terminalFallback = () => {
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        const retainedPage = append && m2Active;
+        showBaseline();
+        if (request !== m2Sequence) return;
+        m2Sequence += 1;
+        const mode = document.getElementById("m2-mode");
+        if (retainedPage) {
+          if (mode) mode.textContent = "Could not load more. Your current stories are still available.";
+          announce("Could not load more. Your current stories are still available.");
+        } else {
+          if (mode) mode.textContent = "Captured edition fallback. Personalized ranking did not finish.";
+          announce("Showing the captured edition. Personalized ranking did not finish.");
+        }
+      };
+      const deadline = setTimeout(showBaseline, m2Config.request_timeout_ms);
+      // This deadline starts before queued behavior writes and history retrieval.
+      // It bounds the reader request, while an aborted browser request cannot prove
+      // that upstream work stopped.
+      const transportDeadline = setTimeout(terminalFallback, m2Config.transport_timeout_ms);
       try {
         if (searchEvent && eligibility.query) await recordBehavior("search_query", { query: eligibility.query });
         await behaviorWrites.catch(() => {});
@@ -1213,14 +1236,29 @@
               server_commit_revision: history.history_revision })
           : await m2.rank(history, eligibility);
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        if (baselineShown) {
+          await behaviorWrites.catch(() => {});
+          const latest = await api.historySnapshot();
+          if (epoch !== authEpoch || request !== m2Sequence || !usesM2() || m2InteractionEpoch !== interactionEpoch ||
+              JSON.stringify(m2Eligibility()) !== key || latest.history_generation !== history.history_generation ||
+              latest.history_revision !== history.history_revision ||
+              latest.included_history_revision !== history.included_history_revision ||
+              latest.consent_revision !== history.consent_revision || latest.learning_enabled !== history.learning_enabled ||
+              latest.provider_processing_enabled !== history.provider_processing_enabled ||
+              latest.provider_policy_id !== history.provider_policy_id || response.result_mode !== "model") {
+            terminalFallback(); return;
+          }
+        }
         applyM2Page(response, Boolean(canContinue), eligibility); m2Key = key;
         announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
         if (!append && eligibility.query && !response.cards.length) {
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
         }
       } catch (_) {
-        showFallback();
-      } finally { clearTimeout(deadline); pageRequests.delete(pageRequest); refreshLoadButton(); }
+        terminalFallback();
+      } finally {
+        clearTimeout(deadline); clearTimeout(transportDeadline); pageRequests.delete(pageRequest); refreshLoadButton();
+      }
     }
     const saveM2Consent = async () => {
       const local = document.getElementById("m2-local-learning"), provider = document.getElementById("m2-provider-processing");
@@ -1241,6 +1279,8 @@
         .catch(() => announce("Learning history could not be cleared. Try again."));
     });
     document.getElementById("m2-download-data")?.addEventListener("click", () => { void downloadOwnerData(); });
+    document.addEventListener("pointerdown", () => { m2InteractionEpoch += 1; }, true);
+    document.addEventListener("keydown", () => { m2InteractionEpoch += 1; }, true);
     searchBox?.addEventListener("input", () => {
       if (!usesM2()) return;
       m2Sequence += 1; clearTimeout(m2SearchTimer);

@@ -26,8 +26,12 @@ function response(value, url) { return { ok: true, redirected: false, url,
 (async () => {
   assert.deepEqual(reader.validateM2Config({ enabled: false }), { enabled: false });
   assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000 }).request_timeout_ms, 8000);
+  assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000 }).transport_timeout_ms, 8000);
+  assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 20000 }).transport_timeout_ms, 20000);
   assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8001 }), /configuration/);
   assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 30000 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 7999 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 20001 }), /configuration/);
   let token = "token-a";
   const calls = [];
   const service = reader.createM2Service(config, async () => ({ access_token: token }),
@@ -36,6 +40,7 @@ function response(value, url) { return { ok: true, redirected: false, url,
   assert.equal(ranked.result_mode, "fallback");
   assert.equal(ranked.fallback_reason, "model_timeout");
   assert.equal(JSON.parse(calls[0].options.body).server_commit_revision, 8);
+  assert.equal(calls[0].options.signal instanceof AbortSignal, true);
   assert.equal(calls[0].options.headers.authorization, "Bearer token-a");
   assert.equal(JSON.stringify(calls[0]).includes("user_id"), false);
 

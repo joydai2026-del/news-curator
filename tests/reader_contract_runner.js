@@ -526,6 +526,7 @@ async function main() {
     getElementById: (id) => controls.get(id) || null,
     querySelectorAll: () => [],
     querySelector: () => null,
+    addEventListener() {},
   };
   global.BroadcastChannel = undefined;
   global.fetch = async (url) => response(200, {}, url);
@@ -555,6 +556,7 @@ async function main() {
       ? unavailableActions
       : (selector.includes('__saved__') ? [unavailableSavedTab] : []),
     querySelector: () => null,
+    addEventListener() {},
   };
   controls.get("load-more").textContent = "Load more";
   await reader.run();
@@ -606,6 +608,7 @@ async function main() {
       : (selector === ".state-action" ? configuredActions
       : (selector.includes('__saved__') ? [configuredSavedTab] : [])),
     querySelector: (selector) => selector.includes('data-section="ai"') ? aiSection : null,
+    addEventListener() {},
   };
   const linklessCard = reader.createStoryCard(story({
     canonical_url: "", source_kind: "newsletter", source_name: "Daily Brief",
