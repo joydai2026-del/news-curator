@@ -45,6 +45,17 @@ def frozen_insert(user, bindings=None, cards=None, expires_at="now()+interval '1
         bindings={key:current[key] for key in ('history_generation','consent_revision','server_commit_revision')}
     return f"insert into public.m2_frozen_rankings(request_id,user_id,bindings,cards,page_size,expires_at) values('{uuid.uuid4()}','{user}',{literal(json.dumps(bindings))},{literal(json.dumps(cards or []))},20,{expires_at});"
 
+fixture_rows=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows']
+pre_migration_rows=[row for row in fixture_rows if row['category_ids']]
+pre_backfill_row=pre_migration_rows[0]
+pre_dedup_row=next(row for row in pre_migration_rows if row['story_id'] != pre_backfill_row['story_id'])
+pre_seeded_story_ids={pre_backfill_row['story_id'],pre_dedup_row['story_id']}
+
+def seed_retained(row, topic_id):
+    sql('insert into public.canonical_stories(story_id,canonical_url,title,summary,language,source_kind,source_name,published_at) values ('+
+        ','.join(literal(value) for value in (row['story_id'],row['canonical_url'],row['title'],row['summary'],row['language'],'outlet',row['source_name'],row['published_at']))+');')
+    sql(f"insert into public.retained_corpus_observations(story_id,source_id,source_name,source_is_aggregator,language,title,summary,canonical_url,published_at,first_observed_at,source_observed_at) select story_id,'captured','Captured',false,language,title,summary,canonical_url,published_at,now(),now() from public.canonical_stories where story_id={literal(row['story_id'])}; insert into public.retained_corpus_categories(story_id,category_id) values({literal(row['story_id'])},{literal(topic_id)});")
+
 sql('create database '+DB, database='postgres')
 sql("""create schema auth; create schema extensions;
 create extension pgcrypto with schema extensions;
@@ -57,9 +68,18 @@ grant usage on schema auth to anon,authenticated,service_role;
 grant execute on all functions in schema auth to anon,authenticated,service_role;""")
 migrations=[]
 for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
+    if path.name == '202609150001_m2_ranked_story_access.sql':
+        # Captured public records are present before the registry migration.
+        # One pre-existing registry row proves the backfill's conflict path.
+        seed_retained(pre_backfill_row,pre_backfill_row['category_ids'][0])
+        seed_retained(pre_dedup_row,pre_dedup_row['category_ids'][0])
+        sql(f"insert into public.story_topics(story_id,topic_id,topic_name) values({literal(pre_dedup_row['story_id'])},{literal(pre_dedup_row['category_ids'][0])},{literal(pre_dedup_row['category_ids'][0])});")
     data=path.read_text()
     sql(data)
     migrations.append({'file':path.name,'sha256':hashlib.sha256(data.encode()).hexdigest()})
+    if path.name == '202609150001_m2_ranked_story_access.sql':
+        check('ranked access migration backfills nonempty captured retained category registry',sql(f"select count(*)=1 from public.story_topics where story_id={literal(pre_backfill_row['story_id'])} and topic_id={literal(pre_backfill_row['category_ids'][0])};")=='t')
+        check('ranked access migration backfill deduplicates existing captured registry row',sql(f"select count(*)=1 from public.story_topics where story_id={literal(pre_dedup_row['story_id'])} and topic_id={literal(pre_dedup_row['category_ids'][0])};")=='t')
 check('all migrations apply',True)
 owner, other = str(uuid.uuid4()), str(uuid.uuid4())
 sql(f"insert into auth.users values ('{owner}'),('{other}');")
@@ -91,9 +111,9 @@ for user,with_revision in [(owner,True),(other,False)]:
 check('clear preserves budget audit',sql(f"select count(*)=5 from public.m2_ranker_reservations where user_id='{owner}';")=='t')
 
 # Actual captured public article; all actions and identities below are isolated test inputs.
-row=next(r for r in json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'] if r['category_ids'])
+row=next(r for r in fixture_rows if r['category_ids'] and r['story_id'] not in pre_seeded_story_ids)
 story,topic=row['story_id'],row['category_ids'][0]
-unseen_row=next(r for r in json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'] if r['story_id'] != story)
+unseen_row=next(r for r in fixture_rows if r['story_id'] not in pre_seeded_story_ids and r['story_id'] != story)
 unseen_story=unseen_row['story_id']
 sql('insert into public.canonical_stories(story_id,canonical_url,title,summary,language,source_kind,source_name,published_at) values ('+
     ','.join(literal(v) for v in (story,row['canonical_url'],row['title'],row['summary'],row['language'],'outlet',row['source_name'],row['published_at']))+');')
@@ -292,6 +312,21 @@ sql(authenticated(interest_owner,'select public.clear_behavior_history();'))
 rejects_without_side_effects('reset removes interest-only access after frozen expiry',interest_owner,story,[
     f"select public.set_story_interest({literal(story)},{literal(topic)},'more_like',0,'interest-only-after-reset');",
 ])
+# The ranked-card addition preserves the two pre-existing M1 visibility paths.
+# Keep these fixtures after retained-only isolation checks, so final publication
+# never grants the stories used by the cross-owner and expiry assertions.
+m1_public_owner,m1_private_owner=str(uuid.uuid4()),str(uuid.uuid4())
+sql(f"insert into auth.users values('{m1_public_owner}'),('{m1_private_owner}');")
+publication_seq=int(sql("insert into public.publication_runs(build_nonce,commit_sha,deployed_url,built_at,candidate_digest,site_sha256) values("+','.join(literal(value) for value in (uuid.uuid4().hex,'a'*40,'https://example.test','2026-09-01T00:00:00Z','b'*64,'c'*64))+") returning publication_seq;").splitlines()[0])
+sql("insert into public.publication_topics(publication_seq,topic_id,topic_name,position) values("+','.join(literal(value) for value in (publication_seq,topic,topic,1))+");")
+sql("insert into public.publication_entries(publication_seq,story_id,topic_id,position,canonical_url,title,summary,language,published_at,score_components,ordering_mode,ordering_key,topic_ranks,source_kind,source_name,ranking_explanation) values("+','.join(literal(value) for value in (publication_seq,story,topic,1,row['canonical_url'],row['title'],row['summary'],row['language'],row['published_at'],'{}','weighted_total','{}','{}','outlet',row['source_name'],'captured fixture'))+");")
+public_result=json.loads(sql(authenticated(m1_public_owner,f"select public.set_story_state({literal(story)},true,true,0,'m1-finalized-publication');")).splitlines()[-1])
+check('M1 finalized publication-only state access survives ranked access migration',public_result['status']=='updated' and sql(f"select not exists(select 1 from public.private_discovery_entries where owner_user_id='{m1_public_owner}') and not exists(select 1 from public.m2_frozen_rankings where user_id='{m1_public_owner}');")=='t')
+private_edition='local-'+uuid.uuid4().hex
+sql("insert into public.private_discovery_editions(owner_user_id,edition_id,payload_digest,payload_text,payload,generated_at) values("+','.join(literal(value) for value in (m1_private_owner,private_edition,'d'*64,'{}','{}','2026-09-01T00:00:00Z'))+");")
+sql("insert into public.private_discovery_entries(owner_user_id,edition_id,story_id,position,source_id,primary_lane,placement,facts) values("+','.join(literal(value) for value in (m1_private_owner,private_edition,unseen_story,1,'captured','updates','{}','{}'))+");")
+private_result=json.loads(sql(authenticated(m1_private_owner,f"select public.set_story_state({literal(unseen_story)},true,true,0,'m1-private-discovery');")).splitlines()[-1])
+check('M1 private-discovery-only state access survives ranked access migration',private_result['status']=='updated' and sql(f"select not exists(select 1 from public.publication_entries where story_id={literal(unseen_story)}) and not exists(select 1 from public.m2_frozen_rankings where user_id='{m1_private_owner}');")=='t')
 receipt={'database':DB,'environment':'local PostgreSQL only, no production claims','migrations':migrations,'checks':checks}
 args.receipt.write_text(json.dumps(receipt,indent=2)+'\n')
 print(json.dumps({'database':DB,'passed':sum(c['passed'] for c in checks),'failed':[c['name'] for c in checks if not c['passed']]}))
