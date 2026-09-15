@@ -245,12 +245,15 @@ class RankingService:
             except ValueError:
                 return M2HistoryEventType(str(value))
 
+        def optional_context(value: object):
+            return None if isinstance(value, str) and not value.strip() else value
+
         raw_events = snapshot.get("events", ()) if snapshot.get("learning_enabled") else ()
         events = tuple(OrderedHistoryEvent(str(e["event_id"]), event_type(e["event_type"]),
             datetime.fromisoformat(str(e["occurred_at"]).replace("Z", "+00:00")), int(e["event_revision"]),
             e.get("payload", {}).get("story_id"), e.get("payload", {}).get("query"),
-            e.get("story_title"), e.get("story_summary"),
-            e.get("source_id"), e.get("payload", {}).get("saved")) for e in raw_events)
+            optional_context(e.get("story_title")), optional_context(e.get("story_summary")),
+            optional_context(e.get("source_id")), e.get("payload", {}).get("saved")) for e in raw_events)
         return RankingRequest(1, request_id, owner, candidates, tuple(c.candidate_id for c in candidates), events,
             int(snapshot["included_history_revision"]), int(snapshot["history_revision"]),
             int(snapshot["history_generation"]), int(snapshot["consent_revision"]), self._policy.policy_version,
