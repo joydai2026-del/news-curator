@@ -106,7 +106,7 @@ class AsyncOpenAIResponses:
             return value
         try:
             return await asyncio.wait_for(request(), timeout=self._total)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, httpx.TimeoutException):
             await self._client.aclose()
             raise ProviderTimeout("provider total deadline exceeded") from None
         except httpx.TransportError:
