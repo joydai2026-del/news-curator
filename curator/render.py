@@ -95,6 +95,8 @@ body{
   font-size:17px; line-height:1.5;
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
+body.locale-pending .sections,body.locale-pending .countline,body.locale-pending .history-tools{visibility:hidden}
+.card[data-locale-hidden="true"]{display:none!important}
 .wrap{max-width:78rem; margin:0 auto; padding:4rem 1.5rem 6rem}
 header{margin-bottom:2rem}
 h1{margin:0 0 .6rem; font-size:1.5rem; font-weight:620; letter-spacing:-.021em; line-height:1.2}
@@ -275,6 +277,7 @@ body{overflow-x:hidden;overflow-x:clip;background:
 .topbar{display:flex;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1rem}
 .crumb{font-size:.75rem;color:var(--faint)}
 .profile-slot{min-height:44px;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}
+.locale-switch{display:flex;gap:.25rem;align-items:center}.locale-switch button{min-width:44px;min-height:44px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--fg);cursor:pointer}.locale-switch button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
 .profile-link,.dashboard-link{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);border-radius:999px;padding:.5rem .9rem;color:var(--accent);font-size:.78rem;font-weight:650;text-decoration:none;background:var(--card)}
 .profile-link:hover,.dashboard-link:hover{background:var(--accent-soft)}
 .profile-link:focus-visible,.dashboard-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible,.load-more:focus-visible,.updates-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -893,6 +896,7 @@ def _render_card(
     story_id = story_id_for_item(item)
     return (
         f'<article class="card" data-story-id="{_e(story_id)}" '
+        f'data-language="{_e(item.language)}" '
         f'data-topic-ids="{_e(topics)}" data-topic-api-ids="{_e(api_topics)}" '
         f'data-topics="{_e(topics)}" data-rank-all="{all_rank}" '
         f'data-summary-chars="{len(summary)}"'
@@ -1061,7 +1065,7 @@ def render_html(
 <meta name="news-curator-m2-transport-timeout-ms" content="">
 <style>{CSS}</style>
 </head>
-<body>
+<body class="locale-pending">
 <div class="wrap">
 <div class="shell">
   <aside class="rail" aria-label="News Curator navigation">
@@ -1073,6 +1077,7 @@ def render_html(
   <div class="maincol">
     <div class="topbar">
       <div class="crumb">{_e(site_name)} / Today's edition</div>
+      <div class="locale-switch" role="group" aria-label="Display language"><button id="locale-en" type="button" data-locale="en" aria-pressed="true">EN</button><button id="locale-zh" type="button" data-locale="zh" aria-pressed="false">中文</button></div>
       <div class="profile-slot"><!-- personalization-link --></div>
     </div>
     <header class="intro">

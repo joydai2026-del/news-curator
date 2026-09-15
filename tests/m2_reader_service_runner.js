@@ -12,6 +12,7 @@ const config = { enabled: true, url: "https://rank.example",
 function payload(overrides = {}) { return { schema_version: 1, request_id: "request-1",
   policy_version: config.policy_version, model_version: config.model_version,
   history_revision: 6, server_commit_revision: 8, history_generation: 2, consent_revision: 3,
+  display_language: "en",
   result_mode: "fallback", fallback_reason: "model_timeout", cards: [{ story_id: storyId,
     card_schema_version: 1,
     source_id: "ars", language: "en", category_ids: ["ai"], read_at: null,
@@ -40,6 +41,7 @@ function response(value, url) { return { ok: true, redirected: false, url,
   assert.equal(ranked.result_mode, "fallback");
   assert.equal(ranked.fallback_reason, "model_timeout");
   assert.equal(JSON.parse(calls[0].options.body).server_commit_revision, 8);
+  assert.equal(JSON.parse(calls[0].options.body).display_language, "en");
   assert.equal(calls[0].options.signal instanceof AbortSignal, true);
   assert.equal(calls[0].options.headers.authorization, "Bearer token-a");
   assert.equal(JSON.stringify(calls[0]).includes("user_id"), false);
@@ -51,5 +53,8 @@ function response(value, url) { return { ok: true, redirected: false, url,
   const stale = reader.createM2Service(config, async () => ({ access_token: token }),
     async (url) => response(payload({ history_generation: 1 }), url));
   await assert.rejects(() => stale.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
+  const wrongLocale = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => response(payload({ display_language: "zh" }), url));
+  await assert.rejects(() => wrongLocale.rank(history, {}, [], "en"), /feed response/);
   assert.throws(() => reader.validateM2Config({ ...config, provider_retention_url: "javascript:bad" }), /configuration/);
 })().catch((error) => { console.error(error); process.exitCode = 1; });

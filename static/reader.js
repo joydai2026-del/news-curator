@@ -12,6 +12,12 @@
     "weighted_total", "preference_then_freshness", "native_rank_then_freshness",
   ]);
   const encoder = new TextEncoder();
+  const LOCALE_KEY = "news-curator-display-language";
+  const COPY = Object.freeze({
+    en: { all:"All", saved:"Saved", search:"Search all retained stories", load:"Load", loading:"Loading", more:"more", stories:"stories", noMatches:"No matching stories found.", translationUnavailable:"Translation unavailable", translationSummary:"This saved story is not available in English yet. Open the original or try again later.", refresh:"Refresh feed", download:"Download my data", clear:"Clear learning history", activity:"Activity recorded", activityUsed:"Latest activity used" },
+    zh: { all:"全部", saved:"已收藏", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityUsed:"已使用最新活动" },
+  });
+  function validLocale(value) { return value === "en" || value === "zh"; }
 
   function fail(message) { throw new Error(message); }
   function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
@@ -162,6 +168,17 @@
   }
   function validateSavedPage(value, pageSize = MAX_PAGE_SIZE) {
     return validateCardPage(value, ["saved_at"], pageSize);
+  }
+  function validateLocalizedText(value, locale) {
+    if (!Array.isArray(value) || value.length > MAX_PAGE_SIZE) fail("The localized story response was invalid.");
+    const seen = new Set();
+    return value.map((row) => {
+      if (!exactFields(row, ["display_language", "story_id", "summary", "title", "translation_available"]) ||
+          !STORY_ID.test(row.story_id) || row.display_language !== locale || !validLocale(row.display_language) ||
+          !boundedString(row.title, 2000) || typeof row.summary !== "string" || row.summary.length > 8000 ||
+          typeof row.translation_available !== "boolean" || seen.has(row.story_id)) fail("The localized story response was invalid.");
+      seen.add(row.story_id); return row;
+    });
   }
   function validateDiscovery(value) {
     const error = "The private edition response was invalid.";
@@ -364,6 +381,11 @@
         p_before_story_id: cursor ? cursor.before_story_id : null,
         p_limit: validatePageSize(pageSize),
       }, (payload) => validateSavedPage(payload, pageSize), true),
+      localizedStoryText: (storyIds, locale) => {
+        if (!Array.isArray(storyIds) || storyIds.length > MAX_PAGE_SIZE || !storyIds.every((id) => STORY_ID.test(id)) || !validLocale(locale)) fail("Invalid localization request.");
+        return rpc("m2_localized_story_text", { p_story_ids: storyIds, p_locale: locale },
+          (payload) => validateLocalizedText(payload, locale), true);
+      },
       updatesSince: (publicationSeq, cursor, pageSize) => rpc("updates_since", {
         p_since_publication_seq: publicationSeq,
         p_after_publication_seq: cursor ? cursor.after_publication_seq : null,
@@ -579,6 +601,7 @@
   ) {
     const card = element("article", "card");
     card.dataset.storyId = row.story_id;
+    card.dataset.language = row.language;
     mergeTopicMembership(card, row.topic_ids.map(topicSlug));
     card.dataset.topicApiIds = [...row.topic_ids].sort().join(" ");
     applyServerRank(card, row, selectedTopic, topicSlug, historyAllRank);
@@ -705,7 +728,7 @@
 
   const M2_CARD_FIELDS = ["card_schema_version", "published_at", "source_name", "story_id", "summary", "title", "url",
     "source_id", "language", "category_ids", "read_at", "saved_at", "state_revision", "interests"];
-  const M2_RESPONSE_FIELDS = ["cards", "consent_revision", "fallback_reason", "history_generation",
+  const M2_RESPONSE_FIELDS = ["cards", "consent_revision", "display_language", "fallback_reason", "history_generation",
     "history_revision", "model_version", "next_cursor", "policy_version", "request_id",
     "result_mode", "schema_version", "server_commit_revision"];
   function validateM2Config(value) {
@@ -729,6 +752,7 @@
   function validateM2Response(value, expected) {
     if (!exactFields(value, M2_RESPONSE_FIELDS) || value.schema_version !== 1 ||
         value.policy_version !== expected.policy_version || value.model_version !== expected.model_version ||
+        value.display_language !== expected.display_language || !validLocale(value.display_language) ||
         value.history_revision !== expected.history_revision ||
         value.server_commit_revision !== expected.server_commit_revision ||
         value.history_generation !== expected.history_generation ||
@@ -777,13 +801,14 @@
     return Object.freeze({
       enabled: true,
       retentionUrl: config.provider_retention_url,
-      rank: (history, eligibility, excludeStoryIds = []) => request("/rank", "POST", {
+      rank: (history, eligibility, excludeStoryIds = [], displayLanguage = "en") => request("/rank", "POST", {
         schema_version: 1, policy_version: config.policy_version, model_version: config.model_version,
+        display_language: displayLanguage,
         history_revision: history.included_history_revision,
         server_commit_revision: history.history_revision,
         history_generation: history.history_generation, consent_revision: history.consent_revision,
         page_size: config.page_size, eligibility, exclude_story_ids: excludeStoryIds,
-      }, { ...history, policy_version: config.policy_version, model_version: config.model_version,
+      }, { ...history, display_language: displayLanguage, policy_version: config.policy_version, model_version: config.model_version,
         page_size: config.page_size, server_commit_revision: history.history_revision,
         history_revision: history.included_history_revision }),
       page: (cursor, binding) => request(`/page?cursor=${encodeURIComponent(cursor)}`, "GET", null,
@@ -825,6 +850,20 @@
     const updatesButton = document.getElementById("show-updates");
     if (!auth || !view || !status || !loadButton || !updatesStatus || !updatesButton) return;
     const savedTabs = document.querySelectorAll('.chip[data-filter="__saved__"]');
+    let displayLanguage = (() => { try { const value = localStorage.getItem(LOCALE_KEY); return validLocale(value) ? value : "en"; } catch (_) { return "en"; } })();
+    let localeEpoch = 0;
+    const localeCopy = () => COPY[displayLanguage];
+    function applyLocaleLabels() {
+      if (document.documentElement) document.documentElement.lang = displayLanguage;
+      document.querySelectorAll('[data-filter="__all__"]').forEach((node) => { node.textContent = localeCopy().all; });
+      document.querySelectorAll('[data-filter="__saved__"]').forEach((node) => { node.textContent = localeCopy().saved; });
+      document.querySelectorAll('[data-locale]').forEach((node) => node.setAttribute("aria-pressed", String(node.dataset.locale === displayLanguage)));
+      const refresh = document.getElementById("m2-refresh"), download = document.getElementById("m2-download-data"), clear = document.getElementById("m2-clear-history");
+      if (refresh) refresh.textContent = localeCopy().refresh;
+      if (download) download.textContent = localeCopy().download;
+      if (clear) clear.textContent = localeCopy().clear;
+      document.querySelectorAll(".locale-switch").forEach((node) => node.setAttribute("aria-label", displayLanguage === "zh" ? "显示语言" : "Display language"));
+    }
     let api;
     let authEpoch = 0;
     let ownerExportEpoch = 0;
@@ -833,6 +872,9 @@
       if (view.currentTab() === "__saved__") {
         document.querySelector('.chip[data-filter="__all__"]')?.click();
       }
+      applyLocaleLabels();
+      const staticCards = [...document.querySelectorAll(".card[data-story-id]")];
+      if (staticCards.every((card) => card.dataset.language === displayLanguage)) document.body?.classList.remove("locale-pending");
       return;
     }
     savedTabs.forEach((tab) => {
@@ -876,6 +918,59 @@
       }
       cards.set(card.dataset.storyId, card);
     });
+    function applyLocalizedRows(rows, epoch) {
+      if (epoch !== localeEpoch) return false;
+      const byId = new Map(rows.map((row) => [row.story_id, row]));
+      cards.forEach((card, storyId) => {
+        const row = byId.get(storyId);
+        card.dataset.localeHidden = String(!row && !card.classList.contains("is-saved"));
+        if (!row) return;
+        const title = card.querySelector(".head"), summary = card.querySelector(".desc"), full = card.querySelector(".full");
+        if (title) title.textContent = row.title;
+        if (summary) summary.textContent = row.summary;
+        if (full) full.textContent = row.summary;
+      });
+      return true;
+    }
+    async function localizeVisibleCards(epoch) {
+      const ids = [...cards.keys()].slice(0, MAX_PAGE_SIZE);
+      if (!ids.length) return;
+      let response;
+      try { response = await fetch(`/data/news-${displayLanguage}.json`, { credentials:"omit", cache:"no-store", redirect:"error" }); }
+      catch (_) { response = null; }
+      if (!response || !response.ok || response.redirected) {
+        const legacyFixture = !document.querySelector("[data-locale]");
+        const allAlreadySelected = [...cards.values()].every((card) => card.dataset.language === displayLanguage);
+        if (legacyFixture || allAlreadySelected) return;
+        fail("Localized stories are unavailable.");
+      }
+      const payload = await boundedJson(response, "The localized story projection was invalid.", MAX_DISCOVERY_BYTES);
+      if (!isObject(payload) || payload.schema_version !== 1 || payload.language !== displayLanguage || !Array.isArray(payload.categories)) fail("The localized story projection was invalid.");
+      const projectionRows = [];
+      payload.categories.forEach((category) => {
+        if (!isObject(category) || !boundedString(category.id, 80) || !boundedString(category.name, 120) || !Array.isArray(category.items)) fail("The localized story projection was invalid.");
+        document.querySelectorAll(`[data-topic-id="${CSS.escape(category.id)}"]`).forEach((node) => { node.textContent = category.name; });
+        document.querySelectorAll(`.topic-section[data-topic-id="${CSS.escape(category.id)}"] .section-title`).forEach((node) => { node.textContent = category.name; });
+        category.items.forEach((item) => {
+          if (!isObject(item) || !STORY_ID.test(item.story_id) || item.display_language !== displayLanguage || !boundedString(item.title, 2000) || typeof item.description !== "string") fail("The localized story projection was invalid.");
+          projectionRows.push({ story_id:item.story_id, title:item.title, summary:item.description,
+            display_language:displayLanguage, translation_available:item.translation_available === true });
+        });
+      });
+      if (signedIn()) {
+        const rows = await api.localizedStoryText(ids, displayLanguage);
+        if (!applyLocalizedRows(rows, epoch)) return;
+        const returned = new Set(rows.map((row) => row.story_id));
+        cards.forEach((card, id) => {
+          if (returned.has(id) || !card.classList.contains("is-saved")) return;
+          applyLocalizedRows([{ story_id:id, title:localeCopy().translationUnavailable,
+            summary:localeCopy().translationSummary, display_language:displayLanguage,
+            translation_available:false }], epoch);
+        });
+        return;
+      }
+      applyLocalizedRows(projectionRows, epoch);
+    }
     const cursors = new Map();
     const exhausted = new Set();
     const hydrated = new Set();
@@ -1186,14 +1281,14 @@
       if (m2Controls) m2Controls.hidden = false;
       if (searchBox) searchBox.placeholder = "Search all retained stories";
       const mode = document.getElementById("m2-mode");
-      if (mode) mode.textContent = reason;
+      if (mode) mode.textContent = `${reason} ${response.history_revision === response.server_commit_revision ? localeCopy().activityUsed : localeCopy().activity}.`;
       if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
       view.apply(); refreshStateControls(); refreshInterestControls();
     }
     async function loadM2(append = false, searchEvent = false) {
       if (!usesM2()) return;
       unknownM2Consent(); showM2Policy();
-      const epoch = authEpoch, request = ++m2Sequence, interactionEpoch = m2InteractionEpoch, eligibility = m2Eligibility();
+      const epoch = authEpoch, languageEpoch = localeEpoch, request = ++m2Sequence, interactionEpoch = m2InteractionEpoch, eligibility = m2Eligibility();
       const key = JSON.stringify(eligibility);
       const pageRequest = { topic: selectedTopic(), epoch };
       pageRequests.add(pageRequest); refreshLoadButton();
@@ -1235,14 +1330,15 @@
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         syncM2Consent(history);
         const canContinue = append && key === m2Key && m2Cursor && m2Binding &&
+          m2Binding.display_language === displayLanguage &&
           history.history_generation === m2Binding.history_generation && history.consent_revision === m2Binding.consent_revision;
         // A new eligible request always carries the committed history. The
         // server freezes existing pages and re-ranks continuation windows.
         const response = canContinue
           ? await m2.page(m2Cursor, { ...m2Binding, history_revision: history.included_history_revision,
               server_commit_revision: history.history_revision })
-          : await m2.rank(history, eligibility);
-        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+          : await m2.rank(history, eligibility, [], displayLanguage);
+        if (epoch !== authEpoch || languageEpoch !== localeEpoch || response.display_language !== displayLanguage || request !== m2Sequence || !usesM2()) return;
         if (baselineShown) {
           await behaviorWrites.catch(() => {});
           const latest = await api.historySnapshot();
@@ -1932,6 +2028,32 @@
         void hydrate().catch(() => { announce("This section could not be synced. Try again."); });
       });
     });
+    async function persistLocale() {
+      const personalization = window.NewsCuratorPersonalization;
+      if (!signedIn() || !personalization) return;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const current = await personalization.get();
+        const base = current || { revision:0, interests:[], saved_searches:[] };
+        const outcome = await personalization.set({ expected_revision:base.revision, locale:displayLanguage,
+          interests:base.interests, saved_searches:base.saved_searches });
+        if (outcome.status === "updated") return;
+        if (outcome.status !== "conflict") fail("Language preference could not be saved.");
+      }
+      fail("Language preference changed in another session.");
+    }
+    async function selectLocale(locale) {
+      if (!validLocale(locale) || locale === displayLanguage) return;
+      displayLanguage = locale; localeEpoch += 1; m2Sequence += 1;
+      try { localStorage.setItem(LOCALE_KEY, locale); } catch (_) {}
+      applyLocaleLabels();
+      document.body?.classList.add("locale-pending");
+      try {
+        await Promise.all([localizeVisibleCards(localeEpoch), persistLocale()]);
+        if (usesM2()) await loadM2();
+      } catch (_) { announce(locale === "zh" ? "语言切换失败，请重试。" : "Language change failed. Try again."); }
+      finally { document.body?.classList.remove("locale-pending"); }
+    }
+    document.querySelectorAll("[data-locale]").forEach((button) => button.addEventListener("click", () => { void selectLocale(button.dataset.locale); }));
     loadButton.addEventListener("click", () => { void loadMore(); });
     updatesButton.addEventListener("click", () => { window.location.reload(); });
     window.addEventListener("news-curator:auth-changed", () => {
@@ -1984,6 +2106,19 @@
       syncReadIntent(card, intent);
     });
     try {
+      applyLocaleLabels();
+      try {
+        if (signedIn() && window.NewsCuratorPersonalization) {
+          const preference = await window.NewsCuratorPersonalization.get();
+          if (preference && validLocale(preference.locale)) displayLanguage = preference.locale;
+          applyLocaleLabels();
+        }
+        await localizeVisibleCards(localeEpoch);
+        document.body?.classList.remove("locale-pending");
+      } catch (_) {
+        announce(displayLanguage === "zh" ? "所选语言的新闻暂不可用。" : "Stories in the selected language are unavailable.");
+        return;
+      }
       latest = usesM2() ? await api.latestPublication().catch(() => null) : await api.latestPublication();
       if (!usesM2()) void fetchDiscovery(true);
       if (usesM2()) {
