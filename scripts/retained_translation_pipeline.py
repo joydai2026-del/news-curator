@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Background-only public retained translation and localized projection export."""
 from __future__ import annotations
-import argparse, json, os, sys
+import argparse, json, os, sys, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -32,8 +34,8 @@ def _queue_policy(policy: Mapping[str, object]) -> tuple[int, int, int]:
     return limit, workers, budget
 
 
-def _transport(policy: Mapping[str, object]) -> SafeHttpTransport:
-    return SafeHttpTransport(policy=SafeHttpPolicy(total_timeout_seconds=float(policy.get("request_timeout_seconds",20)), max_wire_bytes=int(policy.get("max_response_bytes",524288)), max_decoded_bytes=int(policy.get("max_response_bytes",524288)), per_host_concurrency=int(policy.get("per_host_concurrency",2))))
+def _transport(policy: Mapping[str, object], *, timeout_seconds: float | None = None) -> SafeHttpTransport:
+    return SafeHttpTransport(policy=SafeHttpPolicy(total_timeout_seconds=timeout_seconds if timeout_seconds is not None else float(policy.get("request_timeout_seconds",20)), max_wire_bytes=int(policy.get("max_response_bytes",524288)), max_decoded_bytes=int(policy.get("max_response_bytes",524288)), per_host_concurrency=int(policy.get("per_host_concurrency",2))))
 
 def _rpc(transport, origin: str, key: str, name: str, body: dict) -> object:
     credentials=(OriginBoundCredential(origin=origin,header_name="apikey",value=key),) if key.startswith("sb_secret_") else (OriginBoundCredential(origin=origin,header_name="Authorization",value="Bearer "+key),OriginBoundCredential(origin=origin,header_name="apikey",value=key))
@@ -51,31 +53,67 @@ def _item(row: Mapping[str, object]) -> tuple[Item, tuple[str,...], str]:
     if story_id_for_item(item) != row["story_id"]: raise ValueError("retained identity mismatch")
     return item, tuple(row["category_ids"]), str(row["story_id"])
 
+def _provider_store(policy: Mapping[str, object], origin: str, service_key: str, api_key: str):
+    provider_transport = _transport(policy, timeout_seconds=float(policy.get("request_timeout_seconds", 20)))
+    store_transport = _transport(policy, timeout_seconds=3.0)
+    provider = OpenAITranslationAdapter(config=OpenAITranslationConfig(endpoint=str(policy["openai_endpoint"]),model_version=str(policy["openai_model"]),max_output_tokens=int(policy["openai_max_output_tokens"]),input_microusd_per_million_tokens=int(policy["openai_input_microusd_per_million_tokens"]),output_microusd_per_million_tokens=int(policy["openai_output_microusd_per_million_tokens"])),transport=provider_transport,api_key=lambda:api_key)
+    return provider, SupabaseTranslationStore(SupabaseTranslationConfig(origin,service_key),transport=store_transport)
+
+
+def _fair_tasks(rows, categories: Mapping[str, str]):
+    buckets: dict[tuple[str, str], list[Item]] = {}
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        item, category_ids, story_id = _item(row)
+        if item.language not in {"en", "zh"}: continue
+        for category_id in category_ids:
+            name = categories.get(category_id)
+            key = (item.language, name) if name else None
+            if key and (item.language, story_id) not in seen:
+                buckets.setdefault(key, []).append(item); seen.add((item.language, story_id)); break
+    for value in buckets.values(): value.sort(key=lambda item: (item.published_at, item.canonical_url), reverse=True)
+    ordered=[]; index=0
+    while True:
+        added=False
+        for language in ("en", "zh"):
+            for key in sorted(key for key in buckets if key[0] == language):
+                values=buckets[key]
+                if index < len(values): ordered.append((language, key[1], values[index])); added=True
+        if not added: return ordered
+        index += 1
+
+
 def translate(root: Path, limit: int) -> int:
     cfg=load_config(root); policy=cfg.translation
-    if policy.get("enabled") is not True or policy.get("provider") != "openai":
-        return 0
+    if policy.get("enabled") is not True or policy.get("provider") != "openai": return 0
     configured_limit, workers, time_budget = _queue_policy(policy)
     limit = min(limit, configured_limit)
-    origin=_origin(os.environ.get(str(policy["supabase_url_env"]),"")); key=os.environ.get(str(policy["supabase_service_role_key_env"]),"")
-    api_key=os.environ.get(str(policy["openai_api_key_env"]),"")
+    origin=_origin(os.environ.get(str(policy["supabase_url_env"]),"")); key=os.environ.get(str(policy["supabase_service_role_key_env"]),""); api_key=os.environ.get(str(policy["openai_api_key_env"]),"")
     if not key or not api_key: raise ValueError("retained translation credentials unavailable")
-    transport=_transport(policy)
-    rows=_rpc(transport,origin,key,"m2_translation_queue",{"p_limit":limit,"p_max_age_hours":int(policy.get("queue_max_age_hours",168))})
-    categories={category.id: category.name for category in cfg.categories}; ranked={"en":{},"zh":{}}
-    accepted=0
-    for row in rows:
-        item, category_ids, _ = _item(row)
-        if item.language not in ranked: continue
-        for category_id in category_ids:
-            name=categories.get(category_id)
-            if name is not None: ranked[item.language].setdefault(name,[]).append(item)
-        accepted += 1
-    provider=OpenAITranslationAdapter(config=OpenAITranslationConfig(endpoint=str(policy["openai_endpoint"]),model_version=str(policy["openai_model"]),max_output_tokens=int(policy["openai_max_output_tokens"]),input_microusd_per_million_tokens=int(policy["openai_input_microusd_per_million_tokens"]),output_microusd_per_million_tokens=int(policy["openai_output_microusd_per_million_tokens"])),transport=transport,api_key=lambda:api_key)
-    store=SupabaseTranslationStore(SupabaseTranslationConfig(origin,key),transport=transport)
-    result=produce_translation_records(cfg=cfg,ranked_by_language=ranked,store=store,provider=provider,now=datetime.now(timezone.utc),run_id="retained:"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
-    print(json.dumps({"queue_rows":accepted,"translated":result.counters.get("translated",0),"fatal_persistence_failure":result.fatal_persistence_failure},separators=(",",":")))
-    return 1 if result.fatal_persistence_failure else 0
+    probe_transport=_transport(policy, timeout_seconds=3.0)
+    rows=_rpc(probe_transport,origin,key,"m2_translation_queue",{"p_limit":MAX_QUEUE,"p_max_age_hours":int(policy.get("queue_max_age_hours",168))})
+    tasks=_fair_tasks(rows,{category.id: category.name for category in cfg.categories})[:limit]
+    deadline=time.monotonic()+time_budget; run_id="retained:"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    def dispatch(task):
+        language, category_name, item = task
+        if time.monotonic() >= deadline: return {"skipped_deadline": 1}
+        local_cfg=deepcopy(cfg); local_cfg.translation["targets"]=["zh" if language == "en" else "en"]
+        local_cfg.translation["max_items_per_language"]=1
+        provider, store=_provider_store(local_cfg.translation,origin,key,api_key)
+        result=produce_translation_records(cfg=local_cfg,ranked_by_language={language:{category_name:[item]}},store=store,provider=provider,now=datetime.now(timezone.utc),run_id=run_id)
+        return {"translated":result.counters.get("translated",0),"failed":sum(value for name,value in result.counters.items() if name not in {"translated","cache_hit"}),"fatal":int(result.fatal_persistence_failure)}
+    totals={"translated":0,"failed":0,"fatal":0,"skipped_deadline":0}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures=[]
+        for task in tasks:
+            if time.monotonic() >= deadline:
+                totals["skipped_deadline"] += 1; continue
+            futures.append(executor.submit(dispatch,task))
+        for future in as_completed(futures):
+            result=future.result()
+            for field in totals: totals[field]+=int(result.get(field,0))
+    print(json.dumps({"queue_rows":len(rows),"dispatched":len(futures),"run_id":run_id,**totals},separators=(",",":")))
+    return 1 if totals["fatal"] else 0
 
 def export(root: Path, output: Path, locale: str) -> int:
     if locale not in {"en","zh"}: raise ValueError("locale is invalid")

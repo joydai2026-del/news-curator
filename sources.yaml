@@ -337,9 +337,9 @@ translation:
   openai_output_microusd_per_million_tokens: 2000000
   openai_max_input_tokens: 4096
   openai_max_output_tokens: 4096
-  queue_limit: 12
+  queue_limit: 60
   queue_time_budget_seconds: 240
-  translation_workers: 1
+  translation_workers: 4
   max_output_title_characters: 2000
   max_output_description_characters: 8000
   lease_timeout_seconds: 900

@@ -64,3 +64,34 @@ def test_captured_public_retained_row_preserves_its_canonical_identity():
     assert story_id == row["story_id"]
     assert categories == tuple(row["category_ids"])
     assert item.title == row["title"] and item.description == row["summary"]
+
+
+def test_export_writes_selected_language_public_projection_from_captured_shape(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from curator.models import Item
+    item = Item(title="English title", description="English summary", url="https://example.com/a", canonical_url="https://example.com/a", source_id="public", source_name="Public", language="en", published_at=datetime(2026, 9, 15, tzinfo=timezone.utc), native_categories={"ai"})
+    row = {"story_id": module.story_id_for_item(item), "title": item.title, "summary": item.description, "language": "en", "source_id": "public", "source_name": "Public", "canonical_url": item.canonical_url, "published_at": item.published_at.isoformat(), "category_ids": ["ai"], "display_title": "中文标题", "display_summary": "中文摘要", "display_language": "zh", "translation_available": True}
+    cfg = type("Cfg", (), {"translation": {"supabase_url_env": "URL", "supabase_service_role_key_env": "KEY"}, "categories": [type("Category", (), {"id": "ai", "name": "AI"})()]})()
+    monkeypatch.setattr(module, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(module, "_transport", lambda _policy: object())
+    monkeypatch.setattr(module, "_rpc", lambda *_args: [row])
+    monkeypatch.setenv("URL", "https://example.supabase.co"); monkeypatch.setenv("KEY", "sb_secret_test")
+    out = tmp_path / "news-zh.json"
+    assert module.export(tmp_path, out, "zh") == 0
+    projection = json.loads(out.read_text(encoding="utf-8"))
+    rendered = projection["categories"][0]["items"][0]
+    assert rendered["story_id"] == row["story_id"] and rendered["title"] == "中文标题"
+    assert rendered["display_language"] == "zh" and rendered["is_newsletter"] is False
+
+
+def test_fair_tasks_alternate_language_before_second_item_from_same_language(monkeypatch):
+    from datetime import datetime, timezone
+    def row(story_id, language, category):
+        item = __import__("curator.models", fromlist=["Item"]).Item(title=story_id, description="summary", url=f"https://example.com/{story_id}", canonical_url=f"https://example.com/{story_id}", source_id="public", source_name="Public", language=language, published_at=datetime(2026, 9, 15, tzinfo=timezone.utc), native_categories={category})
+        return {"story_id": module.story_id_for_item(item), "title": item.title, "summary": item.description, "language": language, "source_id":"public", "source_name":"Public", "canonical_url":item.canonical_url, "published_at":item.published_at.isoformat(), "category_ids":[category]}
+    tasks = module._fair_tasks([row("en-one","en","ai"), row("en-two","en","ai"), row("zh-one","zh","ai")], {"ai":"AI"})
+    assert [task[0] for task in tasks] == ["en", "zh", "en"]
+
+
+def test_queue_policy_accepts_bounded_four_worker_configuration():
+    assert module._queue_policy({"queue_limit":60,"translation_workers":4,"queue_time_budget_seconds":240}) == (60,4,240)
