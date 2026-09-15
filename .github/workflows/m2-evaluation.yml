@@ -26,6 +26,7 @@ jobs:
             --policy config/m2-evaluation/metrics-policy.yaml \
             --checklist config/m2-evaluation/qa-checklist.yaml \
             --topics topics.yaml \
+            --environment production \
             --commit "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/m2-evaluation/operational.json"
       - name: Reduce bound receipts
