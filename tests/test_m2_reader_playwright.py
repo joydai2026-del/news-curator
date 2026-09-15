@@ -115,7 +115,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         policy=RankerPolicy('test-provider','test-model','https://provider.example','test-prompt'),engine=NoProvider()),
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
-    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]
+    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
@@ -137,7 +137,10 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             if name=='latest_publication':
                 payload={'publication_seq':1,'finalized_at':capture['generated_at'],'initial_history_cursor':None,
                     'page_size':25,'poll_seconds':60,'topics':[{'topic_id':c,'name':c} for c in categories]}
-            elif name=='m2_history_snapshot':payload=store.history_snapshot('local-auth-token')
+            elif name=='m2_history_snapshot':
+                if history_mode['fail']:
+                    return route.fulfill(status=500,content_type='application/json',body='{}')
+                payload=store.history_snapshot('local-auth-token')
             elif name=='append_behavior_event':payload=store.event(body)
             elif name=='set_story_state_with_event':
                 sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]
@@ -301,13 +304,28 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 window.__m2Timeouts=[];
                 AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===8000?30:ms);};
                 window.__stallM2=true;
+                const policy=document.querySelector("#m2-provider-retention");policy.hidden=true;policy.removeAttribute("href");
             }''')
+            store.learning=True;store.provider=True
             page.locator('#m2-refresh').click()
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Showing the captured edition")')
             assert page.evaluate('window.__m2Timeouts.includes(8000)')
+            assert page.locator('#m2-local-learning').is_checked()
+            assert page.locator('#m2-provider-processing').is_checked()
+            assert page.locator('#m2-local-learning').is_enabled()
+            assert page.locator('#m2-provider-processing').is_enabled()
+            assert page.locator('#m2-provider-retention').get_attribute('href')=='https://policy.example'
+            assert page.locator('#m2-provider-retention').is_visible()
             assert page.locator('.card:not([hidden])').count()>0
             assert page.locator('[data-m2-card=true]').count()==0
             assert page.locator('.edition-meta').is_visible()
+            page.evaluate('window.__stallM2=false')
+            history_mode['fail']=True
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#m2-local-learning").indeterminate')
+            assert page.locator('#m2-local-learning').is_disabled()
+            assert page.locator('#m2-provider-processing').is_disabled()
+            history_mode['fail']=False
             page.evaluate('window.__stallExport=true;document.querySelector("#m2-download-data").click()')
             page.wait_for_function('() => typeof window.__releaseExport === "function"')
             page.evaluate('window.__localSession=null;window.dispatchEvent(new Event("news-curator:auth-changed"))')
