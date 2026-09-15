@@ -20,7 +20,8 @@ from curator.contracts.ranking_request import (
     validate_ranking_request,
     validate_ranking_response,
 )
-from .async_provider import ProviderResponseError
+from .async_provider import (ProviderHTTPError, ProviderResponseError, ProviderResponseInvalid,
+    ProviderTimeout, ProviderTransportFailure)
 
 
 class RankLLMEngine(Protocol):
@@ -138,6 +139,14 @@ class RankLLMAdapter:
             except RetryableProviderError:
                 if attempt >= self._policy.max_retries:
                     return self._fallback(request, "provider_retry_exhausted")
+            except ProviderTimeout:
+                return self._fallback(request, "provider_deadline")
+            except ProviderHTTPError as error:
+                return self._fallback(request, error.reason)
+            except ProviderTransportFailure:
+                return self._fallback(request, "provider_transport_failure")
+            except ProviderResponseInvalid:
+                return self._fallback(request, "provider_response_invalid")
             except ProviderResponseError as error:
                 if usage_observer is not None:
                     usage_observer(ProviderOutcome((), error.input_tokens, error.output_tokens,

@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence
 
+import httpx
+
 
 class PromptBuilder(Protocol):
     """Adapter over the pinned RankLLM create_prompt implementation."""
@@ -24,6 +26,22 @@ class AsyncProviderOutcome:
 
 
 class ProviderTimeout(RuntimeError):
+    pass
+
+
+class ProviderHTTPError(RuntimeError):
+    def __init__(self, reason: str) -> None:
+        if reason not in {"provider_http_4xx", "provider_http_5xx"}:
+            raise ValueError("invalid provider HTTP category")
+        super().__init__(reason)
+        self.reason = reason
+
+
+class ProviderTransportFailure(RuntimeError):
+    pass
+
+
+class ProviderResponseInvalid(RuntimeError):
     pass
 
 
@@ -71,16 +89,24 @@ class AsyncOpenAIResponses:
                     "max_output_tokens": self._max_output_tokens,
                     "reasoning": {"effort": self._reasoning_effort},
                     "text": {"verbosity": self._verbosity, "format": exact_order_schema(candidate_count)}})
-            response.raise_for_status()
-            value = response.json()
+            if 400 <= response.status_code < 500:
+                raise ProviderHTTPError("provider_http_4xx")
+            if response.status_code >= 500:
+                raise ProviderHTTPError("provider_http_5xx")
+            try:
+                value = response.json()
+            except ValueError:
+                raise ProviderResponseInvalid("provider response invalid") from None
             if not isinstance(value, Mapping):
-                raise ValueError("provider response must be an object")
+                raise ProviderResponseInvalid("provider response invalid")
             return value
         try:
             return await asyncio.wait_for(request(), timeout=self._total)
         except asyncio.TimeoutError as exc:
             await self._client.aclose()
-            raise ProviderTimeout("provider total deadline exceeded") from exc
+            raise ProviderTimeout("provider total deadline exceeded") from None
+        except httpx.TransportError:
+            raise ProviderTransportFailure("provider transport failed") from None
 
 
 class AsyncRankLLMProvider:
@@ -104,7 +130,7 @@ class AsyncRankLLMProvider:
         output = "".join(texts) if texts else None
         usage = response.get("usage")
         if not isinstance(usage, Mapping):
-            raise ValueError("invalid raw provider response")
+            raise ProviderResponseInvalid("provider response invalid")
         input_tokens, output_tokens = usage.get("input_tokens"), usage.get("output_tokens")
         request_id = response.get("id")
         usage_valid = (type(input_tokens) is int and type(output_tokens) is int and input_tokens >= 0
@@ -121,10 +147,10 @@ class AsyncRankLLMProvider:
             if usage_valid:
                 raise ProviderResponseError("invalid raw provider response", input_tokens=input_tokens,
                     output_tokens=output_tokens, request_id=request_id)
-            raise ValueError("invalid raw provider response")
+            raise ProviderResponseInvalid("provider response invalid")
         order = tuple(order_value)
         if type(input_tokens) is not int or type(output_tokens) is not int or input_tokens < 0 or output_tokens < 0:
-            raise ValueError("invalid provider usage")
+            raise ProviderResponseInvalid("provider response invalid")
         if not isinstance(request_id, str) or not request_id:
-            raise ValueError("missing provider request id")
+            raise ProviderResponseInvalid("provider response invalid")
         return AsyncProviderOutcome(order, input_tokens, output_tokens, request_id, 1)

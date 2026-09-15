@@ -3,7 +3,8 @@ import asyncio
 import httpx
 import pytest
 
-from curator.recommendation.async_provider import AsyncOpenAIResponses, AsyncRankLLMProvider, ProviderTimeout
+from curator.recommendation.async_provider import (AsyncOpenAIResponses, AsyncRankLLMProvider, ProviderHTTPError,
+    ProviderResponseInvalid, ProviderTimeout, ProviderTransportFailure)
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +53,55 @@ def test_unvalidated_or_nonpermutation_output_is_rejected(raw):
             client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test", max_output_tokens=32))
         with pytest.raises(ValueError):
             await provider.rerank(query="policy", passages=["first", "second"])
+        await client.aclose()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(("response", "error", "reason"), [
+    (httpx.Response(401, text="private-response-marker"), ProviderHTTPError, "provider_http_4xx"),
+    (httpx.Response(503, text="private-response-marker"), ProviderHTTPError, "provider_http_5xx"),
+    (httpx.Response(200, text="private-response-marker"), ProviderResponseInvalid, None),
+])
+def test_provider_failure_categories_do_not_retain_response_body(response, error, reason):
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response))
+        transport = AsyncOpenAIResponses(client=client, endpoint="https://provider.invalid/v1",
+            api_key="test", model="test", max_output_tokens=32)
+        with pytest.raises(error) as caught:
+            await transport.create([], candidate_count=1)
+        assert "private-response-marker" not in str(caught.value)
+        assert caught.value.__cause__ is None
+        if reason is not None:
+            assert caught.value.reason == reason
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_transport_failure_does_not_retain_exception_detail():
+    async def run():
+        def fail(request):
+            raise httpx.ConnectError("private-transport-marker", request=request)
+        client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
+        transport = AsyncOpenAIResponses(client=client, endpoint="https://provider.invalid/v1",
+            api_key="test", model="test", max_output_tokens=32)
+        with pytest.raises(ProviderTransportFailure) as caught:
+            await transport.create([], candidate_count=1)
+        assert "private-transport-marker" not in str(caught.value)
+        assert caught.value.__cause__ is None
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_missing_usage_is_classified_without_raw_response_detail():
+    async def run():
+        marker = "private-provider-marker"
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "id": marker, "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"order":[1]}' }]}]})))
+        provider = AsyncRankLLMProvider(prompt_builder=Prompt(), transport=AsyncOpenAIResponses(
+            client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test", max_output_tokens=32))
+        with pytest.raises(ProviderResponseInvalid) as caught:
+            await provider.rerank(query="policy", passages=["first"])
+        assert marker not in str(caught.value)
         await client.aclose()
     asyncio.run(run())
 

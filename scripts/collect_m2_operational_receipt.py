@@ -25,7 +25,8 @@ _FALLBACK_REASONS = {
     "", "budget_reservation_failed", "daily_cost_limit", "invalid_provider_permutation",
     "model_policy_mismatch", "no_candidates", "observed_cost_limit", "provider_deadline",
     "provider_failure", "provider_preparation_failed", "provider_preparation_unavailable",
-    "provider_processing_consent_required", "provider_retry_exhausted", "request_cost_limit",
+    "provider_processing_consent_required", "provider_retry_exhausted", "provider_http_4xx",
+    "provider_http_5xx", "provider_response_invalid", "provider_transport_failure", "request_cost_limit",
     "unknown_provider_pricing",
 }
 

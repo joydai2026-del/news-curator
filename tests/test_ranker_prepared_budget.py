@@ -9,7 +9,8 @@ from curator.contracts.enums import ActorKind, EventType, M2HistoryEventType
 from curator.contracts.ranking_request import (AuthenticatedOwner, ModelRankingInput, OrderedHistoryEvent,
     RankingCandidate, RankingRequest)
 from curator.recommendation.engine import OpenAIRankLLMEngine
-from curator.recommendation.async_provider import exact_order_schema as sent_schema
+from curator.recommendation.async_provider import (ProviderHTTPError, ProviderResponseInvalid,
+    ProviderTimeout, ProviderTransportFailure, exact_order_schema as sent_schema)
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -156,7 +157,14 @@ def test_invalid_permutation_still_settles_reported_usage():
     assert store.frozen['bindings']['execution']['cost_basis']=='observed_with_unknown_attempt_reserves'
 
 
-def test_ambiguous_provider_failure_keeps_reservation_unsettled():
+@pytest.mark.parametrize(("provider_error", "expected_reason"), [
+    (RuntimeError("private-unknown"), "provider_failure"),
+    (ProviderTimeout("private-timeout"), "provider_deadline"),
+    (ProviderHTTPError("provider_http_4xx"), "provider_http_4xx"),
+    (ProviderTransportFailure("private-transport"), "provider_transport_failure"),
+    (ProviderResponseInvalid("private-response"), "provider_response_invalid"),
+])
+def test_ambiguous_provider_failure_keeps_reservation_unsettled(provider_error, expected_reason):
     from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
     from curator.recommendation.service import RankingService, ServicePolicy
     rows=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'][:1]
@@ -171,7 +179,7 @@ def test_ambiguous_provider_failure_keeps_reservation_unsettled():
         def save_frozen_order(self, **kwargs): self.frozen=kwargs; return 'local-frozen'
     class Engine:
         def prepare(self, model_input): return type('Prepared',(),{'input_tokens_bound':100,'output_tokens_budget':100})()
-        def rerank_prepared(self, prepared, timeout_seconds): raise RuntimeError('ambiguous transport failure')
+        def rerank_prepared(self, prepared, timeout_seconds): raise provider_error
     class Auth:
         def get_user(self, token): return {'id':'local-owner'}
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
@@ -180,7 +188,8 @@ def test_ambiguous_provider_failure_keeps_reservation_unsettled():
         policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
         history_generation=1,consent_revision=1))
-    assert response['fallback_reason']=='provider_failure'
+    assert response['fallback_reason']==expected_reason
+    assert 'private' not in response['fallback_reason']
     assert store.frozen['bindings']['execution']['attempts_started']==1
     assert store.frozen['bindings']['execution']['cost_basis']=='unknown_provider_charge_reserved'
 
