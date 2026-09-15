@@ -27,13 +27,13 @@ jobs:
             --checklist config/m2-evaluation/qa-checklist.yaml \
             --topics topics.yaml \
             --environment production \
-            --commit "${{ vars.NEWS_CURATOR_M2_DEPLOYED_REVISION }}" \
+            --runtime-revision "${{ vars.NEWS_CURATOR_M2_DEPLOYED_REVISION }}" \
             --output "$RUNNER_TEMP/m2-evaluation/operational.json"
       - name: Reduce bound receipts
         id: reduce
         continue-on-error: true
         run: |
-          receipts=("$RUNNER_TEMP/m2-evaluation/operational.json")
+          receipts=()
           while IFS= read -r path; do receipts+=("$path"); done < <(find evaluation/receipts -maxdepth 1 -type f -name '*.json' -print | sort)
           args=()
           for path in "${receipts[@]}"; do args+=(--receipt "$path"); done

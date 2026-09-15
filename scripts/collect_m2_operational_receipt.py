@@ -70,7 +70,7 @@ def _category_ids(path: Path) -> list[str]:
     return values
 
 
-def _receipt(rows: list[dict[str, object]], *, commit: str, policy_hash: str,
+def _receipt(rows: list[dict[str, object]], *, runtime_revision: str, policy_hash: str,
              checklist_hash: str, category_ids: list[str], environment: str,
              observed_at: datetime) -> dict[str, object]:
     modes, fallbacks = Counter(), Counter()
@@ -92,7 +92,8 @@ def _receipt(rows: list[dict[str, object]], *, commit: str, policy_hash: str,
             raise ValueError("invalid attempt count")
         attempted += attempts > 0
         successful += mode == "model"
-    return {"schema_version": 1, "git_commit_sha": commit,
+    return {"schema_version": 1, "runtime_source_revision": runtime_revision,
+        "row_source_revision_status": "unbound",
         "policy_sha256": policy_hash, "checklist_sha256": checklist_hash,
         "environment": environment, "observed_at_utc": observed_at.isoformat(),
         "configured_category_ids": category_ids,
@@ -111,15 +112,16 @@ def main() -> int:
     parser.add_argument("--checklist", required=True, type=Path)
     parser.add_argument("--topics", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--commit", required=True)
+    parser.add_argument("--runtime-revision", required=True)
     parser.add_argument("--environment", required=True, choices=("production",))
     args = parser.parse_args()
-    if not args.commit or any(ch not in "0123456789abcdef" for ch in args.commit) or not 7 <= len(args.commit) <= 64:
-        raise ValueError("invalid commit")
+    if (not args.runtime_revision or any(ch not in "0123456789abcdef" for ch in args.runtime_revision)
+            or not 7 <= len(args.runtime_revision) <= 64):
+        raise ValueError("invalid runtime revision")
     now = datetime.now(timezone.utc)
     rows = _get_rows(_origin(os.environ["NEWS_CURATOR_SUPABASE_URL"]),
         os.environ["NEWS_CURATOR_SUPABASE_SECRET_KEY"], now - timedelta(days=7))
-    result = _receipt(rows, commit=args.commit,
+    result = _receipt(rows, runtime_revision=args.runtime_revision,
         policy_hash=hashlib.sha256(args.policy.read_bytes()).hexdigest(),
         checklist_hash=hashlib.sha256(args.checklist.read_bytes()).hexdigest(),
         category_ids=_category_ids(args.topics), environment=args.environment, observed_at=now)
