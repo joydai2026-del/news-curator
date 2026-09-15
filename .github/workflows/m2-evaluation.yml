@@ -20,6 +20,7 @@ jobs:
         env:
           NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
           NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
+          NEWS_CURATOR_M2_DEPLOYED_REVISION: ${{ vars.NEWS_CURATOR_M2_DEPLOYED_REVISION }}
         run: |
           mkdir -p "$RUNNER_TEMP/m2-evaluation"
           python scripts/collect_m2_operational_receipt.py \
@@ -27,7 +28,7 @@ jobs:
             --checklist config/m2-evaluation/qa-checklist.yaml \
             --topics topics.yaml \
             --environment production \
-            --runtime-revision "${{ vars.NEWS_CURATOR_M2_DEPLOYED_REVISION }}" \
+            --runtime-revision "$NEWS_CURATOR_M2_DEPLOYED_REVISION" \
             --output "$RUNNER_TEMP/m2-evaluation/operational.json"
       - name: Reduce bound receipts
         id: reduce
