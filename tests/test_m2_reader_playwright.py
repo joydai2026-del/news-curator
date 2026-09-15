@@ -109,7 +109,8 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         topic_ids_by_name={c:c for c in categories},require_summaries=False,discovery_enabled=True)
     activate_personalization_link(site/'index.html',supabase_url=DATABASE,publishable_key='sb_publishable_localtest',
         m2_config={'enabled':True,'url':RANKER,'policy_version':'test-policy',
-        'model_version':'test-model','provider_policy_id':'test-policy','provider_retention_url':'https://policy.example', 'page_size':25})
+        'model_version':'test-model','provider_policy_id':'test-policy','provider_retention_url':'https://policy.example',
+        'page_size':25,'request_timeout_ms':8000,'transport_timeout_ms':20000})
     store=LocalStore(rows)
     service=RankingService(auth=LocalAuth(),store=store,adapter=RankLLMAdapter(
         policy=RankerPolicy('test-provider','test-model','https://provider.example','test-prompt'),engine=NoProvider()),
@@ -204,8 +205,19 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             window.fetch=(url,options)=>{
               if(window.__stallExport && String(url).endsWith("/m2_owner_export_page"))
                 return new Promise((resolve,reject)=>{window.__releaseExport=()=>originalFetch(url,options).then(resolve,reject);});
+              if(window.__stallHistory && String(url).endsWith("/m2_history_snapshot"))
+                return new Promise((resolve,reject)=>setTimeout(()=>originalFetch(url,options).then(resolve,reject),400));
               return window.__stallM2 && String(url).startsWith("https://ranker.example")
-                ?new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}))
+                ?new Promise((resolve,reject)=>{
+                    const timer=setTimeout(()=>originalFetch(url,options).then(async(response)=>{
+                      const payload=await response.json();
+                      payload.result_mode="model";payload.fallback_reason="";
+                      resolve(new Proxy(response,{get(target,key){
+                        return key==="text" ? async()=>JSON.stringify(payload) : Reflect.get(target,key,target);
+                      }}));
+                    },reject),window.__stallM2Delay||0);
+                    options.signal.addEventListener('abort',()=>{clearTimeout(timer);reject(options.signal.reason);},{once:true});
+                  })
                 :originalFetch(url,options);
             };
         })();''')
@@ -325,19 +337,21 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             screenshot=artifact_dir / 'reader-m2-390.png'
             page.screenshot(path=str(screenshot),full_page=True)
             assert page.evaluate('document.documentElement.scrollWidth<=390')
-            # Controlled fetch stall tests the actual run() fallback path.
-            # The configured deadline stays 8s; its clock is accelerated here.
+            # A delayed original request shows public cards by the visible deadline,
+            # then applies its model result before the longer transport deadline.
             page.evaluate('''() => {
                 const timeout=AbortSignal.timeout.bind(AbortSignal);
                 window.__m2Timeouts=[];
-                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===8000?30:ms);};
-                window.__stallM2=true;
+                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===20000?300:ms);};
+                const later=window.setTimeout.bind(window);
+                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===20000?300:ms,...args);
+                window.__stallM2=true;window.__stallM2Delay=120;
                 const policy=document.querySelector("#m2-provider-retention");policy.hidden=true;policy.removeAttribute("href");
             }''')
             store.learning=True;store.provider=True
             page.locator('#m2-refresh').click()
-            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Showing the captured edition")')
-            assert page.evaluate('window.__m2Timeouts.includes(8000)')
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            assert page.evaluate('window.__m2Timeouts.includes(20000)')
             assert page.locator('#m2-local-learning').is_checked()
             assert page.locator('#m2-provider-processing').is_checked()
             assert page.locator('#m2-local-learning').is_enabled()
@@ -345,9 +359,35 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert page.locator('#m2-provider-retention').get_attribute('href')=='https://policy.example'
             assert page.locator('#m2-provider-retention').is_visible()
             assert page.locator('.card:not([hidden])').count()>0
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+            assert 'Ranked using' in page.locator('#m2-mode').inner_text()
+            preceding_ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
+            page.locator('#load-more').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading")')
+            assert page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')==preceding_ids
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+            # History is deliberately slower than the full transport deadline.
+            # The terminal public state proves the deadline begins before fetch().
+            page.evaluate('window.__stallHistory=true')
+            rank_before=requests.count('/rank')
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("did not finish")')
             assert page.locator('[data-m2-card=true]').count()==0
             assert page.locator('.edition-meta').is_visible()
-            page.evaluate('window.__stallM2=false')
+            assert requests.count('/rank')==rank_before
+            page.wait_for_timeout(150)
+            assert requests.count('/rank')==rank_before
+            page.evaluate('window.__stallHistory=false')
+            # A real public-card interaction changes queued learning history.
+            # The delayed original result must remain discarded.
+            page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            page.locator('.card:not([hidden]) .accordion-toggle').first.click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("did not finish")')
+            assert page.locator('[data-m2-card=true]').count()==0
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
             history_mode['fail']=True
             page.locator('#m2-refresh').click()
             page.wait_for_function('() => document.querySelector("#m2-local-learning").indeterminate')

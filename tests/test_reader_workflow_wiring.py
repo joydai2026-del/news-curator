@@ -56,7 +56,7 @@ def test_enabled_workflow_step_validates_and_applies_public_m2_config(tmp_path):
     config=json.dumps({'enabled':True,'url':'https://ranker.example','policy_version':'policy-1',
         'model_version':'model-1','provider_policy_id':'provider-policy-1',
         'provider_retention_url':'https://policy.example/privacy','page_size':25,
-        'request_timeout_ms':8000})
+        'request_timeout_ms':8000,'transport_timeout_ms':20000})
     result=subprocess.run(['/bin/bash','-euo','pipefail','-c',_step_command()],cwd=workspace,
         env=_environment(workspace,enabled='true',config=config),capture_output=True,text=True)
     assert result.returncode==0,result.stderr
@@ -64,6 +64,7 @@ def test_enabled_workflow_step_validates_and_applies_public_m2_config(tmp_path):
     assert '<meta name="news-curator-m2-enabled" content="true">' in page
     assert '<meta name="news-curator-m2-endpoint" content="https://ranker.example">' in page
     assert '<meta name="news-curator-m2-request-timeout-ms" content="8000">' in page
+    assert '<meta name="news-curator-m2-transport-timeout-ms" content="20000">' in page
 
 
 def test_enabled_workflow_step_fails_closed_without_valid_config(tmp_path):
@@ -71,7 +72,9 @@ def test_enabled_workflow_step_fails_closed_without_valid_config(tmp_path):
         'model_version':'model-1','provider_policy_id':'provider-policy-1',
         'provider_retention_url':'https://policy.example/privacy','page_size':25}
     invalid_configs=('', '{invalid', json.dumps({**base,'request_timeout_ms':8001}),
-        json.dumps({**base,'request_timeout_ms':30000}))
+        json.dumps({**base,'request_timeout_ms':30000}),
+        json.dumps({**base,'request_timeout_ms':8000,'transport_timeout_ms':7999}),
+        json.dumps({**base,'request_timeout_ms':8000,'transport_timeout_ms':20001}))
     for index,config in enumerate(invalid_configs):
         workspace=_workspace(tmp_path/f'invalid-{index}');(workspace/'runner-temp').mkdir()
         result=subprocess.run(['/bin/bash','-euo','pipefail','-c',_step_command()],cwd=workspace,
@@ -88,6 +91,12 @@ def test_renderer_request_timeout_boundary(tmp_path):
         'provider_retention_url':'https://policy.example/privacy','page_size':25}
     configure_m2_reader(page,{**base,'request_timeout_ms':8000})
     assert '<meta name="news-curator-m2-request-timeout-ms" content="8000">' in page.read_text()
+    assert '<meta name="news-curator-m2-transport-timeout-ms" content="8000">' in page.read_text()
+    configure_m2_reader(page,{**base,'request_timeout_ms':8000,'transport_timeout_ms':20000})
+    assert '<meta name="news-curator-m2-transport-timeout-ms" content="20000">' in page.read_text()
     for timeout in (8001,30000):
         with pytest.raises(ValueError,match='request deadline'):
             configure_m2_reader(page,{**base,'request_timeout_ms':timeout})
+    for timeout in (7999,20001):
+        with pytest.raises(ValueError,match='transport deadline'):
+            configure_m2_reader(page,{**base,'request_timeout_ms':8000,'transport_timeout_ms':timeout})
