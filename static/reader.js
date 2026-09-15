@@ -1321,10 +1321,12 @@
     function refreshLoadButton() {
       const topic = selectedTopic();
       if (usesM2()) {
+        loadButton.textContent = `Load ${m2Config.page_size} more`;
         loadButton.hidden = initializing || !m2Active || !m2Cursor;
         loadButton.disabled = [...pageRequests].some((request) => request.epoch === authEpoch);
         return;
       }
+      if (latest) loadButton.textContent = `Load ${latest.page_size} more`;
       loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
       loadButton.disabled = [...pageRequests].some((request) =>

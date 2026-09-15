@@ -136,7 +136,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             name=parsed.path.rsplit('/',1)[-1]
             if name=='latest_publication':
                 payload={'publication_seq':1,'finalized_at':capture['generated_at'],'initial_history_cursor':None,
-                    'page_size':25,'poll_seconds':60,'topics':[{'topic_id':c,'name':c} for c in categories]}
+                    'page_size':20,'poll_seconds':60,'topics':[{'topic_id':c,'name':c} for c in categories]}
             elif name=='m2_history_snapshot':
                 if history_mode['fail']:
                     return route.fulfill(status=500,content_type='application/json',body='{}')
@@ -253,6 +253,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert page.locator('.card:not([hidden])').count()==1
             assert requests.count('/rest/v1/rpc/discovery_edition')==discovery_reads
             assert page.locator('#discovery-controls').is_hidden()
+            assert page.locator('#load-more').inner_text()=='Load 20 more'
             page.locator('.chip[data-filter="__all__"]:visible').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             assert requests.count('/rank')>rank_reads
