@@ -358,7 +358,8 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
 }
 @media (max-width:620px){
   .wrap{padding:.75rem .75rem 0}.maincol{padding-bottom:3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
-  .intro h1{font-size:2.15rem}.topbar{gap:.5rem}.crumb{padding-top:.5rem}
+  .intro h1{font-size:2.15rem}.topbar{gap:.5rem;flex-wrap:wrap}.crumb{padding-top:.5rem}
+  .profile-slot{width:100%;max-width:100%;justify-content:flex-start}
   .tools{margin-left:-.1rem;margin-right:-.1rem;flex-direction:column;align-items:stretch}
   .mobiletopics{width:100%;max-width:100%;box-sizing:border-box;flex:none;padding-right:2px}
   .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
