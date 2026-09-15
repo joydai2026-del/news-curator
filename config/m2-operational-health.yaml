@@ -1,5 +1,5 @@
 schema_version: 1
 window_minutes: 60
 minimum_requests: 5
-maximum_failure_rate: 0.50
+maximum_failure_rate: 0.10
 retention_days: 14

@@ -6,6 +6,8 @@ Add a complete in-process denominator for handled `/rank` and `/page` requests w
 
 Operational health uses configurable window rates and minimum volume. It cannot infer consecutive failures, per-owner health, or cold/warm status. Idle and incomplete measurement are neutral, never PASS. Existing reservations and frozen receipts remain authoritative for money and provider usage.
 
+The initial policy uses a 60-minute window and requires at least five handled requests. More than 10% failed deliveries reports FAIL. Lower volume reports insufficient volume, not PASS. These are delivery-alert thresholds, not evidence that recommendations are relevant.
+
 The owner UI is a later change. It may say `Latest activity used` only for model mode, exact used/current revision and generation, current consent, and no pending client writes. Otherwise it says waiting, fallback, or unavailable. It never claims all recorded activity was included.
 
 ## QA
