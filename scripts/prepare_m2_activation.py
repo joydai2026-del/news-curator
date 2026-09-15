@@ -19,6 +19,8 @@ from pathlib import Path
 
 PROJECT_REF = re.compile(r"^[a-z0-9]{20}$")
 OWNER_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
+PUBLISHABLE_KEY = re.compile(r"^sb_publishable_[A-Za-z0-9_-]+$")
+SECRET_KEY = re.compile(r"^sb_secret_[A-Za-z0-9_-]+$")
 MANAGEMENT_ORIGIN = "https://api.supabase.com"
 MAX_PRIVATE_INPUT_BYTES = 64 * 1024
 REQUIRED_SECRET_FIELDS = (
@@ -138,12 +140,14 @@ def dotenv_value(path: Path, name: str) -> str:
 
 
 def api_keys(ref: str, access: str, service_key_name: str) -> tuple[str, str]:
-    rows = request_json(ref, access, "/api-keys")
+    rows = request_json(ref, access, "/api-keys?reveal=true")
     if not isinstance(rows, list):
         raise ValueError("API key response invalid")
     publishable = [row.get("api_key") for row in rows if isinstance(row, dict) and row.get("type") == "publishable" and row.get("name") == "default"]
     service = [row.get("api_key") for row in rows if isinstance(row, dict) and row.get("type") == "secret" and row.get("name") == service_key_name]
-    if len(publishable) != 1 or len(service) != 1 or any(not isinstance(key, str) or not key for key in publishable + service):
+    if (len(publishable) != 1 or len(service) != 1
+            or not isinstance(publishable[0], str) or not PUBLISHABLE_KEY.fullmatch(publishable[0])
+            or not isinstance(service[0], str) or not SECRET_KEY.fullmatch(service[0])):
         raise ValueError("required scoped API keys unavailable")
     return publishable[0], service[0]
 
