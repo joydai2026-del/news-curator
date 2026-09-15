@@ -300,6 +300,46 @@ def test_distinct_concurrent_acquires_finish_without_deadlock_pressure() -> None
     assert _counters()["month"] == 1200
 
 
+def test_money_rpc_caps_idempotence_nulls_and_never_sent_release() -> None:
+    suffix = uuid.uuid4().hex[:12]
+    idem = f"idem:money-{suffix}"
+    run = f"run:money-{suffix}"
+    assert json.loads(_psql(_acquire_sql(_key("money-" + suffix), idem, run)))["status"] == "leased"
+    args = f"'{idem}','public_translation_openai_v1',100,150,150,150"
+    first = _rpc("translation_reserve_money", args)
+    second = _rpc("translation_reserve_money", args)
+    assert first == second
+    assert first["reservation"]["reserved_microusd"] == 100
+
+    null_call = _raw_psql(
+        _claims() + f" select public.translation_reserve_money('{idem}',null,100,150,150,150);"
+    )
+    assert null_call.returncode != 0
+
+    other = f"idem:money-other-{suffix}"
+    assert json.loads(
+        _psql(_acquire_sql(_key("money-other-" + suffix), other, run))
+    )["status"] == "leased"
+    exhausted_call = _raw_psql(
+        _claims()
+        + f" select public.translation_reserve_money('{other}','public_translation_openai_v1',51,150,150,150);"
+    )
+    assert exhausted_call.returncode == 0, exhausted_call.stderr
+    exhausted = json.loads(
+        [line for line in exhausted_call.stdout.splitlines() if line.strip()][-1]
+    )
+    assert exhausted["status"] == "budget_exhausted"
+
+    assert _rpc("translation_mark_failed_before_send", f"'{idem}'")["status"] == "failed_before_send"
+    remaining = int(
+        _psql(
+            "select coalesce(sum(counted_microusd),0) "
+            "from translation_private.translation_usage_counters"
+        )
+    )
+    assert remaining == 0
+
+
 def test_settle_retry_is_idempotent_and_cache_lookup_matches() -> None:
     suffix = uuid.uuid4().hex[:12]
     key = _key(suffix)

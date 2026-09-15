@@ -47,6 +47,8 @@ def test_openai_adapter_uses_store_false_strict_json_and_exact_public_items():
     assert payload["model"] == "gpt-5-mini" and payload["store"] is False
     assert payload["text"]["format"]["type"] == "json_schema"
     assert payload["text"]["format"]["strict"] is True
+    assert payload["reasoning"] == {"effort":"minimal"}
+    assert "untrusted data" in payload["input"][0]["content"][0]["text"]
     assert payload["input"][1]["content"][0]["text"] == '{"source_language":"zh","target_language":"en","items":[{"request_id":"story-1","title":"标题","description":"摘要"}]}'
     assert "owner" not in json.dumps(payload).lower()
 
@@ -62,3 +64,13 @@ def test_openai_adapter_fails_closed_for_malformed_or_uncorrelated_response(payl
     with pytest.raises(TranslationProviderError) as error:
         adapter.translate(request())
     assert error.value.reason_code == "malformed_response"
+
+def test_openai_adapter_accepts_reasoning_plus_exactly_one_message():
+    payload=good_response(); payload["output"].insert(0,{"type":"reasoning","summary":[]})
+    result=OpenAITranslationAdapter(config=OpenAITranslationConfig(),transport=Transport(response(payload)),api_key=lambda:"sk-test").translate(request())
+    assert result.items[0].title=="Title"
+
+def test_openai_money_units_and_conservative_serialized_input_ceiling():
+    adapter=OpenAITranslationAdapter(config=OpenAITranslationConfig(),transport=Transport(response(good_response())),api_key=lambda:"sk-test")
+    assert adapter.price_policy==(250_000,2_000_000)
+    assert adapter.maximum_billable_tokens==(128*1024,4096)

@@ -558,3 +558,9 @@ def test_public_translation_money_cap_is_atomic_and_known_usage_releases_conserv
     backend.mark_sent("money:one")
     settled = backend.settle("money:one", actual_characters=8, actual_microusd=25, record=record(first.key, actual=8))
     assert settled.actual_microusd == 25
+
+def test_money_migration_releases_never_sent_holds_and_qualifies_updates() -> None:
+    money=(Path(__file__).parents[1]/'supabase/migrations/202609160002_m2_translation_money.sql').read_text().lower()
+    assert 'perform translation_private.release_money(row_value,coalesce(row_value.reserved_microusd,0))' in money
+    assert 'actual_microusd is null' in money and 'reserved_microusd is null' in money
+    assert 'update translation_private.translation_reservations r set charge_scope' in money

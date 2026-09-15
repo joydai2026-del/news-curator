@@ -596,8 +596,7 @@ def _money_policy(policy: Mapping[str, object], provider: object) -> MoneyReserv
     if getattr(provider, "provider_id", None) != "openai":
         return None
     input_price, output_price = getattr(provider, "price_policy")
-    max_input = _positive_int_with_default(policy, "openai_max_input_tokens", 4096)
-    max_output = _positive_int_with_default(policy, "openai_max_output_tokens", 4096)
+    max_input, max_output = getattr(provider, "maximum_billable_tokens")
     reserve = _microusd(max_input, input_price) + _microusd(max_output, output_price)
     return MoneyReservation(
         charge_scope=_text_with_default(policy, "openai_charge_scope", "public_translation_openai_v1"),
