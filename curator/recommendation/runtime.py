@@ -70,7 +70,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
         request_cost_limit_usd=policy["request_cost_limit_usd"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
         input_cost_per_million_tokens_usd=policy.get("input_cost_per_million_tokens_usd"),
         output_cost_per_million_tokens_usd=policy.get("output_cost_per_million_tokens_usd"))
-    prompt = ReviewedRankLLMPromptBuilder(_required(env, "NEWS_CURATOR_RANKLLM_TEMPLATE"))
+    prompt = ReviewedRankLLMPromptBuilder(env.get("NEWS_CURATOR_RANKLLM_TEMPLATE") or
+        _required(policy, "prompt_template"))
     engine = OpenAIRankLLMEngine(prompt_builder=prompt, endpoint=ranker_policy.endpoint, api_key=provider_key or "disabled",
         model=ranker_policy.model_id, maximum_output_tokens=policy["maximum_output_tokens"],
         reasoning_token_allowance=policy["reasoning_token_allowance"],

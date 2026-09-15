@@ -5,6 +5,7 @@ from curator.contracts.enums import ActorKind
 from curator.contracts.ranking_request import AuthenticatedOwner
 
 from curator.recommendation.service import AuthenticationError, RankingService, ServicePolicy, StaleRankingError
+from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 
 
 class Auth:
@@ -98,3 +99,45 @@ def test_post_provider_snapshot_change_is_rejected():
     after = dict(before, history_revision=6)
     with pytest.raises(StaleRankingError, match="changed_history_revision"):
         service()._assert_fresh(before, after)
+
+
+def test_equal_time_corpus_cursor_has_no_gap_or_duplicate_across_fifty_candidate_boundary():
+    published = "2026-09-14T12:00:00+00:00"
+    rows = [{"story_id": f"story:{index:064x}", "title": f"Story {index}", "summary": "",
+        "source_id": "public", "source_name": "Public", "language": "en", "published_at": published,
+        "canonical_url": f"https://example.invalid/{index}", "category_ids": []}
+        for index in range(101, 0, -1)]
+    class BoundaryStore:
+        def __init__(self): self.frozen = {}; self.sequence = 0
+        def history_snapshot(self, token):
+            return {"included_history_revision": 0, "history_revision": 0, "history_generation": 1,
+                "consent_revision": 1, "learning_enabled": False, "provider_processing_enabled": False,
+                "provider_policy_id": "policy", "events": []}
+        def retained_candidates(self, *, limit, before_published_at=None, before_story_id=None, **kwargs):
+            eligible = rows if before_story_id is None else [row for row in rows
+                if (row["published_at"], row["story_id"]) < (before_published_at, before_story_id)]
+            return eligible[:limit]
+        def reserve_budget(self, **kwargs): return False
+        def owner_states(self, token, story_ids): return {}
+        def save_frozen_order(self, **kwargs):
+            self.sequence += 1; key = f"frozen-{self.sequence}"; self.frozen[key] = kwargs; return key
+        def load_frozen_order(self, *, user_id, frozen_order_id):
+            value = self.frozen[frozen_order_id]
+            return {"expires_at": value["expires_at"], "page_size": value["page_size"],
+                "bindings": value["bindings"], "cards": value["cards"]}
+    store = BoundaryStore()
+    adapter = RankLLMAdapter(policy=RankerPolicy("openai", "gpt-5-mini", "https://provider.invalid",
+        "policy", input_cost_per_million_tokens_usd=.25, output_cost_per_million_tokens_usd=2), engine=object())
+    subject = RankingService(auth=Auth(), store=store, adapter=adapter,
+        policy=ServicePolicy("policy", "gpt-5-mini", "policy", "tenant", candidate_limit=50,
+            maximum_page_size=25, enabled=True), cursor_key=b"x" * 32, clock=lambda: 1000)
+    body = {"history_revision": 0, "server_commit_revision": 0, "history_generation": 1,
+        "consent_revision": 1, "page_size": 25}
+    response = subject.rank(authorization="Bearer valid", body=body)
+    seen = []
+    while True:
+        seen.extend(card["story_id"] for card in response["cards"])
+        if response["next_cursor"] is None: break
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+    assert seen == [row["story_id"] for row in rows]
+    assert len(seen) == len(set(seen)) == 101

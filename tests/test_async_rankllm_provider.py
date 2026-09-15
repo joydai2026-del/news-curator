@@ -19,10 +19,14 @@ class Prompt:
 
 
 def test_exact_raw_permutation_and_usage_are_preserved():
+    sent = []
     async def run():
-        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
-            "id": "response-1", "output": [{"type": "message", "content": [{"type": "output_text", "text": "[2] > [1]"}]}],
-            "usage": {"input_tokens": 12, "output_tokens": 5}}))
+        def respond(request):
+            sent.append(request)
+            return httpx.Response(200, json={
+            "id": "response-1", "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"order":[2,1]}'}]}],
+            "usage": {"input_tokens": 12, "output_tokens": 5}})
+        transport = httpx.MockTransport(respond)
         client = httpx.AsyncClient(transport=transport)
         provider = AsyncRankLLMProvider(prompt_builder=Prompt(), transport=AsyncOpenAIResponses(
             client=client, endpoint="https://provider.invalid/v1", api_key="test", model="test", max_output_tokens=32))
@@ -30,10 +34,14 @@ def test_exact_raw_permutation_and_usage_are_preserved():
         await client.aclose()
         assert outcome.order == (2, 1)
         assert (outcome.input_tokens, outcome.output_tokens, outcome.request_id) == (12, 5, "response-1")
+        body = __import__('json').loads(sent[0].content)
+        schema = body['text']['format']['schema']['properties']['order']
+        assert (schema['minItems'], schema['maxItems'], schema['items']['minimum'], schema['items']['maximum']) == (2, 2, 1, 2)
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("raw", ["2 1", "[2] > [2]", "[2] > [1] explanation"])
+@pytest.mark.parametrize("raw", ["2 1", '{"order":[2,2]}', '{"order":[2]}', '{"order":[3,1]}',
+    '{"order":[2,1],"extra":true}', '{"order":[true,1]}'])
 def test_unvalidated_or_nonpermutation_output_is_rejected(raw):
     async def run():
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
@@ -73,7 +81,7 @@ def test_real_stalled_loopback_connection_is_cancelled_and_transport_closed():
         provider = AsyncOpenAIResponses(client=client, endpoint="https://provider.invalid/v1",
             api_key="test", model="test", max_output_tokens=32, total_seconds=0.05)
         with pytest.raises(ProviderTimeout):
-            await provider.create([])
+            await provider.create([], candidate_count=1)
         assert accepted.is_set()
         assert client.is_closed
         server.close()

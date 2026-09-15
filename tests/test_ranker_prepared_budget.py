@@ -9,6 +9,7 @@ from curator.contracts.enums import ActorKind, EventType, M2HistoryEventType
 from curator.contracts.ranking_request import (AuthenticatedOwner, ModelRankingInput, OrderedHistoryEvent,
     RankingCandidate, RankingRequest)
 from curator.recommendation.engine import OpenAIRankLLMEngine
+from curator.recommendation.async_provider import exact_order_schema as sent_schema
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -47,26 +48,29 @@ def test_prompt_includes_fixture_publication_times_and_current_query_precedence(
     assert 'Current query: bitcoin' in prompt_text and '"query":"fashion week"' in prompt_text
 
 
-def test_two_hundred_candidate_preparation_reserves_configured_output_and_sends_identical_prompt():
+def test_fifty_candidate_preparation_reserves_schema_and_sends_identical_prompt():
     policy=yaml.safe_load((ROOT/'config/ranker-policy-r1.yaml').read_text())
     prompt=InstrumentedPrompt(); sent=[]
     def respond(request):
         body=json.loads(request.content);sent.append(body)
         return httpx.Response(200,json={'id':'local-provider-response','output':[{'type':'message','content':[
-            {'type':'output_text','text':' > '.join(f'[{n}]' for n in range(1,201))}]}],
+            {'type':'output_text','text':json.dumps({'order':list(range(1,51))},separators=(',',':'))}]}],
             'usage':{'input_tokens':1000,'output_tokens':1600}})
     engine=OpenAIRankLLMEngine(prompt_builder=prompt,endpoint='https://provider.example/v1',api_key='local-test',
         model='test-model',maximum_output_tokens=policy['maximum_output_tokens'],reasoning_effort=policy['reasoning_effort'],
         verbosity=policy['verbosity'], reasoning_token_allowance=policy['reasoning_token_allowance'],
         prompt_framing_token_allowance=policy['prompt_framing_token_allowance'],
         client_factory=lambda:httpx.AsyncClient(transport=httpx.MockTransport(respond)))
-    model_input=captured_input();prepared=engine.prepare(model_input)
+    model_input=ModelRankingInput(None,captured_input().candidates[:50],(),0,0,1,1,'test-policy','test-model')
+    prepared=engine.prepare(model_input)
     assert prepared.output_tokens_budget==policy['maximum_output_tokens']
-    assert prepared.output_tokens_budget >= len(' > '.join(f'[{n}]' for n in range(1,201)).encode()) + policy['reasoning_token_allowance']
-    assert prepared.input_tokens_bound==len(json.dumps(prepared.prompt,ensure_ascii=False,separators=(',',':')).encode()) + policy['prompt_framing_token_allowance'] + len(prepared.prompt)*policy['prompt_framing_tokens_per_message']
+    assert prepared.output_tokens_budget >= len(json.dumps({'order':list(range(1,51))},separators=(',',':')).encode()) + policy['reasoning_token_allowance']
+    envelope={'input':prepared.prompt,'text':{'format':sent_schema(50)}}
+    assert prepared.input_tokens_bound==len(json.dumps(envelope,ensure_ascii=False,separators=(',',':')).encode()) + policy['prompt_framing_token_allowance'] + len(prepared.prompt)*policy['prompt_framing_tokens_per_message']
     outcome=engine.rerank_prepared(prepared,timeout_seconds=6)
     assert prompt.calls==1
     assert sent[0]['input']==prepared.prompt
+    assert sent[0]['text']['format']==sent_schema(50)
     assert sent[0]['max_output_tokens']==prepared.output_tokens_budget
     assert outcome.ranked_candidate_ids==tuple(c.candidate_id for c in model_input.candidates)
     assert outcome.output_tokens==1600
@@ -99,7 +103,7 @@ def test_successful_usage_reconciles_cost_and_keeps_private_execution_out_of_res
         def get_user(self, token):return {'id':'local-owner'}
     def respond(request):
         return httpx.Response(200,json={'id':'local-provider-response','output':[{'type':'message','content':[
-            {'type':'output_text','text':'[2] > [1]'}]}],'usage':{'input_tokens':100,'output_tokens':20}})
+            {'type':'output_text','text':'{"order":[2,1]}'}]}],'usage':{'input_tokens':100,'output_tokens':20}})
     engine=OpenAIRankLLMEngine(prompt_builder=InstrumentedPrompt(),endpoint='https://provider.example/v1',
         api_key='local-protocol-only',model='test-model',maximum_output_tokens=4096,
         reasoning_effort='minimal',verbosity='low',client_factory=lambda:httpx.AsyncClient(transport=httpx.MockTransport(respond)))
@@ -136,7 +140,7 @@ def test_invalid_permutation_still_settles_reported_usage():
         def get_user(self, token): return {'id':'local-owner'}
     def respond(request):
         return httpx.Response(200,json={'id':'charged-invalid','output':[{'type':'message','content':[
-            {'type':'output_text','text':'[1] > [1]'}]}],'usage':{'input_tokens':100,'output_tokens':20}})
+            {'type':'output_text','text':'{"order":[1,1]}'}]}],'usage':{'input_tokens':100,'output_tokens':20}})
     engine=OpenAIRankLLMEngine(prompt_builder=InstrumentedPrompt(),endpoint='https://provider.example/v1',
         api_key='local-protocol-only',model='test-model',maximum_output_tokens=4096,
         reasoning_effort='minimal',verbosity='low',client_factory=lambda:httpx.AsyncClient(transport=httpx.MockTransport(respond)))

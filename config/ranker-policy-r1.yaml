@@ -2,9 +2,10 @@ schema_version: 1
 provider: openai
 model: gpt-5-mini
 endpoint: https://api.openai.com/v1
-prompt_revision: m2-rankllm-listwise-r2
-maximum_output_tokens: 4096
-reasoning_token_allowance: 2048
+prompt_revision: m2-rankllm-json-r3
+prompt_template: config/rankllm-news-curator-json.yaml
+maximum_output_tokens: 2048
+reasoning_token_allowance: 1024
 prompt_framing_token_allowance: 1024
 prompt_framing_tokens_per_message: 8
 tokenizer_encoding: o200k_base
@@ -23,8 +24,8 @@ raw_response_logging: false
 invocation_history_persistence: false
 reader_origin: null
 maximum_request_body_bytes: 32768
-candidate_limit: 200
+candidate_limit: 50
 maximum_page_size: 25
 maximum_excluded_story_ids: 1000
 cursor_ttl_seconds: 900
-service_enabled: false
+service_enabled: true

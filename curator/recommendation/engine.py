@@ -9,7 +9,7 @@ from pathlib import Path
 
 from curator.contracts.ranking_request import ModelRankingInput
 
-from .async_provider import AsyncOpenAIResponses, AsyncRankLLMProvider
+from .async_provider import AsyncOpenAIResponses, AsyncRankLLMProvider, exact_order_schema
 from .rankllm_adapter import ProviderOutcome
 
 
@@ -69,11 +69,13 @@ class OpenAIRankLLMEngine:
         # One UTF-8 byte per token is deliberately conservative. Reserve the
         # full configured API output cap, including reasoning, not just the
         # number of list entries expected to appear in the visible answer.
-        permutation = " > ".join(f"[{index}]" for index in range(1, len(passages) + 1))
+        permutation = json.dumps({"order": list(range(1, len(passages) + 1))}, separators=(",", ":"))
         if len(permutation.encode()) + self._reasoning_allowance > self._maximum_output_tokens:
             raise ValueError("output budget cannot accommodate candidate permutation and reasoning allowance")
         prompt = self._builder.create_prompt(query=query, passages=passages)
-        serialized = json.dumps(prompt, ensure_ascii=False, separators=(",", ":"))
+        schema = exact_order_schema(len(passages))
+        serialized = json.dumps({"input": prompt, "text": {"format": schema}},
+            ensure_ascii=False, separators=(",", ":"))
         content_tokens = self._token_counter(serialized) if self._token_counter else len(serialized.encode())
         if type(content_tokens) is not int or content_tokens < 0:
             raise ValueError("invalid provider token count")

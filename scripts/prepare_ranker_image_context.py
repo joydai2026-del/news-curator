@@ -72,6 +72,8 @@ def main() -> None:
     copy_python_tree(repo / "curator", args.output / "curator")
     (args.output / "config").mkdir()
     shutil.copy2(repo / "config/ranker-policy-r1.yaml", args.output / "config/ranker-policy-r1.yaml")
+    shutil.copy2(repo / "config/rankllm-news-curator-json.yaml",
+                 args.output / "config/rankllm-news-curator-json.yaml")
     shutil.copy2(repo / "deploy/ranker/Containerfile", args.output / "Containerfile")
     shutil.copy2(repo / "deploy/ranker/requirements-linux-cp312-x86_64.lock", args.output / "requirements.lock")
     shutil.copy2(repo / "deploy/ranker/linux-wheel-provenance.json", args.output / "wheel-provenance.json")
@@ -92,7 +94,7 @@ def main() -> None:
     rows = json.loads(args.public_artifact.read_text()).get("rows")
     if not isinstance(rows, list) or len(rows) < 200:
         raise SystemExit("public artifact needs at least 200 rows")
-    fields = ("title", "source_id", "summary")
+    fields = ("story_id", "title", "source_id", "summary", "language", "published_at")
     smoke = [{key: row[key] for key in fields} for row in rows[:200]]
     (args.output / "smoke-public-200.json").write_text(json.dumps(smoke, ensure_ascii=False,
         separators=(",", ":")) + "\n")

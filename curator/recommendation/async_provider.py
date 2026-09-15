@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import re
+import json
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence
 
@@ -35,6 +35,17 @@ class ProviderResponseError(ValueError):
         self.input_tokens, self.output_tokens, self.request_id = input_tokens, output_tokens, request_id
 
 
+def exact_order_schema(candidate_count: int) -> dict[str, object]:
+    if type(candidate_count) is not int or candidate_count < 1:
+        raise ValueError("candidate count must be positive")
+    return {"type": "json_schema", "name": "rank_order", "strict": True, "schema": {
+        "type": "object", "properties": {"order": {"type": "array",
+            "description": f"Permutation of identifiers 1 through {candidate_count}, each exactly once",
+            "items": {"type": "integer", "minimum": 1, "maximum": candidate_count},
+            "minItems": candidate_count, "maxItems": candidate_count}},
+        "required": ["order"], "additionalProperties": False}}
+
+
 class AsyncOpenAIResponses:
     """One immutable HTTPX client; timeout closes its transport on cancellation."""
 
@@ -50,7 +61,7 @@ class AsyncOpenAIResponses:
         self._model, self._total = model, total_seconds
         self._max_output_tokens, self._reasoning_effort, self._verbosity = max_output_tokens, reasoning_effort, verbosity
 
-    async def create(self, prompt: object) -> Mapping[str, object]:
+    async def create(self, prompt: object, *, candidate_count: int) -> Mapping[str, object]:
         # wait_for preserves the repository's Python 3.10 CI support while
         # cancelling the whole request on the same total deadline.
         async def request():
@@ -58,7 +69,8 @@ class AsyncOpenAIResponses:
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 json={"model": self._model, "input": prompt, "store": False,
                     "max_output_tokens": self._max_output_tokens,
-                    "reasoning": {"effort": self._reasoning_effort}, "text": {"verbosity": self._verbosity}})
+                    "reasoning": {"effort": self._reasoning_effort},
+                    "text": {"verbosity": self._verbosity, "format": exact_order_schema(candidate_count)}})
             response.raise_for_status()
             value = response.json()
             if not isinstance(value, Mapping):
@@ -74,8 +86,6 @@ class AsyncOpenAIResponses:
 class AsyncRankLLMProvider:
     """Uses RankLLM prompt construction while validating raw output exactly."""
 
-    _RAW_PERMUTATION = re.compile(r"^\s*\[\d+\](\s*>\s*\[\d+\])*\s*$").fullmatch
-
     def __init__(self, *, prompt_builder: PromptBuilder, transport: AsyncOpenAIResponses) -> None:
         self._prompt_builder, self._transport = prompt_builder, transport
 
@@ -84,7 +94,7 @@ class AsyncRankLLMProvider:
         return await self.rerank_prompt(prompt=prompt, candidate_count=len(passages))
 
     async def rerank_prompt(self, *, prompt: object, candidate_count: int) -> AsyncProviderOutcome:
-        response = await self._transport.create(prompt)
+        response = await self._transport.create(prompt, candidate_count=candidate_count)
         texts = []
         for item in response.get("output", ()) if isinstance(response.get("output"), list) else ():
             if isinstance(item, Mapping) and item.get("type") == "message":
@@ -99,17 +109,20 @@ class AsyncRankLLMProvider:
         request_id = response.get("id")
         usage_valid = (type(input_tokens) is int and type(output_tokens) is int and input_tokens >= 0
                        and output_tokens >= 0 and isinstance(request_id, str) and bool(request_id))
-        if not isinstance(output, str) or not self._RAW_PERMUTATION(output):
+        try:
+            parsed = json.loads(output) if isinstance(output, str) else None
+            order_value = parsed.get("order") if isinstance(parsed, Mapping) and set(parsed) == {"order"} else None
+            valid_order = (isinstance(order_value, list) and len(order_value) == candidate_count
+                and all(type(value) is int and 1 <= value <= candidate_count for value in order_value)
+                and len(set(order_value)) == candidate_count)
+        except json.JSONDecodeError:
+            order_value, valid_order = None, False
+        if not valid_order:
             if usage_valid:
                 raise ProviderResponseError("invalid raw provider response", input_tokens=input_tokens,
                     output_tokens=output_tokens, request_id=request_id)
             raise ValueError("invalid raw provider response")
-        order = tuple(int(value) for value in re.findall(r"\[(\d+)\]", output))
-        if sorted(order) != list(range(1, candidate_count + 1)):
-            if usage_valid:
-                raise ProviderResponseError("provider response is not an exact permutation",
-                    input_tokens=input_tokens, output_tokens=output_tokens, request_id=request_id)
-            raise ValueError("provider response is not an exact permutation")
+        order = tuple(order_value)
         if type(input_tokens) is not int or type(output_tokens) is not int or input_tokens < 0 or output_tokens < 0:
             raise ValueError("invalid provider usage")
         if not isinstance(request_id, str) or not request_id:

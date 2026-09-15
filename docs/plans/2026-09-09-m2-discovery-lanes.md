@@ -1,3 +1,5 @@
+> **Superseded on 2026-09-14.** This deterministic lane plan is retained for history. The active reviewed M2 plan is [`2026-09-14-m2-model-feed.md`](2026-09-14-m2-model-feed.md). It keeps Nostr optional, uses model-led feed and search ranking, and preserves configurable pagination.
+
 # M2 implementation plan
 
 Build in the prepared isolated worktree on `feat/m2-discovery-lanes` (base 4741a64744c35f98d9f14c1180470f9ccb766f95). Live Notion M2 is Planned and asks working Updates/newest, Hot/trendy, Interested/fresh, Surprise/out-of-scope, overlap and evidence. JJ authorizes proceeding alongside M1 learning. Do not mark learning complete.
