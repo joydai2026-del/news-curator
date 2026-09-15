@@ -271,6 +271,40 @@ def test_service_reports_truthful_pre_call_fallback_reason(case, expected_reason
     assert store.frozen['bindings']['execution']['cost_basis']=='no_provider_call'
 
 
+def test_service_accepts_no_consent_snapshot_zero_without_provider_or_budget_calls():
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    from curator.recommendation.service import RankingService, ServicePolicy
+    rows=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())['rows'][:1]
+    class Store:
+        reserve_calls=settle_calls=0
+        def history_snapshot(self, token): return dict(history_revision=0,included_history_revision=0,
+            history_generation=1,consent_revision=0,learning_enabled=False,
+            provider_processing_enabled=False,provider_policy_id=None,events=[])
+        def retained_candidates(self, **kwargs): return rows
+        def reserve_budget(self, **kwargs): self.reserve_calls+=1; return True
+        def settle_budget(self, **kwargs): self.settle_calls+=1
+        def owner_states(self, token, story_ids): return {}
+        def save_frozen_order(self, **kwargs): self.frozen=kwargs; return 'local-frozen'
+    class Engine:
+        def prepare(self, model_input): pytest.fail('no-consent fallback must not prepare provider input')
+        def rerank_prepared(self, prepared, timeout_seconds): pytest.fail('no-consent fallback must not call provider')
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example',
+        'test-policy',max_retries=0,input_cost_per_million_tokens_usd=.25,
+        output_cost_per_million_tokens_usd=2),engine=Engine())
+    store=Store(); service=RankingService(auth=type('Auth',(),{'get_user':lambda self,token:{'id':'local-owner'}})(),
+        store=store,adapter=adapter,policy=ServicePolicy('test-policy','test-model','test-policy',
+        'local-tenant',enabled=True),cursor_key=b'x'*32)
+    response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,
+        server_commit_revision=0,history_generation=1,consent_revision=0))
+    assert response['result_mode']=='fallback'
+    assert response['fallback_reason']=='provider_processing_consent_required'
+    assert len(response['cards'])==1 and response['cards'][0]['story_id']==rows[0]['story_id']
+    assert store.frozen['bindings']['consent_revision']==0
+    assert store.frozen['bindings']['execution']['attempts_started']==0
+    assert store.frozen['bindings']['execution']['cost_basis']=='no_provider_call'
+    assert store.reserve_calls==0 and store.settle_calls==0
+
+
 def test_prepare_with_reason_does_not_swallow_process_control():
     from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
     class Engine:

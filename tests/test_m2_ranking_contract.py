@@ -167,6 +167,14 @@ def test_empty_history_requires_zero_revision_and_model_input_validates() -> Non
         invalid.model_input()
 
 
+def test_pre_consent_baseline_revision_zero_is_valid_but_bool_and_negative_are_not() -> None:
+    value = request()
+    validate_ranking_request(RankingRequest(**{**value.__dict__, "consent_revision": 0}))
+    for invalid in (False, -1):
+        with pytest.raises(ValueError, match="schema and history revisions"):
+            validate_ranking_request(RankingRequest(**{**value.__dict__, "consent_revision": invalid}))
+
+
 def test_request_rejects_wrong_collection_and_query_types() -> None:
     value = request()
     with pytest.raises(ValueError, match="contract types"):
