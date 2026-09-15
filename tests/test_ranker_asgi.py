@@ -66,3 +66,21 @@ def test_rank_route_maps_bad_jwt_to_401():
     sent = request(RankingASGI(service=Service(), reader_origin="https://reader.example"),
         method="POST", path="/rank", body=b'{}')
     assert sent[0]["status"] == 401
+
+
+def test_value_error_logs_only_safe_location_metadata(capsys):
+    class InvalidService(Service):
+        def rank(self, *, authorization, body):
+            raise ValueError("NEWS_CURATOR_MODEL_API_KEY=must-never-appear")
+
+    sent = request(RankingASGI(service=InvalidService(), reader_origin="https://reader.example"),
+        method="POST", path="/rank", body=b'{}')
+    assert sent[0]["status"] == 400
+    assert json.loads(sent[1]["body"]) == {"error": "invalid_request"}
+    logged = capsys.readouterr().err
+    assert "NEWS_CURATOR_MODEL_API_KEY" not in logged and "must-never-appear" not in logged
+    event = json.loads(logged)
+    assert event["event"] == "ranker_invalid_request"
+    assert event["exception_class"] == "ValueError"
+    assert event["source_basename"] == "test_ranker_asgi.py"
+    assert type(event["source_line"]) is int and event["source_line"] > 0

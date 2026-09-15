@@ -294,8 +294,10 @@ def test_service_accepts_no_consent_snapshot_zero_without_provider_or_budget_cal
     store=Store(); service=RankingService(auth=type('Auth',(),{'get_user':lambda self,token:{'id':'local-owner'}})(),
         store=store,adapter=adapter,policy=ServicePolicy('test-policy','test-model','test-policy',
         'local-tenant',enabled=True),cursor_key=b'x'*32)
-    response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,
-        server_commit_revision=0,history_generation=1,consent_revision=0))
+    response=service.rank(authorization='Bearer local-test',body=dict(schema_version=1,
+        policy_version='test-policy',model_version='test-model',history_revision=0,
+        server_commit_revision=0,history_generation=1,consent_revision=0,page_size=25,
+        eligibility={'category':None,'query':None},exclude_story_ids=[]))
     assert response['result_mode']=='fallback'
     assert response['fallback_reason']=='provider_processing_consent_required'
     assert len(response['cards'])==1 and response['cards'][0]['story_id']==rows[0]['story_id']
