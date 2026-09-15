@@ -100,6 +100,7 @@ def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(mon
     assert captured["functions"][0]["timeout"] == 15
     assert captured["functions"][0]["max_containers"] == 4
     assert captured["functions"][0]["scaledown_window"] == 60
+    assert captured["functions"][0]["enable_memory_snapshot"] is True
     assert captured["functions"][0]["restrict_modal_access"] is True
     assert captured["concurrent"]["max_inputs"] == 8
 
@@ -111,12 +112,14 @@ def test_modal_policy_uses_validated_overrides(monkeypatch, tmp_path):
         "NEWS_CURATOR_MODAL_MAX_CONTAINERS": "7",
         "NEWS_CURATOR_MODAL_MAX_INPUTS_PER_CONTAINER": "12",
         "NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS": "300",
+        "NEWS_CURATOR_MODAL_MEMORY_SNAPSHOT_ENABLED": "false",
     }
     _, captured = _load(monkeypatch, **values)
     assert captured["app_name"] == "news-curator-preview"
     assert captured["functions"][0]["timeout"] == 30
     assert captured["functions"][0]["max_containers"] == 7
     assert captured["functions"][0]["scaledown_window"] == 300
+    assert captured["functions"][0]["enable_memory_snapshot"] is False
     assert captured["concurrent"]["max_inputs"] == 12
 
 
@@ -128,6 +131,7 @@ def test_smoke_mode_does_not_require_or_resolve_a_secret(monkeypatch, tmp_path):
     assert captured["functions"][0]["scaledown_window"] == 2
     assert captured["functions"][0]["block_network"] is True
     assert captured["functions"][0]["include_source"] is False
+    assert "enable_memory_snapshot" not in captured["functions"][0]
     assert all(call[0] != "secret" for call in captured.values() if isinstance(call, tuple))
 
 
@@ -142,6 +146,7 @@ def test_context_mutation_is_rejected(monkeypatch, tmp_path):
     ("name", "value"),
     [
         ("NEWS_CURATOR_MODAL_DEPLOYMENT_ENABLED", "yes"),
+        ("NEWS_CURATOR_MODAL_MEMORY_SNAPSHOT_ENABLED", "yes"),
         ("NEWS_CURATOR_MODAL_APP_NAME", "News Curator"),
         ("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", "6"),
         ("NEWS_CURATOR_MODAL_MAX_CONTAINERS", "0"),
