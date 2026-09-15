@@ -203,6 +203,9 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         context.add_init_script('''(() => {
             const originalFetch=window.fetch.bind(window);
             window.fetch=(url,options)=>{
+              const requestUrl=typeof url==="string"?url:url.url;
+              if(window.__stallState && requestUrl.includes("/set_story_state_with_event"))
+                return new Promise((resolve,reject)=>{window.__releaseState=()=>originalFetch(url,options).then(resolve,reject);});
               if(window.__stallExport && String(url).endsWith("/m2_owner_export_page"))
                 return new Promise((resolve,reject)=>{window.__releaseExport=()=>originalFetch(url,options).then(resolve,reject);});
               if(window.__stallHistory && String(url).endsWith("/m2_history_snapshot"))
@@ -255,8 +258,19 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             saved_story_id=card.get_attribute('data-story-id')
             card.locator('.accordion-toggle').click()
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="1"')
+            page.evaluate('window.__stallState=true')
             card.locator('.save-action').click()
+            assert card.locator('.save-action').inner_text()=='Saving…'
+            assert card.locator('.save-action').get_attribute('aria-busy')=='true'
+            assert card.locator('.save-action').get_attribute('aria-pressed')=='false'
+            page.wait_for_function('() => typeof window.__releaseState==="function"')
+            page.evaluate('window.__stallState=false;window.__releaseState()')
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="2"')
+            assert card.locator('.save-action').inner_text()=='Saved ✓'
+            assert card.locator('.save-action').get_attribute('aria-label')=='Remove from Saved'
+            assert card.locator('.save-action').get_attribute('aria-pressed')=='true'
+            assert card.locator('.save-action').get_attribute('aria-busy') is None
+            assert page.locator('#reader-status').inner_text()=='Saved. You can find it in Saved.'
             discovery_reads=requests.count('/rest/v1/rpc/discovery_edition')
             rank_reads=requests.count('/rank')
             page.locator('.chip[data-filter="__saved__"]:visible').click()
@@ -387,7 +401,15 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.locator('.chip[data-filter="__all__"]:visible').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             preceding_ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
-            page.locator('#load-more').click()
+            page.evaluate('document.querySelector("#load-more").click()')
+            pending=page.evaluate('''() => ({
+                label:document.querySelector("#load-more").textContent,
+                busy:document.querySelector("#load-more").getAttribute("aria-busy"),
+                disabled:document.querySelector("#load-more").disabled,
+                status:document.querySelector("#reader-status").textContent,
+              })''')
+            assert pending=={'label':'Loading 25 more…','busy':'true','disabled':True,
+                'status':'Loading 25 more stories…'}
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading")')
             assert page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')==preceding_ids
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')

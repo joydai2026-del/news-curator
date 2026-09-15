@@ -521,7 +521,8 @@
     if (Number.isSafeInteger(state.state_revision)) card.dataset.stateRevision = String(state.state_revision);
     const saveButton = card.querySelector(".save-action");
     if (saveButton && hasSaved) {
-      saveButton.textContent = saved ? "Unsave" : "Save";
+      saveButton.textContent = saved ? "Saved ✓" : "Save";
+      saveButton.setAttribute("aria-label", saved ? "Remove from Saved" : "Save story");
       saveButton.setAttribute("aria-pressed", String(saved));
     }
     if (interestButton && interestButton.dataset.topicId) {
@@ -549,6 +550,11 @@
   function finishStateMutation(card, token, ready) {
     if (card.newsCuratorStateMutationToken !== token) return false;
     delete card.newsCuratorStateMutationToken;
+    const saveButton = card.querySelector(".save-action");
+    if (saveButton) {
+      saveButton.removeAttribute("aria-busy");
+      saveButton.classList.remove("is-pending");
+    }
     setStoryStateControlsDisabled(card, !ready);
     return true;
   }
@@ -1191,6 +1197,7 @@
       const key = JSON.stringify(eligibility);
       const pageRequest = { topic: selectedTopic(), epoch };
       pageRequests.add(pageRequest); refreshLoadButton();
+      if (append) announce(`Loading ${m2Config.page_size} more stories…`);
       let baselineShown = false;
       const showBaseline = () => {
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
@@ -1361,16 +1368,22 @@
     function refreshLoadButton() {
       const topic = selectedTopic();
       if (usesM2()) {
-        loadButton.textContent = `Load ${m2Config.page_size} more`;
+        const busy = [...pageRequests].some((request) => request.epoch === authEpoch);
+        loadButton.textContent = busy ? `Loading ${m2Config.page_size} more…` : `Load ${m2Config.page_size} more`;
         loadButton.hidden = initializing || !m2Active || !m2Cursor;
-        loadButton.disabled = [...pageRequests].some((request) => request.epoch === authEpoch);
+        loadButton.disabled = busy;
+        loadButton.toggleAttribute("aria-busy", busy);
+        loadButton.classList.toggle("is-loading", busy);
         return;
       }
-      if (latest) loadButton.textContent = `Load ${latest.page_size} more`;
+      const busy = [...pageRequests].some((request) =>
+        request.topic === topic && request.epoch === authEpoch);
+      if (latest) loadButton.textContent = busy ? `Loading ${latest.page_size} more…` : `Load ${latest.page_size} more`;
       loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
-      loadButton.disabled = [...pageRequests].some((request) =>
-        request.topic === topic && request.epoch === authEpoch);
+      loadButton.disabled = busy;
+      loadButton.toggleAttribute("aria-busy", busy);
+      loadButton.classList.toggle("is-loading", busy);
     }
     function topicIdForSlug(slug) {
       if (slug === "__all__" || slug === "__saved__") return slug;
@@ -1434,7 +1447,10 @@
       }
       if (saveButton) {
         saveButton.textContent = "Save";
+        saveButton.setAttribute("aria-label", "Save story");
         saveButton.setAttribute("aria-pressed", "false");
+        saveButton.removeAttribute("aria-busy");
+        saveButton.classList.remove("is-pending");
       }
       if (interestButton) {
         interestButton.textContent = "More like this";
@@ -1682,6 +1698,7 @@
       const request = { topic, epoch: requestEpoch };
       pageRequests.add(request);
       refreshLoadButton();
+      announce(`Loading ${latest.page_size} more stories…`);
       try {
         const initialCursor = topic === "__all__" ? { order_mode: "history_freshness" } : null;
         const rows = topic === "__saved__"
@@ -1782,6 +1799,17 @@
       };
       card.newsCuratorStateMutationBaseline = { token: mutationToken, ...previous };
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
+      if (eventType === "save") {
+        const saveButton = card.querySelector(".save-action");
+        card.classList.toggle("is-saved", Boolean(previous.saved_at));
+        if (saveButton) {
+          saveButton.textContent = saved ? "Saving…" : "Removing…";
+          saveButton.setAttribute("aria-label", saved ? "Saving story" : "Removing story from Saved");
+          saveButton.setAttribute("aria-pressed", String(Boolean(previous.saved_at)));
+          saveButton.setAttribute("aria-busy", "true");
+          saveButton.classList.add("is-pending");
+        }
+      }
       try {
         const key = idempotencyKey();
         const result = m2?.enabled && signedIn() && (eventType !== "read_more" || read)
@@ -1797,7 +1825,9 @@
         applyServerState(card, confirmed);
         reconcilePendingRead(card, Boolean(confirmed.read_at));
         reapplyCurrentMembership(card, restoreFocusOnRollback ? focusedAction : null);
-        announce("Reading state saved.");
+        announce(eventType === "save"
+          ? saved ? "Saved. You can find it in Saved." : "Removed from Saved."
+          : "Reading state saved.");
       } catch (_) {
         if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
         const baseline = card.newsCuratorStateMutationBaseline || previous;
@@ -1805,7 +1835,10 @@
         reconcilePendingRead(card, Boolean(baseline.read_at));
         reapplyCurrentMembership(card);
         rolledBack = true;
-        announce("Reading state could not be saved. Try again.");
+        announce(eventType === "save"
+          ? saved ? "Could not save. Your previous state was restored. Try again."
+            : "Could not remove from Saved. Your previous state was restored. Try again."
+          : "Reading state could not be saved. Try again.");
       } finally {
         if (card.newsCuratorStateMutationPresentation?.token === mutationToken) {
           delete card.newsCuratorStateMutationPresentation;

@@ -348,7 +348,10 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .updates-status{position:absolute;top:calc(100% + .5rem);left:50%;transform:translateX(-50%);z-index:31;width:max-content;max-width:calc(100% - 2rem);text-align:center;margin:0;pointer-events:none}
 .updates-button{min-height:44px;max-width:100%;border-radius:999px;padding:.55rem 1rem;background:var(--accent);color:var(--accent-fg);font-weight:700;box-shadow:var(--shadow);pointer-events:auto}
 .history-tools{display:flex;justify-content:center;margin:1.25rem 0}
-.load-more{min-height:44px;border-radius:999px;padding:.65rem 1rem;background:var(--card);color:var(--accent);font-weight:700}
+.load-more{min-height:44px;border-radius:999px;padding:.65rem 1rem;background:color-mix(in srgb,var(--card) 82%,transparent);color:var(--accent);font-weight:700;backdrop-filter:blur(14px);box-shadow:0 8px 24px color-mix(in srgb,var(--accent) 10%,transparent);transition:transform .16s ease,box-shadow .16s ease,opacity .16s ease}
+.load-more:not(:disabled):hover{transform:translateY(-1px);box-shadow:0 12px 30px color-mix(in srgb,var(--accent) 16%,transparent)}
+.load-more[aria-busy="true"]{opacity:.78;transform:translateY(1px);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg) 12%,transparent),0 5px 16px color-mix(in srgb,var(--accent) 9%,transparent)}
+.state-action.is-pending{opacity:.76;box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg) 12%,transparent)}
 .empty{margin:1.5rem 0}
 footer{margin-top:2rem;padding:1.25rem .25rem 0}
 .shot,.pad>.eyebrow,.hl,.desc,.meta{display:none!important}
@@ -365,7 +368,7 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
   .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
   .panel{padding:0 .85rem 1rem}.detail .row{grid-template-columns:1fr;gap:.05rem}
 }
-@media (prefers-reduced-motion:reduce){.chev{transition:none}}
+@media (prefers-reduced-motion:reduce){.chev,.load-more{transition:none}.load-more:not(:disabled):hover,.load-more[aria-busy="true"]{transform:none}}
 """
 
 JS = """

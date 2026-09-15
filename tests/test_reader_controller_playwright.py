@@ -604,7 +604,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             fail_next_state["value"] = True
             save_button.evaluate("button => button.click()")
             page.locator("#reader-status").get_by_text(
-                "Reading state could not be saved. Try again."
+                "Could not remove from Saved. Your previous state was restored. Try again."
             ).wait_for()
             assert first.is_visible()
             assert first.evaluate("card => card.classList.contains('is-saved')")
@@ -612,7 +612,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             assert page.evaluate("window.scrollY") == rollback_scroll
 
             save_button.evaluate("button => button.click()")
-            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            page.locator("#reader-status").get_by_text("Removed from Saved.").wait_for()
             assert first.is_hidden()
             assert page.evaluate(
                 "document.activeElement.matches('.chip[data-filter=\"__saved__\"]')"
@@ -1122,7 +1122,7 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
                 "card => card.dataset.stateRevision === '5'", arg=ai.element_handle()
             )
             assert ai.locator(".read-action").inner_text() == "Mark unread"
-            assert ai.locator(".save-action").inner_text() == "Unsave"
+            assert ai.locator(".save-action").inner_text() == "Saved ✓"
             assert quantum.locator(".state-action:enabled").count() == 1
 
             quantum.locator(".save-action").evaluate(
@@ -1136,10 +1136,10 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
                 "card => card.dataset.stateRevision === '7'", arg=quantum.element_handle()
             )
             assert quantum.locator(".read-action").inner_text() == "Mark unread"
-            assert quantum.locator(".save-action").inner_text() == "Unsave"
+            assert quantum.locator(".save-action").inner_text() == "Saved ✓"
             assert quantum.locator(".state-action:enabled").count() == 3
             quantum.locator(".save-action").click()
-            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            page.locator("#reader-status").get_by_text("Removed from Saved.").wait_for()
             assert state_writes == [(second_id, 7)]
             browser.close()
     finally:

@@ -60,11 +60,17 @@ class FakeElement {
         if (on) names.add(name); else names.delete(name);
         this.className = [...names].join(" ");
       },
+      remove: (name) => {
+        const names = new Set(this.className.split(/\s+/).filter(Boolean));
+        names.delete(name); this.className = [...names].join(" ");
+      },
     };
   }
   append(...children) { this.children.push(...children); this.lastChild = children.at(-1); }
   addEventListener() {}
   setAttribute(name, value) { this.attrs[name] = String(value); }
+  removeAttribute(name) { delete this.attrs[name]; }
+  toggleAttribute(name, force) { if (force) this.setAttribute(name, ""); else this.removeAttribute(name); }
   getAttribute(name) { return this.attrs[name]; }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name); }
   querySelector(selector) {
@@ -399,10 +405,11 @@ async function main() {
     classList: {
       values: new Set(),
       toggle(name, on) { if (on) this.values.add(name); else this.values.delete(name); },
+      remove(name) { this.values.delete(name); },
     },
     controls: {
       ".read-action": { textContent: "", setAttribute() {} },
-      ".save-action": { textContent: "", attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } },
+      ".save-action": { textContent: "", attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; }, classList: { remove() {} } },
       ".interest-action": {
         textContent: "", dataset: { topicId: "ai" }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; },
       },
@@ -505,7 +512,7 @@ async function main() {
 
   const controls = new Map([
     ["reader-status", { textContent: "" }],
-    ["load-more", { hidden: false, addEventListener() {} }],
+    ["load-more", new FakeElement("button")],
     ["updates-status", { hidden: true }],
     ["show-updates", { dataset: {}, addEventListener() {} }],
     ["sections", { addEventListener() {}, append() {} }],
