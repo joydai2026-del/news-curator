@@ -1,0 +1,314 @@
+schema_version: 1
+project: news-curator-learning-companion
+policy_status: reviewed
+measurement_status: unmeasured
+authority:
+  roadmap_and_milestones: private_Notion_sprint_pages
+  executable_policy_tests_deploy_and_receipts: GitHub_repository
+  this_file: canonical_repository_configuration
+primary_outcome: freshest_relevant_eligible_content_reaches_user
+evaluation:
+  clock: UTC
+  snapshot_freeze: [sources, candidates, eligibility, slate, features, policy, user_history]
+  minimum_independent_days: 7
+  bootstrap_unit: user_day
+  bootstrap_resamples: 2000
+  confidence_level: 0.95
+  bootstrap_scope: M4_promotion_or_optional_M2_uncertainty_not_an_M2_absolute_gate
+  small_n_rule: insufficient_evidence
+  missing_data_rule: retain_in_denominator_unless_proven_ineligible
+  registry_lock: sources_classes_and_families_are_predeclared_before_each_evaluation_window
+  registry_change_rule: failures_cannot_be_renamed_removed_or_reclassified_during_the_window
+  shared_M2_evidence_window:
+    minimum_independent_days: 7
+    may_overlap_across_metrics: true
+    minimum_judged_slates: 50
+    minimum_queries: 50
+    minimum_sentinel_items_per_class: 100
+    minimum_profile_events: 50
+    minimum_judged_items_per_required_marginal_slice: 30
+    unchanged_inputs_do_not_restart_window: true
+    affected_revalidation_required_after_relevant_change: true
+    incompatible_code_policy_schema_cohort_or_data_hashes_cannot_be_reused: true
+headline_outcome_groups:
+  freshness: [F1]
+  coverage: [F3]
+  feed_relevance: [R1]
+  search_quality: [R6]
+  learning: [L1, L2]
+M2_metric_roles:
+  headline: [F1, F3, R1, R6, L1, L2]
+  guardrail: [S1]
+  diagnostic: [F2, F4, F5, F6, R2, R3, R4, R5, D1, O1]
+source_families: [publisher, research_or_official, community_or_social, newsletter]
+source_classes:
+  fast_stream:
+    examples: [hacker_news]
+    optional_later_sources: [nostr]
+    target_poll_interval_minutes: 5
+    minimum_poll_interval_minutes: 5
+    maximum_poll_interval_minutes: 5
+    target_p95_independent_first_seen_to_ready_minutes: 15
+  scheduled_feed:
+    examples: [rss, json_feed, news_sitemap]
+    target_poll_interval_minutes: 15
+    minimum_poll_interval_minutes: 15
+    maximum_poll_interval_minutes: 15
+    target_p95_independent_first_seen_to_ready_minutes: 45
+  delayed_newsletter:
+    examples: [authorized_newsletter_import]
+    target_poll_interval_minutes: 30
+    minimum_poll_interval_minutes: 30
+    maximum_poll_interval_minutes: 90
+    target_p95_receipt_to_ready_minutes: 120
+polling_policy:
+  rule: fixed_runtime_configured_interval_by_source_class
+  adaptive_14_day_algorithm_required_for_M2: false
+  failure_rule: keep_failure_visible_and_alert_through_existing_workflow
+metrics:
+  F1:
+    name: controlled_observation_to_ready_lag
+    status: unmeasured
+    formula: "max(0, ready_at - independent_first_seen_at)"
+    units: minutes
+    denominator: all independently observed eligible items, including items missed or delayed by collection
+    quality_target: {p95_by_source_class_at_or_below_target: true, minimum_items_per_class: 100, minimum_days: 7}
+    missed_ready_rule: missed_items_are_infinite_lag_for_quantile_or_reported_as_explicit_bound_failures_never_dropped
+    timestamp_inequality: true_source_exposure_at_lte_independent_first_seen_at_so_measured_ready_minus_first_seen_lte_true_ready_lag
+    publisher_lag_diagnostic: ready_at_minus_trusted_publisher_published_at
+    early_capture_diagnostic: count_and_fraction_where_ready_at_precedes_independent_first_seen_at
+  F2:
+    name: descriptive_end_to_end_viewport_lag
+    status: unmeasured
+    formula: "first_actual_viewport_at - independent_first_seen_at"
+    units: minutes
+    denominator: independently identified eligible must-surface items during active-user observable opportunities, whether offered or omitted
+    missing: no_qualifying_foreground_interval_is_NA_and_reported_separately
+    diagnostic_target: {median_minutes: 60, p90_minutes: 240, minimum_items: 50, minimum_days: 7}
+    reporting_rule: report_viewed_percentiles_with_censored_and_missing_counts; never_compute_a_claimed_population_percentile_from_viewed_only
+  F5:
+    name: foreground_offer_latency
+    status: unmeasured
+    formula: "offer_at - foreground_request_at"
+    denominator: priority_frozen_reference_set_of_top_min_20_must_surface_items_for_each_foreground_opportunity
+    foreground_opportunity: foreground_request_at_is_first_eligible_foreground_feed_request_after_ready_at_for_corpus_members_or_after_independent_first_seen_at_for_omitted_items
+    omission_rule: reference_set_item_without_top20_offer_within_60_seconds_is_a_failure
+    capacity_reporting: report_ordinary_important_omission_rate_across_all_must_surface_candidates_separately
+    quality_target: {p95_seconds: 60, minimum_items: 50, minimum_days: 7}
+  F6:
+    name: publisher_published_to_ready_lag
+    status: unmeasured
+    formula: "ready_at - trusted_publisher_published_at"
+    units: minutes
+    role: diagnostic_only
+    missing: unknown_or_untrusted_publisher_timestamp_is_reported_not_imputed
+  F3:
+    name: eligible_fresh_recall
+    status: unmeasured
+    formula: "adjudicated relevant fresh items found in corpus / adjudicated relevant fresh items in sentinel candidate pool"
+    denominator: frozen_independently_sampled_and_adjudicated_eligible_sentinel_pool_only
+    numerator: denominator_items_present_in_production_corpus
+    collector_union_recall: diagnostic_only
+    quality_target: {overall_min: 0.85, must_surface_min: 0.95, minimum_items: 100, minimum_days: 7}
+    freshness_definition: trusted_publisher_published_at_with_age_at_decision_at_most_24_hours
+    unknown_time: excluded_from_fresh_numerator_but_reported_against_timestamp_missingness_budget
+    historical_import: fetch_or_import_time_never_makes_old_content_fresh
+  R1:
+    name: precision_at_20
+    status: unmeasured
+    formula: "relevant returned slots / min(20, independently frozen eligible candidate count); missing required slots are failures"
+    quality_target: {minimum: 0.75, minimum_judged_slates: 50, minimum_days: 7}
+    empty_candidate_rule: no_eligible_candidates_is_NA_not_pass
+    relevance_definition: grade_at_least_2
+    page_fill_gate: {minimum_fill_fraction_when_eligible_count_at_least_20: 1.0}
+    triage: fill_failure_is_pipeline_or_eligibility_integrity; precision_failure_is_ranking_quality
+  R2:
+    name: ndcg_at_20
+    status: unmeasured
+    formula: "DCG@20 using gain 2^grade-1 and log2(rank+1), divided by ideal DCG@20; tied grades share gain"
+    quality_target: {minimum: 0.80, minimum_judged_slates: 50, minimum_days: 7}
+    empty_or_unjudged_rule: NA_not_pass
+  R3:
+    name: top_k_relevant_coverage
+    status: unmeasured
+    formula: "relevant items in top K / min(K, adjudicated relevant items in frozen corpus)"
+    parameters: {K: 30}
+    quality_target: {minimum: 0.85, minimum_snapshots: 50, minimum_days: 7}
+    empty_or_unjudged_rule: NA_not_pass
+  R4:
+    name: top_90_desirable_coverage
+    status: unmeasured
+    formula: "relevant items within first 90 / min(90, adjudicated relevant items in frozen corpus)"
+    quality_target: {minimum: 0.80, must_surface_min: 0.95, minimum_queries: 50, minimum_days: 7}
+    empty_or_unjudged_rule: NA_not_pass
+  R5:
+    name: pooled_relevant_recall_at_1000
+    status: unmeasured
+    formula: "relevant candidates retrieved within fixed budget 1000 / relevant in independently pooled candidate set"
+    pool: union_of_rankers_plus_independent_source_samples
+    quality_target: {minimum: 0.85, must_surface_min: 0.95, minimum_queries: 50}
+    abundant_pool_rule: when_relevant_count_exceeds_1000_report_capacity_coverage_and_ordinary_recall_without_impossible_hard_target
+    empty_or_unjudged_rule: NA_not_pass
+  R6:
+    name: search_rank_ndcg_at_20
+    status: unmeasured
+    formula: "query-conditioned nDCG@20 against ideal ordering from the independent frozen pool; retrieval misses retain zero gain"
+    quality_target: {minimum: 0.80, minimum_queries: 50}
+  S1:
+    name: worst_slice_precision_at_20
+    status: unmeasured
+    slices: [each_configured_category, English, Chinese]
+    slice_definition: marginal_category_slices_plus_language_slices_not_cross_product
+    assignment: frozen_primary_category_and_original_content_language
+    diagnostic_buckets: [category_by_language_intersections, mixed_language, unknown_language]
+    quality_target: {minimum: 0.60, minimum_items_per_slice: 30}
+    missing: slices_below_minimum_are_insufficient_evidence
+  D1:
+    name: duplicate_cluster_rate_top_30
+    status: unmeasured
+    formula: "items beyond first representative of same event cluster / displayed top 30"
+    quality_target: {maximum: 0.10, minimum_slates: 50}
+  F4:
+    name: fresh_relevant_opportunity_capture
+    status: unmeasured
+    formula: "fresh relevant candidates placed in top 20 / min(available top-20 capacity, fresh relevant candidates in frozen corpus)"
+    quality_target: {minimum: 0.85, minimum_snapshots: 50, minimum_days: 7}
+    diagnostic_only: [median_item_age_hours, p90_item_age_hours, share_older_than_24h]
+    diagnostic_gate_rule: age_diagnostics_never_gate_promotion
+    empty_fresh_relevant_rule: NA_not_pass
+    M2_role: diagnostic_only
+    ordering_invariant: never_promote_a_newer_weaker_item_over_an_older_more_relevant_item_to_satisfy_this_metric
+  L1:
+    name: profile_update_latency
+    status: unmeasured
+    formula: "profile_version_committed_at - settled_interaction_at"
+    units: seconds
+    quality_target: {p95_maximum: 60, minimum_events: 50, minimum_days: 7}
+    model_path_evidence: ordered_history_input_receipt_and_profile_commit_receipt
+  L2:
+    name: new_request_profile_visibility_latency
+    status: unmeasured
+    formula: "ranking_response_completed_at - ranking_request_received_at for the first request after commit, with newest committed profile version asserted"
+    units: seconds
+    quality_target: {p95_maximum: 60, minimum_events: 50, minimum_days: 7}
+    hard_invariant: first_request_after_commit_uses_newest_committed_profile_version
+    behavior_test: genuine_replay_cases_have_predeclared_expected_direction; random_or_irrelevant_actions_need_not_change_rank
+    model_path_evidence: newest_committed_event_id_in_request_receipt
+  Q1:
+    name: source_supported_answer_rate
+    status: unmeasured
+    formula: "answers whose material claims are entailed by cited retrieved passages / answerable questions"
+    quality_target: {minimum: 0.90, minimum_questions: 50, minimum_languages: 2}
+  Q2:
+    name: unsupported_material_claim_rate
+    status: unmeasured
+    formula: "answers with one or more unsupported material claims / generated answers"
+    quality_target: {maximum: 0.02, minimum_questions: 50}
+  Q3:
+    name: citation_precision
+    status: unmeasured
+    formula: "citations that support their attached claim / all citations"
+    quality_target: {minimum: 0.95, minimum_questions: 50}
+  Q4:
+    name: answerable_question_refusal_rate
+    status: unmeasured
+    formula: "answerable questions refused / answerable questions"
+    quality_target: {maximum: 0.10, minimum_questions: 50}
+  P1:
+    name: proactive_precision
+    status: unmeasured
+    formula: "surfaced items graded relevant or must-surface / all proactive items delivered"
+    quality_target: {minimum: 0.80, minimum_deliveries: 50, minimum_days: 14}
+  P2:
+    name: proactive_policy_violation_rate
+    status: unmeasured
+    formula: "deliveries violating quiet hours, cap, consent, or off-switch / all attempted deliveries"
+    hard_gate: {maximum: 0.0, minimum_attempts: 50}
+  P3:
+    name: duplicate_proactive_rate
+    status: unmeasured
+    formula: "duplicate cluster deliveries within 7 days / all proactive deliveries"
+    quality_target: {maximum: 0.05, minimum_deliveries: 50}
+  P4:
+    name: negative_explicit_feedback_rate
+    status: unmeasured
+    formula: "proactive deliveries receiving explicit negative feedback / rated proactive deliveries"
+    quality_target: {maximum: 0.10, minimum_rated_deliveries: 50}
+  O1:
+    name: ranking_api_latency
+    status: unmeasured
+    formula: "response_completed_at - request_received_at"
+    units: milliseconds
+    quality_target: {p95_maximum: 500, minimum_requests: 200}
+    supplemental_model_acceptance: {p95_model_response_seconds: 5, hard_model_deadline_seconds: 6, baseline_usable_deadline_seconds: 8, cold_and_warm_reported: true}
+    model_path: pretrained_model_led_optional_query_ordered_history_rankllm_style_adapter
+    fallback_rule: deterministic_baseline_on_timeout_malformed_output_provider_failure_or_exhausted_budget; fallback_never_counts_as_model_pass
+    proposed_model_success_target: {minimum: 0.95, requests: 200, eligible_consented_only: true, budget_available_only: true, cold_and_warm_reported: true}
+    proposed_budget: {usd_per_request: 0.02, usd_per_day: 2.0, configurable: true, unknown_pricing: block_model_calls}
+    budget_acceptance: {preflight_token_estimate_required: true, observed_cost_reconciliation_required: true, request_cap_enforced: true, daily_cap_enforced: true, retry_reservation_within_budget: true, cap_exhaustion_no_further_submissions: true, cap_exhaustion_result_mode: labeled_fallback}
+    retry_policy: at_most_one_retry_inside_same_deadline; distinct_retries_do_not_deduplicate_distinct_user_actions
+    privacy_policy: explicit_model_provider_consent_required; redact_unnecessary_identifiers; no_raw_prompts_in_public_receipts; withdrawal_blocks_subsequent_submissions
+    receipt_fields: [source_revision, policy_revision, prompt_revision, model_revision, candidate_ids, newest_included_event_id, latency, cost, result_mode, fallback_reason]
+    candidate_validation: exact_candidate_set_equality_and_unique_valid_permutation_required
+    query_precedence: explicit_query_constraints_and_query_relevance_preserved; history_may_personalize_among_query_relevant_items
+    privacy_consent_violation_target: 0
+    privacy_consent_failure_response: disable_affected_path_and_rollback_within_5_minutes
+promotion:
+  applies_to: M4_sequence_model_only
+  paired_primary_metric: ndcg_at_20
+  practical_margin_absolute: 0.03
+  requirement: lower_bound_of_paired_user_day_bootstrap_ci_above_0.03
+  guardrails:
+    precision_at_20_noninferiority_margin: -0.02
+    p95_independent_first_seen_to_ready_lag_regression_max_fraction: 0.10
+    important_omission_rate_maximum: 0.05
+    forbidden_eligibility_consent_or_tenancy_violations: 0
+  canary_percentages: [10, 25, 50, 100]
+  canary_minimums: {independent_days_per_stage: 3, eligible_impressions_per_stage: 50}
+  canary_values_are_configurable_policy_targets: true
+  blocked_rule: do_not_advance_when_minimum_evidence_is_unavailable
+model_led_M2_release:
+  applies_to: full_M2
+  requirement: headline_targets_and_S1_guardrail_and_applicable_hard_gates_pass
+  privacy: owner_raw_outcomes_remain_owner_scoped_and_are_not_global_training_data
+  replay: frozen_time_aware_replay_with_pretrained_model_and_transparent_deterministic_fallback
+  percentage_canary_stages: []
+  internal_owner_preview:
+    allocation: owner_only
+    runtime_flag_required: true
+    off_switch_required: true
+    rollback_required_tested: true
+    quality_may_remain: [unmeasured, insufficient_evidence]
+    completion_claim: forbidden
+    consent_rule: flag_or_owner_allocation_never_grants_or_bypasses_consent
+  full_M2_requires: [headline_quality, applicable_hard_gates, S1_slice_proof, all_category_bilingual_scope, authorized_import_rehearsal, shared_seven_day_evidence_window, model_path_receipts, model_budget_and_consent_gates]
+  Nostr_M2_status: optional_later_source; not_a_full_M2_dependency
+  pagination_policy: stable_configurable_page_size; named_30_and_90_cutoffs_are_measurement_definitions_only
+  owner_preview_gate: agent_full_functional_M2_live_test_must_pass_before_owner_user_E2E
+  missing_evidence_rule: pending_or_unmeasured_or_missing_verifier_evidence_cannot_pass
+human_judging:
+  rubric: {0: irrelevant, 1: weak_contextual_value, 2: relevant, 3: must_surface}
+  owner_authorized_judgments_allowed: true
+  automated_judge_optional: true
+  automated_judge_only_calibration_items: 50
+  automated_judge_only_target_weighted_kappa: 0.60
+  disagreement_rule: adjudicate_and_record_reason
+timestamp_quality:
+  trusted_publisher_timestamp_coverage_target: 0.90
+  independent_first_seen_coverage_target: 0.95
+  minimum_items: 100
+family_and_category_coverage:
+  minimum_independently_observed_eligible_items_per_source_family: 30
+  minimum_judged_items_per_required_marginal_slice: 30
+  below_minimum_status: insufficient_evidence
+  promotion_rule: covered_slices_may_run_safe_partial_capability; sparse_slices_remain_blocked_and_visible
+  milestone_rule: expanded_all_category_bilingual_M2_is_not_complete_until_every_required_slice_has_sufficient_evidence_and_passes
+  recovery: collect_targeted_real_cases_expand_sources_and_recheck_weekly
+operational_tripwire:
+  source_health_cadence: runtime_configured_by_source_class
+  event_failure_visibility: runtime_alert_and_existing_workflow
+  quality_window: shared_evidence_window_not_short_interval_percentiles
+  critical_trigger: any_forbidden_policy_privacy_consent_or_tenancy_violation
+  rollback_target_minutes: 5
+  reporting_surface: one_health_summary_page_and_existing_workflow
+  critical_privacy_response: isolate_affected_read_write_and_API_paths_then_restore_only_after_bound_revalidation

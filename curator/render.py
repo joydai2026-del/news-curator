@@ -358,7 +358,8 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
 }
 @media (max-width:620px){
   .wrap{padding:.75rem .75rem 0}.maincol{padding-bottom:3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
-  .intro h1{font-size:2.15rem}.topbar{gap:.5rem}.crumb{padding-top:.5rem}
+  .intro h1{font-size:2.15rem}.topbar{gap:.5rem;flex-wrap:wrap}.crumb{padding-top:.5rem}
+  .profile-slot{width:100%;max-width:100%;justify-content:flex-start}
   .tools{margin-left:-.1rem;margin-right:-.1rem;flex-direction:column;align-items:stretch}
   .mobiletopics{width:100%;max-width:100%;box-sizing:border-box;flex:none;padding-right:2px}
   .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
@@ -1054,6 +1055,7 @@ def render_html(
 <meta name="news-curator-m2-provider-retention-url" content="">
 <meta name="news-curator-m2-page-size" content="">
 <meta name="news-curator-m2-request-timeout-ms" content="">
+<meta name="news-curator-m2-transport-timeout-ms" content="">
 <style>{CSS}</style>
 </head>
 <body>
@@ -1131,15 +1133,18 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
     if config == {"enabled": False}:
         return
     config = {"request_timeout_ms": 8000, **config}
+    config = {"transport_timeout_ms": config["request_timeout_ms"], **config}
     fields = {"enabled", "url", "policy_version", "model_version", "provider_policy_id",
-              "provider_retention_url", "page_size", "request_timeout_ms"}
+              "provider_retention_url", "page_size", "request_timeout_ms", "transport_timeout_ms"}
     if set(config) != fields or config["enabled"] is not True:
         raise ValueError("invalid M2 reader configuration")
     if type(config["page_size"]) is not int or not 1 <= config["page_size"] <= 25:
         raise ValueError("invalid M2 page size")
     if type(config["request_timeout_ms"]) is not int or not 1 <= config["request_timeout_ms"] <= 8000:
         raise ValueError("invalid M2 request deadline")
-    for key in fields - {"enabled", "page_size", "request_timeout_ms"}:
+    if type(config["transport_timeout_ms"]) is not int or not config["request_timeout_ms"] <= config["transport_timeout_ms"] <= 20000:
+        raise ValueError("invalid M2 transport deadline")
+    for key in fields - {"enabled", "page_size", "request_timeout_ms", "transport_timeout_ms"}:
         value = config[key]
         if not isinstance(value, str) or not value or value != value.strip() or len(value) > 2048:
             raise ValueError("invalid M2 configuration value")
@@ -1154,7 +1159,8 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
     values = {"enabled": "true", "endpoint": config["url"], "policy-version": config["policy_version"],
               "model-version": config["model_version"], "provider-policy-id": config["provider_policy_id"],
               "provider-retention-url": config["provider_retention_url"], "page-size": str(config["page_size"]),
-              "request-timeout-ms": str(config["request_timeout_ms"])}
+              "request-timeout-ms": str(config["request_timeout_ms"]),
+              "transport-timeout-ms": str(config["transport_timeout_ms"])}
     for name, value in values.items():
         payload, count = re.subn(r'(<meta name="news-curator-m2-' + re.escape(name) + r'" content=")[^"]*(">)',
                                 lambda match: match[1] + html.escape(value, quote=True) + match[2], payload)

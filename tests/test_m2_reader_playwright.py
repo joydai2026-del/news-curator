@@ -109,13 +109,14 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         topic_ids_by_name={c:c for c in categories},require_summaries=False,discovery_enabled=True)
     activate_personalization_link(site/'index.html',supabase_url=DATABASE,publishable_key='sb_publishable_localtest',
         m2_config={'enabled':True,'url':RANKER,'policy_version':'test-policy',
-        'model_version':'test-model','provider_policy_id':'test-policy','provider_retention_url':'https://policy.example', 'page_size':25})
+        'model_version':'test-model','provider_policy_id':'test-policy','provider_retention_url':'https://policy.example',
+        'page_size':25,'request_timeout_ms':8000,'transport_timeout_ms':20000})
     store=LocalStore(rows)
     service=RankingService(auth=LocalAuth(),store=store,adapter=RankLLMAdapter(
         policy=RankerPolicy('test-provider','test-model','https://provider.example','test-prompt'),engine=NoProvider()),
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
-    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]
+    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
@@ -136,8 +137,11 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             name=parsed.path.rsplit('/',1)[-1]
             if name=='latest_publication':
                 payload={'publication_seq':1,'finalized_at':capture['generated_at'],'initial_history_cursor':None,
-                    'page_size':25,'poll_seconds':60,'topics':[{'topic_id':c,'name':c} for c in categories]}
-            elif name=='m2_history_snapshot':payload=store.history_snapshot('local-auth-token')
+                    'page_size':20,'poll_seconds':60,'topics':[{'topic_id':c,'name':c} for c in categories]}
+            elif name=='m2_history_snapshot':
+                if history_mode['fail']:
+                    return route.fulfill(status=500,content_type='application/json',body='{}')
+                payload=store.history_snapshot('local-auth-token')
             elif name=='append_behavior_event':payload=store.event(body)
             elif name=='set_story_state_with_event':
                 sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]
@@ -175,7 +179,20 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                     'total_rows':len(export_rows),'max_download_bytes':1048576,
                     'rows':export_rows[offset:offset+1],
                     'next_cursor':f'cursor-{offset+1}' if offset+1<len(export_rows) else None}
-            elif name in ('feed_page','saved_page'):payload=[]
+            elif name=='saved_page':
+                payload=[]
+                for row in rows:
+                    state=store.states.get(row['story_id'])
+                    if not state or not state['saved_at']:continue
+                    payload.append({'story_id':row['story_id'],'canonical_url':row['canonical_url'],
+                        'title':row['title'],'summary':row['summary'],'language':row['language'],
+                        'published_at':row['published_at'],'publication_seq':0,'position':0,
+                        'ordering_mode':'preference_then_freshness','ordering_key':{},'page_order_mode':'saved_at',
+                        'next_cursor':{'before_saved_at':state['saved_at'],'before_story_id':row['story_id']},
+                        'score_components':{},'topic_ids':row['category_ids'],'topic_ranks':{},
+                        'source_kind':row['source_kind'],'source_name':row['source_name'],
+                        'ranking_explanation':'Saved story','coverage_mentions':[],**copy.deepcopy(state)})
+            elif name=='feed_page':payload=[]
             elif name=='discovery_edition':payload={'schema_version':1,'status':'unavailable','reason_code':'no_private_edition','edition':None}
             else:raise AssertionError(name)
             return route.fulfill(status=200,content_type='application/json',body=json.dumps(payload))
@@ -188,8 +205,19 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             window.fetch=(url,options)=>{
               if(window.__stallExport && String(url).endsWith("/m2_owner_export_page"))
                 return new Promise((resolve,reject)=>{window.__releaseExport=()=>originalFetch(url,options).then(resolve,reject);});
+              if(window.__stallHistory && String(url).endsWith("/m2_history_snapshot"))
+                return new Promise((resolve,reject)=>setTimeout(()=>originalFetch(url,options).then(resolve,reject),400));
               return window.__stallM2 && String(url).startsWith("https://ranker.example")
-                ?new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}))
+                ?new Promise((resolve,reject)=>{
+                    const timer=setTimeout(()=>originalFetch(url,options).then(async(response)=>{
+                      const payload=await response.json();
+                      payload.result_mode="model";payload.fallback_reason="";
+                      resolve(new Proxy(response,{get(target,key){
+                        return key==="text" ? async()=>JSON.stringify(payload) : Reflect.get(target,key,target);
+                      }}));
+                    },reject),window.__stallM2Delay||0);
+                    options.signal.addEventListener('abort',()=>{clearTimeout(timer);reject(options.signal.reason);},{once:true});
+                  })
                 :originalFetch(url,options);
             };
         })();''')
@@ -224,15 +252,33 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
             assert len(ids)>200 and len(set(ids))==len(ids)
             card=page.locator('[data-m2-card=true]').first
+            saved_story_id=card.get_attribute('data-story-id')
             card.locator('.accordion-toggle').click()
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="1"')
             card.locator('.save-action').click()
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="2"')
+            discovery_reads=requests.count('/rest/v1/rpc/discovery_edition')
+            rank_reads=requests.count('/rank')
+            page.locator('.chip[data-filter="__saved__"]:visible').click()
+            page.wait_for_function('() => document.querySelectorAll(".card:not([hidden])").length===1')
+            page.reload(wait_until='networkidle')
+            assert page.locator('.chip[data-filter="__saved__"]:visible').get_attribute('aria-pressed')=='true'
+            assert page.locator('.card:not([hidden])').count()==1
+            assert page.locator('.card:not([hidden])').get_attribute('data-story-id')==saved_story_id
+            assert requests.count('/rest/v1/rpc/discovery_edition')==discovery_reads
+            assert page.locator('#discovery-controls').is_hidden()
+            assert page.locator('#load-more').inner_text()=='Load 20 more'
+            assert page.locator('#load-more').is_hidden()
+            page.locator('.chip[data-filter="__all__"]:visible').click()
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+            assert requests.count('/rank')>rank_reads
+            assert page.locator('#load-more').inner_text()=='Load 25 more'
+            page.locator('#m2-controls summary').click()
             assert [e['event_type'] for e in store.events[:2]]==['read_more','save']
             page.locator('#load-more').click()
-            page.wait_for_function('(count)=>document.querySelectorAll("[data-m2-card=true]").length===count',arg=len(rows))
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')
             ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
-            assert len(set(ids))==len(rows)
+            assert len(ids)==len(set(ids))==50
             assert store.rank_reads[-1][2]==2
             # Search hits are real captured publisher titles; no fabricated news.
             query=next(row['title'] for row in rows if row['language']=='zh')[:6]
@@ -294,20 +340,85 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             screenshot=artifact_dir / 'reader-m2-390.png'
             page.screenshot(path=str(screenshot),full_page=True)
             assert page.evaluate('document.documentElement.scrollWidth<=390')
-            # Controlled fetch stall tests the actual run() fallback path.
-            # The configured deadline stays 8s; its clock is accelerated here.
+            # A delayed original request shows public cards by the visible deadline,
+            # then applies its model result before the longer transport deadline.
             page.evaluate('''() => {
                 const timeout=AbortSignal.timeout.bind(AbortSignal);
                 window.__m2Timeouts=[];
-                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===8000?30:ms);};
-                window.__stallM2=true;
+                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===20000?300:ms);};
+                const later=window.setTimeout.bind(window);
+                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===20000?300:ms,...args);
+                window.__stallM2=true;window.__stallM2Delay=120;
+                const policy=document.querySelector("#m2-provider-retention");policy.hidden=true;policy.removeAttribute("href");
             }''')
+            store.learning=True;store.provider=True
             page.locator('#m2-refresh').click()
-            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Showing the captured edition")')
-            assert page.evaluate('window.__m2Timeouts.includes(8000)')
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            assert page.evaluate('window.__m2Timeouts.includes(20000)')
+            assert page.locator('#m2-local-learning').is_checked()
+            assert page.locator('#m2-provider-processing').is_checked()
+            assert page.locator('#m2-local-learning').is_enabled()
+            assert page.locator('#m2-provider-processing').is_enabled()
+            assert page.locator('#m2-provider-retention').get_attribute('href')=='https://policy.example'
+            assert page.locator('#m2-provider-retention').is_visible()
             assert page.locator('.card:not([hidden])').count()>0
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+            assert 'Ranked using' in page.locator('#m2-mode').inner_text()
+            # Saved navigation makes M2 ineligible while this original request is
+            # still delayed. Its timers must not mutate the selected surface.
+            page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            page.locator('.chip[data-filter="__saved__"]:visible').click()
+            page.wait_for_function("() => document.querySelector(\".chip[data-filter='__saved__']\").getAttribute('aria-pressed')==='true' && document.querySelectorAll('.card:not([hidden])').length===1")
+            saved_surface=page.evaluate('''() => ({
+                status:document.querySelector("#reader-status").textContent,
+                controlsHidden:document.querySelector("#m2-controls").hidden,
+                visibleCards:document.querySelectorAll(".card:not([hidden])").length,
+              })''')
+            page.wait_for_timeout(350)
+            assert page.locator('.chip[data-filter="__saved__"]:visible').get_attribute('aria-pressed')=='true'
+            assert page.evaluate('''() => ({
+                status:document.querySelector("#reader-status").textContent,
+                controlsHidden:document.querySelector("#m2-controls").hidden,
+                visibleCards:document.querySelectorAll(".card:not([hidden])").length,
+              })''')==saved_surface
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+            page.locator('.chip[data-filter="__all__"]:visible').click()
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+            preceding_ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
+            page.locator('#load-more').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading")')
+            assert page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')==preceding_ids
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+            # History is deliberately slower than the full transport deadline.
+            # The terminal public state proves the deadline begins before fetch().
+            page.evaluate('window.__stallHistory=true')
+            rank_before=requests.count('/rank')
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("did not finish")')
             assert page.locator('[data-m2-card=true]').count()==0
             assert page.locator('.edition-meta').is_visible()
+            assert requests.count('/rank')==rank_before
+            page.wait_for_timeout(150)
+            assert requests.count('/rank')==rank_before
+            page.evaluate('window.__stallHistory=false')
+            # A real public-card interaction changes queued learning history.
+            # The delayed original result must remain discarded.
+            page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            page.locator('.card:not([hidden]) .accordion-toggle').first.click()
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("did not finish")')
+            assert page.locator('[data-m2-card=true]').count()==0
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+            history_mode['fail']=True
+            page.locator('#m2-refresh').click()
+            page.wait_for_function('() => document.querySelector("#m2-local-learning").indeterminate')
+            assert page.locator('#m2-local-learning').is_disabled()
+            assert page.locator('#m2-provider-processing').is_disabled()
+            history_mode['fail']=False
             page.evaluate('window.__stallExport=true;document.querySelector("#m2-download-data").click()')
             page.wait_for_function('() => typeof window.__releaseExport === "function"')
             page.evaluate('window.__localSession=null;window.dispatchEvent(new Event("news-curator:auth-changed"))')
@@ -315,6 +426,10 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===0')
             assert page.locator('#m2-controls').is_hidden()
             assert not completed_downloads
+            page.evaluate('window.__localSession={access_token:"local-auth-token",user_id:"'+OWNER+'"};window.dispatchEvent(new Event("news-curator:auth-changed"))')
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0')
+            assert page.locator('#m2-controls').is_visible()
+            assert page.locator('#discovery-controls').is_hidden()
             assert not page_errors,page_errors
         except BaseException:
             print({"reader_status":page.locator('#reader-status').inner_text(), "page_errors":page_errors,

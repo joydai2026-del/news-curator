@@ -119,22 +119,39 @@ def test_stage_secret_uses_one_scoped_key_response_and_writes_private_output(tmp
     def controlled_request(ref, access, path, *, payload=None):
         calls.append((ref, access, path, payload))
         return [
-            {"type": "publishable", "name": "default", "api_key": "protocol-publishable-key"},
-            {"type": "secret", "name": "news_curator_github", "api_key": "protocol-service-key"},
+            {"type": "publishable", "name": "default", "api_key": "sb_publishable_protocol"},
+            {"type": "secret", "name": "news_curator_github", "api_key": "sb_secret_protocol"},
         ]
 
     monkeypatch.setattr(activation, "request_json", controlled_request)
     activation.stage_secret(args)
     receipt = capsys.readouterr()
     secret = json.loads(args.output.read_text())
-    assert calls == [("odurwknvigshekaprjvj", "protocol-management-token", "/api-keys", None)]
+    assert calls == [("odurwknvigshekaprjvj", "protocol-management-token", "/api-keys?reveal=true", None)]
     assert stat.S_IMODE(args.output.stat().st_mode) == 0o600
     assert secret["NEWS_CURATOR_PREVIEW_OWNER_IDS"] == '["00000000-0000-0000-0000-000000000001"]'
-    assert secret["NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY"] == "protocol-publishable-key"
-    assert secret["NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"] == "protocol-service-key"
+    assert secret["NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY"] == "sb_publishable_protocol"
+    assert secret["NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"] == "sb_secret_protocol"
     assert "protocol-model-value" not in receipt.out
-    assert "protocol-publishable-key" not in receipt.out
-    assert "protocol-service-key" not in receipt.out
+    assert "sb_publishable_protocol" not in receipt.out
+    assert "sb_secret_protocol" not in receipt.out
+
+
+@pytest.mark.parametrize("rows", [
+    [{"type": "publishable", "name": "default", "api_key": "sb_publishable_...censored"},
+     {"type": "secret", "name": "news_curator_github", "api_key": "sb_secret_...censored"}],
+    [{"type": "publishable", "name": "default", "api_key": "sb_secret_wrong_type"},
+     {"type": "secret", "name": "news_curator_github", "api_key": "sb_publishable_wrong_type"}],
+])
+def test_stage_secret_rejects_redacted_or_wrongly_typed_keys(tmp_path, monkeypatch, rows):
+    private = tmp_path / "binding.json"
+    binding(private, "odurwknvigshekaprjvj")
+    args = secret_args(tmp_path, private, tmp_path / "secret.json")
+    monkeypatch.setattr(activation, "token", lambda _: "protocol-management-token")
+    monkeypatch.setattr(activation, "request_json", lambda *_args, **_kwargs: rows)
+    with pytest.raises(ValueError, match="scoped API keys"):
+        activation.stage_secret(args)
+    assert not args.output.exists()
 
 
 @pytest.mark.parametrize("owners", [[], [{"owner_id": "00000000-0000-0000-0000-000000000001"}, {"owner_id": "00000000-0000-0000-0000-000000000002"}]])

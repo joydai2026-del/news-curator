@@ -158,7 +158,7 @@ def validate_ranking_request(request: RankingRequest) -> None:
         or type(request.server_commit_revision) is not int
         or request.server_commit_revision < request.history_revision
         or type(request.history_generation) is not int or request.history_generation < 1
-        or type(request.consent_revision) is not int or request.consent_revision < 1):
+        or type(request.consent_revision) is not int or request.consent_revision < 0):
         raise ValueError("schema and history revisions must be valid")
     if not isinstance(request.owner.actor_kind, ActorKind):
         raise ValueError("owner actor kind must be a supported enum")

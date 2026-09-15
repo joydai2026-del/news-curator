@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
+import traceback
 
 from .service import AuthenticationError, StaleRankingError
 
@@ -42,7 +45,12 @@ class RankingASGI:
             await self._reply(send, 401, {"error": "authentication_required"})
         except StaleRankingError as exc:
             await self._reply(send, 409, {"error": str(exc)})
-        except (ValueError, json.JSONDecodeError):
+        except (ValueError, json.JSONDecodeError) as exc:
+            frame = traceback.extract_tb(exc.__traceback__)[-1]
+            print(json.dumps({"event": "ranker_invalid_request",
+                "exception_class": type(exc).__name__,
+                "source_basename": os.path.basename(frame.filename),
+                "source_line": frame.lineno}, separators=(",", ":")), file=sys.stderr, flush=True)
             await self._reply(send, 400, {"error": "invalid_request"})
         except RuntimeError as exc:
             await self._reply(send, 503, {"error": str(exc)})

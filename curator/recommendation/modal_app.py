@@ -12,8 +12,8 @@ from .modal_handlers import endpoint as _endpoint
 from .modal_handlers import smoke_rankllm_image as _smoke_rankllm_image
 
 
-def _enabled(name: str) -> bool:
-    value = os.environ.get(name, "false")
+def _enabled(name: str, *, default: bool = False) -> bool:
+    value = os.environ.get(name, str(default).lower())
     if value not in {"true", "false"}:
         raise ValueError(f"{name} must be true or false")
     return value == "true"
@@ -93,6 +93,7 @@ if deployment_mode == "service":
     runtime_secret = modal.Secret.from_name(os.environ["NEWS_CURATOR_RANKER_SECRET_NAME"])
     endpoint = app.function(image=image, secrets=[runtime_secret], timeout=function_timeout,
         max_containers=max_containers, scaledown_window=scaledown_window,
+        enable_memory_snapshot=_enabled("NEWS_CURATOR_MODAL_MEMORY_SNAPSHOT_ENABLED", default=True),
         restrict_modal_access=True)(modal.concurrent(max_inputs=max_inputs)(modal.asgi_app()(_endpoint)))
 
 if deployment_mode == "smoke":
