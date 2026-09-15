@@ -1,0 +1,455 @@
+schema_version: 1
+project: news-curator-learning-companion
+created: 2026-09-11
+status: reviewed_all_pending
+source_plan: docs/plans/2026-09-11-learning-companion-execution-plan.md
+metric_policy: config/m2-evaluation/metrics-policy.yaml
+canonical_path: config/m2-evaluation/qa-checklist.yaml
+scope_authority: "The approved current-user scope carried in the reviewed plan package is authoritative. Inventory and Notion milestone text are evidence inputs, not permission to narrow or replace that scope."
+historical_checklist:
+  path: docs/qa-checklist.yaml
+  handling: preserve_unchanged
+  note: "Dormant historical evidence. Preserve all old IDs and statuses; this additive checklist does not supersede or rewrite it."
+id_namespace:
+  rule: "NC2-A, NC2-B, NC2-C, NC3, NC4, NC5, and NCX are QA groups, independent of execution-plan work-package IDs."
+  gaps: "Number gaps are intentional grouping artifacts where one QA check covers multiple requirements. A missing number does not imply a missing or retired historical check. Coverage is authoritative through the milestone coverage map below."
+evidence_binding:
+  required: [git_commit_sha, policy_sha256, checklist_sha256, environment, observed_at_utc]
+  rule: "Every run and release record binds evidence to one exact code revision and exact policy/checklist hashes."
+status_legend:
+  pending: defined but not executed
+  passed: verifier passed on bound evidence
+  failed: verifier ran and failed
+  blocked: required dependency or authority is unavailable
+  insufficient_evidence: verifier ran but metric-policy minimum evidence was not met
+slice_contract: "Required slices are marginal: each configured category separately, plus English and Chinese separately. Category-by-language intersections are diagnostic only. Each item uses its frozen primary category and original-content language; mixed and unknown language are separate diagnostic buckets, never silently counted as English or Chinese."
+phase_binding:
+  rule: "This map defines when checks bind. Approved targeted criteria simplifications preserve each check's identity and safety purpose."
+  owner_preview:
+    check_ids: [NC2-A01, NC2-A08, NC2-A09, NC2-B01, NC2-B02, NC2-B03, NC2-B04, NC2-B07, NC2-B08, NC2-C01, NC2-C02, NC2-C08, NC2-C09, NCX-01, NCX-02, NCX-03]
+    functional_learning_path: "Exercise a real settled interaction through profile commit and assert the next eligible request uses the newest committed profile; numeric L1/L2 evidence minimums do not block preview."
+    quality_status_allowed: [unmeasured, insufficient_evidence]
+    required_label: internal_owner_preview
+    counts_as_M2_complete: false
+    consent_rule: "The runtime flag and owner allocation do not grant consent or bypass authorization."
+    critical_privacy_response: "A consent, tenancy, or private-data failure isolates affected read, write, and API paths; changing only the ranker is insufficient."
+    readiness_definition: "Technical readiness only. All listed functional checks and existing CI floors require bound evidence. A named verifier artifact that has not been built and run is pending and cannot count as working."
+  full_M2:
+    check_groups: [NC2-A, NC2-B, NC2-C, NCX]
+    excluded_optional_checks: [NC2-A06]
+    headline_metric_ids: [F1, F3, R1, R6, L1, L2]
+    guardrail_metric_ids: [S1]
+    diagnostic_metric_ids: [F2, F4, F5, F6, R2, R3, R4, R5, D1, O1]
+    additional_scope: [all_category_bilingual, authorized_import_rehearsal, shared_seven_day_evidence_window, pretrained_model_path, model_receipts, model_budget_consent_privacy_gates]
+    quality_definition: "Full M2 quality requires all functional M2 checks plus headline and guardrail metric evidence. Missing evidence, pending verifiers, unmeasured metrics, and insufficient evidence block completion."
+    owner_e2e_order: "The agent must complete the full functional M2 live journey and technical checklist before the owner performs userE2E."
+  later_milestones:
+    M3: [NC3-01, NC3-02, NC3-03]
+    M4: [NC4-01, NC4-02, NC4-03, NC4-05]
+    M5: [NC5-01, NC5-02, NC5-03, NC5-04, NC5-05]
+summary: {total: 40, passed: 0, failed: 0, blocked: 0, insufficient_evidence: 0, pending: 40}
+existing_ci_commands:
+  python_compile: 'python -m compileall -q curator tests scripts'
+  deterministic_tests: 'python -m pytest -p no:cacheprovider -q -m "not allow_socket"'
+  edge_tests: 'node --test "edge/*.test.js"'
+  edge_tests_no_esm_autodetect: 'node --no-experimental-detect-module --test "edge/*.test.js"'
+  edge_manifest: 'test -f edge/package.json'
+  regenerate_edge_fixtures: 'node edge/scripts/regenerate-fixtures.mjs'
+  fixture_diff: 'git diff --exit-code -- edge/fixtures'
+  discovery_database: 'python -m pytest -p no:cacheprovider -q tests/test_discovery_postgres_runtime.py --junitxml=/tmp/discovery-db.xml'
+  note: "These commands are copied from .github/workflows/ci.yml. This checklist generation did not run them. Dependency installation and workflow dispatch are outside this artifact."
+
+checks:
+  - id: NC2-A01
+    milestone: M2a
+    name: Exact revision and policy evidence binding
+    type: code-audit
+    files: [tools/qa/run_manifest.py, docs/qa/metrics-policy.yaml]
+    criteria: "Each verifier emits git_commit_sha, policy_sha256, checklist_sha256, environment, and observed_at_utc; aggregation rejects mixed revisions or hashes."
+    verifier_artifact_to_build: tools/qa/verify_evidence_binding
+    status: pending
+  - id: NC2-A02
+    milestone: M2a
+    name: Source registry and denominator lock
+    type: code-audit
+    files: [curator/sources/, config/, docs/contracts/]
+    criteria: "Source classes, families, rights, cadence, language, expected availability, and exclusions are frozen before the window; failures remain visible and cannot be removed, renamed, or reclassified to improve a denominator."
+    verifier_artifact_to_build: tools/verify_source_freshness
+    eval_metric_ids: [F1, F3]
+    status: pending
+  - id: NC2-A03
+    milestone: M2a
+    name: Six-clock receipt integrity
+    type: code-audit
+    files: [curator/sources/, curator/models.py]
+    criteria: "Receipts preserve raw source_exposed when available and distinguish publisher_published, independent_first_seen, collector_observed, fetched, ready, offered, and actual viewport clocks. Unknown source exposure stays unknown. Independent first-seen is labeled an upper-bound timestamp that produces a lower bound on true delay."
+    verifier_artifact_to_build: tools/verify_source_freshness
+    eval_metric_ids: [F1, F6]
+    status: pending
+  - id: NC2-A04
+    milestone: M2a
+    name: Coverage and freshness independent sentinels
+    type: code-audit
+    files: [curator/sources/, curator/health.py]
+    criteria: "Independent sentinel sampling records found, missed, delayed, ineligible, and unknown items separately; collector success cannot stand in for coverage and a missing item cannot be erased from the declared denominator."
+    verifier_artifact_to_build: tools/verify_sentinel_recall
+    eval_metric_ids: [F1, F3]
+    status: pending
+  - id: NC2-A05
+    milestone: M2a
+    name: Retained bilingual corpus and canonical identity
+    type: code-audit
+    files: [curator/models.py, curator/dedup.py, curator/localization.py]
+    criteria: "English and Chinese originals retain provenance and immutable identity. Features and training inputs obey strict as-of cutoffs. Preregistered outcome labels may mature only inside the declared post-decision label window and remain unavailable to the decision being scored."
+    verifier_artifact_to_build: tools/qa/verify_corpus_contract
+    status: pending
+  - id: NC2-A06
+    milestone: M2a
+    name: Nostr attribution and signature verification
+    type: code-audit
+    files: [curator/sources/nostr.py, docs/contracts/]
+    criteria: "Optional later-source capability only. If implemented, owned Nostr ingestion emits the same versioned ContentObject, SourceObservation, identity, provenance, and eligibility contract schemas as every other adapter. It validates signatures; preserves event ID, author pubkey, relay observations, tags, event kind, native target, and real attribution; and handles repeated relay delivery idempotently. Migrations use project-owned code and prove upgrade plus rollback. Nostr is not required for M2 completion, and no DVM is required."
+    verifier_artifact_to_build: tools/qa/verify_nostr_ingest_and_migration
+    status: pending
+  - id: NC2-A08
+    milestone: M2a
+    name: Append-only owner-isolated event ledger
+    type: code-audit
+    files: [curator/events/, supabase/migrations/]
+    criteria: "Events are append-only, owner-scoped, schema-versioned, and idempotent by event identity; anonymous and different-owner reads and writes are denied without returning private fields."
+    verifier_artifact_to_build: tools/verify_event_ledger
+    status: pending
+  - id: NC2-A09
+    milestone: M2a
+    name: Consent, export, reset, and deletion rebuild
+    type: code-audit
+    files: [curator/events/, curator/profile/, supabase/migrations/]
+    criteria: "The owner can disable learning, export their data, reset learned state, and delete event/profile data; derived indexes and caches rebuild without deleted records; no public activity history is exposed."
+    verifier_artifact_to_build: tools/qa/verify_data_rights
+    status: pending
+  - id: NC2-A10
+    milestone: M2a
+    name: Authorized import rehearsal
+    type: code-audit
+    files: [curator/imports/, docs/contracts/]
+    criteria: "A bounded real authorized import records provenance, authority, item counts, exclusions, removal, and clean rebuild receipts. Synthetic or fabricated source records cannot satisfy the check."
+    verifier_artifact_to_build: tools/qa/verify_import_rehearsal
+    status: pending
+
+  - id: NC2-B01
+    milestone: M2b
+    name: Stable full-corpus pagination
+    type: code-audit
+    files: [curator/search/, curator/rank.py, edge/]
+    criteria: "Main feed, every category feed, and search have independent stable cursors and a validated configurable page size. Diagnostic cutoffs at 30 and 90 remain unchanged for metric evaluation, but page size is not fixed at 30. When the requested page capacity exceeds eligible results, all eligible results are returned and the genuine shortage is enumerated. No global candidate cap truncates later categories or queries; no eligible item identity is duplicated or omitted across stable pages."
+    verifier_artifact_to_build: tools/qa/verify_deep_pagination
+    eval_metric_ids: [R3, R4, R5, R6, O1]
+    status: pending
+  - id: NC2-B02
+    milestone: M2b
+    name: Transparent baseline reasons
+    type: code-audit
+    files: [curator/rank.py, static/]
+    criteria: "Each ranked item exposes a truthful human-readable reason derived from versioned ranking inputs, with no claim that an RPC offer or candidate generation proves the item was viewed. The model-led path records model and prompt revisions, ordered newest history, optional query, candidate IDs, result mode, latency, cost, and fallback reason. A deterministic baseline fallback is explicitly labeled and never counts as a model-quality pass."
+    verifier_artifact_to_build: tools/qa/verify_ranking_receipts
+    status: pending
+  - id: NC2-B03
+    milestone: M2b
+    name: Complete idempotent interaction events
+    type: code-audit
+    files: [static/, edge/, curator/events/]
+    criteria: "Impression, read, save, hide, original-click, query, result-click, reformulation, zero-result, dwell, and scroll events are emitted once per defined event identity. Query zero-results is explicit. Original-click links to a real prior exposure only when one exists; otherwise missing exposure is explicit and no impression is fabricated. Retry delivery is idempotent while distinct repeated user actions remain distinct. Model-path receipts include the newest committed event ID, and all returned IDs form an exact unique candidate permutation. Explicit query constraints and query-relevant candidates remain satisfied against conflicting history; history may personalize ordering among relevant candidates."
+    verifier_artifact_to_build: tools/verify_event_ledger
+    status: pending
+  - id: NC2-B04
+    milestone: M2b
+    name: Actual viewport proof
+    type: code-audit
+    files: [static/, edge/, curator/events/]
+    criteria: "Actual view is recorded only from rendered viewport evidence under the declared visibility rule; server offer, RPC success, page response, background tab, bot, or prefetch alone cannot create a view. During an active session, eligible updates can reach the user through the designed refresh or update affordance without a forced full-page reload; user absence is reported separately."
+    verifier_artifact_to_build: tools/verify_live_reader
+    eval_metric_ids: [F2, F5, O1]
+    status: pending
+  - id: NC2-B06
+    milestone: M2b
+    name: Human UI, API, and CLI parity
+    type: code-audit
+    files: [static/, edge/, scripts/]
+    criteria: "Owner feed, search, history, feedback, export, reset, and disable-learning operations have equivalent authenticated UI and agent-callable API or CLI contracts."
+    verifier_artifact_to_build: tools/qa/verify_surface_parity
+    status: pending
+  - id: NC2-B07
+    milestone: M2b
+    name: Owner auth and other-owner denial
+    type: code-audit
+    files: [static/auth/, edge/, supabase/migrations/]
+    criteria: "A known authorized owner completes the real signed-in path. Anonymous and another owner are denied private history and mutations. Receipts identify test roles by opaque IDs and never print account addresses or denied data."
+    verifier_artifact_to_build: tools/verify_tenancy
+    status: pending
+  - id: NC2-B08
+    milestone: M2b
+    name: Responsive and accessible live surface
+    type: code-audit
+    files: [static/]
+    criteria: "The bound build is visually inspected at 320, 390, 430, and 768 CSS pixels with no horizontal overflow; keyboard-only use, visible focus, and touch targets of at least 44 by 44 CSS pixels pass."
+    verifier_artifact_to_build: tools/verify_live_reader
+    status: pending
+
+  - id: NC2-C01
+    milestone: M2c
+    name: Fast interpretable profile update
+    type: code-audit
+    files: [curator/profile/, curator/rank.py]
+    criteria: "Preview requires a functional settled-interaction to profile-commit path and asserts that the first genuinely subsequent ranking request uses the newest committed ordered history with a predeclared directional result. Full M2 additionally requires the 60-second L1/L2 targets and evidence minimums. M2 ranking uses the configured pretrained model-led adapter; M4 remains responsible for real-data-trained shared-sequence learning."
+    verifier_artifact_to_build: tools/qa/verify_profile_update
+    eval_metric_ids: [L1, L2]
+    status: pending
+  - id: NC2-C02
+    milestone: M2c
+    name: Explicit feedback precedence and passive confidence
+    type: code-audit
+    files: [curator/profile/, curator/rank.py]
+    criteria: "Passive signals carry lower declared confidence and cannot silently override settled explicit feedback; selecting all categories still allows meaningful subtopic, entity, source, action, and similarity adaptation. The model input preserves explicit negative signals, ordered repeated events, and current-query priority. Provider processing requires explicit consent, with retention and training-use policy revision recorded before calls. Withdrawal blocks later submissions, private metadata is excluded, and no raw prompt is logged in public receipts. Privacy and consent violations must be zero; any violation disables the affected path and triggers rollback within five minutes."
+    verifier_artifact_to_build: tools/qa/verify_profile_policy
+    status: pending
+  - id: NC2-C03
+    milestone: M2c
+    name: Global as-of freeze and leakage rejection
+    type: code-audit
+    files: [evals/, curator/evaluation/]
+    criteria: "Each replay freezes sources, candidates, eligibility, slate, features, policy, and user history as of the decision time. Future features, translations, cluster membership, and interactions are inaccessible. Only preregistered outcome labels may mature inside their declared post-decision window; they cannot enter features or the scored decision. Injected leakage fails."
+    verifier_artifact_to_build: tools/verify_rank_eval
+    eval_metric_ids: [R1, R2, R3, R4, R5, R6, S1, D1, F4, L1, L2, O1]
+    status: pending
+  - id: NC2-C04
+    milestone: M2c
+    name: Real gold cases and legitimate judgment
+    type: code-audit
+    files: [evals/, docs/qa/]
+    criteria: "Quality evidence uses real captured candidates, queries, slates, and owner-authorized judgments. No fabricated labels, self-scoring, or fixture-only results count. All judgments use the declared rubric and retain disagreements and adjudication reasons. Only when an automated judge is used must it pass the 50-item calibration and weighted-kappa 0.60 target."
+    verifier_artifact_to_build: tools/qa/verify_gold_and_judge_evidence
+    status: pending
+  - id: NC2-C06
+    milestone: M2c
+    name: Hard gates separated from quality metrics
+    type: code-audit
+    files: [curator/evaluation/, docs/qa/metrics-policy.yaml]
+    criteria: "Auth, duplicate-action, dangling-reference, tenancy, and forbidden-policy gates require zero violations. D1 and P3 measure tolerated content-cluster repetition, distinct from duplicate actions. Sparse slices remain blocked and visible. Covered slices may run only as labeled safe partial capability; full all-category bilingual M2 waits until every required slice has enough real evidence and passes."
+    verifier_artifact_to_build: tools/qa/verify_promotion_gate
+    eval_metric_ids: [F1, F2, F3, R1, R2, R3, R4, R5, R6, S1, D1, F4, L1, L2, O1]
+    status: pending
+  - id: NC2-C07
+    milestone: M2c
+    name: Baseline and learned candidate comparison
+    type: code-audit
+    files: [curator/evaluation/, curator/rank.py]
+    criteria: "The pretrained model-led adapter and transparent deterministic fallback run on identical frozen snapshots; reports include metric numerators, denominators, missingness, uncertainty, slices, model revision, and promotion decision under the referenced metric policy. Fallback output is reported separately and cannot establish model-path success. Unknown provider pricing blocks calls. Binary budget assertions require preflight token estimates, observed-cost reconciliation, enforcement of the proposed $0.02 request and $2 daily caps, retry reservation within remaining budget, no further model submissions after either cap is exhausted, and an explicitly labeled fallback result on exhaustion."
+    verifier_artifact_to_build: tools/verify_rank_eval
+    eval_metric_ids: [R1, R2, R3, R4, R5, R6, S1, D1, F4, L1, L2, O1]
+    status: pending
+  - id: NC2-C08
+    milestone: M2c
+    name: Failure triage contract
+    type: code-audit
+    files: [docs/qa/2026-09-11-ai-release-standards.md]
+    criteria: "Every source, model-quality, UX, content, safety, tenancy, monitoring, and insufficient-evidence failure maps to a pre-decided solo action, first step, escalation condition, and evidence destination."
+    verifier_artifact_to_build: tools/qa/verify_triage_contract
+    status: pending
+  - id: NC2-C09
+    milestone: M2c
+    name: Rehearsed compatible rollback
+    type: code-audit
+    files: [curator/policy/, docs/qa/]
+    criteria: "A staging drill restores the last compatible transparent baseline policy and cache/profile schema within the five-minute target; before/after policy, health, ranking, and timing receipts are retained. Any privacy or consent violation disables the affected personalization read/write/API path and triggers compatible rollback within five minutes."
+    verifier_artifact_to_build: tools/verify_rollback
+    status: pending
+  - id: NC2-C10
+    milestone: M2c
+    name: Production health and recurrence integration
+    type: code-audit
+    files: [.github/workflows/, curator/health.py]
+    criteria: "Configured source-health checks and event failures stay visible through runtime alerts, one health summary, and the existing workflow. No new dashboard, duplicate scheduler, or five-minute quality monitor is required. A critical privacy, consent, or tenancy failure isolates affected read, write, and API paths and triggers compatible rollback within five minutes. Model-path failures expose latency, cost, provider, fallback, and budget state; fallback never masquerades as a model pass."
+    verifier_artifact_to_build: tools/qa/verify_monitor_integration
+    status: pending
+
+  - id: NC3-01
+    milestone: M3
+    name: Grounded Q&A with precise citations
+    type: code-audit
+    files: [curator/qa/, curator/wiki/]
+    criteria: "Material answer claims are entailed by retrieved passages and citations resolve to the exact retained source. Invented or dangling citations are zero-tolerance hard failures."
+    verifier_artifact_to_build: tools/qa/verify_qa_grounding
+    eval_metric_ids: [Q1, Q2, Q3, Q4]
+    status: pending
+  - id: NC3-02
+    milestone: M3
+    name: Safe unavailable-evidence behavior
+    type: code-audit
+    files: [curator/qa/]
+    criteria: "When evidence is unavailable or insufficient, the answer declines or asks for missing evidence without inventing content; answerable cases are evaluated separately through policy metrics."
+    verifier_artifact_to_build: tools/qa/verify_qa_decline
+    eval_metric_ids: [Q1, Q2, Q3, Q4]
+    status: pending
+  - id: NC3-03
+    milestone: M3
+    name: Durable wiki artifact and restore
+    type: code-audit
+    files: [curator/wiki/, docs/contracts/]
+    criteria: "A real grounded Q&A produces a provenance-bearing durable wiki artifact; export, deletion, and restore from retained source plus receipts reproduce it without fabricated content."
+    verifier_artifact_to_build: tools/qa/verify_wiki_restore
+    status: pending
+
+  - id: NC4-01
+    milestone: M4
+    name: Shared encoder and separate heads
+    type: code-audit
+    files: [curator/models/, curator/training/]
+    criteria: "One versioned encoder/checkpoint serves distinct search and recommendation heads. Each head has separate losses, evaluation, guardrails, and promotion evidence."
+    verifier_artifact_to_build: tools/qa/verify_multitask_model
+    eval_metric_ids: [R1, R2, R3, R4, R5, S1, D1, F4]
+    status: pending
+  - id: NC4-02
+    milestone: M4
+    name: Immutable time-ordered training and bounded authority
+    type: code-audit
+    files: [curator/training/, curator/models/]
+    criteria: "Training consumes immutable time-ordered corpus and event records. The model cannot own ingestion, storage, deletion, tenancy, slate constraints, policy gates, or publishing."
+    verifier_artifact_to_build: tools/qa/verify_training_boundary
+    status: pending
+  - id: NC4-03
+    milestone: M4
+    name: Data readiness, learning curves, and M4 block
+    type: code-audit
+    files: [curator/training/, docs/qa/metrics-policy.yaml]
+    criteria: "Readiness and promotion use policy and plan minima, time-blocked holdout, and learning curves. Unmet evidence or absent useful improvement never passes. A real training receipt records the configured provider, exact code, checkpoint, data, task-head, timing, environment, and output hashes."
+    verifier_artifact_to_build: tools/qa/verify_model_readiness_and_training_receipt
+    status: pending
+  - id: NC4-05
+    milestone: M4
+    name: Nostr second-client contract proof
+    type: code-audit
+    files: [docs/contracts/, curator/clients/]
+    criteria: "Transfer waits until comparable identity, event semantics, label meaning, consent, and distribution are proven. The permitted prototype uses shared API or datastore contracts and preserves Nostr-native attribution."
+    verifier_artifact_to_build: tools/qa/verify_nostr_client_contract
+    status: pending
+
+  - id: NC5-01
+    milestone: M5
+    name: Programmable proactive policy and off switch
+    type: code-audit
+    files: [curator/proactive/, config/]
+    criteria: "Triggers, quiet hours, consent, channel, and caps are validated runtime policy; disabling proactive delivery takes effect without source edits."
+    verifier_artifact_to_build: tools/qa/verify_proactive_policy
+    eval_metric_ids: [P2]
+    status: pending
+  - id: NC5-02
+    milestone: M5
+    name: Separate action-class limits
+    type: code-audit
+    files: [curator/proactive/, config/]
+    criteria: "Proactive top-level delivery, reply, repost, paid action, and human action counters are separate unless policy explicitly combines them; one class cannot consume another class's cap."
+    verifier_artifact_to_build: tools/qa/verify_action_class_limits
+    eval_metric_ids: [P2]
+    status: pending
+  - id: NC5-03
+    milestone: M5
+    name: Exact-once delivery and duplicate suppression
+    type: code-audit
+    files: [curator/proactive/, curator/events/]
+    criteria: "Each attempted delivery has an idempotency key, durable receipt, reason, policy version, and terminal outcome. Retry cannot duplicate the same delivery, and cluster suppression follows the metric policy window."
+    verifier_artifact_to_build: tools/qa/verify_proactive_delivery
+    eval_metric_ids: [P1, P2, P3, P4]
+    status: pending
+  - id: NC5-04
+    milestone: M5
+    name: Quiet and inactive behavior
+    type: code-audit
+    files: [curator/proactive/]
+    criteria: "No delivery occurs during quiet hours, after consent withdrawal, after the off switch, or beyond the relevant action-class cap. Non-actionable cycles stay quiet and create no duplicate user notification."
+    verifier_artifact_to_build: tools/qa/verify_proactive_policy
+    eval_metric_ids: [P2]
+    status: pending
+  - id: NC5-05
+    milestone: M5
+    name: Real proactive quality evidence
+    type: code-audit
+    files: [evals/, curator/proactive/]
+    criteria: "Promotion uses real delivered items and legitimate owner judgments over the policy observation window. Smaller samples remain insufficient_evidence."
+    verifier_artifact_to_build: tools/qa/verify_proactive_eval
+    eval_metric_ids: [P1, P2, P3, P4]
+    status: pending
+
+  - id: NCX-01
+    milestone: all
+    name: Existing deterministic CI floor
+    type: automated
+    command: 'python -m compileall -q curator tests scripts && python -m pytest -p no:cacheprovider -q -m "not allow_socket"'
+    expected: '0'
+    comparison_mode: exit_code
+    side_effects: false
+    status: pending
+    retries: 0
+    blocked_reason: null
+  - id: NCX-02
+    milestone: all
+    name: Existing edge and fixture CI floor
+    type: automated
+    command: 'node --test "edge/*.test.js" && node --no-experimental-detect-module --test "edge/*.test.js" && test -f edge/package.json && node edge/scripts/regenerate-fixtures.mjs && git diff --exit-code -- edge/fixtures'
+    expected: '0'
+    comparison_mode: exit_code
+    side_effects: true
+    status: pending
+    retries: 0
+    blocked_reason: null
+    note: "Fixture regeneration writes deterministic tracked fixtures. Run once at the end and require a clean diff."
+  - id: NCX-03
+    milestone: M2a
+    name: Existing PostgreSQL discovery runtime floor
+    type: automated
+    command: 'python -m pytest -p no:cacheprovider -q tests/test_discovery_postgres_runtime.py --junitxml=/tmp/discovery-db.xml'
+    expected: '0'
+    comparison_mode: exit_code
+    side_effects: true
+    status: pending
+    retries: 0
+    blocked_reason: null
+    note: "Requires the CI-provided disposable PostgreSQL 17.11 runtime; follow with the existing XML no-skips assertion."
+
+coverage:
+  role_rule: "Metric references show evidence coverage. For M2 completion only F1, F3, R1, R6, L1, and L2 are headline gates; S1 is a guardrail; other M2 metrics are diagnostics."
+  M2a:
+    check_ids: [NC2-A01, NC2-A02, NC2-A03, NC2-A04, NC2-A05, NC2-A06, NC2-A08, NC2-A09, NC2-A10, NCX-01, NCX-03]
+    eval_metric_ids: [F1, F3, F6]
+    optional_later_checks: [NC2-A06]
+  M2b:
+    check_ids: [NC2-B01, NC2-B02, NC2-B03, NC2-B04, NC2-B06, NC2-B07, NC2-B08, NCX-01, NCX-02]
+    eval_metric_ids: [F2, F5, R1, R2, R3, R4, R5, R6, S1, D1, F4, O1]
+  M2c:
+    check_ids: [NC2-C01, NC2-C02, NC2-C03, NC2-C04, NC2-C06, NC2-C07, NC2-C08, NC2-C09, NC2-C10, NCX-01]
+    eval_metric_ids: [F1, F2, F3, F5, F6, R1, R2, R3, R4, R5, R6, S1, D1, F4, L1, L2, O1]
+  M3:
+    check_ids: [NC3-01, NC3-02, NC3-03, NCX-01]
+    eval_metric_ids: [Q1, Q2, Q3, Q4]
+  M4:
+    check_ids: [NC4-01, NC4-02, NC4-03, NC4-05, NCX-01]
+    eval_metric_ids: [R1, R2, R3, R4, R5, R6, S1, D1, F4, L1, L2, O1]
+  M5:
+    check_ids: [NC5-01, NC5-02, NC5-03, NC5-04, NC5-05, NCX-01]
+    eval_metric_ids: [P1, P2, P3, P4]
+
+validation_requirements:
+  expected_total_checks: 40
+  expected_all_status: pending
+  required_for_automated: [command, expected, comparison_mode, side_effects, status, retries, blocked_reason]
+  required_for_code_audit: [files, criteria, verifier_artifact_to_build, status]
+  assertions:
+    - "Every ID is unique and every coverage check_id resolves."
+    - "Summary counts equal parsed check states."
+    - "Every automated check declares comparison_mode and side_effects."
+    - "No proposed verifier is presented as an existing runnable command."
+    - "Every eval_metric_id exists in metrics-policy.yaml."
+    - "No metric threshold is duplicated in this checklist."
+    - "Historical docs/qa-checklist.yaml remains byte-for-byte unchanged."
+    - "No check can pass on insufficient evidence or missing denominators."
+    - "Pending, unmeasured, blocked, and verifier-not-built placeholders cannot count as working or passed."
+    - "Supplemental model assertions remain nested in existing check IDs; expected total remains 40."
