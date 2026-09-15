@@ -58,6 +58,7 @@ def test_unvalidated_or_nonpermutation_output_is_rejected(raw):
 
 
 @pytest.mark.parametrize(("response", "error", "reason"), [
+    (httpx.Response(302, json={"id": "private-response-marker", "output": [], "usage": {}}), ProviderResponseInvalid, None),
     (httpx.Response(401, text="private-response-marker"), ProviderHTTPError, "provider_http_4xx"),
     (httpx.Response(503, text="private-response-marker"), ProviderHTTPError, "provider_http_5xx"),
     (httpx.Response(200, text="private-response-marker"), ProviderResponseInvalid, None),

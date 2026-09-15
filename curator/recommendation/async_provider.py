@@ -93,6 +93,8 @@ class AsyncOpenAIResponses:
                 raise ProviderHTTPError("provider_http_4xx")
             if response.status_code >= 500:
                 raise ProviderHTTPError("provider_http_5xx")
+            if not 200 <= response.status_code < 300:
+                raise ProviderResponseInvalid("provider response invalid")
             try:
                 value = response.json()
             except ValueError:
@@ -102,7 +104,7 @@ class AsyncOpenAIResponses:
             return value
         try:
             return await asyncio.wait_for(request(), timeout=self._total)
-        except asyncio.TimeoutError as exc:
+        except asyncio.TimeoutError:
             await self._client.aclose()
             raise ProviderTimeout("provider total deadline exceeded") from None
         except httpx.TransportError:
