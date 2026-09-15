@@ -24,6 +24,22 @@ def binding(path: Path, ref: str) -> None:
     path.chmod(0o600)
 
 
+def secret_args(tmp_path: Path, binding_path: Path, output: Path) -> Namespace:
+    model_env = tmp_path / "model.env"
+    model_env.write_text("NEWS_CURATOR_MODEL_API_KEY=protocol-model-value\n")
+    model_env.chmod(0o600)
+    return Namespace(
+        binding=binding_path,
+        expected_project_ref="odurwknvigshekaprjvj",
+        management_token_helper=tmp_path / "token.py",
+        model_env=model_env,
+        reader_origin="https://reader.example.test",
+        template="/opt/news-curator/config/rankllm-news-curator-json.yaml",
+        service_key_name="news_curator_github",
+        output=output,
+    )
+
+
 def test_wrong_project_ref_rejects_before_management_token_read(tmp_path, monkeypatch):
     private = tmp_path / "binding.json"
     binding(private, "aaaaaaaaaaaaaaaaaaaa")
@@ -91,3 +107,71 @@ def test_keychain_failure_is_sanitized_at_cli_boundary(tmp_path, monkeypatch, ca
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "activation preparation failed: CalledProcessError\n"
+
+
+def test_stage_secret_uses_one_scoped_key_response_and_writes_private_output(tmp_path, monkeypatch, capsys):
+    private = tmp_path / "binding.json"
+    binding(private, "odurwknvigshekaprjvj")
+    args = secret_args(tmp_path, private, tmp_path / "secret.json")
+    calls = []
+    monkeypatch.setattr(activation, "token", lambda _: "protocol-management-token")
+
+    def controlled_request(ref, access, path, *, payload=None):
+        calls.append((ref, access, path, payload))
+        return [
+            {"type": "publishable", "name": "default", "api_key": "protocol-publishable-key"},
+            {"type": "secret", "name": "news_curator_github", "api_key": "protocol-service-key"},
+        ]
+
+    monkeypatch.setattr(activation, "request_json", controlled_request)
+    activation.stage_secret(args)
+    receipt = capsys.readouterr()
+    secret = json.loads(args.output.read_text())
+    assert calls == [("odurwknvigshekaprjvj", "protocol-management-token", "/api-keys", None)]
+    assert stat.S_IMODE(args.output.stat().st_mode) == 0o600
+    assert secret["NEWS_CURATOR_PREVIEW_OWNER_IDS"] == '["00000000-0000-0000-0000-000000000001"]'
+    assert secret["NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY"] == "protocol-publishable-key"
+    assert secret["NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"] == "protocol-service-key"
+    assert "protocol-model-value" not in receipt.out
+    assert "protocol-publishable-key" not in receipt.out
+    assert "protocol-service-key" not in receipt.out
+
+
+@pytest.mark.parametrize("owners", [[], [{"owner_id": "00000000-0000-0000-0000-000000000001"}, {"owner_id": "00000000-0000-0000-0000-000000000002"}]])
+def test_stage_secret_rejects_non_single_owner_before_token_read(tmp_path, monkeypatch, owners):
+    private = tmp_path / "binding.json"
+    private.write_text(json.dumps({"project_ref": "odurwknvigshekaprjvj", "owners": owners}))
+    private.chmod(0o600)
+    args = secret_args(tmp_path, private, tmp_path / "secret.json")
+    monkeypatch.setattr(activation, "token", lambda _: pytest.fail("token must not be read"))
+    with pytest.raises(ValueError, match="exactly one owner"):
+        activation.stage_secret(args)
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("rows", [
+    [{"type": "publishable", "name": "default", "api_key": "one"}],
+    [{"type": "publishable", "name": "default", "api_key": "one"}, {"type": "secret", "name": "news_curator_github", "api_key": "two"}, {"type": "secret", "name": "news_curator_github", "api_key": "three"}],
+])
+def test_stage_secret_rejects_missing_or_ambiguous_scoped_keys(tmp_path, monkeypatch, rows):
+    private = tmp_path / "binding.json"
+    binding(private, "odurwknvigshekaprjvj")
+    args = secret_args(tmp_path, private, tmp_path / "secret.json")
+    monkeypatch.setattr(activation, "token", lambda _: "protocol-management-token")
+    monkeypatch.setattr(activation, "request_json", lambda *_args, **_kwargs: rows)
+    with pytest.raises(ValueError, match="scoped API keys"):
+        activation.stage_secret(args)
+    assert not args.output.exists()
+
+
+def test_cli_help_runs_from_an_arbitrary_current_directory(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/prepare_m2_activation.py"), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "Prepare bounded M2 deployment artifacts" in result.stdout
+    assert result.stderr == ""

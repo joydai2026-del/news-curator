@@ -17,8 +17,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from curator.recommendation.supabase_http import _NoRedirect
-
 PROJECT_REF = re.compile(r"^[a-z0-9]{20}$")
 OWNER_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
 MANAGEMENT_ORIGIN = "https://api.supabase.com"
@@ -30,6 +28,13 @@ REQUIRED_SECRET_FIELDS = (
     "NEWS_CURATOR_PREVIEW_OWNER_IDS", "NEWS_CURATOR_READER_ORIGIN",
     "NEWS_CURATOR_RANKLLM_TEMPLATE",
 )
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep a management bearer token on the fixed Supabase API origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def private_text(path: Path) -> str:
