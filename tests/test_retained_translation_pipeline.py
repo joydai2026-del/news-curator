@@ -95,3 +95,43 @@ def test_fair_tasks_alternate_language_before_second_item_from_same_language(mon
 
 def test_queue_policy_accepts_bounded_four_worker_configuration():
     assert module._queue_policy({"queue_limit":60,"translation_workers":4,"queue_time_budget_seconds":240}) == (60,4,240)
+
+
+def test_deadline_stops_queued_provider_dispatch_and_preserves_one_run_id(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from threading import Lock
+    rows=json.loads((ROOT/"tests/fixtures/m2-retained-public.json").read_text())["rows"]
+    rows=[r for r in rows if r["category_ids"]][:2]
+    cfg=SimpleNamespace(translation={"enabled":True,"provider":"openai","queue_limit":2,"translation_workers":1,"queue_time_budget_seconds":1,"supabase_url_env":"URL","supabase_service_role_key_env":"KEY","openai_api_key_env":"API"},categories=[SimpleNamespace(id=k,name=k) for k in set(k for r in rows for k in r["category_ids"])])
+    monkeypatch.setattr(module,"load_config",lambda _:cfg)
+    monkeypatch.setattr(module,"_rpc",lambda *_args:rows)
+    monkeypatch.setattr(module,"_provider_store",lambda *_args:(object(),object()))
+    monkeypatch.setenv("URL","https://example.supabase.co"); monkeypatch.setenv("KEY","sb_secret_test");monkeypatch.setenv("API","not-a-key")
+    clock=[0]; calls=[]
+    monkeypatch.setattr(module.time,"monotonic",lambda:clock[0])
+    def produce(**kwargs):
+        calls.append(kwargs); clock[0]=2
+        return SimpleNamespace(counters={"translated":1},fatal_persistence_failure=False)
+    monkeypatch.setattr(module,"produce_translation_records",produce)
+    assert module.translate(tmp_path,2)==0
+    assert len(calls)==1
+    language=next(iter(calls[0]["ranked_by_language"]))
+    assert calls[0]["cfg"].translation["targets"]==["zh" if language=="en" else "en"]
+
+def test_background_workers_share_whole_job_budget_identity(monkeypatch,tmp_path):
+    from types import SimpleNamespace
+    rows=json.loads((ROOT/"tests/fixtures/m2-retained-public.json").read_text())["rows"]
+    rows=[r for r in rows if r["category_ids"]][:3]
+    cfg=SimpleNamespace(translation={"enabled":True,"provider":"openai","queue_limit":3,"translation_workers":2,"queue_time_budget_seconds":10,"supabase_url_env":"URL","supabase_service_role_key_env":"KEY","openai_api_key_env":"API"},categories=[SimpleNamespace(id=k,name=k) for k in set(k for r in rows for k in r["category_ids"])])
+    monkeypatch.setattr(module,"load_config",lambda _:cfg); monkeypatch.setattr(module,"_rpc",lambda *_args:rows)
+    stores=[]; calls=[]
+    def factory(*args):
+        store=object();stores.append(store);return object(),store
+    monkeypatch.setattr(module,"_provider_store",factory)
+    monkeypatch.setenv("URL","https://example.supabase.co");monkeypatch.setenv("KEY","sb_secret_test");monkeypatch.setenv("API","not-a-key")
+    def produce(**kwargs):
+        calls.append(kwargs);return SimpleNamespace(counters={"translated":1},fatal_persistence_failure=False)
+    monkeypatch.setattr(module,"produce_translation_records",produce)
+    assert module.translate(tmp_path,3)==0
+    assert len(calls)==3 and len({call["run_id"] for call in calls})==1
+    assert len(set(stores))==3

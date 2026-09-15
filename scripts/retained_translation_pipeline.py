@@ -40,7 +40,7 @@ def _transport(policy: Mapping[str, object], *, timeout_seconds: float | None = 
 def _rpc(transport, origin: str, key: str, name: str, body: dict) -> object:
     credentials=(OriginBoundCredential(origin=origin,header_name="apikey",value=key),) if key.startswith("sb_secret_") else (OriginBoundCredential(origin=origin,header_name="Authorization",value="Bearer "+key),OriginBoundCredential(origin=origin,header_name="apikey",value=key))
     response=transport.request("retained-translation","POST",origin+"/rest/v1/rpc/"+name,headers={"Accept":"application/json","Content-Type":"application/json"},body=json.dumps(body,separators=(",",":")).encode(),credentials=credentials,allowed_mime_types=("application/json",))
-    if response.status_code != 200 or len(response.body)>2_000_000: raise ValueError("retained translation RPC unavailable")
+    if response.status_code != 200 or len(response.body)>8_000_000: raise ValueError("retained translation RPC unavailable")
     value=json.loads(response.body.decode())
     if not isinstance(value,list): raise ValueError("retained translation RPC response is invalid")
     return value
@@ -48,7 +48,8 @@ def _rpc(transport, origin: str, key: str, name: str, body: dict) -> object:
 def _item(row: Mapping[str, object]) -> tuple[Item, tuple[str,...], str]:
     required=("story_id","title","summary","language","source_id","source_name","canonical_url","published_at","category_ids")
     if any(not isinstance(row.get(key),str) for key in required[:-1]) or not isinstance(row.get("category_ids"),list) or not all(isinstance(x,str) for x in row["category_ids"]): raise ValueError("queue row is invalid")
-    published=datetime.fromisoformat(str(row["published_at"]).replace("Z","+00"))
+    published=datetime.fromisoformat(str(row["published_at"]).replace("Z","+00:00"))
+    if published.tzinfo is None or row["language"] not in {"en", "zh"}: raise ValueError("queue row locale or timestamp invalid")
     item=Item(title=str(row["title"]),description=str(row["summary"]),url=str(row["canonical_url"]),canonical_url=str(row["canonical_url"]),source_id=str(row["source_id"]),source_name=str(row["source_name"]),language=str(row["language"]),published_at=published,native_categories=set(row["category_ids"]))
     if story_id_for_item(item) != row["story_id"]: raise ValueError("retained identity mismatch")
     return item, tuple(row["category_ids"]), str(row["story_id"])
@@ -66,8 +67,8 @@ def _fair_tasks(rows, categories: Mapping[str, str]):
     for row in rows:
         item, category_ids, story_id = _item(row)
         if item.language not in {"en", "zh"}: continue
-        for category_id in category_ids:
-            name = categories.get(category_id)
+        for category_id in (category_ids or ("__all__",)):
+            name = categories.get(category_id) or ("All" if category_id == "__all__" else None)
             key = (item.language, name) if name else None
             if key and (item.language, story_id) not in seen:
                 buckets.setdefault(key, []).append(item); seen.add((item.language, story_id)); break
@@ -90,7 +91,7 @@ def translate(root: Path, limit: int) -> int:
     limit = min(limit, configured_limit)
     origin=_origin(os.environ.get(str(policy["supabase_url_env"]),"")); key=os.environ.get(str(policy["supabase_service_role_key_env"]),""); api_key=os.environ.get(str(policy["openai_api_key_env"]),"")
     if not key or not api_key: raise ValueError("retained translation credentials unavailable")
-    probe_transport=_transport(policy, timeout_seconds=3.0)
+    probe_transport=SafeHttpTransport(policy=SafeHttpPolicy(total_timeout_seconds=5.0, max_wire_bytes=8_000_000, max_decoded_bytes=8_000_000, per_host_concurrency=1))
     rows=_rpc(probe_transport,origin,key,"m2_translation_queue",{"p_limit":MAX_QUEUE,"p_max_age_hours":int(policy.get("queue_max_age_hours",168))})
     tasks=_fair_tasks(rows,{category.id: category.name for category in cfg.categories})[:limit]
     deadline=time.monotonic()+time_budget; run_id="retained:"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -113,7 +114,7 @@ def translate(root: Path, limit: int) -> int:
             result=future.result()
             for field in totals: totals[field]+=int(result.get(field,0))
     print(json.dumps({"queue_rows":len(rows),"dispatched":len(futures),"run_id":run_id,**totals},separators=(",",":")))
-    return 1 if totals["fatal"] else 0
+    return 1 if totals["fatal"] or (totals["failed"] and not totals["translated"]) else 0
 
 def export(root: Path, output: Path, locale: str) -> int:
     if locale not in {"en","zh"}: raise ValueError("locale is invalid")
@@ -127,7 +128,7 @@ def export(root: Path, output: Path, locale: str) -> int:
             item, _, story_id=_item(row)
             title=row.get("display_title"); summary=row.get("display_summary"); display_language=row.get("display_language"); available=row.get("translation_available")
             if not all(isinstance(x,str) for x in (title,summary,display_language)) or available is not True: raise ValueError("localized projection row is unavailable")
-            if display_language != locale: raise ValueError("mixed locale projection")
+            if display_language != locale or not title.strip(): raise ValueError("mixed or empty locale projection")
             items.append({"story_id":story_id,"title":title,"description":summary,"url":item.url,"canonical_url":item.canonical_url,"source_id":item.source_id,"source_name":item.source_name,"published_at":item.published_at.astimezone(timezone.utc).isoformat(),"original_language":item.language,"display_language":display_language,"translated":item.language != locale,"translation_available":available,"translation_source_language":item.language if available else "","translation_provider":"","translation_model_version":"","image_url":"","is_newsletter":False})
         categories.append({"id":category.id,"name":category.name,"items":items})
     payload={"schema_version":1,"generated_at":datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),"language":locale,"categories":categories}
