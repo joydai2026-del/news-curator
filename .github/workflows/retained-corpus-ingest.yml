@@ -48,6 +48,6 @@ jobs:
         if: ${{ github.event.schedule != '5,10,20,25,35,40,50,55 * * * *' }}
         env:
           NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
-          NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY }}
+          NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python scripts/retained_translation_pipeline.py translate --root . --limit 100

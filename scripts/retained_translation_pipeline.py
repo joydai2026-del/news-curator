@@ -11,20 +11,32 @@ from curator.localization import story_id_for_item
 from curator.models import Item
 from curator.sources import OriginBoundCredential, SafeHttpPolicy, SafeHttpTransport
 from curator.translation import OpenAITranslationAdapter, OpenAITranslationConfig, SupabaseTranslationConfig, SupabaseTranslationStore
+from curator.recommendation.supabase_http import validate_https_origin
 from scripts.run_translation_job import produce_translation_records
 
 MAX_QUEUE = 1000
 MAX_PAGE = 100
 
 def _origin(value: str) -> str:
-    if not value.startswith("https://") or "/" in value[8:]: raise ValueError("Supabase origin is invalid")
-    return value.rstrip("/")
+    return validate_https_origin(value).rstrip("/")
+
+def _queue_policy(policy: Mapping[str, object]) -> tuple[int, int, int]:
+    values = (policy.get("queue_limit", 12), policy.get("translation_workers", 1), policy.get("queue_time_budget_seconds", 240))
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        raise ValueError("retained translation queue policy is invalid")
+    limit, workers, budget = values
+    if not 1 <= limit <= 1000 or not 1 <= workers <= 4 or not 1 <= budget <= 240:
+        raise ValueError("retained translation queue policy is out of bounds")
+    # One worker preserves the existing store/transport transition order. The queue cap
+    # bounds worst-case dispatch below the configured background budget; no retry occurs.
+    return limit, workers, budget
+
 
 def _transport(policy: Mapping[str, object]) -> SafeHttpTransport:
     return SafeHttpTransport(policy=SafeHttpPolicy(total_timeout_seconds=float(policy.get("request_timeout_seconds",20)), max_wire_bytes=int(policy.get("max_response_bytes",524288)), max_decoded_bytes=int(policy.get("max_response_bytes",524288)), per_host_concurrency=int(policy.get("per_host_concurrency",2))))
 
 def _rpc(transport, origin: str, key: str, name: str, body: dict) -> object:
-    credentials=(OriginBoundCredential(origin=origin,header_name="Authorization",value="Bearer "+key),OriginBoundCredential(origin=origin,header_name="apikey",value=key))
+    credentials=(OriginBoundCredential(origin=origin,header_name="apikey",value=key),) if key.startswith("sb_secret_") else (OriginBoundCredential(origin=origin,header_name="Authorization",value="Bearer "+key),OriginBoundCredential(origin=origin,header_name="apikey",value=key))
     response=transport.request("retained-translation","POST",origin+"/rest/v1/rpc/"+name,headers={"Accept":"application/json","Content-Type":"application/json"},body=json.dumps(body,separators=(",",":")).encode(),credentials=credentials,allowed_mime_types=("application/json",))
     if response.status_code != 200 or len(response.body)>2_000_000: raise ValueError("retained translation RPC unavailable")
     value=json.loads(response.body.decode())
@@ -41,6 +53,10 @@ def _item(row: Mapping[str, object]) -> tuple[Item, tuple[str,...], str]:
 
 def translate(root: Path, limit: int) -> int:
     cfg=load_config(root); policy=cfg.translation
+    if policy.get("enabled") is not True or policy.get("provider") != "openai":
+        return 0
+    configured_limit, workers, time_budget = _queue_policy(policy)
+    limit = min(limit, configured_limit)
     origin=_origin(os.environ.get(str(policy["supabase_url_env"]),"")); key=os.environ.get(str(policy["supabase_service_role_key_env"]),"")
     api_key=os.environ.get(str(policy["openai_api_key_env"]),"")
     if not key or not api_key: raise ValueError("retained translation credentials unavailable")
@@ -72,7 +88,7 @@ def export(root: Path, output: Path, locale: str) -> int:
         for row in rows:
             item, _, story_id=_item(row)
             title=row.get("display_title"); summary=row.get("display_summary"); display_language=row.get("display_language"); available=row.get("translation_available")
-            if not all(isinstance(x,str) for x in (title,summary,display_language)) or not isinstance(available,bool): raise ValueError("localized projection row is invalid")
+            if not all(isinstance(x,str) for x in (title,summary,display_language)) or available is not True: raise ValueError("localized projection row is unavailable")
             if display_language != locale: raise ValueError("mixed locale projection")
             items.append({"story_id":story_id,"title":title,"description":summary,"url":item.url,"canonical_url":item.canonical_url,"source_id":item.source_id,"source_name":item.source_name,"published_at":item.published_at.astimezone(timezone.utc).isoformat(),"original_language":item.language,"display_language":display_language,"translated":item.language != locale,"translation_available":available,"translation_source_language":item.language if available else "","translation_provider":"","translation_model_version":"","image_url":"","is_newsletter":False})
         categories.append({"id":category.id,"name":category.name,"items":items})
@@ -85,7 +101,7 @@ def main(argv=None) -> int:
     q=subs.add_parser("translate"); q.add_argument("--root",type=Path,default=Path.cwd()); q.add_argument("--limit",type=int,default=100)
     e=subs.add_parser("export"); e.add_argument("--root",type=Path,default=Path.cwd()); e.add_argument("--output",type=Path,required=True); e.add_argument("--locale",required=True)
     args=parser.parse_args(argv)
-    if getattr(args,"limit",0) and not 1<=args.limit<=MAX_QUEUE: parser.error("limit must be 1..1000")
+    if args.command == "translate" and not 1 <= args.limit <= MAX_QUEUE: parser.error("limit must be 1..1000")
     return translate(args.root,args.limit) if args.command=="translate" else export(args.root,args.output,args.locale)
 if __name__=="__main__":
     try: raise SystemExit(main())

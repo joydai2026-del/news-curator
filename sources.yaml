@@ -337,6 +337,9 @@ translation:
   openai_output_microusd_per_million_tokens: 2000000
   openai_max_input_tokens: 4096
   openai_max_output_tokens: 4096
+  queue_limit: 12
+  queue_time_budget_seconds: 240
+  translation_workers: 1
   max_output_title_characters: 2000
   max_output_description_characters: 8000
   lease_timeout_seconds: 900
@@ -348,7 +351,11 @@ translation:
   glossary_policy_version: none-v1
   candidate_policy_version: retained-round-robin-v1
   supabase_url_env: NEWS_CURATOR_SUPABASE_URL
-  supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY
+  supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SECRET_KEY
+  # Retained only for the disabled Google adapter fallback contract.
+  project_id_env: GOOGLE_CLOUD_PROJECT_ID
+  location: global
+  model_version: projects/{project_id}/locations/{location}/models/general/nmt
 
 # ---------------------------------------------------------------------------
 # The newsletter lane. Reads a dedicated newsletter-only Gmail account through
