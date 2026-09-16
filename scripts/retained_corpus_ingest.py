@@ -6,9 +6,100 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from curator.config import load_config
 from curator.pipeline import configured_source_specs
-from curator.retained_corpus import public_ingest_rows, retain
+from curator.retained_corpus import apply_translations, language_exclusive_story_ids, public_ingest_rows, retain
 from curator.source_snapshot import load_source_snapshot, snapshot_config_digest
 from curator.recommendation.supabase_http import _NoRedirect, validate_https_origin
+from curator.sources import SafeHttpPolicy, SafeHttpTransport
+from curator.translation import (
+    ModelTranslationAdapter,
+    ModelTranslationConfig,
+    SupabaseTranslationConfig,
+    SupabaseTranslationStore,
+)
+from curator.translation.ingest import IngestTranslationPolicy, translate_exclusive_stories
+
+
+def _ingest_translation_policy(cfg) -> IngestTranslationPolicy:
+    """Build the validated policy from config. Boot fails on a bad value."""
+    translation, language = cfg.translation or {}, cfg.language or {}
+    return IngestTranslationPolicy(
+        enabled=bool(translation.get('enabled', False)),
+        provider=str(translation.get('provider') or 'google'),
+        display_language=str(language.get('default_display') or 'en'),
+        run_character_limit=int(translation.get('run_character_limit', 2000)),
+        day_character_limit=int(translation.get('day_character_limit', 15000)),
+        month_character_limit=int(translation.get('month_character_limit', 450000)),
+        daily_cost_limit_usd=float(translation.get('daily_cost_limit_usd', 0.5)),
+        cost_per_1k_characters_usd=float(translation.get('cost_per_1k_characters_usd', 0.002)),
+        cache_ttl_days=int(translation.get('cache_ttl_days', 30)),
+        on_failure=str(translation.get('on_failure') or 'show_original_marked'),
+        max_items=int(translation.get('max_items_per_language', 25)),
+        normalization_version=str(translation.get('normalization_version') or 'normalized-item-v1'),
+        glossary_policy_version=str(translation.get('glossary_policy_version') or 'none-v1'),
+        candidate_policy_version=str(translation.get('candidate_policy_version') or 'ranked-non-newsletter-v1'),
+    )
+
+
+def translate_rows(cfg, rows, *, env, now, store=None, provider=None):
+    """Translate the language-exclusive stories, or say plainly why not.
+
+    Returns ``(rows, message)``. A missing credential, a switched-off feature,
+    a provider failure or an unavailable cache is always a SKIP, never an
+    exception: the hourly ingest must keep running and no story is ever
+    dropped for a translation problem.
+    """
+    try:
+        policy = _ingest_translation_policy(cfg)
+    except ValueError as error:
+        return rows, f'translation unavailable: invalid policy ({error})'
+    if not policy.enabled:
+        return rows, 'translation skipped: disabled in config'
+    translation = cfg.translation or {}
+    key_env = str(translation.get('api_key_env') or '')
+    api_key = env.get(key_env, '') if key_env else ''
+    if not api_key:
+        return rows, 'translation skipped: key not configured'
+    exclusive = set(language_exclusive_story_ids(rows, display_language=policy.display_language))
+    stories = [(row.story_id, row.item) for row in rows if row.story_id in exclusive]
+    if not stories:
+        return rows, 'translation skipped: no language-exclusive stories'
+    try:
+        if store is None or provider is None:
+            built = _build_translation_clients(translation, api_key, env)
+            if built is None:
+                return rows, 'translation skipped: store not configured'
+            store, provider = built if store is None and provider is None else (store or built[0], provider or built[1])
+        result = translate_exclusive_stories(
+            stories, policy=policy, store=store, provider=provider,
+            run_id=f"retained-corpus-{now.strftime('%Y%m%dT%H%M%SZ')}", now=now)
+    except Exception:
+        # Never let a translation problem take the ingest down with it.
+        return rows, 'translation unavailable: original text retained'
+    translated = result.counters.get('translated', 0) + result.counters.get('cache_hit', 0)
+    return (apply_translations(rows, result.overlays),
+            f'translated={translated} untranslated_shown={result.untranslated_shown}')
+
+
+def _build_translation_clients(translation, api_key, env):
+    url = env.get(str(translation.get('supabase_url_env') or ''), '')
+    service_key = env.get(str(translation.get('supabase_service_role_key_env') or ''), '')
+    if not url or not service_key:
+        return None
+    validate_https_origin(url)
+    transport = SafeHttpTransport(policy=SafeHttpPolicy(
+        total_timeout_seconds=float(translation.get('request_timeout_seconds', 20)),
+        max_wire_bytes=int(translation.get('max_response_bytes', 524288)),
+        max_decoded_bytes=int(translation.get('max_response_bytes', 524288)),
+        per_host_concurrency=int(translation.get('per_host_concurrency', 2))))
+    store = SupabaseTranslationStore(SupabaseTranslationConfig(url, service_key), transport=transport)
+    provider = ModelTranslationAdapter(
+        config=ModelTranslationConfig(
+            provider_id=str(translation.get('provider') or 'openai'),
+            model=str(translation.get('model') or ''),
+            api_origin=str(translation.get('api_origin') or 'https://api.openai.com'),
+            max_response_bytes=int(translation.get('max_response_bytes', 524288))),
+        transport=transport, api_key=lambda: api_key)
+    return store, provider
 
 def main() -> int:
     p=argparse.ArgumentParser(); p.add_argument('command', choices=('build','ingest')); p.add_argument('--root',type=Path,default=Path.cwd()); p.add_argument('--source-snapshot',type=Path,required=True); p.add_argument('--output',type=Path); a=p.parse_args()
@@ -28,7 +119,10 @@ def main() -> int:
     }
     if unexpected:
         raise ValueError("snapshot contains an unconfigured source")
-    rows=public_ingest_rows(retain(source_items, categories=cfg.categories, observed_at=snap.generated_at), allowed_source_ids=allowed)
+    retained=retain(source_items, categories=cfg.categories, observed_at=snap.generated_at)
+    retained, translation_message = translate_rows(cfg, retained, env=os.environ, now=snap.generated_at)
+    print(translation_message, file=sys.stderr)
+    rows=public_ingest_rows(retained, allowed_source_ids=allowed)
     if a.command == 'build':
         if not a.output: raise ValueError('output required')
         a.output.write_text(json.dumps({'schema_version':1,'generated_at':snap.generated_at.isoformat(),'rows':rows}, ensure_ascii=False), encoding='utf-8'); return 0
