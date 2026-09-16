@@ -125,9 +125,10 @@ def build_site(tmp_path):
     return site
 
 
-def test_language_toggle_section_and_untranslated_mark(tmp_path):
+def _run_reader(tmp_path, rows, steps):
+    """Boot the rendered reader against a local store and run `steps(page, ctx)`."""
     site = build_site(tmp_path)
-    store = LanguageStore(FIXTURE_ROWS)
+    store = LanguageStore(rows)
     service = RankingService(auth=LocalAuth(), store=store, adapter=RankLLMAdapter(
         policy=RankerPolicy('test-provider', 'test-model', 'https://provider.example', 'test-prompt'),
         engine=NoProvider()),
@@ -239,6 +240,79 @@ def test_language_toggle_section_and_untranslated_mark(tmp_path):
             section_title = page.locator('#sections [data-section="__m2__"] .section-title').first
             assert section_title.inner_text() == 'Only in Chinese press'
             assert page.locator('.m2-empty').count() == 0
+        finally:
+            context.close()
+            browser.close()
+    assert page_errors == []
+
+
+def test_the_empty_exclusive_section_shows_exactly_one_message(tmp_path):
+    """Two empty states on one screen contradict each other. Only one may paint."""
+    site = build_site(tmp_path)
+    # A corpus with no language-exclusive story at all.
+    store = LanguageStore([FIXTURE_ROWS[2]])
+    service = RankingService(auth=LocalAuth(), store=store, adapter=RankLLMAdapter(
+        policy=RankerPolicy('test-provider', 'test-model', 'https://provider.example', 'test-prompt'),
+        engine=NoProvider()),
+        policy=ServicePolicy('test-policy', 'test-model', 'test-policy', 'test-tenant', enabled=True,
+                             display_language='en', exclusive_category_id=EXCLUSIVE, other_lane_enabled=True),
+        cursor_key=b'k' * 32)
+    app = RankingASGI(service=service, reader_origin=READER)
+    page_errors = []
+
+    def route_handler(route):
+        request = route.request
+        parsed = urlsplit(request.url)
+        body = request.post_data_json if request.post_data else {}
+        if request.url.startswith(READER):
+            if parsed.path == '/auth/client.js':
+                script = ('window.__localSession={access_token:"local-auth-token",user_id:"' + OWNER + '"};'
+                          'window.NewsCuratorAuth={config:()=>({url:"' + DATABASE + '",key:"sb_publishable_localtest"}),'
+                          'sessionForRequest:async()=>window.__localSession,hasSessionCandidate:()=>!!window.__localSession,'
+                          'isConfirmed:()=>true,confirmSession:()=>{},clearSession:()=>{window.__localSession=null;},'
+                          'channelName:"m2-local-test"};')
+                return route.fulfill(status=200, content_type='text/javascript', body=script)
+            file = site / (parsed.path.lstrip('/') or 'index.html')
+            return route.fulfill(status=200,
+                content_type='text/javascript' if file.suffix == '.js' else 'text/html', body=file.read_bytes())
+        if request.url.startswith(RANKER):
+            status, payload = asgi_request(app, request)
+            return route.fulfill(status=status, content_type='application/json', body=payload)
+        if request.url.startswith(DATABASE):
+            name = parsed.path.rsplit('/', 1)[-1]
+            if name == 'latest_publication':
+                payload = {'publication_seq': 1, 'finalized_at': NOW.isoformat().replace('+00:00', 'Z'),
+                           'initial_history_cursor': None, 'page_size': 20, 'poll_seconds': 60,
+                           'topics': [{'topic_id': 'world', 'name': 'world'}]}
+            elif name == 'm2_history_snapshot':
+                payload = store.history_snapshot('local-auth-token')
+            elif name in ('feed_page', 'saved_page'):
+                payload = []
+            elif name == 'discovery_edition':
+                payload = {'schema_version': 1, 'status': 'unavailable', 'reason_code': 'no_private_edition', 'edition': None}
+            elif name == 'append_behavior_event':
+                payload = {'status': 'recorded', 'event_id': body.get('p_event_id'), 'event_revision': 1}
+            else:
+                raise AssertionError(name)
+            return route.fulfill(status=200, content_type='application/json', body=json.dumps(payload))
+        route.abort()
+
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, args=['--mute-audio'])
+        context = browser.new_context(viewport={'width': 390, 'height': 844})
+        context.route('**/*', route_handler)
+        page = context.new_page()
+        page.on('pageerror', lambda error: page_errors.append(str(error)))
+        try:
+            page.goto(READER, wait_until='networkidle')
+            page.wait_for_function(VISIBLE_CARDS + " === 1")
+            page.locator('.chip[data-language-exclusive=true]').nth(1).click()
+            page.wait_for_function(VISIBLE_CARDS + " === 0")
+            painted = page.evaluate(
+                "() => [...document.querySelectorAll('.m2-empty, #empty')]"
+                ".filter((node) => node.offsetParent !== null).map((node) => node.textContent.trim())")
+            assert len(painted) == 1, painted
+            assert 'No stories that only the Chinese press carried today' in painted[0]
         finally:
             context.close()
             browser.close()

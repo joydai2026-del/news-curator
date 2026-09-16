@@ -1282,6 +1282,8 @@
       // Never a blank page and never a silent fallback to All.
       if (!empty) m2Section.append(element("p", "m2-empty", strings().emptyExclusive(otherLanguageName())));
       else empty.textContent = strings().emptyExclusive(otherLanguageName());
+      // A section holding the empty message must not be hidden as "no cards".
+      m2Section.hidden = false;
     }
     function switchDisplayLanguage() {
       displayLanguage = displayLanguage === "en" ? "zh" : "en";
@@ -1327,6 +1329,8 @@
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });
       m2Cursor = response.next_cursor; m2Binding = response;
+      // The section's own empty state must exist BEFORE the view decides
+      // whether to show the generic one, or both render together.
       applyExclusiveSectionTitle(); refreshLanguageLabels();
       document.getElementById("discovery-controls")?.setAttribute("hidden", "");
       if (m2Controls) m2Controls.hidden = false;
