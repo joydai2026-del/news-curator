@@ -35,6 +35,7 @@ from .store import (
     ReservationState,
     TranslationCacheKey,
     TranslationCacheRecord,
+    TranslationStoreError,
 )
 
 
@@ -267,7 +268,7 @@ def _translated(title: str, summary: str, target: str) -> TranslationOverlay:
 def _fresh_cache(store, key, *, now: datetime, ttl: timedelta, counters: Counter) -> TranslationCacheRecord | None:
     try:
         cached = store.lookup(key)
-    except Exception:
+    except TranslationStoreError:
         counters["cache_unavailable"] += 1
         return None
     if cached is None:
@@ -289,11 +290,11 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
     try:
         store.recover_stale(key, lease_timeout_seconds=policy.lease_timeout_seconds,
                             sent_timeout_seconds=policy.sent_timeout_seconds)
-    except Exception:
+    except TranslationStoreError:
         counters["recover_failed"] += 1
     try:
         acquired = store.acquire(request)
-    except Exception:
+    except TranslationStoreError:
         counters["acquire_failed"] += 1
         return _untranslated("acquire_failed")
     if acquired.status == AcquireStatus.CACHE_HIT and acquired.cache is not None and acquired.cache.key == key:
@@ -304,7 +305,7 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
         return _untranslated(acquired.status.value)
     try:
         sent = store.mark_sent(idempotency_key)
-    except Exception:
+    except TranslationStoreError:
         counters["mark_sent_failed"] += 1
         return _untranslated("mark_sent_failed")
     if sent.state != ReservationState.SENT:
@@ -331,14 +332,14 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
         ledger.retain(reservation_usd)
         _mark_unknown(store, idempotency_key, counters)
         return _untranslated(error.reason_code)
-    except Exception:
+    except ValueError:
         counters["provider_contract_failed"] += 1
         ledger.retain(reservation_usd)
         _mark_unknown(store, idempotency_key, counters)
         return _untranslated("malformed_response")
     try:
         settled = store.settle(idempotency_key, actual_characters=candidate.content.character_count, record=record)
-    except Exception:
+    except TranslationStoreError:
         counters["settlement_failed"] += 1
         ledger.retain(reservation_usd)
         _mark_unknown(store, idempotency_key, counters)
@@ -358,5 +359,5 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
 def _mark_unknown(store, idempotency_key: str, counters: Counter) -> None:
     try:
         store.mark_charge_unknown(idempotency_key)
-    except Exception:
+    except TranslationStoreError:
         counters["persistence_unknown"] += 1

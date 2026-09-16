@@ -12,7 +12,13 @@ import pytest
 
 from curator.models import Item
 from curator.retained_corpus import retain
-from curator.translation import InMemoryTranslationStore
+from curator.translation import (
+    InMemoryTranslationStore,
+    StoreErrorReason,
+    TranslationErrorReason,
+    TranslationProviderError,
+    TranslationStoreError,
+)
 from curator.translation.base import TranslationProviderResult, TranslationResultItem
 from curator.grouping import GroupingCandidate, event_group_id_for
 from curator.translation.pairing import ExclusivityDecision
@@ -148,7 +154,7 @@ def test_a_translation_failure_degrades_and_never_drops_a_row():
         model_version = "gpt-5-mini:translation-json-v1"
 
         def translate(self, request):
-            raise RuntimeError("provider exploded")
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.PROVIDER_REJECTED)
 
     rows = fixture_rows()
     result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
@@ -159,37 +165,27 @@ def test_a_translation_failure_degrades_and_never_drops_a_row():
     assert "untranslated_shown=1" in message
 
 
-def test_an_unexpected_failure_inside_translation_leaves_the_ingest_intact():
-    class Exploding:
-        provider_id = "openai"
-        model_version = "gpt-5-mini:translation-json-v1"
+def test_a_store_outage_degrades_with_a_named_reason_and_keeps_every_row():
+    """A store that is DOWN (its own error type) degrades. A store that is
+    BROKEN (a TypeError) surfaces, and that case is asserted separately."""
+    rows = fixture_rows()
 
-        def translate(self, request):
-            raise RuntimeError("unreachable")
-
-    class BrokenStore:
+    class DownStore:
         def lookup(self, key):
-            raise RuntimeError("store down")
+            raise TranslationStoreError(StoreErrorReason.UNAVAILABLE)
 
         def recover_stale(self, key, **kwargs):
-            raise RuntimeError("store down")
+            raise TranslationStoreError(StoreErrorReason.UNAVAILABLE)
 
         def acquire(self, request):
-            raise RuntimeError("store down")
+            raise TranslationStoreError(StoreErrorReason.UNAVAILABLE)
 
-    rows = fixture_rows()
     result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
-                                     store=BrokenStore(), provider=Exploding(), pairing_provider=StubPairing())
-    assert result == rows or len(result) == len(rows)
-    assert "untranslated_shown" in message or message.startswith("translation unavailable")
-
-
-def test_the_ingest_workflow_passes_the_translation_values_through():
-    """Without these the wiring can never fire, and each one is optional."""
-    from pathlib import Path
-    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/retained-corpus-ingest.yml").read_text()
-    for name in ("NEWS_CURATOR_MODEL_API_KEY", "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"):
-        assert f"{name}: ${{{{ secrets.{name} }}}}" in workflow, name
+                                     store=DownStore(), provider=StubProvider(),
+                                     pairing_provider=pairing_for(rows))
+    assert len(result) == len(rows), "no story is dropped for a store outage"
+    assert all(row.title_translations == {} for row in result)
+    assert "untranslated_shown=1" in message
 
 
 def test_the_shipped_config_translates_language_exclusive_stories_with_a_key():
@@ -320,3 +316,43 @@ def test_the_decision_callback_receives_every_new_decision_for_persistence():
     assert {decision.story_id for decision in recorded} == {
         row.story_id for row in rows if row.item.language == "zh"}
     assert {decision.policy_id for decision in recorded} == {"pairing-json-v1"}
+
+
+def test_the_two_supabase_key_env_names_are_deliberate_and_documented():
+    """The ingest RPCs and the translation store use DIFFERENT key names.
+
+    Both are service-role credentials, but they are provisioned separately, so
+    the split is recorded here rather than left as a trap for the next reader.
+    """
+    from pathlib import Path
+    from curator.config import load_config
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_config(root)
+    script = (root / "scripts/retained_corpus_ingest.py").read_text(encoding="utf-8")
+    workflow = (root / ".github/workflows/retained-corpus-ingest.yml").read_text(encoding="utf-8")
+    # The corpus read and ingest RPCs use the ingest key.
+    assert "NEWS_CURATOR_SUPABASE_SECRET_KEY" in script
+    # The translation cache/budget store uses the service-role key from config.
+    assert cfg.translation["supabase_service_role_key_env"] == "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"
+    # Both must be present in the job, or one half of the feature is dark.
+    for name in ("NEWS_CURATOR_SUPABASE_SECRET_KEY", "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"):
+        assert name in workflow, name
+
+
+def test_a_programmer_error_is_not_swallowed_as_a_provider_outage():
+    """Round 2 hid code defects behind 'original text retained'. It must not."""
+    rows = fixture_rows()
+
+    class BrokenStore:
+        def lookup(self, key):
+            raise TypeError("lookup() got an unexpected keyword argument")
+
+        def recover_stale(self, key, **kwargs):
+            raise TypeError("programmer error")
+
+        def acquire(self, request):
+            raise TypeError("programmer error")
+
+    with pytest.raises(TypeError):
+        translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW, store=BrokenStore(),
+                       provider=StubProvider(), pairing_provider=pairing_for(rows))
