@@ -29,7 +29,7 @@ OWNER='00000000-0000-0000-0000-000000000001'
 
 class LocalStore:
     def __init__(self, rows):
-        self.rows=rows; self.frozen={}; self.events=[]; self.states={}; self.rank_reads=[]
+        self.rows=rows; self.frozen={}; self.events=[]; self.states={}; self.rank_reads=[]; self.event_failures=0
         self.generation=1; self.consent=1; self.learning=True; self.provider=False
     def history_snapshot(self, token):
         revision=len(self.events)
@@ -59,6 +59,9 @@ class LocalStore:
         assert row is None or row['user_id']==user_id
         return copy.deepcopy(row)
     def event(self, body):
+        if self.event_failures:
+            self.event_failures-=1
+            return None
         if not self.learning:return {'status':'learning_disabled'}
         assert body['p_expected_history_generation']==self.generation
         self.events.append({'event_id':body['p_event_id'],'event_type':body['p_event_type'],
@@ -97,14 +100,18 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
     capture=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())
     rows=sorted(capture['rows'],key=lambda r:(r['published_at'],r['story_id']),reverse=True)
     assert len(rows)>250 and len({row['story_id'] for row in rows})==len(rows)
+    missing_translation_story_id=rows[0]['story_id']
     categories=sorted({category for row in rows for category in row['category_ids']})
-    projection_only_row=rows[-1]
     ranked={}
     for category in categories:
         row=next(r for r in rows if category in r['category_ids'])
         ranked[category]=[Item(title=row['title'],url=row['canonical_url'],canonical_url=row['canonical_url'],
             published_at=datetime.fromisoformat(row['published_at']),source_id=row['source_id'],
             source_name=row['source_name'],language=row['language'],description=row['summary'])]
+    # Use a captured row absent from the one-per-category SSR seed. This makes
+    # the China News materialization assertion exercise the projection path.
+    ssr_story_ids={item.canonical_url for items in ranked.values() for item in items}
+    projection_only_row=next(row for row in rows if row['canonical_url'] not in ssr_story_ids)
     site=tmp_path/'site'
     render_site(ranked,[],datetime.fromisoformat(capture['generated_at']),site,
         topic_ids_by_name={c:c for c in categories},require_summaries=False,discovery_enabled=True)
@@ -116,7 +123,8 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 'items':[{'story_id':row['story_id'],'title':f'[protocol-{locale}] {row["story_id"][-8:]}',
                     'description':f'[protocol-{locale}-summary] {row["story_id"][-8:]}',
                     'display_language':locale,'translation_available':True}
-                    for row in rows if category in row['category_ids'] and row['story_id'] != projection_only_row['story_id']]})
+                    for row in rows if category in row['category_ids'] and row['story_id'] != projection_only_row['story_id']
+                    and not (locale=='zh' and row['story_id']==missing_translation_story_id)]})
         # Controlled protocol fixture: this real captured public row appears
         # only in a projection category absent from the SSR page.
         projection['categories'].append({'id':'china-news','name':'China News' if locale=='en' else '中国新闻',
@@ -138,7 +146,19 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
     requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}; response_locale={'value':'en'}
-    localized_chunks=[]; missing_translation={'story_id':None}; hold_rank={'value':True}; pending_rank=[]
+    # Controlled protocol case: a captured, unsaved candidate has no Chinese
+    # projection or RPC text. The reader must hide it, rather than show its
+    # original-language title.
+    localized_chunks=[]; missing_translation={'story_id':missing_translation_story_id}; hold_rank={'value':True}; pending_rank=[]
+    def localized_rank_response(decoded, locale):
+        # Controlled protocol response: captured article identities flow through
+        # the normal ranker, while the owned localized-candidate layer supplies
+        # the selected display text.
+        decoded['display_language']=locale
+        for card in decoded['cards']:
+            card['title']=f'[protocol-{locale}] {card["story_id"][-8:]}'
+            card['summary']=f'[protocol-{locale}-summary] {card["story_id"][-8:]}'
+        return decoded
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
@@ -159,7 +179,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             status,payload=asgi_request(app,request)
             decoded=json.loads(payload)
             if parsed.path=='/rank': response_locale['value']=body.get('display_language','en')
-            decoded['display_language']=response_locale['value']
+            localized_rank_response(decoded,response_locale['value'])
             return route.fulfill(status=status,content_type='application/json',body=json.dumps(decoded))
         if request.url.startswith(DATABASE):
             name=parsed.path.rsplit('/',1)[-1]
@@ -177,22 +197,27 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                     'summary':f'[protocol-{locale}-summary] {story_id[-8:]}',
                     'display_language':locale,'translation_available':True}
                     for story_id in selected if story_id != missing_translation['story_id']]
-            elif name=='append_behavior_event':payload=store.event(body)
+            elif name=='append_behavior_event':
+                payload=store.event(body)
+                if payload is None:return route.fulfill(status=500,content_type='application/json',body='{}')
             elif name=='set_story_state_with_event':
                 sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]
                 assert current['state_revision']==body['p_expected_revision']
-                current.update(read_at=body['p_occurred_at'] if body['p_read'] else None,
-                    saved_at=body['p_occurred_at'] if body['p_saved'] else None,state_revision=current['state_revision']+1)
-                store.states[sid]=current
+                updated={**current,'read_at':body['p_occurred_at'] if body['p_read'] else None,
+                    'saved_at':body['p_occurred_at'] if body['p_saved'] else None,'state_revision':current['state_revision']+1}
                 event=store.event({**body,'p_payload':{'story_id':sid,**({'saved':body['p_saved']} if body['p_event_type']=='save' else {}),'surface':'reader'}})
-                payload={'status':'updated','revision':current['state_revision'],'read_at':current['read_at'],
-                         'saved_at':current['saved_at'],'behavior_event':event}
+                if event is None:return route.fulfill(status=500,content_type='application/json',body='{}')
+                store.states[sid]=updated
+                payload={'status':'updated','revision':updated['state_revision'],'read_at':updated['read_at'],
+                         'saved_at':updated['saved_at'],'behavior_event':event}
             elif name=='set_story_interest_with_event':
                 sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]
                 signal=body['p_signal']; revision=body['p_expected_revision']+1
-                current['interests']=[{'topic_id':body['p_topic_id'],'signal':signal,'revision':revision}];store.states[sid]=current
+                updated={**current,'interests':[{'topic_id':body['p_topic_id'],'signal':signal,'revision':revision}]}
                 event=store.event({**body,'p_event_type':'less_like_this' if signal=='less_like' else 'more_like_this',
                     'p_payload':{'story_id':sid,'topic_id':body['p_topic_id'],'surface':'reader'}})
+                if event is None:return route.fulfill(status=500,content_type='application/json',body='{}')
+                store.states[sid]=updated
                 payload={'status':'updated','signal':signal,'revision':revision,'behavior_event':event}
             elif name=='set_behavior_consent':
                 store.learning=body['p_learning_enabled'];store.provider=body['p_provider_processing_enabled'];store.consent+=1
@@ -243,8 +268,12 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 return new Promise((resolve,reject)=>{window.__releaseState=()=>originalFetch(url,options).then(resolve,reject);});
               if(window.__stallExport && String(url).endsWith("/m2_owner_export_page"))
                 return new Promise((resolve,reject)=>{window.__releaseExport=()=>originalFetch(url,options).then(resolve,reject);});
+              if(window.__holdHistory && String(url).endsWith("/m2_history_snapshot"))
+                return new Promise((resolve,reject)=>{
+                  (window.__historyResolvers ||= []).push(()=>originalFetch(url,options).then(resolve,reject));
+                });
               if(window.__stallHistory && String(url).endsWith("/m2_history_snapshot"))
-                return new Promise((resolve,reject)=>setTimeout(()=>originalFetch(url,options).then(resolve,reject),400));
+                return new Promise((resolve,reject)=>setTimeout(()=>originalFetch(url,options).then(resolve,reject),1200));
               return window.__stallM2 && String(url).startsWith("https://ranker.example")
                 ?new Promise((resolve,reject)=>{
                     const timer=setTimeout(()=>originalFetch(url,options).then(async(response)=>{
@@ -265,23 +294,28 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.goto(READER,wait_until='domcontentloaded')
             page.wait_for_function('(storyId)=>document.querySelector(`[data-story-id="${storyId}"]`) !== null && document.querySelector(`[data-topic-id="china-news"]`) !== null',arg=projection_only_row['story_id'])
             projection_card=page.locator(f'[data-story-id="{projection_only_row["story_id"]}"]')
-            assert projection_card.locator('.head').inner_text().startswith('[protocol-en] ')
+            assert projection_card.locator('.headline').inner_text().startswith('[protocol-en] ')
             assert projection_card.evaluate("card => card.closest('.topic-section').dataset.topicId")=='china-news'
             assert len(pending_rank)==1
             rank_route,rank_request=pending_rank.pop()
             status,payload=asgi_request(app,rank_request)
+            assert status==200
             decoded=json.loads(payload); response_locale['value']=rank_request.post_data_json.get('display_language','en')
-            decoded['display_language']=response_locale['value']
+            localized_rank_response(decoded,response_locale['value'])
             hold_rank['value']=False
             rank_route.fulfill(status=status,content_type='application/json',body=json.dumps(decoded))
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
             assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
+            # This controlled empty-history fallback must never present a
+            # freshness-only result as though it used activity.
+            assert 'Latest activity used' not in page.locator('#m2-mode').inner_text()
+            assert page.locator('#m2-mode').inner_text().endswith('No recorded reading activity yet.')
             assert page.locator('#discovery-controls').is_hidden()
             assert page.locator('.edition-meta').is_hidden()
             assert page.locator('.eyebrow').text_content()=="Today's edition"
             assert page.locator('html').get_attribute('lang')=='en'
             assert not page.locator('body').evaluate('(body)=>body.classList.contains("locale-pending")')
-            assert all(title.startswith('[protocol-en] ') for title in page.locator('[data-m2-card=true] .head').all_text_contents())
+            assert all(title.startswith('[protocol-en] ') for title in page.locator('[data-m2-card=true] .headline').all_text_contents())
             # Check the same rendered reader at every required mobile/tablet width.
             for width in (320, 390, 430, 768):
                 page.set_viewport_size({'width': width, 'height': 844})
@@ -306,7 +340,8 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             # Controlled protocol case over captured public IDs. The selected
             # unsaved story has no Chinese row, so the real visibility policy
             # must hide it while all other cards render only Chinese markers.
-            missing_translation['story_id']=ids[-1]
+            assert missing_translation['story_id'] in ids
+            assert not page.locator(f'[data-m2-card=true][data-story-id="{missing_translation["story_id"]}"]').evaluate('(card)=>card.classList.contains("is-saved")')
             chunks_before=len(localized_chunks)
             en_mode=page.locator('#m2-mode').inner_text()
             rank_reads_before_locale=requests.count('/rank')
@@ -320,18 +355,20 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             missing_card=page.locator(f'[data-m2-card=true][data-story-id="{missing_translation["story_id"]}"]')
             assert missing_card.get_attribute('data-locale-hidden')=='true'
             assert missing_card.is_hidden()
+            page.wait_for_function("() => [...document.querySelectorAll('[data-m2-card=true]:not([data-locale-hidden=true]) .headline')].every((node) => node.textContent.startsWith('[protocol-zh] '))")
             assert len(pending_rank)==1
             rank_route,rank_request=pending_rank.pop()
             status,payload=asgi_request(app,rank_request)
             decoded=json.loads(payload); response_locale['value']=rank_request.post_data_json.get('display_language','en')
-            decoded['display_language']=response_locale['value']
+            localized_rank_response(decoded,response_locale['value'])
             hold_rank['value']=False
             rank_route.fulfill(status=status,content_type='application/json',body=json.dumps(decoded))
             page.wait_for_function('() => document.documentElement.lang==="zh" && !document.body.classList.contains("locale-pending") && document.querySelectorAll("[data-m2-card=true]").length===25')
             assert requests.count('/rank')==rank_reads_before_locale+1
-            assert all(title.startswith('[protocol-zh] ') for title in page.locator('[data-m2-card=true]:visible .head').all_text_contents())
-            assert all('[protocol-en]' not in title for title in page.locator('[data-m2-card=true]:visible .head').all_text_contents())
+            assert all(title.startswith('[protocol-zh] ') for title in page.locator('[data-m2-card=true]:visible .headline').all_text_contents())
+            assert all('[protocol-en]' not in title for title in page.locator('[data-m2-card=true]:visible .headline').all_text_contents())
             assert page.locator('#m2-mode').inner_text().startswith('按新鲜度排序，本次未使用模型排序。')
+            assert page.locator('#m2-mode').inner_text().endswith('尚无已记录的阅读活动。')
             card=page.locator('[data-m2-card=true]').first
             saved_story_id=card.get_attribute('data-story-id')
             card.locator('.accordion-toggle').click()
@@ -350,6 +387,20 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert card.locator('.save-action').get_attribute('aria-pressed')=='true'
             assert card.locator('.save-action').get_attribute('aria-busy') is None
             assert page.locator('#reader-status').inner_text()=='已收藏。你可以在“已收藏”中找到它。'
+            # Two ordered protocol writes exercise the visible status before a
+            # history snapshot resolves. The first controlled failure must not
+            # restore a false "used" claim while the second is still pending.
+            store.event_failures=1
+            page.evaluate('window.__holdHistory=true;window.__historyResolvers=[]')
+            card.locator('.interest-action').click()
+            page.wait_for_function('() => window.__historyResolvers?.length===1')
+            assert page.locator('#m2-mode').inner_text().endswith('正在保存活动。')
+            card.locator('.less-interest-action').click()
+            page.evaluate('window.__historyResolvers.shift()()')
+            page.wait_for_function('() => window.__historyResolvers?.length===1')
+            assert page.locator('#m2-mode').inner_text().endswith('正在保存活动。')
+            page.evaluate('window.__historyResolvers.shift()();window.__holdHistory=false')
+            page.wait_for_function('() => document.querySelector("#m2-mode").textContent.endsWith("已记录活动。")')
             discovery_reads=requests.count('/rest/v1/rpc/discovery_edition')
             rank_reads=requests.count('/rank')
             page.locator('.chip[data-filter="__saved__"]:visible').click()
@@ -360,19 +411,21 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert page.locator('.card:not([hidden])').get_attribute('data-story-id')==saved_story_id
             assert requests.count('/rest/v1/rpc/discovery_edition')==discovery_reads
             assert page.locator('#discovery-controls').is_hidden()
-            assert page.locator('#load-more').inner_text()=='Load 20 more'
+            assert page.locator('#load-more').inner_text()=='再加载 20 篇'
             assert page.locator('#load-more').is_hidden()
             page.locator('.chip[data-filter="__all__"]:visible').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             assert requests.count('/rank')>rank_reads
-            assert page.locator('#load-more').inner_text()=='Load 25 more'
+            assert page.locator('#load-more').inner_text()=='再加载 25 篇'
             page.locator('#m2-controls summary').click()
             assert [e['event_type'] for e in store.events[:2]]==['read_more','save']
             page.locator('#load-more').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')
             ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
             assert len(ids)==len(set(ids))==50
-            assert store.rank_reads[-1][2]==2
+            # The continuation binds the three committed actions from this
+            # controlled run: read, save, then the second queued interest.
+            assert len(store.events)==3 and store.rank_reads[-1][2]==len(store.events)
             # Search hits are real captured publisher titles; no fabricated news.
             query=next(row['title'] for row in rows if row['language']=='zh')[:6]
             page.locator('#q').fill(query)
@@ -392,7 +445,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             with page.expect_response(lambda response: response.url.endswith('/append_behavior_event') and
                     response.request.post_data_json.get('p_event_type')=='search_zero_results'):
                 page.locator('#q').fill('___local_no_match___')
-                page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("No matching stories")')
+                page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("没有匹配结果")')
             assert any(e['event_type']=='search_zero_results' for e in store.events)
             page.locator('#q').fill('')
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
@@ -424,12 +477,16 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.wait_for_function('() => typeof window.__releaseExport === "function"')
             page.locator('#m2-clear-history').click()
             page.evaluate('window.__stallExport=false;window.__releaseExport()')
-            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0 && document.querySelector("#reader-status").textContent.includes("stories loaded")')
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0 && document.querySelector("#reader-status").textContent.includes("新闻已加载")')
             assert store.generation==2 and not store.events
             assert not completed_downloads
             page.locator('#m2-local-learning').uncheck()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length>0 && !document.querySelector("#m2-local-learning").checked')
             assert store.learning is False
+            # The Chinese path above proves its selected-language surface.
+            # Switch back before the established English cold-response cases.
+            page.locator('#locale-en').click()
+            page.wait_for_function('() => document.documentElement.lang==="en" && document.querySelectorAll("[data-m2-card=true]").length===25')
             screenshot=artifact_dir / 'reader-m2-390.png'
             page.screenshot(path=str(screenshot),full_page=True)
             assert page.evaluate('document.documentElement.scrollWidth<=390')
@@ -438,9 +495,9 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.evaluate('''() => {
                 const timeout=AbortSignal.timeout.bind(AbortSignal);
                 window.__m2Timeouts=[];
-                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===20000?300:ms);};
+                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===20000?1000:ms);};
                 const later=window.setTimeout.bind(window);
-                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===20000?300:ms,...args);
+                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===20000?1000:ms,...args);
                 window.__stallM2=true;window.__stallM2Delay=120;
                 const policy=document.querySelector("#m2-provider-retention");policy.hidden=true;policy.removeAttribute("href");
             }''')
@@ -462,6 +519,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
             page.locator('#m2-refresh').click()
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            assert store.states[saved_story_id]['saved_at']
             page.locator('.chip[data-filter="__saved__"]:visible').click()
             page.wait_for_function("() => document.querySelector(\".chip[data-filter='__saved__']\").getAttribute('aria-pressed')==='true' && document.querySelectorAll('.card:not([hidden])').length===1")
             saved_surface=page.evaluate('''() => ({
@@ -480,6 +538,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.locator('.chip[data-filter="__all__"]:visible').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             preceding_ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
+            page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
             page.evaluate('document.querySelector("#load-more").click()')
             pending=page.evaluate('''() => ({
                 label:document.querySelector("#load-more").textContent,
@@ -487,7 +546,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 disabled:document.querySelector("#load-more").disabled,
                 status:document.querySelector("#reader-status").textContent,
               })''')
-            assert pending=={'label':'Loading 25 more…','busy':'true','disabled':True,
+            assert pending=={'label':'Loading 25 more…','busy':'','disabled':True,
                 'status':'Loading 25 more stories…'}
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading")')
             assert page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')==preceding_ids
@@ -500,6 +559,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.locator('#m2-refresh').click()
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("did not finish")')
             assert page.locator('[data-m2-card=true]').count()==0
+            assert 'Latest activity used' not in page.locator('#m2-mode').inner_text()
             assert page.locator('.edition-meta').is_visible()
             assert requests.count('/rank')==rank_before
             page.wait_for_timeout(150)
