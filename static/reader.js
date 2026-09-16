@@ -697,9 +697,13 @@
     return { rows: collected, cursor: nextCursor, drained: false };
   }
 
-  const M2_CARD_FIELDS = ["card_schema_version", "published_at", "source_name", "story_id", "summary", "title", "url",
-    "source_id", "language", "category_ids", "read_at", "saved_at", "state_revision", "interests",
-    "title_en", "title_zh", "summary_en", "summary_zh", "translation_status"];
+  const M2_CARD_FIELDS_V1 = ["card_schema_version", "published_at", "source_name", "story_id", "summary", "title", "url",
+    "source_id", "language", "category_ids", "read_at", "saved_at", "state_revision", "interests"];
+  const M2_TRANSLATION_FIELDS = ["title_en", "title_zh", "summary_en", "summary_zh", "translation_status"];
+  const M2_CARD_FIELDS = [...M2_CARD_FIELDS_V1, ...M2_TRANSLATION_FIELDS];
+  // Same bound the database column carries, so an oversized translated summary
+  // is rejected here rather than rendered.
+  const MAX_TRANSLATED_SUMMARY = 32000;
   const DISPLAY_LANGUAGES = ["en", "zh"];
   const TRANSLATION_STATUS = ["original", "translated", "untranslated"];
   // The other language's name, in the language currently being read. The
@@ -755,11 +759,17 @@
         !(value.next_cursor === null || boundedString(value.next_cursor, 4096))) fail("The M2 feed response was invalid.");
     const seen = new Set();
     value.cards.forEach((card) => {
-      if (!exactFields(card, M2_CARD_FIELDS) || card.card_schema_version !== 1 || !STORY_ID.test(card.story_id) ||
-          !DISPLAY_LANGUAGES.every((code) => typeof card[`title_${code}`] === "string" &&
-            card[`title_${code}`].length <= 2000 && typeof card[`summary_${code}`] === "string") ||
-          !isObject(card.translation_status) || !exactFields(card.translation_status, DISPLAY_LANGUAGES) ||
-          !DISPLAY_LANGUAGES.every((code) => TRANSLATION_STATUS.includes(card.translation_status[code])) ||
+      // One release accepts both card schemas, so the reader and the ranker can
+      // deploy in either order without every card failing validation.
+      const translated = card.card_schema_version === 2;
+      if (![1, 2].includes(card.card_schema_version) ||
+          !exactFields(card, translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) || !STORY_ID.test(card.story_id) ||
+          (translated && (
+            !DISPLAY_LANGUAGES.every((code) => typeof card[`title_${code}`] === "string" &&
+              card[`title_${code}`].length <= 2000 && typeof card[`summary_${code}`] === "string" &&
+              card[`summary_${code}`].length <= MAX_TRANSLATED_SUMMARY) ||
+            !isObject(card.translation_status) || !exactFields(card.translation_status, DISPLAY_LANGUAGES) ||
+            !DISPLAY_LANGUAGES.every((code) => TRANSLATION_STATUS.includes(card.translation_status[code])))) ||
           !boundedString(card.title, 2000) || typeof card.summary !== "string" ||
           !boundedString(card.source_name, 200) || !validTimestamp(card.published_at) ||
           !safeDestination(card.url) || !boundedString(card.source_id, 512) || !["en", "zh"].includes(card.language) ||
@@ -770,6 +780,15 @@
             TOPIC_ID.test(interest.topic_id) && ["more_like", "less_like"].includes(interest.signal) &&
             Number.isSafeInteger(interest.revision) && interest.revision >= 0) ||
           seen.has(card.story_id)) fail("The M2 feed response was invalid.");
+      if (!translated) {
+        const other = card.language === "en" ? "zh" : "en";
+        card[`title_${card.language}`] = card.title;
+        card[`summary_${card.language}`] = card.summary;
+        card[`title_${other}`] = "";
+        card[`summary_${other}`] = "";
+        card.translation_status = { [card.language]: "original", [other]: "untranslated" };
+        card.card_schema_version = 2;
+      }
       seen.add(card.story_id);
     });
     return value;
@@ -1183,8 +1202,14 @@
       const translated = status !== "untranslated";
       const title = translated ? entry[`title_${displayLanguage}`] : entry.title;
       const summary = translated ? entry[`summary_${displayLanguage}`] : entry.summary;
+      // The language-exclusive section is a SERVER-side selection, so no story
+      // carries it in its own category_ids. Without this the client-side
+      // membership filter hides every card the section just fetched.
+      const selectedId = topicIdForSlug(selectedTopic());
+      const topicIds = exclusiveSelected() && !entry.category_ids.includes(selectedId)
+        ? [...entry.category_ids, selectedId] : entry.category_ids;
       return { ...entry, title: title || entry.title, summary: summary || entry.summary,
-        canonical_url: entry.url, topic_ids: entry.category_ids, source_kind: "outlet",
+        canonical_url: entry.url, topic_ids: topicIds, source_kind: "outlet",
         coverage_mentions: [], topic_ranks: {}, ranking_explanation: reason,
         translation_mark: status === "untranslated"
           ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "" };
@@ -1228,6 +1253,9 @@
         const row = displayRow(entry, reason);
         const card = createStoryCard(row, selectedTopic(), topicSlugForId, topicIdForSlug(selectedTopic()));
         card.dataset.m2Card = "true"; card.dataset.m2Position = String(++m2Position);
+        // The view filter hides any remote card whose m2Query differs from the
+        // live search box. Omitting it here blanked the page on every toggle.
+        card.dataset.m2Query = (searchBox?.value.trim() || "").toLowerCase();
         markUntranslated(card, row);
         const interest = card.querySelector(".interest-action");
         if (interest) {

@@ -27,6 +27,16 @@ OWNER = '00000000-0000-0000-0000-000000000001'
 EXCLUSIVE = 'only-other-language-press'
 NOW = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
 LANGUAGE_POLICY = {'default_display': 'en', 'other_lane_enabled': True, 'exclusive_category_id': EXCLUSIVE}
+# A hidden card still answers innerText, so every count and every headline read
+# in this test goes through offsetParent, which only a painted node has.
+VISIBLE_CARDS = ("() => [...document.querySelectorAll('[data-m2-card=true]')]"
+                 ".filter((card) => card.offsetParent !== null).length")
+
+
+def visible_headlines(page):
+    return page.evaluate("() => [...document.querySelectorAll('[data-m2-card=true]')]"
+                         ".filter((card) => card.offsetParent !== null)"
+                         ".map((card) => card.querySelector('.headline').textContent)")
 
 
 def row(index, language, title, summary, *, translations=None, group=None):
@@ -174,21 +184,24 @@ def test_language_toggle_section_and_untranslated_mark(tmp_path):
         page.on('pageerror', lambda error: page_errors.append(str(error)))
         try:
             page.goto(READER, wait_until='networkidle')
-            page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===3")
+            page.wait_for_function(VISIBLE_CARDS + " === 3")
 
             # (a) The toggle exists without being told where to look.
             toggle = page.locator('#m2-language-toggle')
             assert toggle.is_visible() and toggle.inner_text() == '中文'
 
             # (b) A zh-exclusive story reads in English while the site is English.
-            headlines = page.locator('[data-m2-card=true] .headline')
-            texts = [headlines.nth(i).inner_text() for i in range(headlines.count())]
+            # innerText on a display:none node still returns its text, so every
+            # assertion here is about what is actually PAINTED.
+            texts = visible_headlines(page)
+            assert len(texts) == 3, texts
             assert 'Chinese exclusive: seven new rules published' in texts
 
             # (d) The untranslated zh story is still shown, and says so.
             assert '中文独家报道：未翻译的第二条' in texts
             marks = page.locator('.translation-mark')
-            assert marks.count() == 1 and 'Not translated' in marks.first.inner_text()
+            assert marks.count() == 1 and marks.first.is_visible()
+            assert 'Not translated' in marks.first.inner_text()
 
             # (c) The section exists in the rail and the phone strip, derived.
             chips = page.locator('.chip[data-language-exclusive=true]')
@@ -200,20 +213,28 @@ def test_language_toggle_section_and_untranslated_mark(tmp_path):
             page.wait_for_function("() => document.getElementById('m2-language-toggle').innerText === 'EN'")
             # Switching is instant and free: no new ranking request.
             assert len(ranker_requests) == before_requests
+            # The toggle must not blank the page. Every card stays PAINTED, not
+            # merely present in the DOM with display:none.
+            page.wait_for_function(VISIBLE_CARDS + " === 3")
+            assert page.locator('[data-m2-card=true]').first.is_visible()
+            assert page.locator('[data-m2-card=true]').first.bounding_box() is not None
             # The title is derived: reading in Chinese renames it to the mirror.
             assert page.locator('.chip[data-language-exclusive=true]').first.inner_text() == '只有英文媒体报道'
-            after = page.locator('[data-m2-card=true] .headline')
-            after_texts = [after.nth(i).inner_text() for i in range(after.count())]
+            after_texts = visible_headlines(page)
+            assert len(after_texts) == 3, after_texts
             # Chinese display: Chinese cards read as written, English is untranslated.
             assert '中文独家报道：某部门发布七项新规' in after_texts
             assert 'An English wire story every reader can already read' in after_texts
 
             toggle.click()
             page.wait_for_function("() => document.getElementById('m2-language-toggle').innerText === '中文'")
+            # Toggling twice returns to the start with the same visible count.
+            page.wait_for_function(VISIBLE_CARDS + " === 3")
+            assert visible_headlines(page) == texts
 
             # Opening the section serves only language-exclusive stories.
             page.locator('.chip[data-language-exclusive=true]').nth(1).click()
-            page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===2")
+            page.wait_for_function(VISIBLE_CARDS + " === 2")
             assert store.exclusive_calls == ['en']
             section_title = page.locator('#sections [data-section="__m2__"] .section-title').first
             assert section_title.inner_text() == 'Only in Chinese press'

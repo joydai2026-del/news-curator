@@ -13,7 +13,7 @@ function payload(overrides = {}) { return { schema_version: 1, request_id: "requ
   policy_version: config.policy_version, model_version: config.model_version,
   history_revision: 6, server_commit_revision: 8, history_generation: 2, consent_revision: 3,
   result_mode: "fallback", fallback_reason: "model_timeout", cards: [{ story_id: storyId,
-    card_schema_version: 1,
+    card_schema_version: 2,
     source_id: "ars", language: "en", category_ids: ["ai"], read_at: null,
     saved_at: null, state_revision: 0, interests: [],
     title: "Six Chinese AI firms accused of aggressively copying US frontier models",
@@ -56,4 +56,24 @@ function response(value, url) { return { ok: true, redirected: false, url,
     async (url) => response(payload({ history_generation: 1 }), url));
   await assert.rejects(() => stale.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
   assert.throws(() => reader.validateM2Config({ ...config, provider_retention_url: "javascript:bad" }), /configuration/);
+
+  // Deploy-order safety: one release accepts a version-1 card (an older ranker)
+  // and a version-2 card (this one), in either direction.
+  const expectation = { ...history, policy_version: config.policy_version, model_version: config.model_version,
+    history_revision: history.included_history_revision, server_commit_revision: history.history_revision,
+    page_size: config.page_size };
+  const legacyCard = { ...payload().cards[0], card_schema_version: 1 };
+  ["title_en", "title_zh", "summary_en", "summary_zh", "translation_status"].forEach((field) => { delete legacyCard[field]; });
+  const legacy = reader.validateM2Response(payload({ cards: [legacyCard] }), expectation);
+  assert.equal(legacy.cards[0].card_schema_version, 2, "a version-1 card normalizes to the rendered shape");
+  assert.equal(legacy.cards[0].title_en, legacyCard.title);
+  assert.equal(legacy.cards[0].title_zh, "");
+  assert.deepEqual(legacy.cards[0].translation_status, { en: "original", zh: "untranslated" });
+  const current = reader.validateM2Response(payload(), expectation);
+  assert.equal(current.cards[0].card_schema_version, 2);
+  // A version-1 card carrying translation fields is still rejected, and so is
+  // an oversized translated summary.
+  assert.throws(() => reader.validateM2Response(payload({ cards: [{ ...payload().cards[0], card_schema_version: 1 }] }), expectation), /feed response/);
+  assert.throws(() => reader.validateM2Response(payload({ cards: [{ ...payload().cards[0], summary_zh: "x".repeat(32001) }] }), expectation), /feed response/);
+  assert.throws(() => reader.validateM2Response(payload({ cards: [{ ...payload().cards[0], card_schema_version: 3 }] }), expectation), /feed response/);
 })().catch((error) => { console.error(error); process.exitCode = 1; });

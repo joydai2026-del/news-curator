@@ -333,7 +333,9 @@ class RankingService:
         summaries = row.get("summary_translations") or {}
         if not isinstance(titles, Mapping) or not isinstance(summaries, Mapping):
             raise ValueError("invalid_translation_overlay")
-        card = {"card_schema_version": 1, "story_id": row["story_id"], "title": row["title"],
+        # Version 2 is version 1 plus the five translation fields. The reader
+        # accepts both for one release, so reader and ranker deploy in any order.
+        card = {"card_schema_version": 2, "story_id": row["story_id"], "title": row["title"],
             "summary": row.get("summary", ""), "source_name": row["source_name"], "published_at": row["published_at"],
             "url": row["canonical_url"], "source_id": row["source_id"], "language": language,
             "category_ids": row.get("category_ids", []), "read_at": owner_state.get("read_at"),
