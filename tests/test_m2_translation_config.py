@@ -30,6 +30,9 @@ def test_shipped_config_declares_every_phase1_key():
     assert cfg.language["exclusive_category_id"]
     # Phase 1 is English direction only. The flip stays in the design, off.
     assert cfg.reader["chinese_site_mode_enabled"] is False
+    # Grouping reads its own keys; the 48-hour window is the spec default.
+    assert cfg.grouping["window_hours"] == 48
+    assert cfg.grouping["min_shared_entity_tokens"] == 2
 
 
 @pytest.mark.parametrize("mutation", [
@@ -45,6 +48,11 @@ def test_shipped_config_declares_every_phase1_key():
     lambda raw: raw["language"].__setitem__("other_lane_enabled", "yes"),
     lambda raw: raw["language"].__setitem__("exclusive_category_id", "Not A Category"),
     lambda raw: raw["reader"].__setitem__("chinese_site_mode_enabled", "false"),
+    lambda raw: raw["grouping"].__setitem__("window_hours", 0),
+    lambda raw: raw["grouping"].__setitem__("window_hours", 169),
+    lambda raw: raw["grouping"].__setitem__("min_shared_entity_tokens", 0),
+    lambda raw: raw["grouping"].__setitem__("max_pairs_per_bucket", 99),
+    lambda raw: raw["grouping"].__setitem__("cross_language_enabled", "yes"),
 ])
 def test_out_of_range_values_fail_the_boot(tmp_path, mutation):
     with pytest.raises(ConfigError):

@@ -30,24 +30,29 @@ class GroupingPolicy:
 
     cross_language_enabled: bool = True
     min_shared_entity_tokens: int = 2
-    window_hours: int = 24
+    window_hours: int = 48
+    max_pairs_per_bucket: int = 2_000
 
     def __post_init__(self) -> None:
         if not isinstance(self.cross_language_enabled, bool):
             raise ValueError("grouping.cross_language_enabled must be a boolean")
         for label, value, low, high in (
             ("grouping.min_shared_entity_tokens", self.min_shared_entity_tokens, 1, 10),
-            ("trend.window_hours", self.window_hours, 1, 72),
+            ("grouping.window_hours", self.window_hours, 1, 168),
+            ("grouping.max_pairs_per_bucket", self.max_pairs_per_bucket, 100, 100_000),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
                 raise ValueError(f"{label} must be an integer in [{low}, {high}]")
 
     @classmethod
-    def from_config(cls, grouping: Mapping[str, object], trend: Mapping[str, object]) -> "GroupingPolicy":
+    def from_config(cls, grouping: Mapping[str, object]) -> "GroupingPolicy":
+        """Every value is its own `grouping.*` key. Nothing reads `trend.*`."""
+
         return cls(
             cross_language_enabled=bool(grouping.get("cross_language_enabled", True)),
             min_shared_entity_tokens=int(grouping.get("min_shared_entity_tokens", 2)),
-            window_hours=int(trend.get("window_hours", 24)),
+            window_hours=int(grouping.get("window_hours", 48)),
+            max_pairs_per_bucket=int(grouping.get("max_pairs_per_bucket", 2_000)),
         )
 
 
@@ -58,6 +63,9 @@ class GroupingCandidate:
     title: str
     summary: str
     published_at: datetime
+    # Set when the candidate was read back from the corpus and already carries
+    # a group. Never recomputed for those rows, only respected.
+    event_group_id: str | None = None
 
 
 def entity_tokens(title: str, summary: str = "") -> frozenset[str]:
@@ -106,19 +114,36 @@ def assign_event_groups(
                 a, b = b, a
             parent[b] = a
 
-    # The identical non-empty number set is the bucketing key, so the pairwise
-    # token comparison stays linear in practice instead of quadratic overall.
-    buckets: dict[frozenset[str], list[tuple[GroupingCandidate, frozenset[str]]]] = {}
-    for row in rows:
-        numbers = number_key(row.title, row.summary)
-        if not numbers:
-            # An identical EMPTY number set is not evidence of the same event.
-            continue
-        buckets.setdefault(numbers, []).append((row, entity_tokens(row.title, row.summary)))
+    # Bucket by EACH number rather than by the whole number set. Two real
+    # write-ups of one event rarely carry identical number sets (one adds a
+    # share price, the other a headcount), so requiring equality made tier 1
+    # fire on almost nothing. The rule is now: at least one shared number, at
+    # least `min_shared_entity_tokens` shared entity tokens, inside the window.
+    prepared = [(row, entity_tokens(row.title, row.summary), number_key(row.title, row.summary))
+                for row in rows]
+    by_number: dict[str, list[int]] = {}
+    for index, (_, _, numbers) in enumerate(prepared):
+        for number in numbers:
+            by_number.setdefault(number, []).append(index)
 
-    for members in buckets.values():
-        for index, (left, left_tokens) in enumerate(members):
-            for right, right_tokens in members[index + 1:]:
+    considered: set[tuple[int, int]] = set()
+    skipped_pairs = 0
+    for members in by_number.values():
+        if len(members) < 2:
+            continue
+        budget = active.max_pairs_per_bucket
+        for position, left_index in enumerate(members):
+            for right_index in members[position + 1:]:
+                if budget <= 0:
+                    skipped_pairs += 1
+                    continue
+                budget -= 1
+                pair = (left_index, right_index) if left_index < right_index else (right_index, left_index)
+                if pair in considered:
+                    continue
+                considered.add(pair)
+                left, left_tokens, _ = prepared[pair[0]]
+                right, right_tokens, _ = prepared[pair[1]]
                 if left.language == right.language:
                     continue
                 if abs(left.published_at - right.published_at) > window:

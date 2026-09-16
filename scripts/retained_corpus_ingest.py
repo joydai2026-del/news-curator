@@ -2,11 +2,14 @@
 """Build or service-ingest a public-only retained-corpus artifact."""
 from __future__ import annotations
 import argparse, json, os, sys, urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from curator.config import load_config
 from curator.pipeline import configured_source_specs
-from curator.retained_corpus import apply_translations, language_exclusive_story_ids, public_ingest_rows, retain
+from curator.grouping import GroupingCandidate, GroupingPolicy
+from curator.retained_corpus import (apply_translations, language_exclusive_story_ids,
+                                     public_ingest_rows, regroup_with_corpus, retain)
 from curator.source_snapshot import load_source_snapshot, snapshot_config_digest
 from curator.recommendation.supabase_http import _NoRedirect, validate_https_origin
 from curator.sources import SafeHttpPolicy, SafeHttpTransport
@@ -40,7 +43,46 @@ def _ingest_translation_policy(cfg) -> IngestTranslationPolicy:
     )
 
 
-def translate_rows(cfg, rows, *, env, now, store=None, provider=None):
+def read_corpus_window(url, key, *, policy: GroupingPolicy, now, pages: int = 10):
+    """Read the newest corpus rows inside the grouping window, newest first.
+
+    Grouping must see stories ingested by EARLIER runs, not only this batch.
+    The read RPC caps at 100 rows per call, so this pages until it leaves the
+    window or hits the page cap, and the cap is reported rather than hidden.
+    """
+    headers = {'apikey': key, 'content-type': 'application/json'}
+    if not key.startswith('sb_secret_'):
+        headers['authorization'] = 'Bearer ' + key
+    horizon = now - timedelta(hours=policy.window_hours)
+    collected, before_published, before_story, truncated = [], None, None, False
+    for page in range(pages):
+        body = json.dumps({'p_category_id': None, 'p_query': None,
+                           'p_before_published_at': before_published,
+                           'p_before_story_id': before_story, 'p_limit': 100}).encode()
+        request = urllib.request.Request(url + '/rest/v1/rpc/m2_retained_candidates',
+                                         data=body, headers=headers, method='POST')
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
+            if response.status != 200:
+                raise ValueError('retained corpus read failed')
+            rows = json.loads(response.read())
+        if not isinstance(rows, list) or not rows:
+            break
+        for row in rows:
+            published = datetime.fromisoformat(str(row['published_at']).replace('Z', '+00:00'))
+            if published < horizon:
+                return tuple(collected), False
+            collected.append(GroupingCandidate(
+                story_id=str(row['story_id']), language=str(row['language']),
+                title=str(row['title']), summary=str(row.get('summary') or ''),
+                published_at=published, event_group_id=row.get('event_group_id')))
+        before_published, before_story = rows[-1]['published_at'], rows[-1]['story_id']
+        if len(rows) < 100:
+            break
+        truncated = page == pages - 1
+    return tuple(collected), truncated
+
+
+def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=()):
     """Translate the language-exclusive stories, or say plainly why not.
 
     Returns ``(rows, message)``. A missing credential, a switched-off feature,
@@ -59,7 +101,7 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None):
     api_key = env.get(key_env, '') if key_env else ''
     if not api_key:
         return rows, 'translation skipped: key not configured'
-    exclusive = set(language_exclusive_story_ids(rows, display_language=policy.display_language))
+    exclusive = set(language_exclusive_story_ids(rows, display_language=policy.display_language, corpus=corpus))
     stories = [(row.story_id, row.item) for row in rows if row.story_id in exclusive]
     if not stories:
         return rows, 'translation skipped: no language-exclusive stories'
@@ -120,8 +162,24 @@ def main() -> int:
     }
     if unexpected:
         raise ValueError("snapshot contains an unconfigured source")
-    retained=retain(source_items, categories=cfg.categories, observed_at=snap.generated_at)
-    retained, translation_message = translate_rows(cfg, retained, env=os.environ, now=snap.generated_at)
+    grouping_policy = GroupingPolicy.from_config(cfg.grouping or {})
+    retained = retain(source_items, categories=cfg.categories, observed_at=snap.generated_at,
+                      grouping=grouping_policy)
+    corpus = ()
+    url = os.environ.get('NEWS_CURATOR_SUPABASE_URL', '')
+    key = os.environ.get('NEWS_CURATOR_SUPABASE_SECRET_KEY', '')
+    if a.command == 'ingest' and url and key:
+        validate_https_origin(url)
+        try:
+            corpus, truncated = read_corpus_window(url, key, policy=grouping_policy, now=snap.generated_at)
+            retained = regroup_with_corpus(retained, corpus, policy=grouping_policy)
+            print(f'grouping corpus rows={len(corpus)} truncated={truncated}', file=sys.stderr)
+        except Exception:
+            # Grouping against the corpus is an improvement, never a gate. The
+            # batch-local grouping from retain() still stands.
+            print('grouping corpus unavailable: batch-local grouping only', file=sys.stderr)
+    retained, translation_message = translate_rows(cfg, retained, env=os.environ, now=snap.generated_at,
+                                                   corpus=corpus)
     print(translation_message, file=sys.stderr)
     rows=public_ingest_rows(retained, allowed_source_ids=allowed)
     if a.command == 'build':

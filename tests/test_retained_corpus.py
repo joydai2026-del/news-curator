@@ -4,6 +4,7 @@ from xml.etree import ElementTree
 
 from curator.config import Category
 from curator.models import Item
+from dataclasses import replace
 from curator.retained_corpus import candidate_response, candidates, public_ingest_rows, retain
 
 
@@ -145,3 +146,44 @@ def test_ingest_rows_carry_the_overlay_only_when_present():
         {"en": "Exclusive: 7 new rules"}, {}, TRANSLATED)})
     payload = public_ingest_rows(translated, allowed_source_ids={"fixture"})
     assert payload[0]["title_translations"] == {"en": "Exclusive: 7 new rules"}
+
+
+def test_grouping_sees_stories_ingested_by_an_earlier_run():
+    """Twelve ingests an hour: the pair almost never lands in one batch."""
+    from curator.grouping import GroupingCandidate
+    from curator.retained_corpus import language_exclusive_story_ids, regroup_with_corpus
+    english = Item(title="Nvidia beats on earnings with 3 Blackwell chips",
+                   url="https://e.com/1", canonical_url="https://e.com/1", source_id="fixture",
+                   source_name="Fixture", published_at=NOW, language="en",
+                   description="Nvidia reported revenue of 46 billion dollars, 56 percent above a year "
+                               "ago, and said 7 new sites are live in 2026.")
+    chinese = Item(title="英伟达 Nvidia 发布 Blackwell 芯片 earnings 超预期",
+                   url="https://e.cn/1", canonical_url="https://e.cn/1", source_id="fixture",
+                   source_name="Fixture", published_at=NOW, language="zh",
+                   description="英伟达公布季度营收 467 亿美元，同比增长 56%，并称 2026 年将有 3 座新数据中心投入使用。")
+    # Run N ingested the English story; run N+1 brings the Chinese one alone.
+    earlier = retain([english], categories=[], observed_at=NOW)
+    batch = retain([chinese], categories=[], observed_at=NOW)
+    assert batch[0].event_group_id is None
+    corpus = tuple(GroupingCandidate(story_id=row.story_id, language=row.item.language,
+                                     title=row.item.title, summary=row.item.description,
+                                     published_at=row.item.published_at,
+                                     event_group_id=row.event_group_id) for row in earlier)
+    regrouped = regroup_with_corpus(batch, corpus)
+    assert regrouped[0].event_group_id is not None
+    # And it is therefore NOT language exclusive: an English outlet ran it.
+    covered = tuple(GroupingCandidate(story_id=row.story_id, language=row.language, title=row.title,
+                                      summary=row.summary, published_at=row.published_at,
+                                      event_group_id=regrouped[0].event_group_id) for row in corpus)
+    assert language_exclusive_story_ids(regrouped, display_language="en", corpus=covered) == ()
+
+
+def test_regrouping_never_downgrades_an_id_the_row_already_carries():
+    from curator.retained_corpus import regroup_with_corpus
+    lone = Item(title="独家：某部门发布 7 项新规", url="https://e.cn/2", canonical_url="https://e.cn/2",
+                source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
+                description="该通知自 2026 年起执行。")
+    rows = retain([lone], categories=[], observed_at=NOW)
+    kept = "group:" + "9" * 32
+    rows = (replace(rows[0], event_group_id=kept),)
+    assert regroup_with_corpus(rows, ())[0].event_group_id == kept

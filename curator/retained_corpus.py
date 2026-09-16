@@ -65,7 +65,31 @@ def retain(items: Iterable[Item], *, categories: Iterable[Category], observed_at
     return tuple(sorted(retained.values(), key=lambda row: (row.item.published_at, row.story_id), reverse=True))
 
 
-def language_exclusive_story_ids(rows: Iterable[RetainedCandidate], *, display_language: str) -> tuple[str, ...]:
+def regroup_with_corpus(rows, existing, *, policy: GroupingPolicy | None = None):
+    """Group this batch against rows ALREADY in the corpus, not only itself.
+
+    The ingest runs about twelve times an hour, so an English story from an
+    earlier run must still be able to join this run's Chinese story. Without
+    this, a covered story looks language exclusive, which is the reported bug
+    inverted. An id a row already carries is never downgraded.
+    """
+
+    rows = list(rows)
+    batch_ids = {row.story_id for row in rows}
+    candidates = [GroupingCandidate(story_id=row.story_id, language=row.item.language,
+                                    title=row.item.title, summary=row.item.description or "",
+                                    published_at=row.item.published_at) for row in rows]
+    candidates.extend(row for row in existing if row.story_id not in batch_ids)
+    groups = assign_event_groups(candidates, policy=policy or GroupingPolicy())
+    return tuple(
+        replace(row, event_group_id=row.event_group_id or groups.get(row.story_id))
+        if groups.get(row.story_id) or row.event_group_id else row
+        for row in rows
+    )
+
+
+def language_exclusive_story_ids(rows: Iterable[RetainedCandidate], *, display_language: str,
+                                 corpus: Iterable[GroupingCandidate] = ()) -> tuple[str, ...]:
     """Stories no outlet in the reader's display language carried.
 
     Exclusivity is stated against the reader's display language, never against
@@ -75,6 +99,9 @@ def language_exclusive_story_ids(rows: Iterable[RetainedCandidate], *, display_l
     rows = list(rows)
     covered = {row.event_group_id for row in rows
                if row.event_group_id and row.item.language == display_language}
+    # A story the display language already covered may live in an EARLIER batch.
+    covered |= {row.event_group_id for row in corpus
+                if getattr(row, "event_group_id", None) and row.language == display_language}
     return tuple(row.story_id for row in rows
                  if row.item.language != display_language
                  and (row.event_group_id is None or row.event_group_id not in covered))

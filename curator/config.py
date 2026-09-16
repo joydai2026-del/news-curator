@@ -74,6 +74,7 @@ _SOURCE_FILE_KEYS = frozenset(
         "translation",
         "language",
         "reader",
+        "grouping",
     }
 )
 _BUILTIN_SOURCE_TYPES = frozenset(
@@ -189,6 +190,8 @@ class Config:
     # Reading-surface language policy (`language:` / `reader:` in sources.yaml).
     language: dict[str, Any] = field(default_factory=dict)
     reader: dict[str, Any] = field(default_factory=dict)
+    # Cross-language same-event grouping policy (`grouping:` in sources.yaml).
+    grouping: dict[str, Any] = field(default_factory=dict)
 
     @property
     def topics(self) -> list[Category]:
@@ -612,7 +615,7 @@ def load_sources(path: Path) -> dict[str, Any]:
 
     for key in (
         "settings", "ranking", "dedup", "hackernews", "reddit", "images",
-        "summaries", "newsletter", "translation", "language", "reader",
+        "summaries", "newsletter", "translation", "language", "reader", "grouping",
     ):
         if raw.get(key) is not None and not isinstance(raw[key], dict):
             raise ConfigError(f"{path.name}: '{key}' must be a mapping.")
@@ -784,6 +787,20 @@ def load_sources(path: Path) -> dict[str, Any]:
         or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", exclusive_category)
     ):
         raise ConfigError(f"{path.name}: 'language.exclusive_category_id' must be a category id.")
+    grouping = raw.get("grouping") or {}
+    cross_language = grouping.get("cross_language_enabled")
+    if cross_language is not None and not isinstance(cross_language, bool):
+        raise ConfigError(f"{path.name}: 'grouping.cross_language_enabled' must be true or false.")
+    for key, low, high in (
+        ("min_shared_entity_tokens", 1, 10),
+        ("window_hours", 1, 168),
+        ("max_pairs_per_bucket", 100, 100000),
+    ):
+        value = grouping.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)
+                                  or not low <= value <= high):
+            raise ConfigError(f"{path.name}: 'grouping.{key}' must be an integer between {low} and {high}.")
+
     reader = raw.get("reader") or {}
     chinese_site = reader.get("chinese_site_mode_enabled")
     if chinese_site is not None and not isinstance(chinese_site, bool):
@@ -810,6 +827,7 @@ def load_config(root: Path) -> Config:
         translation=src.get("translation") or {},
         language=src.get("language") or {},
         reader=src.get("reader") or {},
+        grouping=src.get("grouping") or {},
     )
 
     # Feed ids must be unique across BOTH files. A duplicate id is not cosmetic:

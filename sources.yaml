@@ -370,6 +370,14 @@ language:
 reader:
   chinese_site_mode_enabled: false
 
+# Cross-language same-event grouping (tier 1). Every value is its own key here;
+# nothing reads the trend block, which measures a different thing.
+grouping:
+  cross_language_enabled: true
+  min_shared_entity_tokens: 2
+  window_hours: 48
+  max_pairs_per_bucket: 2000
+
 # ---------------------------------------------------------------------------
 # The newsletter lane. Reads a dedicated newsletter-only Gmail account through
 # a separate, secrets-scoped Actions job and renders the stories as their own
