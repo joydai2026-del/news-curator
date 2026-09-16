@@ -14,8 +14,8 @@
   const encoder = new TextEncoder();
   const LOCALE_KEY = "news-curator-display-language";
   const COPY = Object.freeze({
-    en: { all:"All", saved:"Saved", topics:"Topics", today:"Today's edition", companion:"Your reading companion", intro:"Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.", rail:"One current edition. Open any headline for the source summary and ranking context.", preferences:"Feed preferences", learn:"Learn from my reading", provider:"Use my history for model ranking", policy:"Provider data policy", privacy:"Privacy", search:"Search all retained stories", load:"Load", loading:"Loading", more:"more", stories:"stories", noMatches:"No matching stories found.", translationUnavailable:"Translation unavailable", translationSummary:"This saved story is not available in English yet. Open the original or try again later.", refresh:"Refresh feed", download:"Download my data", clear:"Clear learning history", activity:"Activity recorded", activityPending:"Saving activity", activityFailed:"Activity was not recorded", activityUsed:"Latest activity used", read:"Mark read", unread:"Mark unread", save:"Save", savedAction:"Saved ✓", moreLike:"More like this", lessLike:"Less like this", close:"Close", original:"Read original", source:"Source", newsletter:"Newsletter", published:"Published", coverage:"Also covered by", signals:"Ranking signals", why:"Why this appeared", matched:"Matched on" },
-    zh: { all:"全部", saved:"已收藏", topics:"主题", today:"今日新闻", companion:"你的阅读助手", intro:"打开标题即可查看可靠摘要、来源和入选原因。", rail:"每小时更新一期。打开任意标题，查看来源摘要和排序说明。", preferences:"新闻偏好", learn:"根据我的阅读学习", provider:"使用我的阅读记录进行模型排序", policy:"服务商数据政策", privacy:"隐私", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityPending:"正在保存活动", activityFailed:"活动未记录", activityUsed:"已使用最新活动", read:"标为已读", unread:"标为未读", save:"收藏", savedAction:"已收藏 ✓", moreLike:"更多类似内容", lessLike:"减少类似内容", close:"关闭", original:"阅读原文", source:"来源", newsletter:"新闻通讯", published:"发布时间", coverage:"其他报道", signals:"排序依据", why:"入选原因", matched:"匹配依据" },
+    en: { all:"All", saved:"Saved", topics:"Topics", today:"Today's edition", companion:"Your reading companion", intro:"Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.", rail:"One current edition. Open any headline for the source summary and ranking context.", preferences:"Feed preferences", learn:"Learn from my reading", provider:"Use my history for model ranking", policy:"Provider data policy", privacy:"Privacy", search:"Search all retained stories", load:"Load", loading:"Loading", more:"more", stories:"stories", noMatches:"No matching stories found.", translationUnavailable:"Translation unavailable", translationSummary:"This saved story is not available in English yet. Open the original or try again later.", refresh:"Refresh feed", download:"Download my data", clear:"Clear learning history", activity:"Activity recorded", activityPending:"Saving activity", activityFailed:"Activity was not recorded", activityNone:"No recorded reading activity yet", activityUsed:"Latest activity used", read:"Mark read", unread:"Mark unread", save:"Save", savedAction:"Saved ✓", moreLike:"More like this", lessLike:"Less like this", close:"Close", original:"Read original", source:"Source", newsletter:"Newsletter", published:"Published", coverage:"Also covered by", signals:"Ranking signals", why:"Why this appeared", matched:"Matched on" },
+    zh: { all:"全部", saved:"已收藏", topics:"主题", today:"今日新闻", companion:"你的阅读助手", intro:"打开标题即可查看可靠摘要、来源和入选原因。", rail:"每小时更新一期。打开任意标题，查看来源摘要和排序说明。", preferences:"新闻偏好", learn:"根据我的阅读学习", provider:"使用我的阅读记录进行模型排序", policy:"服务商数据政策", privacy:"隐私", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityPending:"正在保存活动", activityFailed:"活动未记录", activityNone:"尚无已记录的阅读活动", activityUsed:"已使用最新活动", read:"标为已读", unread:"标为未读", save:"收藏", savedAction:"已收藏 ✓", moreLike:"更多类似内容", lessLike:"减少类似内容", close:"关闭", original:"阅读原文", source:"来源", newsletter:"新闻通讯", published:"发布时间", coverage:"其他报道", signals:"排序依据", why:"入选原因", matched:"匹配依据" },
   });
   function validLocale(value) { return value === "en" || value === "zh"; }
   function activeCopy() { return COPY[typeof document !== "undefined" && document.documentElement?.lang === "zh" ? "zh" : "en"]; }
@@ -970,7 +970,7 @@
     let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null;
     let m2Section = null, m2PublicCards = [], m2Position = 0;
     let behaviorWrites = Promise.resolve();
-    let activityWriteSequence = 0, activityWritesPending = 0;
+    let activityWriteSequence = 0, activityWritesPending = 0, activityCommittedSequence = 0;
     let m2SearchTimer = null;
     const searchBox = document.getElementById("q");
     document.querySelectorAll(".state-action:not(.read-action)").forEach((button) => { button.hidden = false; });
@@ -1317,6 +1317,7 @@
       behaviorWrites = pending;
       if (recordsActivity) pending.then(() => {
         activityWritesPending = Math.max(0, activityWritesPending - 1);
+        if (learningEnabled) activityCommittedSequence = Math.max(activityCommittedSequence, writeSequence);
         if (writeSequence === activityWriteSequence) setActivityStatus(learningEnabled ? "activity" : "activityFailed");
       }, () => {
         activityWritesPending = Math.max(0, activityWritesPending - 1);
@@ -1407,9 +1408,11 @@
       const usedLatestActivity = response.result_mode === "model" && response.history_revision > 0 &&
         response.history_revision === response.server_commit_revision && history.learning_enabled &&
         history.provider_processing_enabled && requestActivitySequence === activityWriteSequence && activityWritesPending === 0;
+      const activityStatus = usedLatestActivity ? "activityUsed" : activityWritesPending > 0 ? "activityPending" :
+        (response.history_revision > 0 || activityCommittedSequence > 0) ? "activity" : "activityNone";
       if (mode) {
         mode.dataset.rankingReason = reason;
-        mode.textContent = `${reason} ${localeCopy()[usedLatestActivity ? "activityUsed" : "activity"]}.`;
+        mode.textContent = `${reason} ${localeCopy()[activityStatus]}.`;
       }
       if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
       applyLocaleLabels();
@@ -1456,8 +1459,8 @@
       try {
         if (searchEvent && eligibility.query) await recordBehavior("search_query", { query: eligibility.query });
         await behaviorWrites.catch(() => {});
-        const history = await api.historySnapshot();
         const requestActivitySequence = activityWriteSequence;
+        const history = await api.historySnapshot();
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         syncM2Consent(history);
         const canContinue = append && key === m2Key && m2Cursor && m2Binding &&
