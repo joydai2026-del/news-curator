@@ -250,7 +250,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
             assert page.locator('#discovery-controls').is_hidden()
             assert page.locator('.edition-meta').is_hidden()
-            assert page.locator('.eyebrow').text_content()=='Reading feed'
+            assert page.locator('.eyebrow').text_content()=="Today's edition"
             # Check the same rendered reader at every required mobile/tablet width.
             for width in (320, 390, 430, 768):
                 page.set_viewport_size({'width': width, 'height': 844})

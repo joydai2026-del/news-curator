@@ -154,6 +154,18 @@ def test_pagination_hides_exhausted_scopes_but_preserves_cursor_and_retry(
                 "topics": [{"topic_id": "ai", "name": "AI"}, {"topic_id": "us", "name": "US News"}],
                 "initial_history_cursor": initial_cursor, "page_size": 2, "poll_seconds": 300,
             }
+        elif request.url.endswith("/m2_localized_story_text"):
+            assert body["p_locale"] in {"en", "zh"}
+            payload = [
+                {
+                    "story_id": story_id,
+                    "title": "Localized controller story",
+                    "summary": "Localized controller summary.",
+                    "display_language": body["p_locale"],
+                    "translation_available": True,
+                }
+                for story_id in body["p_story_ids"]
+            ]
         elif request.url.endswith("/saved_page"):
             payload = []
         elif request.url.endswith("/feed_page"):
@@ -317,6 +329,11 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         ),
         encoding="utf-8",
     )
+    (site / "data").mkdir()
+    (site / "data" / "news-en.json").write_text(
+        json.dumps({"schema_version": 1, "language": "en", "categories": []}),
+        encoding="utf-8",
+    )
 
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
@@ -346,6 +363,18 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "poll_seconds": 30,
                 "page_size": 3,
             }
+        elif request.url.endswith("/m2_localized_story_text"):
+            assert body["p_locale"] == "en"
+            payload = [
+                {
+                    "story_id": story_id,
+                    "title": "Localized controller story",
+                    "summary": "Localized controller summary.",
+                    "display_language": "en",
+                    "translation_available": True,
+                }
+                for story_id in body["p_story_ids"]
+            ]
         elif request.url.endswith("/feed_page"):
             assert body["p_limit"] == 3
             if counts["latest"] >= 3:
