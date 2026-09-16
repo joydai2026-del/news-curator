@@ -56,13 +56,13 @@ class SupabaseHTTP:
         return self._request("POST", "/rest/v1/rpc/m2_history_snapshot", token=access_token,
             key=self._publishable, body={"p_limit": None})
 
-    def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int,
+    def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int, display_language: str = "en",
                             before_published_at: str | None = None, before_story_id: str | None = None):
         rows, before_published, before_story = [], before_published_at, before_story_id
         while len(rows) < limit:
             take = min(100, limit - len(rows))
-            page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates", token=self._service_token(),
-                key=self._service, body={"p_category_id": category_id, "p_query": query,
+            page = self._request("POST", "/rest/v1/rpc/m2_localized_candidates", token=self._service_token(),
+                key=self._service, body={"p_category_id": category_id, "p_query": query, "p_locale": display_language,
                     "p_before_published_at": before_published, "p_before_story_id": before_story, "p_limit": take})
             if not isinstance(page, list):
                 raise SupabaseHTTPError("candidate RPC returned a non-list")
@@ -110,7 +110,12 @@ class SupabaseHTTP:
         row["expires_at"] = int(__import__("datetime").datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00")).timestamp())
         return row
 
-    def _request(self, method, path, *, token, key, body=None, prefer=None):
+    def record_request_health(self, *, endpoint: str, outcome: str, latency_band: str, latest_input_match: bool) -> None:
+        self._request("POST", "/rest/v1/rpc/m2_record_request_health", token=self._service_token(), key=self._service,
+            body={"p_endpoint": endpoint, "p_outcome": outcome, "p_latency_band": latency_band,
+                "p_latest_input_match": latest_input_match}, timeout=0.5)
+
+    def _request(self, method, path, *, token, key, body=None, prefer=None, timeout=None):
         headers = {"apikey": key, "Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -121,7 +126,7 @@ class SupabaseHTTP:
             headers["Prefer"] = prefer
         request = urllib.request.Request(self._origin + path, data=data, headers=headers, method=method)
         try:
-            with self._opener.open(request, timeout=self._timeout) as response:
+            with self._opener.open(request, timeout=self._timeout if timeout is None else timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             raise SupabaseHTTPError("Supabase request failed", status_code=exc.code) from exc

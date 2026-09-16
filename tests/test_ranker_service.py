@@ -22,7 +22,7 @@ class Store:
         if frozen_order_id != "frozen":
             return None
         return {"expires_at": 1100, "page_size": 2,
-            "bindings": {"request_id": "request", "result_mode": "model", "fallback_reason": "",
+            "bindings": {"request_id": "request", "result_mode": "model", "fallback_reason": "", "display_language": "en",
                 "history_generation": 1, "consent_revision": 1, "server_commit_revision": 2},
             "cards": [{"story_id": "a"}, {"story_id": "b"}, {"story_id": "c"}]}
 
@@ -145,3 +145,14 @@ def test_equal_time_corpus_cursor_has_no_gap_or_duplicate_across_fifty_candidate
         response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
     assert seen == [row["story_id"] for row in rows]
     assert len(seen) == len(set(seen)) == 101
+
+def test_old_unlocalized_frozen_orders_are_rejected():
+    import pytest
+    from curator.recommendation.service import StaleRankingError
+    subject=service()
+    original=subject._store.load_frozen_order
+    def old(**kwargs):
+        frozen=original(**kwargs); frozen["bindings"].pop("display_language"); return frozen
+    subject._store.load_frozen_order=old
+    with pytest.raises(StaleRankingError,match="cursor_language_required"):
+        subject.page(authorization="Bearer valid",cursor=subject._cursor("frozen",0,1100))

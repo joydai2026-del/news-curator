@@ -158,12 +158,26 @@ class TranslationResultItem:
 
 
 @dataclass(frozen=True)
+class TranslationUsage:
+    """Provider-reported tokens only. Missing usage is never guessed."""
+
+    input_tokens: int
+    output_tokens: int
+
+    def __post_init__(self) -> None:
+        for value in (self.input_tokens, self.output_tokens):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("translation usage must contain non-negative integers")
+
+
+@dataclass(frozen=True)
 class TranslationProviderResult:
     items: tuple[TranslationResultItem, ...]
     source_language: str
     target_language: str
     provider: str
     model_version: str
+    usage: TranslationUsage | None = None
 
     def __post_init__(self) -> None:
         if not self.items:

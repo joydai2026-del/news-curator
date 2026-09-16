@@ -9,3 +9,5 @@ Commands: `history`, `rank` (feed when query is absent and search when supplied)
 `export` requires a bounded JSON input object with exactly `p_cursor` and `p_expected_fence`. Both may be `null` for the first page. A continuation supplies the opaque response cursor plus the 64-character lowercase-hex fence from the preceding page. The RPC contract takes both values as text; the JSON file prevents unbounded command-line values while preserving the server's exact request shape.
 
 For a same-principal parity check, use one authenticated owner session and compare the private UI/API/CLI receipts by result IDs and order, binding revisions and generations, mode or fallback reason, mutation revision, and export section/count digest. Any behavior change requires the owner-approved action and a fresh history receipt.
+
+`rank --locale en|zh` selects the display language, defaulting to English. It sends `display_language` to the same endpoint the reader uses. The original language remains attached to each source story. A `page` cursor retains the language of its original ranking; changing language requires a new `rank` request.

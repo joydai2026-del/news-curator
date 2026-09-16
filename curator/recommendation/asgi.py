@@ -7,15 +7,17 @@ import json
 import os
 import sys
 import traceback
+import time
 
 from .service import AuthenticationError, StaleRankingError
 
 
 class RankingASGI:
-    def __init__(self, *, service, reader_origin: str, maximum_body_bytes: int = 32768) -> None:
+    def __init__(self, *, service, reader_origin: str, maximum_body_bytes: int = 32768, health_reporter=None) -> None:
         if not reader_origin.startswith("https://") or maximum_body_bytes < 1:
             raise ValueError("invalid ASGI configuration")
         self._service, self._origin, self._maximum = service, reader_origin, maximum_body_bytes
+        self._health_reporter = health_reporter
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
@@ -25,6 +27,8 @@ class RankingASGI:
         if origin is not None and origin != self._origin:
             return await self._reply(send, 403, {"error": "origin_denied"})
         method, path = scope.get("method"), scope.get("path")
+        endpoint = "rank" if method == "POST" and path == "/rank" else "page" if method == "GET" and path == "/page" else None
+        started = time.monotonic()
         if method == "OPTIONS":
             return await self._reply(send, 204, None)
         try:
@@ -41,10 +45,15 @@ class RankingASGI:
             else:
                 return await self._reply(send, 404, {"error": "not_found"})
             await self._reply(send, 200, result)
+            self._record(endpoint, "model" if result.get("result_mode") == "model" else "fallback",
+                started, latest_input_match=bool(endpoint == "rank" and result.get("result_mode") == "model"
+                    and result.get("history_revision") == result.get("server_commit_revision")))
         except AuthenticationError:
             await self._reply(send, 401, {"error": "authentication_required"})
+            self._record(endpoint, "auth_denied", started)
         except StaleRankingError as exc:
             await self._reply(send, 409, {"error": str(exc)})
+            self._record(endpoint, "stale", started)
         except (ValueError, json.JSONDecodeError) as exc:
             frame = traceback.extract_tb(exc.__traceback__)[-1]
             print(json.dumps({"event": "ranker_invalid_request",
@@ -52,8 +61,21 @@ class RankingASGI:
                 "source_basename": os.path.basename(frame.filename),
                 "source_line": frame.lineno}, separators=(",", ":")), file=sys.stderr, flush=True)
             await self._reply(send, 400, {"error": "invalid_request"})
+            self._record(endpoint, "invalid_request", started)
+        except (asyncio.TimeoutError, TimeoutError):
+            await self._reply(send, 503, {"error": "provider_deadline"})
+            self._record(endpoint, "timeout", started)
         except RuntimeError as exc:
-            await self._reply(send, 503, {"error": str(exc)})
+            await self._reply(send, 503, {"error": "ranking_disabled" if str(exc) == "ranking_disabled" else "service_unavailable"})
+            self._record(endpoint, "disabled" if str(exc) == "ranking_disabled" else "server_error", started)
+        except Exception:
+            await self._reply(send, 500, {"error": "server_error"})
+            self._record(endpoint, "server_error", started)
+
+    def _record(self, endpoint, outcome, started, latest_input_match=False):
+        if endpoint is not None and self._health_reporter is not None:
+            self._health_reporter.record(endpoint=endpoint, outcome=outcome,
+                elapsed_seconds=max(0.0, time.monotonic()-started), latest_input_match=latest_input_match)
 
     async def _body(self, receive):
         chunks, size = [], 0

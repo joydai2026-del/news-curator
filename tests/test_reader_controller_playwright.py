@@ -110,6 +110,30 @@ def _update(index: int) -> dict[str, object]:
     }
 
 
+def _localized_story_text(body: dict[str, object]) -> list[dict[str, object]]:
+    locale = body["p_locale"]
+    rows = []
+    for story_id in body["p_story_ids"]:
+        index = int(str(story_id).removeprefix("story:"), 16)
+        title = f"Update {index - 1000}" if index >= 1000 else f"Controller story {index}"
+        rows.append({
+            "story_id": story_id, "title": title,
+            "summary": "A server supplied summary.", "display_language": locale,
+            "translation_available": True,
+        })
+    return rows
+
+
+def _write_projection_shell(site: Path) -> None:
+    data = site / "data"
+    data.mkdir(exist_ok=True)
+    for locale in ("en", "zh"):
+        (data / f"news-{locale}.json").write_text(json.dumps({
+            "schema_version": 1, "generated_at": "2026-09-07T12:00:00Z",
+            "language": locale, "categories": [],
+        }), encoding="utf-8")
+
+
 def _visible_story_ids(page: object) -> list[str]:
     return page.locator("article.card:visible").evaluate_all(
         "cards => cards.map(card => card.dataset.storyId)"
@@ -148,12 +172,27 @@ def test_pagination_hides_exhausted_scopes_but_preserves_cursor_and_retry(
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         if request.url.endswith("/latest_publication"):
             payload = {
                 "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
                 "topics": [{"topic_id": "ai", "name": "AI"}, {"topic_id": "us", "name": "US News"}],
                 "initial_history_cursor": initial_cursor, "page_size": 2, "poll_seconds": 300,
             }
+        elif request.url.endswith("/m2_localized_story_text"):
+            assert body["p_locale"] in {"en", "zh"}
+            payload = [
+                {
+                    "story_id": story_id,
+                    "title": "Localized controller story",
+                    "summary": "Localized controller summary.",
+                    "display_language": body["p_locale"],
+                    "translation_available": True,
+                }
+                for story_id in body["p_story_ids"]
+            ]
         elif request.url.endswith("/saved_page"):
             payload = []
         elif request.url.endswith("/feed_page"):
@@ -245,6 +284,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    _write_projection_shell(site)
     status_rule = re.search(r"\.reader-status\{[^}]*\}", VIEW_CSS)
     assert status_rule is not None and "min-height:1.5rem" in status_rule.group(0)
     (site / "index.html").write_text(
@@ -317,6 +357,11 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         ),
         encoding="utf-8",
     )
+    (site / "data").mkdir(exist_ok=True)
+    (site / "data" / "news-en.json").write_text(
+        json.dumps({"schema_version": 1, "language": "en", "categories": []}),
+        encoding="utf-8",
+    )
 
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
@@ -332,6 +377,9 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         if request.url.endswith("/latest_publication"):
             counts["latest"] += 1
             sequence = 7 if counts["latest"] < 2 else 8
@@ -346,6 +394,18 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
                 "poll_seconds": 30,
                 "page_size": 3,
             }
+        elif request.url.endswith("/m2_localized_story_text"):
+            assert body["p_locale"] == "en"
+            payload = [
+                {
+                    "story_id": story_id,
+                    "title": "Localized controller story",
+                    "summary": "Localized controller summary.",
+                    "display_language": "en",
+                    "translation_available": True,
+                }
+                for story_id in body["p_story_ids"]
+            ]
         elif request.url.endswith("/feed_page"):
             assert body["p_limit"] == 3
             if counts["latest"] >= 3:
@@ -604,7 +664,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             fail_next_state["value"] = True
             save_button.evaluate("button => button.click()")
             page.locator("#reader-status").get_by_text(
-                "Reading state could not be saved. Try again."
+                "Could not remove from Saved. Your previous state was restored. Try again."
             ).wait_for()
             assert first.is_visible()
             assert first.evaluate("card => card.classList.contains('is-saved')")
@@ -612,7 +672,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
             assert page.evaluate("window.scrollY") == rollback_scroll
 
             save_button.evaluate("button => button.click()")
-            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            page.locator("#reader-status").get_by_text("Removed from Saved.").wait_for()
             assert first.is_hidden()
             assert page.evaluate(
                 "document.activeElement.matches('.chip[data-filter=\"__saved__\"]')"
@@ -641,6 +701,7 @@ def test_persisted_topic_history_is_reconciled_by_first_all_page(tmp_path: Path)
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    _write_projection_shell(site)
     current_id = "story:" + f"{1:064x}"
     site.joinpath("index.html").write_text(
         f"""<!doctype html><html><head><meta charset="utf-8"><style>
@@ -703,6 +764,9 @@ def test_persisted_topic_history_is_reconciled_by_first_all_page(tmp_path: Path)
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         if request.url.endswith("/latest_publication"):
             payload: object = {
                 "publication_seq": 7,
@@ -753,6 +817,7 @@ def test_saved_only_card_stays_after_current_edition_and_reconciles_on_all(
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    _write_projection_shell(site)
     current_id = "story:" + f"{1:064x}"
     site.joinpath("index.html").write_text(
         f"""<!doctype html><html><head><meta charset="utf-8"><style>
@@ -828,6 +893,9 @@ def test_saved_only_card_stays_after_current_edition_and_reconciles_on_all(
 
     def fulfill(route: object) -> None:
         request = route.request
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(request.post_data_json)))
+            return
         if request.url.endswith("/latest_publication"):
             payload: object = {
                 "publication_seq": 7,
@@ -878,6 +946,7 @@ def test_short_initial_all_page_continues_at_retention_cursor(tmp_path: Path) ->
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    _write_projection_shell(site)
     current_id = "story:" + f"{1:064x}"
     site.joinpath("index.html").write_text(
         f"""<!doctype html><html><head><meta charset="utf-8"><style>
@@ -930,6 +999,9 @@ def test_short_initial_all_page_continues_at_retention_cursor(tmp_path: Path) ->
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         if request.url.endswith("/latest_publication"):
             payload: object = {
                 "publication_seq": 7,
@@ -978,6 +1050,7 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    _write_projection_shell(site)
     first_id = "story:" + f"{1:064x}"
     second_id = "story:" + f"{2:064x}"
     site.joinpath("index.html").write_text(
@@ -1064,6 +1137,9 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         authenticated = request.headers.get("authorization") == "Bearer private-token"
         if request.url.endswith("/latest_publication"):
             payload: object = {
@@ -1122,7 +1198,7 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
                 "card => card.dataset.stateRevision === '5'", arg=ai.element_handle()
             )
             assert ai.locator(".read-action").inner_text() == "Mark unread"
-            assert ai.locator(".save-action").inner_text() == "Unsave"
+            assert ai.locator(".save-action").inner_text() == "Saved ✓"
             assert quantum.locator(".state-action:enabled").count() == 1
 
             quantum.locator(".save-action").evaluate(
@@ -1136,10 +1212,10 @@ def test_session_arrival_invalidates_anonymous_tabs_before_private_hydration(
                 "card => card.dataset.stateRevision === '7'", arg=quantum.element_handle()
             )
             assert quantum.locator(".read-action").inner_text() == "Mark unread"
-            assert quantum.locator(".save-action").inner_text() == "Unsave"
+            assert quantum.locator(".save-action").inner_text() == "Saved ✓"
             assert quantum.locator(".state-action:enabled").count() == 3
             quantum.locator(".save-action").click()
-            page.locator("#reader-status").get_by_text("Reading state saved.").wait_for()
+            page.locator("#reader-status").get_by_text("Removed from Saved.").wait_for()
             assert state_writes == [(second_id, 7)]
             browser.close()
     finally:
@@ -1309,6 +1385,9 @@ def test_real_render_open_marks_read_locally_and_unread_reopens_without_layout_j
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         if request.url.endswith("/latest_publication"):
             payload: object = {
                 "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
@@ -1446,6 +1525,9 @@ def test_active_read_mutation_uses_newest_hydrated_rollback_baseline(
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         if request.url.endswith("/latest_publication"):
             payload: object = {
                 "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
@@ -1560,6 +1642,9 @@ def test_signed_open_and_unread_persist_across_refresh_and_browser_context(
     def fulfill(route: object) -> None:
         request = route.request
         body = request.post_data_json
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(body)))
+            return
         if request.url.endswith("/latest_publication"):
             payload: object = {
                 "publication_seq": 7, "finalized_at": "2026-09-07T12:00:00Z",
@@ -1638,6 +1723,7 @@ def test_logout_removes_dynamic_saved_card_from_dom_and_view_index(tmp_path: Pat
     site = tmp_path / "site"
     site.mkdir()
     (site / "reader.js").write_bytes((ROOT / "static" / "reader.js").read_bytes())
+    _write_projection_shell(site)
     public_id = _story(1)["story_id"]
     dynamic_id = _story(77)["story_id"]
     (site / "index.html").write_text(
@@ -1690,6 +1776,9 @@ def test_logout_removes_dynamic_saved_card_from_dom_and_view_index(tmp_path: Pat
 
     def fulfill(route: object) -> None:
         request = route.request
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(request.post_data_json)))
+            return
         if request.url.endswith("/latest_publication"):
             payload: object = {
                 "publication_seq": 7,
@@ -1786,6 +1875,9 @@ def test_polled_update_banner_is_an_accessible_overlay_until_explicit_refresh(
 
     def fulfill(route: object) -> None:
         request = route.request
+        if request.url.endswith("/m2_localized_story_text"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(_localized_story_text(request.post_data_json)))
+            return
         if request.url.endswith("/latest_publication"):
             calls["latest"] += 1
             publication_seq = 7 if calls["latest"] == 1 else 8

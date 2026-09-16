@@ -221,12 +221,39 @@ class BudgetLimits:
 
 
 @dataclass(frozen=True)
+class MoneyLimits:
+    """USD micro-unit limits for public translation only, never an owner budget."""
+
+    run: int
+    day: int
+    month: int
+
+    def __post_init__(self) -> None:
+        for value in (self.run, self.day, self.month):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("money limits must be non-negative integer micro-USD")
+
+
+@dataclass(frozen=True)
+class MoneyReservation:
+    charge_scope: str
+    reserved_microusd: int
+    limits: MoneyLimits
+
+    def __post_init__(self) -> None:
+        _bounded(self.charge_scope, _VERSION, "translation charge scope")
+        if isinstance(self.reserved_microusd, bool) or not isinstance(self.reserved_microusd, int) or self.reserved_microusd <= 0:
+            raise ValueError("reserved micro-USD must be a positive integer")
+
+
+@dataclass(frozen=True)
 class AcquireRequest:
     key: TranslationCacheKey
     idempotency_key: str
     run_id: str
     reserved_characters: int
     limits: BudgetLimits
+    money: MoneyReservation | None = None
 
     def __post_init__(self) -> None:
         _bounded(self.idempotency_key, _IDENTIFIER, "idempotency key")
@@ -246,6 +273,11 @@ class AcquireRequest:
             "run": self.run_id,
             "reserved": self.reserved_characters,
             "limits": [self.limits.run, self.limits.day, self.limits.month],
+            "money": None if self.money is None else {
+                "scope": self.money.charge_scope,
+                "reserved": self.money.reserved_microusd,
+                "limits": [self.money.limits.run, self.money.limits.day, self.money.limits.month],
+            },
         }
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -257,6 +289,7 @@ class Reservation:
     counter_day: str
     counter_month: str
     actual_characters: int | None = None
+    actual_microusd: int | None = None
     created_at: datetime | None = None
     sent_at: datetime | None = None
     finalized_at: datetime | None = None
@@ -286,6 +319,7 @@ class TranslationStore(Protocol):
         *,
         actual_characters: int,
         record: TranslationCacheRecord,
+        actual_microusd: int | None = None,
     ) -> Reservation: ...
     def mark_failed_before_send(self, idempotency_key: str) -> Reservation: ...
     def mark_charge_unknown(self, idempotency_key: str) -> Reservation: ...

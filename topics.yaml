@@ -545,6 +545,35 @@ categories:
       - {id: google-zaobao,  name: Zaobao via Google News, url: "https://news.google.com/rss/search?q=site%3Azaobao.com.sg%20when%3A1d&hl=zh-CN&gl=SG&ceid=SG%3Azh-Hans", language: zh, max_age_hours: 12, weight: 0.9, aggregator: true, platform: google-news, echo_eligible: false}
 
   # ==========================================================================
+  - id: china-news
+    name: China News
+    # China is a reporting scope, not a language proxy. Chinese-language feeds
+    # remain shared and must match these China-specific terms before landing here.
+    keywords:
+      - China
+      - Chinese government
+      - Beijing
+      - Xi Jinping
+      - CCP
+      - China-Taiwan
+      - Taiwan Strait
+    keywords_by_language:
+      zh:
+        - 中国
+        - 中国政府
+        - 北京
+        - 习近平
+        - 中共
+        - 台海
+    hn_queries:
+      - China
+      - China policy
+    sources:
+      # SCMP's official China section feed is category-native. It is English,
+      # which keeps this category from equating China reporting with Chinese text.
+      - {id: scmp-china, name: South China Morning Post China, url: "https://www.scmp.com/rss/91/feed", language: en, max_age_hours: 12, weight: 1.0}
+
+  # ==========================================================================
   - id: us-news
     name: US News
     keywords:

@@ -39,7 +39,7 @@ class SupabaseAuth(Protocol):
 
 class RankingStore(Protocol):
     def history_snapshot(self, access_token: str) -> Mapping[str, object]: ...
-    def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int,
+    def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int, display_language: str = "en",
                             before_published_at: str | None = None, before_story_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
@@ -79,6 +79,9 @@ class RankingService:
         self._validate_client_bindings(body, snapshot)
         if snapshot.get("provider_processing_enabled") and snapshot.get("provider_policy_id") != self._policy.provider_policy_id:
             raise StaleRankingError("provider_policy_mismatch")
+        display_language = body.get("display_language", "en")
+        if display_language not in ("en", "zh"):
+            raise ValueError("invalid_display_language")
         page_size = self._page_size(body.get("page_size", 20))
         eligibility = body.get("eligibility", {})
         if not isinstance(eligibility, Mapping):
@@ -98,7 +101,8 @@ class RankingService:
         if (before_published is None) != (before_story is None):
             raise ValueError("invalid_corpus_cursor")
         rows = self._store.retained_candidates(
-            category_id=category_id, query=query, limit=self._policy.candidate_limit + len(excluded_set) + 1,
+            category_id=category_id, query=query, display_language=display_language,
+            limit=self._policy.candidate_limit + len(excluded_set) + 1,
             before_published_at=before_published, before_story_id=before_story,
         )
         filtered = [row for row in rows if row.get("story_id") not in excluded_set]
@@ -164,7 +168,7 @@ class RankingService:
         cards = [by_id[story_id] for story_id in receipt.ranked_candidate_ids]
         expires_at = int(self._clock()) + self._policy.cursor_ttl_seconds
         bindings = self._bindings(receipt)
-        bindings.update({"eligibility": {"category": category_id, "query": query},
+        bindings.update({"display_language": display_language, "eligibility": {"category": category_id, "query": query},
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
             "corpus_start": dict(corpus_cursor), "excluded_story_ids": list(excluded_set),
             "execution": {**observed_usage, "settled_cost_usd": settled_cost,
@@ -188,6 +192,8 @@ class RankingService:
         frozen = self._store.load_frozen_order(user_id=owner.user_id, frozen_order_id=str(payload["frozen_order_id"]))
         if not frozen or int(frozen["expires_at"]) < int(self._clock()):
             raise StaleRankingError("cursor_expired")
+        if frozen["bindings"].get("display_language") not in ("en", "zh"):
+            raise StaleRankingError("cursor_language_required")
         current = self._store.history_snapshot(token)
         current_bindings = {"history_generation": current.get("history_generation"),
             "consent_revision": current.get("consent_revision"),
@@ -201,6 +207,7 @@ class RankingService:
                 [card["story_id"] for card in frozen["cards"][:int(payload["offset"])]]))
             return self.rank(authorization=authorization, body={**current_bindings,
                 "history_revision": current.get("included_history_revision", 0),
+                "display_language": frozen["bindings"].get("display_language", "en"),
                 "eligibility": frozen["bindings"].get("eligibility", {}), "exclude_story_ids": visible,
                 "corpus_cursor": frozen["bindings"].get("corpus_start", {}),
                 "page_size": frozen.get("page_size", self._policy.maximum_page_size)})
@@ -214,6 +221,7 @@ class RankingService:
         if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
             return self.rank(authorization=authorization, body={**current_bindings,
                 "history_revision": current.get("included_history_revision", 0),
+                "display_language": frozen["bindings"].get("display_language", "en"),
                 "eligibility": frozen["bindings"].get("eligibility", {}), "exclude_story_ids": [],
                 "corpus_cursor": frozen["bindings"].get("corpus_cursor"), "page_size": size})
         if next_cursor is None and frozen["bindings"].get("corpus_has_more"):
@@ -300,8 +308,8 @@ class RankingService:
 
     @staticmethod
     def _card(row, owner_state):
-        return {"card_schema_version": 1, "story_id": row["story_id"], "title": row["title"],
-            "summary": row.get("summary", ""), "source_name": row["source_name"], "published_at": row["published_at"],
+        return {"card_schema_version": 1, "story_id": row["story_id"], "title": row.get("display_title", row["title"]),
+            "summary": row.get("display_summary", row.get("summary", "")), "source_name": row["source_name"], "published_at": row["published_at"],
             "url": row["canonical_url"], "source_id": row["source_id"], "language": row["language"],
             "category_ids": row.get("category_ids", []), "read_at": owner_state.get("read_at"),
             "saved_at": owner_state.get("saved_at"), "state_revision": owner_state.get("state_revision", 0),
@@ -318,7 +326,7 @@ class RankingService:
     @staticmethod
     def _public_bindings(bindings):
         fields = ("request_id", "policy_version", "model_version", "history_revision", "history_generation",
-                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason")
+                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason", "display_language")
         return {key: bindings[key] for key in fields if key in bindings}
 
     @classmethod

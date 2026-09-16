@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
@@ -25,6 +26,8 @@ from curator.translation import (
     AcquireRequest,
     AcquireStatus,
     BudgetLimits,
+    MoneyLimits,
+    MoneyReservation,
     ReservationState,
     SupabaseTranslationConfig,
     SupabaseTranslationStore,
@@ -186,6 +189,14 @@ def _counters() -> dict[str, int]:
     return {str(key): int(value) for key, value in json.loads(raw).items()}
 
 
+def _money_counters() -> dict[str, int]:
+    raw = _psql(
+        "select coalesce(jsonb_object_agg(scope_type, counted_microusd), '{}'::jsonb) "
+        "from translation_private.translation_usage_counters where scope_key like 'money:%';"
+    )
+    return {str(key): int(value) for key, value in json.loads(raw).items()}
+
+
 class _LoopbackRestTransport:
     """Minimal test transport that can reach only the local Supabase REST port."""
 
@@ -210,6 +221,63 @@ class _LoopbackRestTransport:
         response_headers = MappingProxyType({key.lower(): value for key, value in response.getheaders()})
         connection.close()
         return SafeHttpResponse(response.status, url, response_headers, body)
+
+
+class _LocalPostgresRpcTransport:
+    """Test-only adapter for SupabaseTranslationStore against an isolated local DB.
+
+    The local PostgreSQL template has no PostgREST listener. This deliberately
+    narrow transport invokes only the RPCs used in this proof and returns their
+    JSON exactly as the Supabase client expects. It never opens a non-local
+    connection and does not carry a credential into a command or test output.
+    """
+
+    def request(self, source_id: str, method: str, url: str, **kwargs: object) -> SafeHttpResponse:
+        parsed = urlsplit(url)
+        assert source_id == "translation-store" and method == "POST"
+        assert parsed.scheme == "http" and parsed.hostname == "127.0.0.1" and parsed.port == 5432
+        assert parsed.path.startswith("/rest/v1/rpc/")
+        credentials = kwargs.get("credentials")
+        assert isinstance(credentials, tuple) and len(credentials) == 2
+        body = json.loads(bytes(kwargs["body"]).decode("utf-8"))
+        assert isinstance(body, dict)
+        name = parsed.path.rsplit("/", 1)[-1]
+        response = _psql(_claims() + " select public." + name + "(" + self._args(name, body) + ");")
+        return SafeHttpResponse(200, url, MappingProxyType({"content-type": "application/json"}), response.encode())
+
+    @staticmethod
+    def _text(value: object) -> str:
+        assert isinstance(value, str)
+        return "'" + value.replace("'", "''") + "'"
+
+    def _args(self, name: str, body: dict[str, object]) -> str:
+        text = self._text
+        integer = lambda key: str(_require_int(body[key]))
+        if name == "translation_acquire":
+            fields = body["field_selection"]
+            assert isinstance(fields, list) and all(isinstance(value, str) for value in fields)
+            array = "array[" + ",".join(text(value) for value in fields) + "]::text[]"
+            return ",".join((
+                text(body["cache_key_digest"]), text(body["story_id"]), text(body["input_digest"]), array,
+                text(body["normalization_version"]), text(body["source_locale"]), text(body["target_locale"]),
+                text(body["provider"]), text(body["model_version"]), text(body["glossary_policy_version"]),
+                text(body["candidate_policy_version"]), text(body["idempotency_key"]), text(body["run_id"]),
+                integer("reserved_characters"), integer("run_limit"), integer("day_limit"), integer("month_limit"),
+            ))
+        if name == "translation_reserve_money":
+            return ",".join((text(body["idempotency_key"]), text(body["charge_scope"]), integer("reserved_microusd"), integer("run_limit_microusd"), integer("day_limit_microusd"), integer("month_limit_microusd")))
+        if name == "translation_settle_money":
+            return ",".join((text(body["idempotency_key"]), integer("actual_microusd")))
+        if name in {"translation_mark_sent", "translation_mark_failed_before_send", "translation_mark_charge_unknown"}:
+            return text(body["idempotency_key"])
+        if name == "translation_settle":
+            return ",".join((text(body["idempotency_key"]), integer("actual_characters"), text(body["translated_title"]), text(body["translated_description"])))
+        raise AssertionError("unexpected local translation RPC")
+
+
+def _require_int(value: object) -> int:
+    assert not isinstance(value, bool) and isinstance(value, int)
+    return value
 
 
 def _local_rest_identity() -> tuple[str, str]:
@@ -298,6 +366,46 @@ def test_distinct_concurrent_acquires_finish_without_deadlock_pressure() -> None
     assert {payload["status"] for payload in payloads} == {"leased"}
     assert _counters()["day"] == 1200
     assert _counters()["month"] == 1200
+
+
+def test_money_rpc_caps_idempotence_nulls_and_never_sent_release() -> None:
+    suffix = uuid.uuid4().hex[:12]
+    idem = f"idem:money-{suffix}"
+    run = f"run:money-{suffix}"
+    assert json.loads(_psql(_acquire_sql(_key("money-" + suffix), idem, run)))["status"] == "leased"
+    args = f"'{idem}','public_translation_openai_v1',100,150,150,150"
+    first = _rpc("translation_reserve_money", args)
+    second = _rpc("translation_reserve_money", args)
+    assert first == second
+    assert first["reservation"]["reserved_microusd"] == 100
+
+    null_call = _raw_psql(
+        _claims() + f" select public.translation_reserve_money('{idem}',null,100,150,150,150);"
+    )
+    assert null_call.returncode != 0
+
+    other = f"idem:money-other-{suffix}"
+    assert json.loads(
+        _psql(_acquire_sql(_key("money-other-" + suffix), other, run))
+    )["status"] == "leased"
+    exhausted_call = _raw_psql(
+        _claims()
+        + f" select public.translation_reserve_money('{other}','public_translation_openai_v1',51,150,150,150);"
+    )
+    assert exhausted_call.returncode == 0, exhausted_call.stderr
+    exhausted = json.loads(
+        [line for line in exhausted_call.stdout.splitlines() if line.strip()][-1]
+    )
+    assert exhausted["status"] == "budget_exhausted"
+
+    assert _rpc("translation_mark_failed_before_send", f"'{idem}'")["status"] == "failed_before_send"
+    remaining = int(
+        _psql(
+            "select coalesce(sum(counted_microusd),0) "
+            "from translation_private.translation_usage_counters"
+        )
+    )
+    assert remaining == 0
 
 
 def test_settle_retry_is_idempotent_and_cache_lookup_matches() -> None:
@@ -402,6 +510,121 @@ def test_python_supabase_client_matches_local_rpc_happy_path() -> None:
     assert cached.key == key
     assert cached.translated_title == "translated title"
     assert cached.actual_characters == 70
+
+
+def _captured_openai_keys() -> tuple[TranslationCacheKey, TranslationCacheKey, TranslationCacheKey]:
+    """Build test-only keys from three public retained rows without emitting content."""
+
+    fixture = Path(__file__).parent / "fixtures" / "m2-retained-public.json"
+    rows = json.loads(fixture.read_text(encoding="utf-8"))["rows"]
+    keys: list[TranslationCacheKey] = []
+    for row in rows:
+        language = row.get("language")
+        title = row.get("title")
+        summary = row.get("summary")
+        story_id = row.get("story_id")
+        canonical_url = row.get("canonical_url")
+        if language not in {"en", "zh"} or not all(isinstance(value, str) and value for value in (title, story_id, canonical_url)):
+            continue
+        original = (canonical_url + "\\n" + title + "\\n" + (summary if isinstance(summary, str) else "")).encode("utf-8")
+        keys.append(
+            TranslationCacheKey(
+                story_id=story_id,
+                input_digest=hashlib.sha256(original).hexdigest(),
+                field_selection=("title", "description") if summary else ("title",),
+                normalization_version="normalized-item-v1",
+                source_locale=language,
+                target_locale="zh" if language == "en" else "en",
+                provider="openai",
+                model_version="gpt-5-mini",
+                glossary_policy_version="none-v1",
+                candidate_policy_version="retained-round-robin-v1",
+            )
+        )
+        if len(keys) == 3:
+            return tuple(keys)  # type: ignore[return-value]
+    raise AssertionError("captured public fixture has fewer than three usable rows")
+
+
+class _ControlledPublicProvider:
+    """A no-network protocol double that records only the number of sends."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def send(self) -> tuple[int, int]:
+        self.calls += 1
+        # 64 input and 32 output tokens at configured prices cost 16 + 64 micro-USD.
+        return (64, 32)
+
+
+@pytest.mark.allow_socket
+def test_supabase_store_money_path_uses_three_public_rows_one_shared_cap_and_no_third_send() -> None:
+    """Controlled local protocol case. It never calls a provider or production service."""
+
+    first_key, second_key, blocked_key = _captured_openai_keys()
+    store = SupabaseTranslationStore(
+        SupabaseTranslationConfig(
+            "http://127.0.0.1:5432",
+            "sb_secret_local_test",
+            allow_insecure_loopback=True,
+        ),
+        transport=_LocalPostgresRpcTransport(),
+    )
+    limits = MoneyLimits(run=250, day=250, month=250)
+    money = MoneyReservation("public_translation_openai_v1", 100, limits)
+    run_id = "run:money-store-" + uuid.uuid4().hex[:12]
+    provider = _ControlledPublicProvider()
+
+    def request_for(key: TranslationCacheKey, suffix: str) -> AcquireRequest:
+        return AcquireRequest(
+            key=key,
+            idempotency_key="idem:money-store-" + suffix + "-" + uuid.uuid4().hex[:12],
+            run_id=run_id,
+            reserved_characters=50,
+            limits=BudgetLimits(500, 500, 500),
+            money=money,
+        )
+
+    # A proven pre-send failure releases both character and money holds.
+    abandoned = request_for(first_key, "abandoned")
+    assert store.acquire(abandoned).status is AcquireStatus.LEASED
+    assert store.mark_failed_before_send(abandoned.idempotency_key).state is ReservationState.FAILED_BEFORE_SEND
+    assert _money_counters() == {"run": 0, "day": 0, "month": 0}
+
+    # The same captured story may subsequently be sent. Its unknown outcome keeps the full hold.
+    unknown = request_for(first_key, "unknown")
+    assert store.acquire(unknown).status is AcquireStatus.LEASED
+    assert store.mark_sent(unknown.idempotency_key).state is ReservationState.SENT
+    provider.send()
+    assert store.mark_charge_unknown(unknown.idempotency_key).state is ReservationState.CHARGE_UNKNOWN
+    assert _money_counters() == {"run": 100, "day": 100, "month": 100}
+
+    # A second public story settles exact known usage: ceil(64*.25) + ceil(32*2) = 80 micro-USD.
+    settled_request = request_for(second_key, "settled")
+    assert store.acquire(settled_request).status is AcquireStatus.LEASED
+    assert store.mark_sent(settled_request.idempotency_key).state is ReservationState.SENT
+    input_tokens, output_tokens = provider.send()
+    actual_microusd = (input_tokens * 250_000 + 999_999) // 1_000_000 + (output_tokens * 2_000_000 + 999_999) // 1_000_000
+    record = TranslationCacheRecord(settled_request.key, "translated", "summary", 50)
+    assert store.settle(settled_request.idempotency_key, actual_characters=50, record=record, actual_microusd=actual_microusd).state is ReservationState.SETTLED
+    assert store.settle(settled_request.idempotency_key, actual_characters=50, record=record, actual_microusd=actual_microusd).state is ReservationState.SETTLED
+    assert _money_counters() == {"run": 180, "day": 180, "month": 180}
+
+    # The third distinct captured row cannot reserve the remaining shared cap, so no third send occurs.
+    blocked = request_for(blocked_key, "blocked")
+    assert store.acquire(blocked).status is AcquireStatus.BUDGET_EXHAUSTED
+    assert provider.calls == 2
+    assert _money_counters() == {"run": 180, "day": 180, "month": 180}
+    assert _psql(
+        "select state from translation_private.translation_reservations where idempotency_key = "
+        + _LocalPostgresRpcTransport._text(blocked.idempotency_key)
+    ) == "failed_before_send"
+    assert _psql(
+        "select count(distinct run_id)::text || ':' || count(distinct counter_day)::text "
+        "from translation_private.translation_reservations where run_id = "
+        + _LocalPostgresRpcTransport._text(run_id)
+    ) == "1:1"
 
 
 def test_local_postgres_stale_recovery_preserves_no_paid_retry_rule() -> None:

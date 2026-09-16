@@ -124,3 +124,14 @@ def test_adapter_options_cannot_escape_the_options_discriminator():
                 "max_json_depth": 3,
             }
         )
+
+
+def test_china_news_is_country_scoped_with_a_verified_international_native_feed():
+    config = load_config(REPO_ROOT)
+    category = next(item for item in config.categories if item.id == "china-news")
+
+    assert "China" in category.keywords
+    assert "中国" in category.keywords_by_language["zh"]
+    assert [(source.id, source.language, source.url) for source in category.sources] == [
+        ("scmp-china", "en", "https://www.scmp.com/rss/91/feed")
+    ]
