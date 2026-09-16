@@ -14,11 +14,11 @@
   const encoder = new TextEncoder();
   const LOCALE_KEY = "news-curator-display-language";
   const COPY = Object.freeze({
-    en: { all:"All", saved:"Saved", topics:"Topics", today:"Today's edition", companion:"Your reading companion", intro:"Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.", rail:"One current edition. Open any headline for the source summary and ranking context.", preferences:"Feed preferences", learn:"Learn from my reading", provider:"Use my history for model ranking", policy:"Provider data policy", privacy:"Privacy", search:"Search all retained stories", load:"Load", loading:"Loading", more:"more", stories:"stories", noMatches:"No matching stories found.", translationUnavailable:"Translation unavailable", translationSummary:"This saved story is not available in English yet. Open the original or try again later.", refresh:"Refresh feed", download:"Download my data", clear:"Clear learning history", activity:"Activity recorded", activityUsed:"Latest activity used", read:"Mark read", unread:"Mark unread", save:"Save", savedAction:"Saved ✓", moreLike:"More like this", lessLike:"Less like this", close:"Close", original:"Read original", source:"Source", newsletter:"Newsletter", published:"Published", coverage:"Also covered by", signals:"Ranking signals", why:"Why this appeared", matched:"Matched on" },
-    zh: { all:"全部", saved:"已收藏", topics:"主题", today:"今日新闻", companion:"你的阅读助手", intro:"打开标题即可查看可靠摘要、来源和入选原因。", rail:"每小时更新一期。打开任意标题，查看来源摘要和排序说明。", preferences:"新闻偏好", learn:"根据我的阅读学习", provider:"使用我的阅读记录进行模型排序", policy:"服务商数据政策", privacy:"隐私", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityUsed:"已使用最新活动", read:"标为已读", unread:"标为未读", save:"收藏", savedAction:"已收藏 ✓", moreLike:"更多类似内容", lessLike:"减少类似内容", close:"关闭", original:"阅读原文", source:"来源", newsletter:"新闻通讯", published:"发布时间", coverage:"其他报道", signals:"排序依据", why:"入选原因", matched:"匹配依据" },
+    en: { all:"All", saved:"Saved", topics:"Topics", today:"Today's edition", companion:"Your reading companion", intro:"Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.", rail:"One current edition. Open any headline for the source summary and ranking context.", preferences:"Feed preferences", learn:"Learn from my reading", provider:"Use my history for model ranking", policy:"Provider data policy", privacy:"Privacy", search:"Search all retained stories", load:"Load", loading:"Loading", more:"more", stories:"stories", noMatches:"No matching stories found.", translationUnavailable:"Translation unavailable", translationSummary:"This saved story is not available in English yet. Open the original or try again later.", refresh:"Refresh feed", download:"Download my data", clear:"Clear learning history", activity:"Activity recorded", activityPending:"Saving activity", activityFailed:"Activity was not recorded", activityUsed:"Latest activity used", read:"Mark read", unread:"Mark unread", save:"Save", savedAction:"Saved ✓", moreLike:"More like this", lessLike:"Less like this", close:"Close", original:"Read original", source:"Source", newsletter:"Newsletter", published:"Published", coverage:"Also covered by", signals:"Ranking signals", why:"Why this appeared", matched:"Matched on" },
+    zh: { all:"全部", saved:"已收藏", topics:"主题", today:"今日新闻", companion:"你的阅读助手", intro:"打开标题即可查看可靠摘要、来源和入选原因。", rail:"每小时更新一期。打开任意标题，查看来源摘要和排序说明。", preferences:"新闻偏好", learn:"根据我的阅读学习", provider:"使用我的阅读记录进行模型排序", policy:"服务商数据政策", privacy:"隐私", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityPending:"正在保存活动", activityFailed:"活动未记录", activityUsed:"已使用最新活动", read:"标为已读", unread:"标为未读", save:"收藏", savedAction:"已收藏 ✓", moreLike:"更多类似内容", lessLike:"减少类似内容", close:"关闭", original:"阅读原文", source:"来源", newsletter:"新闻通讯", published:"发布时间", coverage:"其他报道", signals:"排序依据", why:"入选原因", matched:"匹配依据" },
   });
   function validLocale(value) { return value === "en" || value === "zh"; }
-  function activeCopy() { return COPY[document.documentElement?.lang === "zh" ? "zh" : "en"]; }
+  function activeCopy() { return COPY[typeof document !== "undefined" && document.documentElement?.lang === "zh" ? "zh" : "en"]; }
   const MESSAGE_ZH = Object.freeze({
     "Personalized feed configuration is unavailable. Public stories remain available.":"个性化新闻配置暂不可用。你仍可阅读公开新闻。",
     "Sign in to use synced reading controls.":"登录后可使用同步阅读功能。",
@@ -576,7 +576,7 @@
     if (saveButton && hasSaved) {
       const copy = activeCopy();
       saveButton.textContent = saved ? copy.savedAction : copy.save;
-      saveButton.setAttribute("aria-label", saved ? (document.documentElement?.lang === "zh" ? "从已收藏中移除" : "Remove from Saved") : (document.documentElement?.lang === "zh" ? "收藏新闻" : "Save story"));
+      saveButton.setAttribute("aria-label", saved ? (copy === COPY.zh ? "从已收藏中移除" : "Remove from Saved") : (copy === COPY.zh ? "收藏新闻" : "Save story"));
       saveButton.setAttribute("aria-pressed", String(saved));
     }
     if (interestButton && interestButton.dataset.topicId) {
@@ -883,6 +883,7 @@
     if (!auth || !view || !status || !loadButton || !updatesStatus || !updatesButton) return;
     const savedTabs = document.querySelectorAll('.chip[data-filter="__saved__"]');
     let displayLanguage = (() => { try { const value = localStorage.getItem(LOCALE_KEY); return validLocale(value) ? value : "en"; } catch (_) { return "en"; } })();
+    let committedDisplayLanguage = displayLanguage;
     let localeEpoch = 0;
     const localeCopy = () => COPY[displayLanguage];
     function applyLocaleLabels() {
@@ -922,7 +923,12 @@
       }
       {
         document.querySelectorAll(".read-action").forEach((node) => { node.textContent = node.closest(".card")?.classList.contains("is-read") ? localeCopy().unread : localeCopy().read; });
-        document.querySelectorAll(".save-action").forEach((node) => { if (!node.classList.contains("is-pending")) node.textContent = node.closest(".card")?.classList.contains("is-saved") ? localeCopy().savedAction : localeCopy().save; });
+        document.querySelectorAll(".save-action").forEach((node) => {
+          if (node.classList.contains("is-pending")) return;
+          const saved = node.closest(".card")?.classList.contains("is-saved");
+          node.textContent = saved ? localeCopy().savedAction : localeCopy().save;
+          node.setAttribute("aria-label", saved ? (displayLanguage === "zh" ? "从已收藏中移除" : "Remove from Saved") : (displayLanguage === "zh" ? "收藏新闻" : "Save story"));
+        });
         document.querySelectorAll(".interest-action").forEach((node) => { node.textContent = localeCopy().moreLike; });
         document.querySelectorAll(".less-interest-action").forEach((node) => { node.textContent = localeCopy().lessLike; });
         document.querySelectorAll(".shut").forEach((node) => { node.textContent = localeCopy().close; });
@@ -964,6 +970,7 @@
     let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null;
     let m2Section = null, m2PublicCards = [], m2Position = 0;
     let behaviorWrites = Promise.resolve();
+    let activityWriteSequence = 0, activityWritesPending = 0;
     let m2SearchTimer = null;
     const searchBox = document.getElementById("q");
     document.querySelectorAll(".state-action:not(.read-action)").forEach((button) => { button.hidden = false; });
@@ -1287,31 +1294,34 @@
       const topic = selectedTopic();
       return { category: topic === "__all__" ? null : topicIdForSlug(topic), query: searchBox?.value.trim() || null };
     }
-    function markActivityPending() {
+    function setActivityStatus(status) {
       const mode = document.getElementById("m2-mode");
-      if (!m2Active || !mode || !mode.textContent.includes(localeCopy().activityUsed)) return null;
-      const previous = mode.textContent;
-      mode.textContent = mode.textContent.replace(localeCopy().activityUsed, localeCopy().activity);
-      return previous;
-    }
-    function restoreActivityClaim(previous) {
-      const mode = document.getElementById("m2-mode");
-      if (previous && mode && mode.textContent.includes(localeCopy().activity)) mode.textContent = previous;
+      if (!m2Active || !mode) return;
+      const reason = mode.dataset.rankingReason || "";
+      mode.textContent = `${reason}${reason ? " " : ""}${localeCopy()[status]}.`;
     }
     function enqueueBehavior(operation, recordsActivity = false) {
       const epoch = authEpoch;
-      let previousActivityClaim = recordsActivity ? markActivityPending() : null;
+      const writeSequence = recordsActivity ? ++activityWriteSequence : 0;
+      if (recordsActivity) { activityWritesPending += 1; setActivityStatus("activityPending"); }
+      let learningEnabled = false;
       const pending = behaviorWrites.catch(() => {}).then(async () => {
         if (epoch !== authEpoch || !signedIn()) fail("The signed-in account changed.");
         const snapshot = await api.historySnapshot();
         if (epoch !== authEpoch) fail("The signed-in account changed.");
-        if (recordsActivity && !snapshot.learning_enabled) restoreActivityClaim(previousActivityClaim);
+        learningEnabled = snapshot.learning_enabled;
         const value = await operation(snapshot);
         if (epoch !== authEpoch) fail("The signed-in account changed.");
         return value;
       });
       behaviorWrites = pending;
-      if (recordsActivity) pending.catch(() => restoreActivityClaim(previousActivityClaim));
+      if (recordsActivity) pending.then(() => {
+        activityWritesPending = Math.max(0, activityWritesPending - 1);
+        if (writeSequence === activityWriteSequence) setActivityStatus(learningEnabled ? "activity" : "activityFailed");
+      }, () => {
+        activityWritesPending = Math.max(0, activityWritesPending - 1);
+        if (writeSequence === activityWriteSequence) setActivityStatus("activityFailed");
+      });
       return pending;
     }
     async function behaviorIdentity(snapshot) {
@@ -1352,7 +1362,7 @@
       restorePublicEditionMeta();
       view.apply();
     }
-    function applyM2Page(response, append, eligibility) {
+    function applyM2Page(response, append, eligibility, history, requestActivitySequence) {
       if (!m2Active) {
         leaveDiscovery(true);
         m2PublicCards = [...cards.values()].map((card) => ({ card, parent: card.parentNode }));
@@ -1394,7 +1404,13 @@
       if (m2Controls) m2Controls.hidden = false;
       if (searchBox) searchBox.placeholder = "Search all retained stories";
       const mode = document.getElementById("m2-mode");
-      if (mode) mode.textContent = `${reason} ${response.history_revision === response.server_commit_revision ? localeCopy().activityUsed : localeCopy().activity}.`;
+      const usedLatestActivity = response.result_mode === "model" && response.history_revision > 0 &&
+        response.history_revision === response.server_commit_revision && history.learning_enabled &&
+        history.provider_processing_enabled && requestActivitySequence === activityWriteSequence && activityWritesPending === 0;
+      if (mode) {
+        mode.dataset.rankingReason = reason;
+        mode.textContent = `${reason} ${localeCopy()[usedLatestActivity ? "activityUsed" : "activity"]}.`;
+      }
       if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
       applyLocaleLabels();
       view.apply(); refreshStateControls(); refreshInterestControls();
@@ -1441,6 +1457,7 @@
         if (searchEvent && eligibility.query) await recordBehavior("search_query", { query: eligibility.query });
         await behaviorWrites.catch(() => {});
         const history = await api.historySnapshot();
+        const requestActivitySequence = activityWriteSequence;
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         syncM2Consent(history);
         const canContinue = append && key === m2Key && m2Cursor && m2Binding &&
@@ -1466,7 +1483,7 @@
             terminalFallback(); return;
           }
         }
-        applyM2Page(response, Boolean(canContinue), eligibility); m2Key = key;
+        applyM2Page(response, Boolean(canContinue), eligibility, history, requestActivitySequence); m2Key = key;
         announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
         if (!append && eligibility.query && !response.cards.length) {
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
@@ -2159,14 +2176,17 @@
         void hydrate().catch(() => { announce("This section could not be synced. Try again."); });
       });
     });
-    async function persistLocale(requestedLocale) {
+    async function persistLocale(requestedLocale, selectionEpoch) {
       const personalization = window.NewsCuratorPersonalization;
       if (!signedIn() || !personalization) return;
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (selectionEpoch !== localeEpoch) return;
         const current = await personalization.get();
+        if (selectionEpoch !== localeEpoch) return;
         const base = current || { revision:0, interests:[], saved_searches:[] };
         const outcome = await personalization.set({ expected_revision:base.revision, locale:requestedLocale,
           interests:base.interests, saved_searches:base.saved_searches });
+        if (selectionEpoch !== localeEpoch) return;
         if (outcome.status === "updated") return;
         if (outcome.status !== "conflict") fail("Language preference could not be saved.");
       }
@@ -2174,7 +2194,7 @@
     }
     async function selectLocale(locale) {
       if (!validLocale(locale) || locale === displayLanguage) return;
-      const previousLocale = displayLanguage;
+      const previousLocale = committedDisplayLanguage;
       displayLanguage = locale; localeEpoch += 1; m2Sequence += 1;
       const requestEpoch = localeEpoch;
       applyLocaleLabels();
@@ -2182,9 +2202,10 @@
       try {
         await localizeVisibleCards(localeEpoch);
         if (requestEpoch !== localeEpoch) return;
-        await persistLocale(locale);
+        await persistLocale(locale, requestEpoch);
         if (requestEpoch !== localeEpoch) return;
         try { localStorage.setItem(LOCALE_KEY, locale); } catch (_) {}
+        committedDisplayLanguage = locale;
         if (usesM2()) await loadM2();
       } catch (_) {
         if (requestEpoch !== localeEpoch) return;
@@ -2254,6 +2275,7 @@
         if (signedIn() && window.NewsCuratorPersonalization) {
           const preference = await window.NewsCuratorPersonalization.get();
           if (preference && validLocale(preference.locale)) displayLanguage = preference.locale;
+          committedDisplayLanguage = displayLanguage;
           applyLocaleLabels();
         }
         await localizeVisibleCards(localeEpoch);
