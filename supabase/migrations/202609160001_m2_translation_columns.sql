@@ -10,28 +10,30 @@ alter table public.retained_corpus_observations
   add column summary_translations jsonb not null default '{}'::jsonb,
   add column event_group_id text;
 
+-- A CHECK constraint may not contain a subquery, and validating a jsonb object
+-- needs one (jsonb_each). Postgres allows a CHECK to CALL a function, so the
+-- subquery lives inside an IMMUTABLE function instead. Execute stays at the
+-- default (public): the function reveals nothing and the CHECK is evaluated as
+-- whichever role performs the write.
+create or replace function public.m2_translation_overlay_is_valid(p_value jsonb, p_max_bytes integer)
+returns boolean language sql immutable parallel safe set search_path = pg_catalog, public as $$
+  select p_value is not null
+    and jsonb_typeof(p_value) = 'object'
+    and not exists (
+      select 1 from jsonb_each(p_value) entry
+      where entry.key not in ('en', 'zh')
+        or jsonb_typeof(entry.value) <> 'string'
+        or octet_length(entry.value #>> '{}') > p_max_bytes
+    );
+$$;
+
 alter table public.retained_corpus_observations
-  add constraint retained_corpus_title_translations_shape check (
-    jsonb_typeof(title_translations) = 'object'
-    and not exists (
-      select 1 from jsonb_each(title_translations) entry
-      where entry.key not in ('en', 'zh')
-        or jsonb_typeof(entry.value) <> 'string'
-        or octet_length(entry.value #>> '{}') > 8000
-    )
-  ),
-  add constraint retained_corpus_summary_translations_shape check (
-    jsonb_typeof(summary_translations) = 'object'
-    and not exists (
-      select 1 from jsonb_each(summary_translations) entry
-      where entry.key not in ('en', 'zh')
-        or jsonb_typeof(entry.value) <> 'string'
-        or octet_length(entry.value #>> '{}') > 32000
-    )
-  ),
-  add constraint retained_corpus_event_group_id_shape check (
-    event_group_id is null or event_group_id ~ '^group:[0-9a-f]{32}$'
-  );
+  add constraint retained_corpus_title_translations_shape
+    check (public.m2_translation_overlay_is_valid(title_translations, 8000)),
+  add constraint retained_corpus_summary_translations_shape
+    check (public.m2_translation_overlay_is_valid(summary_translations, 32000)),
+  add constraint retained_corpus_event_group_id_shape
+    check (event_group_id is null or event_group_id ~ '^group:[0-9a-f]{32}$');
 
 create index retained_corpus_event_group_idx
   on public.retained_corpus_observations(event_group_id)
@@ -78,7 +80,9 @@ begin
       published_at = case when not public.retained_corpus_observations.source_is_aggregator and excluded.source_is_aggregator then public.retained_corpus_observations.published_at else least(public.retained_corpus_observations.published_at, excluded.published_at) end,
       title_translations = public.retained_corpus_observations.title_translations || excluded.title_translations,
       summary_translations = public.retained_corpus_observations.summary_translations || excluded.summary_translations,
-      event_group_id = coalesce(excluded.event_group_id, public.retained_corpus_observations.event_group_id),
+      -- An existing group id is never downgraded by a later batch that has not
+      -- yet seen the whole group. A new id only fills a null.
+      event_group_id = coalesce(public.retained_corpus_observations.event_group_id, excluded.event_group_id),
       source_observed_at = excluded.source_observed_at, last_ingested_at = now(), last_ready_at = now()
       where excluded.source_observed_at > public.retained_corpus_observations.source_observed_at
     returning story_id into changed_story;

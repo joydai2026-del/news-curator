@@ -18,10 +18,21 @@ def test_translation_overlays_are_shape_checked_to_the_supported_languages():
     assert "event_group_id is null or event_group_id ~ '^group:[0-9a-f]{32}$'" in SQL
 
 
+def test_no_check_constraint_contains_a_subquery():
+    """PostgreSQL rejects a CHECK containing a subquery; the validation lives
+    in an IMMUTABLE function the CHECK calls instead."""
+    assert "create or replace function public.m2_translation_overlay_is_valid" in SQL
+    assert "language sql immutable" in SQL
+    for line in SQL.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("check ("):
+            assert "select" not in stripped and "exists" not in stripped, stripped
+
+
 def test_a_later_observation_merges_translations_instead_of_erasing_them():
     assert "title_translations = public.retained_corpus_observations.title_translations || excluded.title_translations" in SQL
     assert "summary_translations = public.retained_corpus_observations.summary_translations || excluded.summary_translations" in SQL
-    assert "event_group_id = coalesce(excluded.event_group_id, public.retained_corpus_observations.event_group_id)" in SQL
+    assert "event_group_id = coalesce(public.retained_corpus_observations.event_group_id, excluded.event_group_id)" in SQL
 
 
 def test_the_read_rpc_returns_the_overlay_and_keeps_its_signature():

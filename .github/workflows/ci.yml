@@ -141,3 +141,15 @@ jobs:
           assert not root.findall(".//skipped"), "Discovery database tests must execute, not skip."
           assert root.findall(".//testcase"), "Discovery database evidence is missing."
           PYTHON
+      # A CHECK constraint carrying a subquery is accepted by no PostgreSQL, so
+      # the M2.1 migration is only proven by being applied. Same must-execute
+      # guard: a skip here is a failure, never silent.
+      - name: Verify the M2.1 translation migration applies
+        run: |
+          python -m pytest -p no:cacheprovider -q tests/test_m2_translation_postgres_runtime.py --junitxml=/tmp/translation-db.xml
+          python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("/tmp/translation-db.xml").getroot()
+          assert not root.findall(".//skipped"), "Translation migration tests must execute, not skip."
+          assert root.findall(".//testcase"), "Translation migration evidence is missing."
+          PYTHON
