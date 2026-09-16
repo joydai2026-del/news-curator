@@ -1356,6 +1356,10 @@
         clearM2Cards();
         m2PublicCards.forEach(({ card, parent }) => { parent.append(card); cards.set(card.dataset.storyId, card); view.addCard(card); });
         m2PublicCards = [];
+        // M2 entry clears private state from the retained public cards. The
+        // restored DOM therefore cannot satisfy any previously hydrated owner
+        // scope, including Saved, until that scope is fetched again.
+        hydrated.clear(); cursors.clear(); exhausted.clear();
       }
       m2Active = false;
       if (editionMeta) editionMeta.style.display = "";
