@@ -483,6 +483,17 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
         site,
         topic_ids_by_name={"AI": "ai"},
     )
+    localized_projection = json.loads((site / "data" / "news-en.json").read_text(encoding="utf-8"))
+    localized_projection["categories"][0]["items"].append({
+        "story_id": _feed_story(50, "Anonymous public story")["story_id"],
+        "title": "Anonymous public story",
+        "description": "A public story available after sign-out.",
+        "display_language": "en",
+        "translation_available": True,
+    })
+    (site / "data" / "news-en.json").write_text(
+        json.dumps(localized_projection), encoding="utf-8"
+    )
     activate_personalization_link(
         site / "index.html",
         supabase_url=SUPABASE_ORIGIN,
@@ -671,7 +682,12 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             digest.wait_for_function(
                 "() => sessionStorage.getItem('news-curator.auth.session') === null"
             )
-            digest.get_by_text("Signed out. Public stories are syncing.", exact=True).wait_for()
+            digest.get_by_text(
+                "Signed out. Public stories are ready."
+                if logout_failure == "timeout"
+                else "Loading 10 more stories…",
+                exact=True,
+            ).wait_for()
 
             writes_before_transition = len([
                 call for call in calls
@@ -679,18 +695,22 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             ])
             static_card = digest.locator("article.card", has_text="Static public story")
             static_card.locator(".save-action").evaluate("button => button.click()")
-            digest.get_by_text("Sign in to sync reading controls.", exact=True).wait_for()
+            assert static_card.locator(".save-action").is_hidden()
+            assert static_card.locator(".save-action").is_disabled()
             writes_after_transition = len([
                 call for call in calls
                 if str(call["url"]).endswith(("/set_story_state", "/set_story_interest"))
             ])
             assert writes_after_transition == writes_before_transition
-            assert len(pending_public_hydration) == 1
-            pending_route, pending_payload = pending_public_hydration.pop()
-            pending_route.fulfill(
-                status=200, content_type="application/json", body=json.dumps(pending_payload)
-            )
-            digest.get_by_text("Signed out. Public stories are ready.", exact=True).wait_for()
+            if logout_failure == "timeout":
+                assert len(pending_public_hydration) == 0
+            else:
+                assert len(pending_public_hydration) == 1
+                pending_route, pending_payload = pending_public_hydration.pop()
+                pending_route.fulfill(
+                    status=200, content_type="application/json", body=json.dumps(pending_payload)
+                )
+                digest.get_by_text("Signed out. Public stories are ready.", exact=True).wait_for()
 
             assert digest.locator('.chip[data-filter="__all__"]').first.get_attribute("aria-pressed") == "true"
             assert digest.get_by_text("Private saved-only story", exact=True).count() == 0
@@ -713,9 +733,8 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             public_card.locator(".headline").click()
             public_card.get_by_role("button", name="Mark unread", exact=True).click()
             assert "is-read" not in (public_card.get_attribute("class") or "").split()
-            digest.locator("article.card", has_text="Anonymous public story").locator(
-                ".save-action"
-            ).evaluate("button => button.click()")
+            anonymous_card = digest.locator("article.card", has_text="Anonymous public story")
+            anonymous_card.locator(".save-action").evaluate("button => button.click()")
             digest.get_by_text("Sign in to sync reading controls.", exact=True).wait_for()
             writes_after = len([
                 call for call in calls
