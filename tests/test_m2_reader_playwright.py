@@ -309,8 +309,10 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             missing_translation['story_id']=ids[-1]
             chunks_before=len(localized_chunks)
             en_mode=page.locator('#m2-mode').inner_text()
+            rank_reads_before_locale=requests.count('/rank')
+            hold_rank['value']=True
             page.locator('#locale-zh').click()
-            page.wait_for_function('() => document.documentElement.lang==="zh" && !document.body.classList.contains("locale-pending")')
+            page.wait_for_function('(storyId)=>document.documentElement.lang==="zh" && document.querySelector(`[data-story-id="${storyId}"]`)?.dataset.localeHidden==="true"',arg=missing_translation['story_id'])
             zh_chunks=localized_chunks[chunks_before:]
             assert len(zh_chunks)>=3
             assert all(chunk['locale']=='zh' and 0 < len(chunk['story_ids']) <= 100 for chunk in zh_chunks)
@@ -318,6 +320,15 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             missing_card=page.locator(f'[data-m2-card=true][data-story-id="{missing_translation["story_id"]}"]')
             assert missing_card.get_attribute('data-locale-hidden')=='true'
             assert missing_card.is_hidden()
+            assert len(pending_rank)==1
+            rank_route,rank_request=pending_rank.pop()
+            status,payload=asgi_request(app,rank_request)
+            decoded=json.loads(payload); response_locale['value']=rank_request.post_data_json.get('display_language','en')
+            decoded['display_language']=response_locale['value']
+            hold_rank['value']=False
+            rank_route.fulfill(status=status,content_type='application/json',body=json.dumps(decoded))
+            page.wait_for_function('() => document.documentElement.lang==="zh" && !document.body.classList.contains("locale-pending") && document.querySelectorAll("[data-m2-card=true]").length===25')
+            assert requests.count('/rank')==rank_reads_before_locale+1
             assert all(title.startswith('[protocol-zh] ') for title in page.locator('[data-m2-card=true]:visible .head').all_text_contents())
             assert all('[protocol-en]' not in title for title in page.locator('[data-m2-card=true]:visible .head').all_text_contents())
             assert page.locator('#m2-mode').inner_text().startswith('按新鲜度排序，本次未使用模型排序。')
@@ -335,7 +346,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.evaluate('window.__stallState=false;window.__releaseState()')
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="2"')
             assert card.locator('.save-action').inner_text()=='已收藏 ✓'
-            assert card.locator('.save-action').get_attribute('aria-label')=='Remove from Saved'
+            assert card.locator('.save-action').get_attribute('aria-label')=='从已收藏中移除'
             assert card.locator('.save-action').get_attribute('aria-pressed')=='true'
             assert card.locator('.save-action').get_attribute('aria-busy') is None
             assert page.locator('#reader-status').inner_text()=='已收藏。你可以在“已收藏”中找到它。'
