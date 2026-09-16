@@ -247,3 +247,47 @@ def test_model_adapter_rejects_an_over_length_translation():
     with pytest.raises(TranslationProviderError) as error:
         provider.translate(request_for(zh_item(summary="财报。")))
     assert error.value.reason is TranslationErrorReason.RESPONSE_TOO_LARGE
+
+
+class FakePersistedLedger:
+    """Stands in for the SQL day counter shared by every run on one UTC day."""
+
+    def __init__(self, limit_usd):
+        self.limit, self.reserved, self.settled, self.calls = limit_usd, 0.0, 0.0, 0
+
+    def reserve(self, amount_usd):
+        self.calls += 1
+        if self.settled + self.reserved + amount_usd > self.limit:
+            return False
+        self.reserved += amount_usd
+        return True
+
+    def settle(self, reserved_usd, settled_usd):
+        self.reserved = max(0.0, self.reserved - reserved_usd)
+        self.settled += settled_usd
+
+
+def test_two_runs_on_one_utc_day_share_the_persisted_cap():
+    """An in-memory ledger resets every run; the shared one does not."""
+    shared = FakePersistedLedger(limit_usd=policy().reservation_usd(40) * 1.5)
+    first = translate_exclusive_stories([("story:a", zh_item())], policy=policy(), store=store(),
+                                        provider=StubProvider(), run_id="run-1", now=NOW,
+                                        spend_ledger=shared)
+    assert first.overlays["story:a"].status == TRANSLATED
+    # Run two, same day, different store so the cache cannot mask the cap.
+    second = translate_exclusive_stories([("story:b", zh_item(title="独家：第二条", summary="第二条摘要。"))],
+                                         policy=policy(), store=store(), provider=StubProvider(),
+                                         run_id="run-2", now=NOW, spend_ledger=shared)
+    assert second.overlays["story:b"].status == UNTRANSLATED
+    assert second.overlays["story:b"].reason == "cost_limit_reached"
+    assert shared.calls == 2
+
+
+def test_the_persisted_ledger_is_the_authority_over_the_run_local_numbers():
+    shared = FakePersistedLedger(limit_usd=0.0)
+    provider = StubProvider()
+    result = translate_exclusive_stories([("story:a", zh_item())], policy=policy(daily_cost_limit_usd=25.0),
+                                         store=store(), provider=provider, run_id="run-1", now=NOW,
+                                         spend_ledger=shared)
+    assert provider.calls == 0, "a generous run-local limit cannot override the day's ledger"
+    assert result.overlays["story:a"].reason == "cost_limit_reached"

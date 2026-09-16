@@ -66,6 +66,27 @@ def _rpc(url, key, name, body, *, timeout=30):
         return json.loads(response.read() or b'null')
 
 
+class PersistedSpendLedger:
+    """The daily dollar cap, held in SQL so it survives twelve runs an hour."""
+
+    def __init__(self, url, key, *, daily_limit_usd):
+        self._url, self._key, self._limit = url, key, float(daily_limit_usd)
+
+    def reserve(self, amount_usd: float) -> bool:
+        result = _rpc(self._url, self._key, 'm2_reserve_translation_spend',
+                      {'p_amount_usd': round(float(amount_usd), 6), 'p_daily_limit_usd': self._limit})
+        return bool(result) and result.get('status') == 'reserved'
+
+    def settle(self, reserved_usd: float, settled_usd: float) -> None:
+        _rpc(self._url, self._key, 'm2_settle_translation_spend',
+             {'p_reserved_usd': round(float(reserved_usd), 6), 'p_settled_usd': round(float(settled_usd), 6)})
+
+    def retain(self, reserved_usd: float) -> None:
+        # A retained reservation stays reserved in SQL: nothing to do, and that
+        # is the point. It keeps protecting the cap until the day rolls over.
+        return None
+
+
 def read_exclusivity_decisions(url, key, story_ids):
     """Decisions already on record. A decided story is never re-asked."""
     if not story_ids:
@@ -131,7 +152,8 @@ def read_corpus_window(url, key, *, policy, now, pages: int = 40):
 
 
 def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
-                   pairing_provider=None, decisions=None, truncated=False, on_decision=None):
+                   pairing_provider=None, decisions=None, truncated=False, on_decision=None,
+                   spend_ledger=None):
     """Decide exclusivity with the model, then translate what it ruled exclusive.
 
     Returns ``(rows, message)``. A missing credential, a switched-off feature, a
@@ -192,7 +214,8 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
     try:
         result = translate_exclusive_stories(
             stories, policy=policy, store=store, provider=provider,
-            run_id=f"retained-corpus-{now.strftime('%Y%m%dT%H%M%SZ')}", now=now)
+            run_id=f"retained-corpus-{now.strftime('%Y%m%dT%H%M%SZ')}", now=now,
+            spend_ledger=spend_ledger)
     except (TranslationProviderError, TranslationStoreError, TranslationPrivacyError) as error:
         # Provider and store degradation only. A TypeError here is a code defect
         # and must surface, not hide behind "original text retained".
@@ -285,9 +308,13 @@ def main() -> int:
             truncated = True
             print(f'pairing corpus unavailable: {type(error).__name__}', file=sys.stderr)
     recorded = []
+    spend_ledger = (PersistedSpendLedger(url, key,
+                        daily_limit_usd=(cfg.translation or {}).get('daily_cost_limit_usd', 0.5))
+                    if a.command == 'ingest' and url and key else None)
     retained, translation_message = translate_rows(
         cfg, retained, env=os.environ, now=snap.generated_at, corpus=corpus,
-        decisions=decisions, truncated=truncated, on_decision=recorded.append)
+        decisions=decisions, truncated=truncated, on_decision=recorded.append,
+        spend_ledger=spend_ledger)
     print(translation_message, file=sys.stderr)
     if a.command == 'ingest' and url and key and recorded:
         try:

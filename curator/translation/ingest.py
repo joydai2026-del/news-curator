@@ -14,7 +14,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from curator.models import Item
 from curator.normalize import clean_title
@@ -122,16 +122,30 @@ class IngestTranslationPolicy:
         return self.cost_usd(input_tokens, self.max_output_tokens_per_story)
 
 
-class _SpendLedger:
+class SpendLedger(Protocol):
+    """A daily dollar ledger. The persisted implementation lives in SQL."""
+
+    def reserve(self, amount_usd: float) -> bool: ...
+    def settle(self, reserved_usd: float, settled_usd: float) -> None: ...
+    def retain(self, reserved_usd: float) -> None: ...
+
+
+class _RunLedger:
     """Reserve-then-settle in dollars, mirroring the ranker budget pattern.
 
     A failed attempt AFTER the provider was entered may still have been paid,
-    so its reservation is retained rather than released. Releasing it is what
+    so its reservation is RETAINED rather than released. Releasing it is what
     would let a failing provider spend without limit.
+
+    This one lives for a single run. The hourly job runs about twelve times an
+    hour, so a daily cap must be persisted: pass `persisted` (backed by
+    `m2_reserve_translation_spend` / `m2_settle_translation_spend`) and the
+    run-local numbers become a view of it rather than the whole truth.
     """
 
-    def __init__(self, limit_usd: float) -> None:
+    def __init__(self, limit_usd: float, persisted: SpendLedger | None = None) -> None:
         self._limit = limit_usd
+        self._persisted = persisted
         self.settled_usd = 0.0
         self.retained_usd = 0.0
 
@@ -140,13 +154,20 @@ class _SpendLedger:
         return self.settled_usd + self.retained_usd
 
     def can_afford(self, amount_usd: float) -> bool:
+        if self._persisted is not None:
+            # The persisted ledger is the authority: it knows what earlier runs
+            # on this UTC day already spent.
+            return bool(self._persisted.reserve(amount_usd))
         return self.committed_usd + amount_usd <= self._limit
 
-    def settle(self, amount_usd: float) -> None:
+    def settle(self, amount_usd: float, reserved_usd: float = 0.0) -> None:
         self.settled_usd += amount_usd
+        if self._persisted is not None:
+            self._persisted.settle(reserved_usd or amount_usd, amount_usd)
 
     def retain(self, amount_usd: float) -> None:
         self.retained_usd += amount_usd
+        # Nothing to release: a retained reservation stays reserved on purpose.
 
 
 @dataclass(frozen=True)
@@ -181,6 +202,7 @@ def translate_exclusive_stories(
     provider,
     run_id: str,
     now: datetime,
+    spend_ledger: SpendLedger | None = None,
 ) -> IngestTranslationResult:
     """Translate into ``policy.display_language`` only. One story, one call."""
 
@@ -192,7 +214,7 @@ def translate_exclusive_stories(
     limits = BudgetLimits(policy.run_character_limit, policy.day_character_limit, policy.month_character_limit)
     allowance = policy.character_allowance
     spent_characters = 0
-    ledger = _SpendLedger(policy.daily_cost_limit_usd)
+    ledger = _RunLedger(policy.daily_cost_limit_usd, persisted=spend_ledger)
     ttl = timedelta(days=policy.cache_ttl_days)
 
     for story_id, item in stories[: policy.max_items]:
@@ -328,7 +350,7 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
     # Settle from the provider's OWN reported usage. A provider that reports no
     # usage settles at the reservation, never at zero.
     observed = policy.cost_usd(response.input_tokens, response.output_tokens)
-    ledger.settle(observed if observed > 0 else reservation_usd)
+    ledger.settle(observed if observed > 0 else reservation_usd, reservation_usd)
     counters["translated"] += 1
     return _translated(title, summary, target)
 
