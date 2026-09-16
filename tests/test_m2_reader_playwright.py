@@ -98,6 +98,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
     rows=sorted(capture['rows'],key=lambda r:(r['published_at'],r['story_id']),reverse=True)
     assert len(rows)>250 and len({row['story_id'] for row in rows})==len(rows)
     categories=sorted({category for row in rows for category in row['category_ids']})
+    projection_only_row=rows[-1]
     ranked={}
     for category in categories:
         row=next(r for r in rows if category in r['category_ids'])
@@ -112,10 +113,20 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         projection={'schema_version':1,'generated_at':capture['generated_at'],'language':locale,'categories':[]}
         for category in categories:
             projection['categories'].append({'id':category,'name':category if locale=='en' else f'中文 {category}',
-                'items':[{'story_id':row['story_id'],'title':row['title'] if locale=='en' else f'中文 {row["title"]}',
-                    'description':row['summary'] if locale=='en' else f'中文 {row["summary"]}',
+                'items':[{'story_id':row['story_id'],'title':f'[protocol-{locale}] {row["story_id"][-8:]}',
+                    'description':f'[protocol-{locale}-summary] {row["story_id"][-8:]}',
                     'display_language':locale,'translation_available':True}
-                    for row in rows if category in row['category_ids']]})
+                    for row in rows if category in row['category_ids'] and row['story_id'] != projection_only_row['story_id']]})
+        # Controlled protocol fixture: this real captured public row appears
+        # only in a projection category absent from the SSR page.
+        projection['categories'].append({'id':'china-news','name':'China News' if locale=='en' else '中国新闻',
+            'items':[{'story_id':projection_only_row['story_id'],
+                'title':f'[protocol-{locale}] {projection_only_row["story_id"][-8:]}',
+                'description':f'[protocol-{locale}-summary] {projection_only_row["story_id"][-8:]}',
+                'display_language':locale,'translation_available':True,
+                'canonical_url':projection_only_row['canonical_url'],'source_name':projection_only_row['source_name'],
+                'source_id':projection_only_row['source_id'],'published_at':projection_only_row['published_at'],
+                'original_language':projection_only_row['language']} ]})
         (site/'data'/f'news-{locale}.json').write_text(json.dumps(projection),encoding='utf-8')
     activate_personalization_link(site/'index.html',supabase_url=DATABASE,publishable_key='sb_publishable_localtest',
         m2_config={'enabled':True,'url':RANKER,'policy_version':'test-policy',
@@ -127,6 +138,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
     requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}; response_locale={'value':'en'}
+    localized_chunks=[]; missing_translation={'story_id':None}; hold_rank={'value':True}; pending_rank=[]
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
@@ -141,6 +153,9 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             file=site/(parsed.path.lstrip('/') or 'index.html')
             return route.fulfill(status=200,content_type='text/javascript' if file.suffix=='.js' else 'text/html',body=file.read_bytes())
         if request.url.startswith(RANKER):
+            if hold_rank['value']:
+                pending_rank.append((route,request))
+                return
             status,payload=asgi_request(app,request)
             decoded=json.loads(payload)
             if parsed.path=='/rank': response_locale['value']=body.get('display_language','en')
@@ -156,10 +171,12 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                     return route.fulfill(status=500,content_type='application/json',body='{}')
                 payload=store.history_snapshot('local-auth-token')
             elif name=='m2_localized_story_text':
-                locale=body['p_locale']; selected=set(body['p_story_ids'])
-                payload=[{'story_id':row['story_id'],'title':row['title'] if locale=='en' else f'中文 {row["title"]}',
-                    'summary':row['summary'] if locale=='en' else f'中文 {row["summary"]}',
-                    'display_language':locale,'translation_available':True} for row in rows if row['story_id'] in selected]
+                locale=body['p_locale']; selected=list(body['p_story_ids'])
+                localized_chunks.append({'locale':locale,'story_ids':tuple(selected)})
+                payload=[{'story_id':story_id,'title':f'[protocol-{locale}] {story_id[-8:]}',
+                    'summary':f'[protocol-{locale}-summary] {story_id[-8:]}',
+                    'display_language':locale,'translation_available':True}
+                    for story_id in selected if story_id != missing_translation['story_id']]
             elif name=='append_behavior_event':payload=store.event(body)
             elif name=='set_story_state_with_event':
                 sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]
@@ -245,12 +262,26 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
         context.route('**/*',route_handler)
         page=context.new_page();page.on('pageerror',lambda error:page_errors.append(str(error)))
         try:
-            page.goto(READER,wait_until='networkidle')
+            page.goto(READER,wait_until='domcontentloaded')
+            page.wait_for_function('(storyId)=>document.querySelector(`[data-story-id="${storyId}"]`) !== null && document.querySelector(`[data-topic-id="china-news"]`) !== null',arg=projection_only_row['story_id'])
+            projection_card=page.locator(f'[data-story-id="{projection_only_row["story_id"]}"]')
+            assert projection_card.locator('.head').inner_text().startswith('[protocol-en] ')
+            assert projection_card.evaluate("card => card.closest('.topic-section').dataset.topicId")=='china-news'
+            assert len(pending_rank)==1
+            rank_route,rank_request=pending_rank.pop()
+            status,payload=asgi_request(app,rank_request)
+            decoded=json.loads(payload); response_locale['value']=rank_request.post_data_json.get('display_language','en')
+            decoded['display_language']=response_locale['value']
+            hold_rank['value']=False
+            rank_route.fulfill(status=status,content_type='application/json',body=json.dumps(decoded))
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
             assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
             assert page.locator('#discovery-controls').is_hidden()
             assert page.locator('.edition-meta').is_hidden()
             assert page.locator('.eyebrow').text_content()=="Today's edition"
+            assert page.locator('html').get_attribute('lang')=='en'
+            assert not page.locator('body').evaluate('(body)=>body.classList.contains("locale-pending")')
+            assert all(title.startswith('[protocol-en] ') for title in page.locator('[data-m2-card=true] .head').all_text_contents())
             # Check the same rendered reader at every required mobile/tablet width.
             for width in (320, 390, 430, 768):
                 page.set_viewport_size({'width': width, 'height': 844})
@@ -272,23 +303,42 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 page.wait_for_function('(before)=>document.querySelectorAll("[data-m2-card=true]").length>before',arg=before)
             ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
             assert len(ids)>200 and len(set(ids))==len(ids)
+            # Controlled protocol case over captured public IDs. The selected
+            # unsaved story has no Chinese row, so the real visibility policy
+            # must hide it while all other cards render only Chinese markers.
+            missing_translation['story_id']=ids[-1]
+            chunks_before=len(localized_chunks)
+            en_mode=page.locator('#m2-mode').inner_text()
+            page.locator('#locale-zh').click()
+            page.wait_for_function('() => document.documentElement.lang==="zh" && !document.body.classList.contains("locale-pending")')
+            zh_chunks=localized_chunks[chunks_before:]
+            assert len(zh_chunks)>=3
+            assert all(chunk['locale']=='zh' and 0 < len(chunk['story_ids']) <= 100 for chunk in zh_chunks)
+            assert {story_id for chunk in zh_chunks for story_id in chunk['story_ids']}==set(ids)
+            missing_card=page.locator(f'[data-m2-card=true][data-story-id="{missing_translation["story_id"]}"]')
+            assert missing_card.get_attribute('data-locale-hidden')=='true'
+            assert missing_card.is_hidden()
+            assert all(title.startswith('[protocol-zh] ') for title in page.locator('[data-m2-card=true]:visible .head').all_text_contents())
+            assert all('[protocol-en]' not in title for title in page.locator('[data-m2-card=true]:visible .head').all_text_contents())
+            assert page.locator('#m2-mode').inner_text().startswith('按新鲜度排序，本次未使用模型排序。')
             card=page.locator('[data-m2-card=true]').first
             saved_story_id=card.get_attribute('data-story-id')
             card.locator('.accordion-toggle').click()
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="1"')
             page.evaluate('window.__stallState=true')
             card.locator('.save-action').click()
-            assert card.locator('.save-action').inner_text()=='Saving…'
+            assert card.locator('.save-action').inner_text()=='正在收藏…'
+            assert card.locator('.save-action').get_attribute('aria-label')=='正在收藏新闻'
             assert card.locator('.save-action').get_attribute('aria-busy')=='true'
             assert card.locator('.save-action').get_attribute('aria-pressed')=='false'
             page.wait_for_function('() => typeof window.__releaseState==="function"')
             page.evaluate('window.__stallState=false;window.__releaseState()')
             page.wait_for_function('() => document.querySelector("[data-m2-card=true]").dataset.stateRevision==="2"')
-            assert card.locator('.save-action').inner_text()=='Saved ✓'
+            assert card.locator('.save-action').inner_text()=='已收藏 ✓'
             assert card.locator('.save-action').get_attribute('aria-label')=='Remove from Saved'
             assert card.locator('.save-action').get_attribute('aria-pressed')=='true'
             assert card.locator('.save-action').get_attribute('aria-busy') is None
-            assert page.locator('#reader-status').inner_text()=='Saved. You can find it in Saved.'
+            assert page.locator('#reader-status').inner_text()=='已收藏。你可以在“已收藏”中找到它。'
             discovery_reads=requests.count('/rest/v1/rpc/discovery_edition')
             rank_reads=requests.count('/rank')
             page.locator('.chip[data-filter="__saved__"]:visible').click()
