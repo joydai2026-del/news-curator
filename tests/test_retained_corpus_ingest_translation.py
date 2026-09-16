@@ -139,3 +139,11 @@ def test_an_unexpected_failure_inside_translation_leaves_the_ingest_intact():
                                      store=BrokenStore(), provider=Exploding())
     assert result == rows or len(result) == len(rows)
     assert "untranslated_shown" in message or message.startswith("translation unavailable")
+
+
+def test_the_ingest_workflow_passes_the_translation_values_through():
+    """Without these the wiring can never fire, and each one is optional."""
+    from pathlib import Path
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/retained-corpus-ingest.yml").read_text()
+    for name in ("NEWS_CURATOR_MODEL_API_KEY", "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"):
+        assert f"{name}: ${{{{ secrets.{name} }}}}" in workflow, name
