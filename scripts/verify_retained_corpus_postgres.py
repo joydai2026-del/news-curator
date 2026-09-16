@@ -51,6 +51,10 @@ def main() -> int:
         "select count(*) > 0 as category_works from public.m2_retained_candidates('us-news',null,null,null,100);",
         f"select count(*) > 0 as english_fts_works from public.m2_retained_candidates(null,'{english}',null,null,100);",
         f"select count(*) > 0 as cjk_substring_works from public.m2_retained_candidates(null,'{cjk}',null,null,100);",
+        # M2.1 Phase 1: the reader needs the translation overlay and the
+        # language-exclusive corpus to come back from the RPCs, not from a file.
+        "select bool_and(value ? 'title_translations' and value ? 'summary_translations' and value ? 'event_group_id') as translation_fields_returned from public.m2_retained_candidates(null,null,null,null,100) as candidates(value);",
+        "select bool_and((value->>'language') <> 'en') as exclusive_rows_are_other_language from public.m2_retained_candidates_language_exclusive('en',null,null,null,100) as candidates(value);",
     )
     category_sql = (
         "begin;",
@@ -67,7 +71,7 @@ def main() -> int:
     )
     sql = "\n".join(category_sql if args.category_regression_only else standard_sql)
     result = subprocess.run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-h", args.host, args.database], input=sql, text=True, capture_output=True)
-    expected = 7 if args.category_regression_only else 4
+    expected = 7 if args.category_regression_only else 6
     if result.returncode or result.stdout.count(" t\n") < expected:
         raise SystemExit("retained corpus PostgreSQL verification failed")
     print("retained corpus PostgreSQL verification passed")
