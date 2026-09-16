@@ -451,8 +451,7 @@ JS = """
       }
     });
     [].slice.call(document.querySelectorAll('.topic-section')).forEach(function(section){
-      // A section showing its own empty message is not an empty section.
-      section.hidden=!section.querySelector('.card:not([hidden])')&&!section.querySelector('.m2-empty');
+      section.hidden=!section.querySelector('.card:not([hidden])');
     });
     if(grid){grid.classList.toggle('filtered',tab!=='__all__');}
     if(activeTopic){
@@ -462,13 +461,12 @@ JS = """
     }
     if(count){count.textContent=q?(shown+(shown===1?' matching story':' matching stories')):'';}
     if(empty){
-      // One empty state at a time. The M2 sections own a purpose-built
-      // message; showing the generic one underneath contradicts it on the
-      // same screen. Existence, not visibility: this runs mid-apply, before
-      // the owning section's hidden flag has settled.
-      var owned=document.querySelector('.m2-empty');
-      empty.hidden=shown>0||!!owned;
-      empty.textContent=q?('No story here matches \\u201c'+q+'\\u201d.'):'Nothing matched in this window.';
+      // One empty element, whatever the surface. A section that wants its
+      // own wording supplies it through the selected chip, so the page can
+      // never show two contradictory empty messages at once.
+      empty.hidden=shown>0;
+      var chipEmpty=(chips.find(function(c){return c.dataset.filter===tab;})||{}).dataset;
+      empty.textContent=q?('No story here matches \\u201c'+q+'\\u201d.'):((chipEmpty&&chipEmpty.emptyText)||'Nothing matched in this window.');
     }
   }
 

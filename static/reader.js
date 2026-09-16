@@ -1228,6 +1228,9 @@
       }
       document.querySelectorAll('.chip[data-language-exclusive="true"]').forEach((chip) => {
         chip.textContent = strings().exclusiveSection(otherLanguageName());
+        // The ONE empty element on the page renders this wording when the
+        // section is selected and nothing came back.
+        chip.dataset.emptyText = strings().emptyExclusive(otherLanguageName());
       });
       const title = m2Section?.querySelector(".section-title");
       if (title && exclusiveSelected()) title.textContent = strings().exclusiveSection(otherLanguageName());
@@ -1271,19 +1274,18 @@
     function applyExclusiveSectionTitle() {
       if (!m2Section) return;
       let title = m2Section.querySelector(".section-title");
-      if (!exclusiveSelected()) { title?.remove(); m2Section.querySelector(".m2-empty")?.remove(); return; }
+      if (!exclusiveSelected()) { title?.remove(); return; }
       if (!title) {
         title = element("h2", "section-title");
         m2Section.prepend(title);
       }
       title.textContent = strings().exclusiveSection(otherLanguageName());
-      const empty = m2Section.querySelector(".m2-empty");
-      if (m2Entries.length) { empty?.remove(); return; }
-      // Never a blank page and never a silent fallback to All.
-      if (!empty) m2Section.append(element("p", "m2-empty", strings().emptyExclusive(otherLanguageName())));
-      else empty.textContent = strings().emptyExclusive(otherLanguageName());
-      // A section holding the empty message must not be hidden as "no cards".
-      m2Section.hidden = false;
+      // ONE empty element on the page. The section supplies its wording through
+      // the chip, and the view renders it; a second node beside the generic one
+      // showed two contradictory messages at once.
+      document.querySelectorAll('.chip[data-language-exclusive="true"]').forEach((chip) => {
+        chip.dataset.emptyText = strings().emptyExclusive(otherLanguageName());
+      });
     }
     function switchDisplayLanguage() {
       displayLanguage = displayLanguage === "en" ? "zh" : "en";

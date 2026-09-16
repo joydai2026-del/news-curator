@@ -125,10 +125,9 @@ def build_site(tmp_path):
     return site
 
 
-def _run_reader(tmp_path, rows, steps):
-    """Boot the rendered reader against a local store and run `steps(page, ctx)`."""
+def test_language_toggle_section_and_untranslated_mark(tmp_path):
     site = build_site(tmp_path)
-    store = LanguageStore(rows)
+    store = LanguageStore(FIXTURE_ROWS)
     service = RankingService(auth=LocalAuth(), store=store, adapter=RankLLMAdapter(
         policy=RankerPolicy('test-provider', 'test-model', 'https://provider.example', 'test-prompt'),
         engine=NoProvider()),
@@ -309,7 +308,7 @@ def test_the_empty_exclusive_section_shows_exactly_one_message(tmp_path):
             page.locator('.chip[data-language-exclusive=true]').nth(1).click()
             page.wait_for_function(VISIBLE_CARDS + " === 0")
             painted = page.evaluate(
-                "() => [...document.querySelectorAll('.m2-empty, #empty')]"
+                "() => [...document.querySelectorAll('.m2-empty, #empty, .empty')]"
                 ".filter((node) => node.offsetParent !== null).map((node) => node.textContent.trim())")
             assert len(painted) == 1, painted
             assert 'No stories that only the Chinese press carried today' in painted[0]
