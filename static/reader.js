@@ -973,7 +973,7 @@
     let activityWriteSequence = 0, activityWritesPending = 0, activityCommittedSequence = 0;
     let m2SearchTimer = null;
     const searchBox = document.getElementById("q");
-    document.querySelectorAll(".state-action:not(.read-action)").forEach((button) => { button.hidden = false; });
+    let ownerControlsAvailable = false;
     const cards = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => {
       card.newsCuratorStaticCard = true;
@@ -998,7 +998,7 @@
         const row = byId.get(storyId);
         card.dataset.localeHidden = String(!row && !card.classList.contains("is-saved"));
         if (!row) return;
-        const title = card.querySelector(".head"), summary = card.querySelector(".desc"), full = card.querySelector(".full");
+        const title = card.querySelector(".headline"), summary = card.querySelector(".desc"), full = card.querySelector(".full");
         if (title) title.textContent = row.title;
         if (summary) summary.textContent = row.summary;
         if (full) full.textContent = row.summary;
@@ -1652,6 +1652,7 @@
             button.disabled = false;
             return;
           }
+          button.hidden = !(ownerControlsAvailable || ready);
           const stateWrite = button.classList.contains("read-action") || button.classList.contains("save-action");
           button.disabled = !ready || (stateWrite && Boolean(card.newsCuratorStateMutationToken));
         });
@@ -1717,6 +1718,7 @@
       sessionWasPresent = false;
       abortOwnerExport();
       authEpoch += 1;
+      ownerControlsAvailable = false;
       activityWriteSequence = 0; activityWritesPending = 0; activityCommittedSequence = 0;
       behaviorWrites = Promise.resolve();
       leaveM2();
@@ -1763,6 +1765,7 @@
     function invalidateHydrationForSession() {
       abortOwnerExport();
       authEpoch += 1;
+      ownerControlsAvailable = false;
       activityWriteSequence = 0; activityWritesPending = 0; activityCommittedSequence = 0;
       behaviorWrites = Promise.resolve();
       leaveM2();
@@ -1952,6 +1955,7 @@
           ? await api.savedPage(null, latest.page_size)
           : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
         if (requestEpoch !== authEpoch || discoveryActive) return;
+        ownerControlsAvailable = true;
         mergeRows(rows, true, topic);
         await localizeVisibleCards(languageEpoch);
         if (languageEpoch !== localeEpoch) return;
@@ -2308,6 +2312,7 @@
         announce("No published edition is available yet.");
         return;
       }
+      document.querySelectorAll(".state-action:not(.read-action)").forEach((button) => { button.hidden = false; });
       loadButton.textContent = loadMoreLabel(latest.page_size);
       publicationSeq = latest.publication_seq;
       const poll = async () => {
