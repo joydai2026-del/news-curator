@@ -495,9 +495,10 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             page.evaluate('''() => {
                 const timeout=AbortSignal.timeout.bind(AbortSignal);
                 window.__m2Timeouts=[];
-                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===20000?1000:ms);};
+                window.__accelerateM2Deadline=true;
+                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(window.__accelerateM2Deadline && ms===20000?1000:ms);};
                 const later=window.setTimeout.bind(window);
-                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===20000?1000:ms,...args);
+                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:(window.__accelerateM2Deadline && ms===20000?1000:ms),...args);
                 window.__stallM2=true;window.__stallM2Delay=120;
                 const policy=document.querySelector("#m2-provider-retention");policy.hidden=true;policy.removeAttribute("href");
             }''')
@@ -534,11 +535,11 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 controlsHidden:document.querySelector("#m2-controls").hidden,
                 visibleCards:document.querySelectorAll(".card:not([hidden])").length,
               })''')==saved_surface
-            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0;window.__accelerateM2Deadline=false')
             page.locator('.chip[data-filter="__all__"]:visible').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             preceding_ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
-            page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
+            page.evaluate('window.__accelerateM2Deadline=true;window.__stallM2=true;window.__stallM2Delay=120')
             page.evaluate('document.querySelector("#load-more").click()')
             pending=page.evaluate('''() => ({
                 label:document.querySelector("#load-more").textContent,
