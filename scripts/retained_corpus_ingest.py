@@ -33,7 +33,10 @@ def _ingest_translation_policy(cfg) -> IngestTranslationPolicy:
         day_character_limit=int(translation.get('day_character_limit', 15000)),
         month_character_limit=int(translation.get('month_character_limit', 450000)),
         daily_cost_limit_usd=float(translation.get('daily_cost_limit_usd', 0.5)),
-        cost_per_1k_characters_usd=float(translation.get('cost_per_1k_characters_usd', 0.002)),
+        input_cost_per_million_tokens_usd=float(translation.get('input_cost_per_million_tokens_usd', 0.25)),
+        output_cost_per_million_tokens_usd=float(translation.get('output_cost_per_million_tokens_usd', 2.0)),
+        characters_per_token=int(translation.get('characters_per_token', 4)),
+        max_output_tokens_per_story=int(translation.get('max_output_tokens_per_story', 1000)),
         cache_ttl_days=int(translation.get('cache_ttl_days', 30)),
         on_failure=str(translation.get('on_failure') or 'show_original_marked'),
         max_items=int(translation.get('max_items_per_language', 25)),
@@ -95,12 +98,13 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=())
     except ValueError as error:
         return rows, f'translation unavailable: invalid policy ({error})'
     if not policy.enabled:
-        return rows, 'translation skipped: disabled in config'
+        return rows, 'translation skipped: sources.yaml translation.enabled is false'
     translation = cfg.translation or {}
     key_env = str(translation.get('api_key_env') or '')
     api_key = env.get(key_env, '') if key_env else ''
     if not api_key:
-        return rows, 'translation skipped: key not configured'
+        # Name the switch that is off, so the hourly log says what to fix.
+        return rows, f'translation skipped: {key_env or "translation.api_key_env"} is not set'
     exclusive = set(language_exclusive_story_ids(rows, display_language=policy.display_language, corpus=corpus))
     stories = [(row.story_id, row.item) for row in rows if row.story_id in exclusive]
     if not stories:

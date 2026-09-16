@@ -88,7 +88,7 @@ def test_a_missing_key_skips_cleanly_and_never_breaks_the_ingest():
     rows = fixture_rows()
     result, message = translate_rows(config(), rows, env={}, now=NOW,
                                      store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider())
-    assert message == "translation skipped: key not configured"
+    assert message == "translation skipped: NEWS_CURATOR_MODEL_API_KEY is not set"
     assert result == rows
 
 
@@ -96,7 +96,7 @@ def test_the_feature_switch_off_is_reported_and_changes_nothing():
     rows = fixture_rows()
     result, message = translate_rows(config(enabled=False), rows, env={KEY_ENV: "test-key"}, now=NOW,
                                      store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider())
-    assert message == "translation skipped: disabled in config"
+    assert message == "translation skipped: sources.yaml translation.enabled is false"
     assert result == rows
 
 
@@ -147,3 +147,19 @@ def test_the_ingest_workflow_passes_the_translation_values_through():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/retained-corpus-ingest.yml").read_text()
     for name in ("NEWS_CURATOR_MODEL_API_KEY", "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"):
         assert f"{name}: ${{{{ secrets.{name} }}}}" in workflow, name
+
+
+def test_the_shipped_config_translates_language_exclusive_stories_with_a_key():
+    """Phase 1 acceptance, against sources.yaml as shipped, with a stub provider."""
+    from pathlib import Path
+    from curator.config import load_config
+    cfg = load_config(Path(__file__).resolve().parents[1])
+    assert cfg.translation["enabled"] is True, "Phase 1 ships enabled"
+    provider = StubProvider()
+    rows, message = translate_rows(cfg, fixture_rows(), env={cfg.translation["api_key_env"]: "test-key"},
+                                   now=NOW, store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider)
+    translated = [row for row in rows if row.title_translations]
+    assert provider.calls == 1 and len(translated) == 1
+    assert translated[0].item.language == "zh"
+    assert translated[0].title_translations == {"en": "Exclusive: seven new rules"}
+    assert "translated=1" in message

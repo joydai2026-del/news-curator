@@ -317,7 +317,9 @@ reddit:
 # workflow switch are enabled after explicit approval.
 # ---------------------------------------------------------------------------
 translation:
-  enabled: false
+  # Phase 1 acceptance: JJ calls the missing translation surface a bug, so this
+  # ships ON. With no API key the hourly ingest logs a named skip and exits 0.
+  enabled: true
   # The provider is selected here, never in business logic. `google` is the
   # original adapter; `openai` is the Phase 1 model adapter, chosen because the
   # Google Cloud path was never provisioned (no GOOGLE_* variables, no
@@ -327,8 +329,14 @@ translation:
   api_key_env: NEWS_CURATOR_MODEL_API_KEY
   api_origin: https://api.openai.com
   # Characters bound volume. Dollars bound spend. Both are checked.
+  # Spend is reserved before each send and settled from the provider's own
+  # reported token usage; an attempt that fails after the send keeps its
+  # reservation, because it may still have been charged.
   daily_cost_limit_usd: 0.5
-  cost_per_1k_characters_usd: 0.002
+  input_cost_per_million_tokens_usd: 0.25
+  output_cost_per_million_tokens_usd: 2.0
+  characters_per_token: 4
+  max_output_tokens_per_story: 1000
   cache_ttl_days: 30
   # There is deliberately no drop value. A failed translation shows the
   # original, marked, and never removes the story from the feed.

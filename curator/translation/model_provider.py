@@ -139,7 +139,7 @@ class ModelTranslationAdapter:
             self._fail(TranslationErrorReason.PROVIDER_REJECTED)
         if len(response.body) > self._config.max_response_bytes:
             self._fail(TranslationErrorReason.RESPONSE_TOO_LARGE)
-        title, summary = self._parse(response.body)
+        title, summary, usage = self._parse(response.body)
         if item.content.description and not summary:
             self._fail(TranslationErrorReason.MALFORMED_RESPONSE)
         if not item.content.description and summary:
@@ -147,9 +147,10 @@ class ModelTranslationAdapter:
         return TranslationProviderResult(
             items=(TranslationResultItem(request_id=item.request_id, title=title, description=summary),),
             source_language=request.source_language, target_language=request.target_language,
-            provider=self.provider_id, model_version=self.model_version)
+            provider=self.provider_id, model_version=self.model_version,
+            input_tokens=usage[0], output_tokens=usage[1])
 
-    def _parse(self, raw: bytes) -> tuple[str, str]:
+    def _parse(self, raw: bytes) -> tuple[str, str, tuple[int, int]]:
         try:
             envelope = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -182,7 +183,22 @@ class ModelTranslationAdapter:
             self._fail(TranslationErrorReason.RESPONSE_TOO_LARGE)
         if len(summary) > self._config.max_output_description_chars:
             self._fail(TranslationErrorReason.RESPONSE_TOO_LARGE)
-        return title, summary
+        return title, summary, self._usage(envelope)
+
+    @staticmethod
+    def _usage(envelope: Mapping[str, object]) -> tuple[int, int]:
+        """Usage is advisory: a missing or malformed block settles as zero and
+        the caller then falls back to its own estimate, never to free."""
+
+        usage = envelope.get("usage")
+        if not isinstance(usage, Mapping):
+            return (0, 0)
+        values = []
+        for key in ("prompt_tokens", "completion_tokens"):
+            value = usage.get(key)
+            values.append(value if isinstance(value, int) and not isinstance(value, bool)
+                          and 0 <= value <= 10_000_000 else 0)
+        return (values[0], values[1])
 
     def _load_key(self) -> str:
         try:

@@ -31,6 +31,7 @@ class StubProvider:
 
     def __init__(self, behavior="ok"):
         self.behavior, self.calls = behavior, 0
+        self.input_tokens = self.output_tokens = 0
 
     def translate(self, request):
         self.calls += 1
@@ -41,7 +42,8 @@ class StubProvider:
             items=(TranslationResultItem(request_id=item.request_id, title="Nvidia ships 3 chips",
                                          description="Nvidia reported earnings on Tuesday."),),
             source_language=request.source_language, target_language=request.target_language,
-            provider=self.provider_id, model_version=self.model_version)
+            provider=self.provider_id, model_version=self.model_version,
+            input_tokens=self.input_tokens, output_tokens=self.output_tokens)
 
 
 def policy(**kwargs):
@@ -85,17 +87,59 @@ def test_a_provider_failure_still_returns_the_story_marked_untranslated():
     assert result.untranslated_shown == 1
 
 
-def test_the_daily_cost_cap_stops_spend_and_still_returns_every_story():
-    # One cent at 0.002 USD per 1k characters allows 5,000 characters, but the
-    # dollar cap is the tighter of the two bounds only when it is set low.
-    tiny = policy(daily_cost_limit_usd=0.00001, cost_per_1k_characters_usd=0.002)
+def test_the_dollar_cap_refuses_the_send_and_still_returns_every_story():
+    """The cap is checked BEFORE the provider is entered, and it binds."""
     provider = StubProvider()
+    tiny = policy(daily_cost_limit_usd=0.0)
     result = translate_exclusive_stories([("story:a", zh_item())], policy=tiny, store=store(),
                                          provider=provider, run_id="run-1", now=NOW)
     assert provider.calls == 0
     assert result.overlays["story:a"].status == UNTRANSLATED
-    assert result.overlays["story:a"].reason == "budget_exhausted"
-    assert tiny.character_allowance < policy().character_allowance
+    assert result.overlays["story:a"].reason == "cost_limit_reached"
+
+
+def test_a_failure_after_the_send_still_consumes_budget():
+    """A provider that fails after mark_sent may still have charged. The
+    reservation is retained, so a broken provider cannot spend without limit."""
+    one_attempt = policy(daily_cost_limit_usd=policy().reservation_usd(len("英伟达发布 3 款芯片") + len("英伟达周二公布财报。")) * 1.5)
+    broken = StubProvider("error")
+    result = translate_exclusive_stories(
+        [("story:a", zh_item()), ("story:b", zh_item(title="独家：第二条", summary="第二条摘要。"))],
+        policy=one_attempt, store=store(), provider=broken, run_id="run-1", now=NOW)
+    assert broken.calls == 1, "the second send is refused by the retained reservation"
+    assert result.counters["retained_usd_millionths"] > 0
+    assert result.counters["settled_usd_millionths"] == 0
+    assert result.overlays["story:a"].status == UNTRANSLATED
+    assert result.overlays["story:b"].reason == "cost_limit_reached"
+    assert len(result.overlays) == 2, "no story is dropped for a budget or provider problem"
+
+
+def test_spend_is_settled_from_the_provider_reported_usage():
+    provider = StubProvider()
+    provider.input_tokens, provider.output_tokens = 1_000, 500
+    active = policy(input_cost_per_million_tokens_usd=0.25, output_cost_per_million_tokens_usd=2.0)
+    result = translate_exclusive_stories([("story:a", zh_item())], policy=active, store=store(),
+                                         provider=provider, run_id="run-1", now=NOW)
+    expected = round((1_000 * 0.25 + 500 * 2.0) / 1_000_000 * 1_000_000)
+    assert result.counters["settled_usd_millionths"] == expected
+    assert result.counters["retained_usd_millionths"] == 0
+
+
+def test_a_provider_that_reports_no_usage_settles_at_the_reservation_not_at_zero():
+    result = translate_exclusive_stories([("story:a", zh_item())], policy=policy(), store=store(),
+                                         provider=StubProvider(), run_id="run-1", now=NOW)
+    assert result.counters["settled_usd_millionths"] > 0
+
+
+def test_the_same_content_hash_costs_once():
+    provider, shared = StubProvider(), store()
+    first = translate_exclusive_stories([("story:a", zh_item())], policy=policy(), store=shared,
+                                        provider=provider, run_id="run-1", now=NOW)
+    second = translate_exclusive_stories([("story:a", zh_item())], policy=policy(), store=shared,
+                                         provider=provider, run_id="run-2", now=NOW)
+    assert provider.calls == 1
+    assert first.counters["settled_usd_millionths"] > 0
+    assert second.counters["settled_usd_millionths"] == 0, "a cache hit is free"
 
 
 def test_an_expired_cache_entry_is_refetched_at_ingest():
@@ -132,6 +176,10 @@ def test_translation_is_a_no_op_while_the_feature_is_switched_off():
     {"cache_ttl_days": 366},
     {"daily_cost_limit_usd": 25.1},
     {"daily_cost_limit_usd": -0.1},
+    {"input_cost_per_million_tokens_usd": -1},
+    {"output_cost_per_million_tokens_usd": 1001},
+    {"characters_per_token": 0},
+    {"max_output_tokens_per_story": 0},
     {"enabled": "true"},
 ])
 def test_policy_refuses_out_of_range_values(kwargs):

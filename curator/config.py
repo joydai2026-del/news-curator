@@ -762,12 +762,21 @@ def load_sources(path: Path) -> dict[str, Any]:
         raise ConfigError(f"{path.name}: 'translation.on_failure' must be show_original_marked or show_original_silent.")
     for key, low, high in (
         ("daily_cost_limit_usd", 0.0, 25.0),
-        ("cost_per_1k_characters_usd", 0.0, 1.0),
+        ("input_cost_per_million_tokens_usd", 0.0, 1000.0),
+        ("output_cost_per_million_tokens_usd", 0.0, 1000.0),
     ):
         value = translation.get(key)
         if value is not None:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= float(value) <= high:
                 raise ConfigError(f"{path.name}: 'translation.{key}' must be a number between {low} and {high}.")
+    for key, low, high in (
+        ("characters_per_token", 1, 100),
+        ("max_output_tokens_per_story", 1, 100000),
+    ):
+        value = translation.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)
+                                  or not low <= value <= high):
+            raise ConfigError(f"{path.name}: 'translation.{key}' must be an integer between {low} and {high}.")
     ttl = translation.get("cache_ttl_days")
     if ttl is not None and (isinstance(ttl, bool) or not isinstance(ttl, int) or not 1 <= ttl <= 365):
         raise ConfigError(f"{path.name}: 'translation.cache_ttl_days' must be an integer between 1 and 365.")

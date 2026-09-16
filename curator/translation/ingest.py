@@ -54,7 +54,15 @@ class IngestTranslationPolicy:
     day_character_limit: int = 15_000
     month_character_limit: int = 450_000
     daily_cost_limit_usd: float = 0.50
-    cost_per_1k_characters_usd: float = 0.002
+    # Token prices, because the Phase 1 provider is a token-priced model. The
+    # character ledger stays as the second bound; this one bounds SPEND.
+    input_cost_per_million_tokens_usd: float = 0.25
+    output_cost_per_million_tokens_usd: float = 2.0
+    # Characters per token, used ONLY to size the pre-send reservation.
+    characters_per_token: int = 4
+    # Ceiling on the output the model may return for one story, for the same
+    # reservation arithmetic.
+    max_output_tokens_per_story: int = 1_000
     cache_ttl_days: int = 30
     on_failure: str = "show_original_marked"
     max_items: int = 25
@@ -84,20 +92,61 @@ class IngestTranslationPolicy:
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
                 raise ValueError(f"{label} must be an integer in [{low}, {high}]")
         for label, value, low, high in (
+            ("translation.max_output_tokens_per_story", self.max_output_tokens_per_story, 1, 100_000),
+            ("translation.characters_per_token", self.characters_per_token, 1, 100),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise ValueError(f"{label} must be an integer in [{low}, {high}]")
+        for label, value, low, high in (
             ("translation.daily_cost_limit_usd", self.daily_cost_limit_usd, 0.0, 25.0),
-            ("translation.cost_per_1k_characters_usd", self.cost_per_1k_characters_usd, 0.0, 1.0),
+            ("translation.input_cost_per_million_tokens_usd", self.input_cost_per_million_tokens_usd, 0.0, 1_000.0),
+            ("translation.output_cost_per_million_tokens_usd", self.output_cost_per_million_tokens_usd, 0.0, 1_000.0),
         ):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= float(value) <= high:
                 raise ValueError(f"{label} must be a number in [{low}, {high}]")
 
     @property
     def character_allowance(self) -> int:
-        """Characters bound volume, dollars bound spend. Both must be checked."""
+        """The VOLUME bound. Spend is bounded separately, in dollars."""
 
-        if self.cost_per_1k_characters_usd <= 0:
-            return self.day_character_limit
-        by_cost = math.floor(self.daily_cost_limit_usd * 1_000 / self.cost_per_1k_characters_usd)
-        return min(self.day_character_limit, self.run_character_limit, by_cost)
+        return min(self.day_character_limit, self.run_character_limit)
+
+    def cost_usd(self, input_tokens: int, output_tokens: int) -> float:
+        return (input_tokens * self.input_cost_per_million_tokens_usd
+                + output_tokens * self.output_cost_per_million_tokens_usd) / 1_000_000
+
+    def reservation_usd(self, characters: int) -> float:
+        """What one attempt could cost at worst, reserved BEFORE the send."""
+
+        input_tokens = math.ceil(characters / self.characters_per_token)
+        return self.cost_usd(input_tokens, self.max_output_tokens_per_story)
+
+
+class _SpendLedger:
+    """Reserve-then-settle in dollars, mirroring the ranker budget pattern.
+
+    A failed attempt AFTER the provider was entered may still have been paid,
+    so its reservation is retained rather than released. Releasing it is what
+    would let a failing provider spend without limit.
+    """
+
+    def __init__(self, limit_usd: float) -> None:
+        self._limit = limit_usd
+        self.settled_usd = 0.0
+        self.retained_usd = 0.0
+
+    @property
+    def committed_usd(self) -> float:
+        return self.settled_usd + self.retained_usd
+
+    def can_afford(self, amount_usd: float) -> bool:
+        return self.committed_usd + amount_usd <= self._limit
+
+    def settle(self, amount_usd: float) -> None:
+        self.settled_usd += amount_usd
+
+    def retain(self, amount_usd: float) -> None:
+        self.retained_usd += amount_usd
 
 
 @dataclass(frozen=True)
@@ -143,6 +192,7 @@ def translate_exclusive_stories(
     limits = BudgetLimits(policy.run_character_limit, policy.day_character_limit, policy.month_character_limit)
     allowance = policy.character_allowance
     spent_characters = 0
+    ledger = _SpendLedger(policy.daily_cost_limit_usd)
     ttl = timedelta(days=policy.cache_ttl_days)
 
     for story_id, item in stories[: policy.max_items]:
@@ -170,13 +220,21 @@ def translate_exclusive_stories(
             counters["budget_exhausted"] += 1
             overlays[story_id] = _untranslated("budget_exhausted")
             continue
+        reservation = policy.reservation_usd(content.character_count)
+        if not ledger.can_afford(reservation):
+            counters["cost_limit_reached"] += 1
+            overlays[story_id] = _untranslated("cost_limit_reached")
+            continue
         candidate = TranslationRequestItem(request_id="t-" + content.digest[:32], content=content)
         overlay = _paid_translation(
             store=store, provider=provider, policy=policy, key=key, candidate=candidate,
-            target=target, run_id=run_id, limits=limits, counters=counters)
+            target=target, run_id=run_id, limits=limits, counters=counters,
+            ledger=ledger, reservation_usd=reservation)
         overlays[story_id] = overlay
         if overlay.status == TRANSLATED:
             spent_characters += content.character_count
+    counters["settled_usd_millionths"] = round(ledger.settled_usd * 1_000_000)
+    counters["retained_usd_millionths"] = round(ledger.retained_usd * 1_000_000)
     return IngestTranslationResult(overlays, dict(counters))
 
 
@@ -201,7 +259,8 @@ def _fresh_cache(store, key, *, now: datetime, ttl: timedelta, counters: Counter
     return cached
 
 
-def _paid_translation(*, store, provider, policy, key, candidate, target, run_id, limits, counters) -> TranslationOverlay:
+def _paid_translation(*, store, provider, policy, key, candidate, target, run_id, limits, counters,
+                      ledger, reservation_usd) -> TranslationOverlay:
     idempotency_key = f"{run_id}:{key.digest[:40]}"
     request = AcquireRequest(key=key, idempotency_key=idempotency_key, run_id=run_id,
                              reserved_characters=candidate.content.character_count, limits=limits)
@@ -229,6 +288,8 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
     if sent.state != ReservationState.SENT:
         counters["charge_unknown"] += 1
         return _untranslated("charge_unknown")
+    # From here the provider has been entered: every exit either settles a real
+    # cost or retains the reservation. None of them is free.
     try:
         response = provider.translate(TranslationProviderRequest(
             items=(candidate,), source_language=candidate.content.source_language, target_language=target))
@@ -245,21 +306,29 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
             max_description_characters=policy.output_limits.description)
     except TranslationProviderError as error:
         counters["provider_failed"] += 1
+        ledger.retain(reservation_usd)
         _mark_unknown(store, idempotency_key, counters)
         return _untranslated(error.reason_code)
     except Exception:
         counters["provider_contract_failed"] += 1
+        ledger.retain(reservation_usd)
         _mark_unknown(store, idempotency_key, counters)
         return _untranslated("malformed_response")
     try:
         settled = store.settle(idempotency_key, actual_characters=candidate.content.character_count, record=record)
     except Exception:
         counters["settlement_failed"] += 1
+        ledger.retain(reservation_usd)
         _mark_unknown(store, idempotency_key, counters)
         return _untranslated("settlement_failed")
     if settled.state != ReservationState.SETTLED:
         counters["charge_unknown"] += 1
+        ledger.retain(reservation_usd)
         return _untranslated("charge_unknown")
+    # Settle from the provider's OWN reported usage. A provider that reports no
+    # usage settles at the reservation, never at zero.
+    observed = policy.cost_usd(response.input_tokens, response.output_tokens)
+    ledger.settle(observed if observed > 0 else reservation_usd)
     counters["translated"] += 1
     return _translated(title, summary, target)
 

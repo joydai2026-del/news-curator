@@ -22,9 +22,12 @@ def write_sources(tmp_path, mutate):
 def test_shipped_config_declares_every_phase1_key():
     cfg = load_config(ROOT)
     for key in ("provider", "model", "api_key_env", "api_origin", "daily_cost_limit_usd",
-                "cost_per_1k_characters_usd", "cache_ttl_days", "on_failure"):
+                "input_cost_per_million_tokens_usd", "output_cost_per_million_tokens_usd",
+                "characters_per_token", "max_output_tokens_per_story", "cache_ttl_days", "on_failure"):
         assert key in cfg.translation, key
     assert cfg.translation["on_failure"] == "show_original_marked"
+    # Phase 1 ships enabled: the missing translation surface is a bug, not a flag.
+    assert cfg.translation["enabled"] is True
     assert cfg.language["default_display"] in ("en", "zh")
     assert cfg.language["other_lane_enabled"] is True
     assert cfg.language["exclusive_category_id"]
@@ -38,7 +41,10 @@ def test_shipped_config_declares_every_phase1_key():
 @pytest.mark.parametrize("mutation", [
     lambda raw: raw["translation"].__setitem__("on_failure", "drop"),
     lambda raw: raw["translation"].__setitem__("daily_cost_limit_usd", 25.1),
-    lambda raw: raw["translation"].__setitem__("cost_per_1k_characters_usd", 2),
+    lambda raw: raw["translation"].__setitem__("input_cost_per_million_tokens_usd", 1001),
+    lambda raw: raw["translation"].__setitem__("output_cost_per_million_tokens_usd", -1),
+    lambda raw: raw["translation"].__setitem__("characters_per_token", 0),
+    lambda raw: raw["translation"].__setitem__("max_output_tokens_per_story", 0),
     lambda raw: raw["translation"].__setitem__("cache_ttl_days", 0),
     lambda raw: raw["translation"].__setitem__("cache_ttl_days", 366),
     lambda raw: raw["translation"].__setitem__("api_key_env", "lowercase_name"),
