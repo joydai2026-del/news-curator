@@ -68,7 +68,8 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None):
             built = _build_translation_clients(translation, api_key, env)
             if built is None:
                 return rows, 'translation skipped: store not configured'
-            store, provider = built if store is None and provider is None else (store or built[0], provider or built[1])
+            store = store or built[0]
+            provider = provider or built[1]
         result = translate_exclusive_stories(
             stories, policy=policy, store=store, provider=provider,
             run_id=f"retained-corpus-{now.strftime('%Y%m%dT%H%M%SZ')}", now=now)
