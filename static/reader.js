@@ -1316,10 +1316,12 @@
       });
       behaviorWrites = pending;
       if (recordsActivity) pending.then(() => {
+        if (epoch !== authEpoch) return;
         activityWritesPending = Math.max(0, activityWritesPending - 1);
         if (learningEnabled) activityCommittedSequence = Math.max(activityCommittedSequence, writeSequence);
         if (writeSequence === activityWriteSequence) setActivityStatus(learningEnabled ? "activity" : "activityFailed");
       }, () => {
+        if (epoch !== authEpoch) return;
         activityWritesPending = Math.max(0, activityWritesPending - 1);
         if (writeSequence === activityWriteSequence) setActivityStatus("activityFailed");
       });
@@ -1715,6 +1717,8 @@
       sessionWasPresent = false;
       abortOwnerExport();
       authEpoch += 1;
+      activityWriteSequence = 0; activityWritesPending = 0; activityCommittedSequence = 0;
+      behaviorWrites = Promise.resolve();
       leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
@@ -1759,6 +1763,8 @@
     function invalidateHydrationForSession() {
       abortOwnerExport();
       authEpoch += 1;
+      activityWriteSequence = 0; activityWritesPending = 0; activityCommittedSequence = 0;
+      behaviorWrites = Promise.resolve();
       leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
