@@ -317,14 +317,30 @@ reddit:
 # workflow switch are enabled after explicit approval.
 # ---------------------------------------------------------------------------
 translation:
-  enabled: false
-  provider: google
+  # Paid background ingestion only. Reader, rank, page, and Saved paths never call a provider.
+  enabled: true
+  provider: openai
   targets: [en, zh]
-  max_items_per_language: 25
-  max_characters_per_language: 2000
-  run_character_limit: 2000
-  day_character_limit: 15000
-  month_character_limit: 450000
+  max_items_per_language: 100
+  max_characters_per_language: 100000
+  run_character_limit: 100000
+  day_character_limit: 500000
+  month_character_limit: 3000000
+  run_money_limit_microusd: 250000
+  day_money_limit_microusd: 2000000
+  month_money_limit_microusd: 10000000
+  openai_charge_scope: public_translation_openai_v1
+  openai_api_key_env: OPENAI_API_KEY
+  openai_endpoint: https://api.openai.com/v1/responses
+  openai_model: gpt-5-mini
+  openai_input_microusd_per_million_tokens: 250000
+  openai_output_microusd_per_million_tokens: 2000000
+  openai_max_request_bytes: 131072
+  openai_reasoning_effort: minimal
+  openai_max_output_tokens: 4096
+  queue_limit: 60
+  queue_dispatch_budget_seconds: 240
+  translation_workers: 4
   max_output_title_characters: 2000
   max_output_description_characters: 8000
   lease_timeout_seconds: 900
@@ -334,14 +350,13 @@ translation:
   per_host_concurrency: 2
   normalization_version: normalized-item-v1
   glossary_policy_version: none-v1
-  candidate_policy_version: ranked-non-newsletter-v1
-  # Resolved against project_id_env and location before use. The resulting
-  # full resource is sent to Google and is the cache/provenance identity.
-  model_version: projects/{project_id}/locations/{location}/models/general/nmt
-  location: global
-  project_id_env: GOOGLE_CLOUD_PROJECT_ID
+  candidate_policy_version: retained-round-robin-v1
   supabase_url_env: NEWS_CURATOR_SUPABASE_URL
-  supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY
+  supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SECRET_KEY
+  # Retained only for the disabled Google adapter fallback contract.
+  project_id_env: GOOGLE_CLOUD_PROJECT_ID
+  location: global
+  model_version: projects/{project_id}/locations/{location}/models/general/nmt
 
 # ---------------------------------------------------------------------------
 # The newsletter lane. Reads a dedicated newsletter-only Gmail account through

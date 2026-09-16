@@ -2,7 +2,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-from scripts.collect_m2_operational_receipt import _category_ids, _get_rows, _origin, _receipt
+from scripts.collect_m2_operational_receipt import _category_ids, _get_rows, _health, _origin, _receipt
+
+def test_health_distinguishes_idle_volume_pass_and_fail_without_owner_claims():
+    policy={"minimum_requests":5,"maximum_failure_rate":.5}
+    assert _health([],policy)["status"]=='idle'
+    row={"endpoint":"rank","outcome":"model","latency_band":"1to3s","request_count":4,"latest_input_match_count":4}
+    assert _health([row],policy)["status"]=='insufficient_volume'
+    assert _health([{**row,"request_count":5,"latest_input_match_count":5}],policy)["status"]=='pass'
+    assert _health([{**row,"outcome":"timeout","request_count":5,"latest_input_match_count":0}],policy)["status"]=='fail'
+    assert 'not per owner' in _health([row],policy)['population_scope']
 
 
 def test_receipt_is_sanitized_and_refuses_to_claim_model_denominator():
@@ -71,3 +80,17 @@ def test_get_rows_uses_fixed_projection_and_paginates(monkeypatch):
     assert first.path == "/rest/v1/m2_frozen_rankings"
     assert query["select"] == ["created_at,bindings"] and query["offset"] == ["0"]
     assert "user_id" not in opened[0][0].full_url
+
+
+def test_operational_policy_rejects_unbounded_or_wrong_type_values():
+    from scripts.collect_m2_operational_receipt import _validate_operational_policy
+    policy={"schema_version":1,"window_minutes":60,"minimum_requests":5,"maximum_failure_rate":.5,"retention_days":14}
+    assert _validate_operational_policy(policy) == policy
+    for key,bad in (("window_minutes",0),("minimum_requests",True),("maximum_failure_rate",float("nan")),("retention_days",91)):
+        with pytest.raises(ValueError): _validate_operational_policy({**policy,key:bad})
+
+def test_delivery_health_does_not_hide_fallback_or_latency_counts():
+    row={"endpoint":"rank","outcome":"fallback","latency_band":"8to20s","request_count":5,"latest_input_match_count":0}
+    report=_health([row],{"minimum_requests":5,"maximum_failure_rate":.5})
+    assert report["status_scope"] == "request_delivery_only_not_recommendation_quality"
+    assert report["outcome_counts"]["fallback"] == report["latency_counts"]["8to20s"] == 5

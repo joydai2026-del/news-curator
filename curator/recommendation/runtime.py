@@ -15,6 +15,7 @@ from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import RankingService, ServicePolicy
 from .supabase_http import SupabaseHTTP
+from .request_health import RequestHealthReporter
 
 
 def configured_token_counter(policy, env):
@@ -91,7 +92,7 @@ def build_application(*, environ=None, policy_path: str | None = None):
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,
-        maximum_body_bytes=policy["maximum_request_body_bytes"])
+        maximum_body_bytes=policy["maximum_request_body_bytes"], health_reporter=RequestHealthReporter(transport))
 
 
 def _required(values, key):

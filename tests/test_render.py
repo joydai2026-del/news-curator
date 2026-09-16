@@ -662,7 +662,8 @@ class TestAccordionReadingCompanion:
         assert ".accordion-toggle{width:100%;min-height:58px" in page
         assert "min-width:44px;min-height:44px" in page
         assert "overflow-x:hidden" in page
-        assert ".topbar{gap:.5rem;flex-wrap:wrap}" in page
+        assert ".topbar{gap:.35rem;flex-wrap:wrap;margin-bottom:.55rem}" in page
+        assert ".mobiletopics{display:none;flex-wrap:nowrap;" in page
         assert ".profile-slot{width:100%;max-width:100%;justify-content:flex-start}" in page
 
     def test_story_container_preserves_per_topic_css_ordering(self, now):

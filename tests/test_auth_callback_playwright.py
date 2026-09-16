@@ -483,6 +483,17 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
         site,
         topic_ids_by_name={"AI": "ai"},
     )
+    localized_projection = json.loads((site / "data" / "news-en.json").read_text(encoding="utf-8"))
+    localized_projection["categories"][0]["items"].append({
+        "story_id": _feed_story(50, "Anonymous public story")["story_id"],
+        "title": "Anonymous public story",
+        "description": "A public story available after sign-out.",
+        "display_language": "en",
+        "translation_available": True,
+    })
+    (site / "data" / "news-en.json").write_text(
+        json.dumps(localized_projection), encoding="utf-8"
+    )
     activate_personalization_link(
         site / "index.html",
         supabase_url=SUPABASE_ORIGIN,
@@ -504,7 +515,14 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
     thread.start()
     logged_out = False
     calls: list[dict[str, object]] = []
+    pending_public_hydration: list[tuple[object, object]] = []
     static_id = story_id_for_item(item)
+    localized_titles = {
+        static_id: "Static public story",
+        _feed_story(50, "Anonymous public story")["story_id"]: "Anonymous public story",
+        _feed_story(51, "Private interest-ranked story")["story_id"]: "Private interest-ranked story",
+        _feed_story(777, "Private saved-only story")["story_id"]: "Private saved-only story",
+    }
 
     def fulfill(route: object) -> None:
         nonlocal logged_out
@@ -546,6 +564,9 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 payload = [static_row, public_row, private_ranked]
             else:
                 payload = [public_row]
+            if logged_out:
+                pending_public_hydration.append((route, payload))
+                return
         elif request.url.endswith("/saved_page"):
             saved = _feed_story(777, "Private saved-only story")
             saved.update({
@@ -571,6 +592,11 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
                 "expires_in": 3600,
                 "user": {"id": "user-a"},
             }
+        elif request.url.endswith("/m2_localized_story_text"):
+            requested = request.post_data_json
+            payload = [{"story_id": story_id, "title": localized_titles.get(story_id, "Localized story"),
+                "summary": "Localized summary", "display_language": requested["p_locale"],
+                "translation_available": True} for story_id in requested["p_story_ids"]]
         elif "/rest/v1/user_preferences" in request.url:
             payload = [{
                 "user_id": "user-a",
@@ -621,7 +647,9 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             digest.locator('.chip[data-filter="__saved__"]').first.click()
             digest.get_by_text("Private saved-only story", exact=True).wait_for()
             assert digest.locator("article.is-saved").count() >= 1
-            assert digest.get_by_text("Unsave", exact=True).count() >= 1
+            saved_actions = digest.locator('.save-action[aria-label="Remove from Saved"][aria-pressed="true"]')
+            assert saved_actions.count() >= 1
+            assert saved_actions.first.inner_text() == "Saved ✓"
 
             for forged in (
                 {"type": "logout", "extra": True},
@@ -639,18 +667,6 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             )
             assert digest.get_by_text("Private saved-only story", exact=True).is_visible()
 
-            digest.evaluate(
-                """
-                window.__logoutDisabledObserved = false;
-                new MutationObserver(() => {
-                  const buttons = [...document.querySelectorAll('.state-action:not(.read-action)')];
-                  if (sessionStorage.getItem('news-curator.auth.session') === null &&
-                      buttons.length > 0 && buttons.every(button => button.disabled)) {
-                    window.__logoutDisabledObserved = true;
-                  }
-                }).observe(document.body, {attributes: true, subtree: true});
-                """
-            )
             if logout_failure == "timeout":
                 profile.evaluate(_PENDING_FETCH_UNTIL_ABORT, "/auth/v1/logout")
             profile.locator("#sign-out").click()
@@ -666,9 +682,36 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             digest.wait_for_function(
                 "() => sessionStorage.getItem('news-curator.auth.session') === null"
             )
-            digest.get_by_text("Signed out. Public stories are ready.", exact=True).wait_for()
+            digest.get_by_text(
+                "Signed out. Public stories are ready."
+                if logout_failure == "timeout"
+                else "Loading 10 more stories…",
+                exact=True,
+            ).wait_for()
 
-            assert digest.evaluate("window.__logoutDisabledObserved") is True
+            writes_before_transition = len([
+                call for call in calls
+                if str(call["url"]).endswith(("/set_story_state", "/set_story_interest"))
+            ])
+            static_card = digest.locator("article.card", has_text="Static public story")
+            static_card.locator(".save-action").evaluate("button => button.click()")
+            assert static_card.locator(".save-action").is_hidden()
+            assert static_card.locator(".save-action").is_disabled()
+            writes_after_transition = len([
+                call for call in calls
+                if str(call["url"]).endswith(("/set_story_state", "/set_story_interest"))
+            ])
+            assert writes_after_transition == writes_before_transition
+            if logout_failure == "timeout":
+                assert len(pending_public_hydration) == 0
+            else:
+                assert len(pending_public_hydration) == 1
+                pending_route, pending_payload = pending_public_hydration.pop()
+                pending_route.fulfill(
+                    status=200, content_type="application/json", body=json.dumps(pending_payload)
+                )
+                digest.get_by_text("Signed out. Public stories are ready.", exact=True).wait_for()
+
             assert digest.locator('.chip[data-filter="__all__"]').first.get_attribute("aria-pressed") == "true"
             assert digest.get_by_text("Private saved-only story", exact=True).count() == 0
             assert digest.get_by_text("Private interest-ranked story", exact=True).count() == 0
@@ -690,9 +733,8 @@ def test_profile_logout_always_clears_private_digest_state_across_tabs(
             public_card.locator(".headline").click()
             public_card.get_by_role("button", name="Mark unread", exact=True).click()
             assert "is-read" not in (public_card.get_attribute("class") or "").split()
-            digest.locator("article.card", has_text="Anonymous public story").locator(
-                ".save-action"
-            ).evaluate("button => button.click()")
+            anonymous_card = digest.locator("article.card", has_text="Anonymous public story")
+            anonymous_card.locator(".save-action").evaluate("button => button.click()")
             digest.get_by_text("Sign in to sync reading controls.", exact=True).wait_for()
             writes_after = len([
                 call for call in calls

@@ -40,6 +40,7 @@ class InMemoryTranslationStore:
         self._cache: dict[str, object] = {}
         self._reservations: dict[str, Reservation] = {}
         self._counters: dict[tuple[str, str], int] = {}
+        self._money_counters: dict[tuple[str, str, str], int] = {}
         self._quarantined: set[str] = set()
         self._reconciliations: dict[str, tuple[ReconciliationOutcome, str, int | None]] = {}
 
@@ -98,9 +99,17 @@ class InMemoryTranslationStore:
             limits = (request.limits.run, request.limits.day, request.limits.month)
             if any(self._counters.get(key, 0) + request.reserved_characters > limit for key, limit in zip(keys, limits)):
                 return AcquireResult(AcquireStatus.BUDGET_EXHAUSTED)
-
+            money_keys: tuple[tuple[str, str, str], ...] = ()
+            if request.money is not None:
+                money_keys = tuple((request.money.charge_scope, scope, value) for scope, value in keys)
+                money_limits = (request.money.limits.run, request.money.limits.day, request.money.limits.month)
+                if any(self._money_counters.get(key, 0) + request.money.reserved_microusd > limit for key, limit in zip(money_keys, money_limits)):
+                    return AcquireResult(AcquireStatus.BUDGET_EXHAUSTED)
             for key in keys:  # fixed run, day, month order mirrors the SQL locks
                 self._counters[key] = self._counters.get(key, 0) + request.reserved_characters
+            if request.money is not None:
+                for key in money_keys:
+                    self._money_counters[key] = self._money_counters.get(key, 0) + request.money.reserved_microusd
             reservation = Reservation(
                 request=request,
                 state=ReservationState.LEASED,
@@ -146,6 +155,8 @@ class InMemoryTranslationStore:
                 if current.created_at is None or now < current.created_at + timedelta(seconds=lease_timeout_seconds):
                     return current
                 self._release(current, current.request.reserved_characters)
+                if current.request.money is not None:
+                    self._release_money(current, current.request.money.reserved_microusd)
                 current = replace(
                     current,
                     state=ReservationState.FAILED_BEFORE_SEND,
@@ -186,6 +197,7 @@ class InMemoryTranslationStore:
         *,
         actual_characters: int,
         record: TranslationCacheRecord,
+        actual_microusd: int | None = None,
     ) -> Reservation:
         now = _utc_now(self._clock)
         if isinstance(actual_characters, bool) or not isinstance(actual_characters, int) or actual_characters < 0:
@@ -195,6 +207,11 @@ class InMemoryTranslationStore:
             if record.key != current.request.key or record.actual_characters != actual_characters:
                 raise TranslationStoreError(StoreErrorReason.CONFLICT)
             if actual_characters > current.request.reserved_characters:
+                raise TranslationStoreError(StoreErrorReason.INVALID_REQUEST)
+            if current.request.money is None:
+                if actual_microusd is not None:
+                    raise TranslationStoreError(StoreErrorReason.INVALID_REQUEST)
+            elif isinstance(actual_microusd, bool) or not isinstance(actual_microusd, int) or actual_microusd < 0 or actual_microusd > current.request.money.reserved_microusd:
                 raise TranslationStoreError(StoreErrorReason.INVALID_REQUEST)
             if current.state == ReservationState.SETTLED:
                 if current.actual_characters != actual_characters:
@@ -225,10 +242,14 @@ class InMemoryTranslationStore:
             if existing is None:
                 self._cache[digest] = replace(record, created_at=record.created_at or now)
             self._release(current, current.request.reserved_characters - actual_characters)
+            if current.request.money is not None:
+                assert actual_microusd is not None
+                self._release_money(current, current.request.money.reserved_microusd - actual_microusd)
             current = replace(
                 current,
                 state=ReservationState.SETTLED,
                 actual_characters=actual_characters,
+                actual_microusd=actual_microusd,
                 finalized_at=now,
             )
             self._reservations[idempotency_key] = current
@@ -243,6 +264,8 @@ class InMemoryTranslationStore:
             if current.state != ReservationState.LEASED:
                 raise TranslationStoreError(StoreErrorReason.INVALID_TRANSITION)
             self._release(current, current.request.reserved_characters)
+            if current.request.money is not None:
+                self._release_money(current, current.request.money.reserved_microusd)
             current = replace(current, state=ReservationState.FAILED_BEFORE_SEND, finalized_at=now)
             self._reservations[idempotency_key] = current
             return current
@@ -312,6 +335,8 @@ class InMemoryTranslationStore:
                 )
             else:
                 self._release(current, current.request.reserved_characters)
+                if current.request.money is not None:
+                    self._release_money(current, current.request.money.reserved_microusd)
                 current = replace(current, state=ReservationState.FAILED_BEFORE_SEND, finalized_at=now)
             self._reservations[idempotency_key] = current
             self._reconciliations[idempotency_key] = decision
@@ -337,6 +362,16 @@ class InMemoryTranslationStore:
         if current is None:
             raise TranslationStoreError(StoreErrorReason.INVALID_REQUEST)
         return current
+
+    def _release_money(self, reservation: Reservation, amount: int) -> None:
+        if reservation.request.money is None or amount < 0:
+            raise TranslationStoreError(StoreErrorReason.INVALID_REQUEST)
+        keys = ((reservation.request.money.charge_scope, "run", reservation.request.run_id), (reservation.request.money.charge_scope, "day", reservation.counter_day), (reservation.request.money.charge_scope, "month", reservation.counter_month))
+        for key in keys:
+            remaining = self._money_counters.get(key, 0) - amount
+            if remaining < 0:
+                raise TranslationStoreError(StoreErrorReason.CONFLICT)
+            self._money_counters[key] = remaining
 
     def _release(self, reservation: Reservation, amount: int) -> None:
         if amount < 0:

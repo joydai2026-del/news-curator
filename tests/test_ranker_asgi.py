@@ -84,3 +84,40 @@ def test_value_error_logs_only_safe_location_metadata(capsys):
     assert event["exception_class"] == "ValueError"
     assert event["source_basename"] == "test_ranker_asgi.py"
     assert type(event["source_line"]) is int and event["source_line"] > 0
+
+def test_rank_health_records_model_and_exact_latest_binding():
+    class Reporter:
+        def record(self, **fields): self.fields=fields
+    class ModelService(Service):
+        def rank(self, **_):
+            return {"result_mode":"model","history_revision":7,"server_commit_revision":7,
+                "schema_version":1,"request_id":"request","cards":[],"next_cursor":None}
+    reporter=Reporter()
+    sent=request(RankingASGI(service=ModelService(),reader_origin="https://reader.example",health_reporter=reporter),
+        method="POST",path="/rank",body=b'{}',headers=((b"authorization",b"Bearer valid"),))
+    assert sent[0]["status"]==200
+    assert reporter.fields["endpoint"]=="rank" and reporter.fields["outcome"]=="model"
+    assert reporter.fields["latest_input_match"] is True
+
+def test_rank_health_failure_does_not_change_selected_response(capsys):
+    class Reporter:
+        def record(self, **_): raise RuntimeError("telemetry secret")
+    # The production reporter contains its own failure boundary. Exercise that exact boundary.
+    from curator.recommendation.request_health import RequestHealthReporter
+    class Store:
+        def record_request_health(self,**_): raise RuntimeError("telemetry secret")
+    sent=request(RankingASGI(service=Service(),reader_origin="https://reader.example",
+        health_reporter=RequestHealthReporter(Store())),method="POST",path="/rank",body=b'{}')
+    assert sent[0]["status"]==401
+    logged=capsys.readouterr().err
+    assert "telemetry secret" not in logged and 'request_health_write_failed' in logged
+
+def test_unexpected_rank_failure_is_safely_counted():
+    class Broken(Service):
+        def rank(self, **_): raise LookupError('private')
+    class Reporter:
+        def record(self, **fields): self.fields=fields
+    reporter=Reporter(); sent=request(RankingASGI(service=Broken(),reader_origin="https://reader.example",health_reporter=reporter),
+        method="POST",path="/rank",body=b'{}')
+    assert sent[0]["status"]==500 and json.loads(sent[1]["body"])=={"error":"server_error"}
+    assert reporter.fields["outcome"]=="server_error"

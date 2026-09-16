@@ -371,6 +371,12 @@ def test_custom_domain_change_triggers_the_deploy_workflow() -> None:
     assert "CNAME" in workflow[True]["push"]["paths"]
     assert "if [ -f CNAME ]; then cp CNAME site/CNAME; fi" in workflow_text
 
+def test_m2_operational_health_is_frequent_and_quality_remains_separate():
+    text=(ROOT/'.github/workflows/m2-evaluation.yml').read_text()
+    assert "*/15 * * * *" in text and "operational-health:" in text
+    assert "if status == 'fail': raise SystemExit(1)" in text
+    assert "github.event.schedule == '41 6 * * *'" in text
+
 
 def test_one_source_snapshot_drives_translation_and_publication() -> None:
     jobs = _jobs()

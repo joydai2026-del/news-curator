@@ -51,6 +51,7 @@ from __future__ import annotations
 import html
 import base64
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -95,6 +96,13 @@ body{
   font-size:17px; line-height:1.5;
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
+body.locale-pending .shell{visibility:hidden}
+.locale-loading{display:none;position:fixed;inset:0;z-index:100;place-items:center;color:var(--muted)}
+body.locale-pending .locale-loading{display:grid}
+.locale-loading::before{content:"";width:1.5rem;height:1.5rem;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:locale-spin .7s linear infinite}
+.locale-loading span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+@keyframes locale-spin{to{transform:rotate(360deg)}}
+.card[data-locale-hidden="true"]{display:none!important}
 .wrap{max-width:78rem; margin:0 auto; padding:4rem 1.5rem 6rem}
 header{margin-bottom:2rem}
 h1{margin:0 0 .6rem; font-size:1.5rem; font-weight:620; letter-spacing:-.021em; line-height:1.2}
@@ -275,10 +283,11 @@ body{overflow-x:hidden;overflow-x:clip;background:
 .topbar{display:flex;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1rem}
 .crumb{font-size:.75rem;color:var(--faint)}
 .profile-slot{min-height:44px;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}
+.locale-switch{display:flex;gap:.25rem;align-items:center}.locale-switch button{min-width:44px;min-height:44px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--fg);cursor:pointer}.locale-switch button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
 .profile-link,.dashboard-link{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);border-radius:999px;padding:.5rem .9rem;color:var(--accent);font-size:.78rem;font-weight:650;text-decoration:none;background:var(--card)}
 .profile-link:hover,.dashboard-link:hover{background:var(--accent-soft)}
 .profile-link:focus-visible,.dashboard-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible,.load-more:focus-visible,.updates-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.intro{border:1px solid var(--line);background:color-mix(in srgb,var(--card) 92%,transparent);border-radius:1.5rem;padding:1.75rem 1.9rem;box-shadow:var(--shadow)}
+.intro{border:1px solid color-mix(in srgb,var(--line) 82%,transparent);background:color-mix(in srgb,var(--card) 84%,transparent);border-radius:1.5rem;padding:1.75rem 1.9rem;box-shadow:var(--shadow);backdrop-filter:blur(18px);transition:box-shadow .18s ease,border-color .18s ease}
 .intro .eyebrow{font-size:.625rem;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
 .intro h1{margin:.5rem 0 .45rem;font:600 clamp(2rem,4vw,3rem)/1.04 var(--serif);letter-spacing:-.04em;max-width:16ch}
 .intro p{margin:0;color:var(--muted);max-width:68ch;font-size:.9rem}
@@ -303,19 +312,19 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .topic-section{min-width:0}
 .section-title,.active-topic{margin:0 0 .55rem;padding:0 .15rem;font:650 1.35rem/1.25 var(--serif);letter-spacing:-.02em;color:var(--fg)}
 .active-topic[hidden]{display:none}
-.grid{display:flex;flex-direction:column;gap:0;align-items:stretch;margin:0;border:1px solid var(--line);border-radius:1.1rem;background:var(--card);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05)}
+.grid{display:flex;flex-direction:column;gap:0;align-items:stretch;margin:0;border:1px solid color-mix(in srgb,var(--line) 82%,transparent);border-radius:1.1rem;background:color-mix(in srgb,var(--card) 90%,transparent);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05);backdrop-filter:blur(14px)}
 .sections.filtered{gap:0;border:1px solid var(--line);border-radius:1.1rem;background:var(--card);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05)}
 .sections.filtered .topic-section,.sections.filtered .grid{display:contents}
 .sections.filtered .section-title{display:none}
 .sections.filtered .card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
-.card{display:block;width:100%;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible;cursor:default;transition:none}
+.card{display:block;width:100%;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible;cursor:default;transition:background-color .16s ease}
 .card+.card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
 .card:hover,.card.open{border-color:transparent;transform:none;box-shadow:none}
 .card[hidden]{display:none}
 .card.is-read .headline{color:var(--faint)}
 .card.is-read{background:color-mix(in srgb,var(--line) 16%,transparent)}
 .story-heading{margin:0;font:inherit}
-.accordion-toggle{width:100%;min-height:58px;border:0;background:transparent;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:.65rem;align-items:center;padding:1.05rem 1.15rem;cursor:pointer}
+.accordion-toggle{width:100%;min-height:58px;border:0;background:transparent;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:.65rem;align-items:center;padding:1.05rem 1.15rem;cursor:pointer;transition:background-color .16s ease}
 .accordion-toggle:hover{background:color-mix(in srgb,var(--accent-soft) 38%,transparent)}
 .headline{font:600 1.06rem/1.34 var(--serif);letter-spacing:-.012em}
 .chev{display:grid;place-items:center;width:30px;height:30px;margin:0;border:1px solid var(--line);border-radius:50%;padding:0;color:var(--faint);background:transparent;transition:transform .2s ease}
@@ -348,7 +357,10 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .updates-status{position:absolute;top:calc(100% + .5rem);left:50%;transform:translateX(-50%);z-index:31;width:max-content;max-width:calc(100% - 2rem);text-align:center;margin:0;pointer-events:none}
 .updates-button{min-height:44px;max-width:100%;border-radius:999px;padding:.55rem 1rem;background:var(--accent);color:var(--accent-fg);font-weight:700;box-shadow:var(--shadow);pointer-events:auto}
 .history-tools{display:flex;justify-content:center;margin:1.25rem 0}
-.load-more{min-height:44px;border-radius:999px;padding:.65rem 1rem;background:var(--card);color:var(--accent);font-weight:700}
+.load-more{min-height:44px;border-radius:999px;padding:.65rem 1rem;background:color-mix(in srgb,var(--card) 82%,transparent);color:var(--accent);font-weight:700;backdrop-filter:blur(14px);box-shadow:0 8px 24px color-mix(in srgb,var(--accent) 10%,transparent);transition:transform .16s ease,box-shadow .16s ease,opacity .16s ease}
+.load-more:not(:disabled):hover{transform:translateY(-1px);box-shadow:0 12px 30px color-mix(in srgb,var(--accent) 16%,transparent)}
+.load-more[aria-busy="true"]{opacity:.78;transform:translateY(1px);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg) 12%,transparent),0 5px 16px color-mix(in srgb,var(--accent) 9%,transparent)}
+.state-action.is-pending{opacity:.76;box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg) 12%,transparent)}
 .empty{margin:1.5rem 0}
 footer{margin-top:2rem;padding:1.25rem .25rem 0}
 .shot,.pad>.eyebrow,.hl,.desc,.meta{display:none!important}
@@ -357,15 +369,17 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
   .tools{top:0}.mobiletopics{display:flex}.panelin{grid-template-columns:1fr;gap:1rem}.topbar{align-items:flex-start}
 }
 @media (max-width:620px){
-  .wrap{padding:.75rem .75rem 0}.maincol{padding-bottom:3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
-  .intro h1{font-size:2.15rem}.topbar{gap:.5rem;flex-wrap:wrap}.crumb{padding-top:.5rem}
+  .wrap{padding:.55rem .65rem 0}.maincol{padding-bottom:3rem}.intro{padding:.9rem 1rem;border-radius:1.05rem}
+  .intro h1{font-size:1.7rem;margin:.3rem 0 .25rem}.intro p{font-size:.8rem;line-height:1.4}.intro .eyebrow{font-size:.58rem}
+  .edition-meta{margin-top:.6rem;gap:.3rem}.edition-meta span{padding:.22rem .5rem;font-size:.64rem}
+  .topbar{gap:.35rem;flex-wrap:wrap;margin-bottom:.55rem}.crumb{padding-top:.35rem}
   .profile-slot{width:100%;max-width:100%;justify-content:flex-start}
-  .tools{margin-left:-.1rem;margin-right:-.1rem;flex-direction:column;align-items:stretch}
+  .tools{margin:.6rem -.1rem .55rem;padding:.55rem;flex-direction:column;align-items:stretch}
   .mobiletopics{width:100%;max-width:100%;box-sizing:border-box;flex:none;padding-right:2px}
   .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
   .panel{padding:0 .85rem 1rem}.detail .row{grid-template-columns:1fr;gap:.05rem}
 }
-@media (prefers-reduced-motion:reduce){.chev{transition:none}}
+@media (prefers-reduced-motion:reduce){.intro,.card,.accordion-toggle,.chev,.load-more{transition:none}.locale-loading::before{animation:none}.load-more:not(:disabled):hover,.load-more[aria-busy="true"]{transform:none}}
 """
 
 JS = """
@@ -890,6 +904,7 @@ def _render_card(
     story_id = story_id_for_item(item)
     return (
         f'<article class="card" data-story-id="{_e(story_id)}" '
+        f'data-language="{_e(item.language)}" '
         f'data-topic-ids="{_e(topics)}" data-topic-api-ids="{_e(api_topics)}" '
         f'data-topics="{_e(topics)}" data-rank-all="{all_rank}" '
         f'data-summary-chars="{len(summary)}"'
@@ -1058,7 +1073,8 @@ def render_html(
 <meta name="news-curator-m2-transport-timeout-ms" content="">
 <style>{CSS}</style>
 </head>
-<body>
+<body class="locale-pending">
+<div class="locale-loading" role="status" aria-live="polite"><span>Loading selected language</span></div>
 <div class="wrap">
 <div class="shell">
   <aside class="rail" aria-label="News Curator navigation">
@@ -1070,13 +1086,14 @@ def render_html(
   <div class="maincol">
     <div class="topbar">
       <div class="crumb">{_e(site_name)} / Today's edition</div>
+      <div class="locale-switch" role="group" aria-label="Display language"><button id="locale-en" type="button" data-locale="en" aria-pressed="true">EN</button><button id="locale-zh" type="button" data-locale="zh" aria-pressed="false">中文</button></div>
       <div class="profile-slot"><!-- personalization-link --></div>
     </div>
     <header class="intro">
       <div class="eyebrow">Today's edition</div>
       <h1>Your reading companion</h1>
       <p>Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.</p>
-      <div class="edition-meta" data-timezone="{_e(timezone_name)}">
+      <div class="edition-meta" data-timezone="{_e(timezone_name)}" data-generated-at="{_e(built.isoformat())}">
         <span>Built {_e(stamp)}</span><span>scheduled hourly</span><span>{total} stories</span>{stale}
       </div>
     </header>
@@ -1223,6 +1240,25 @@ def render_site(
     tmp = path.with_suffix(".html.tmp")
     tmp.write_text(payload, encoding="utf-8")
     tmp.replace(path)
+
+    # Direct render callers still receive the two public locale projections.
+    # The full pipeline writes richer translated projections first, so these
+    # source-language-only fallbacks never overwrite reviewed translations.
+    data_dir = out_dir / "data"
+    data_dir.mkdir(exist_ok=True)
+    for language in ("en", "zh"):
+        projection = data_dir / f"news-{language}.json"
+        if projection.exists():
+            continue
+        categories = []
+        for name, items in ranked.items():
+            category_id = (topic_ids_by_name or {}).get(name, _slug(name))
+            categories.append({"id": category_id, "name": "中国新闻" if language == "zh" and category_id == "china-news" else name,
+                "items": [{"story_id": story_id_for_item(item), "title": item.title,
+                    "description": item.description, "display_language": language,
+                    "translation_available": True} for item in items if item.language == language]})
+        projection.write_text(json.dumps({"schema_version": 1, "generated_at": now.isoformat(),
+            "language": language, "categories": categories}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
     for relative_path in (
