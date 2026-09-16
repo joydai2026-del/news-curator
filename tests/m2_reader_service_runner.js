@@ -19,6 +19,10 @@ function payload(overrides = {}) { return { schema_version: 1, request_id: "requ
     title: "Six Chinese AI firms accused of aggressively copying US frontier models",
     summary: "US urges AI firms to ID, then secretly switch, Chinese users to less-capable models.",
     source_name: "Ars Technica", published_at: "2026-09-09T20:06:28Z",
+    title_en: "Six Chinese AI firms accused of aggressively copying US frontier models",
+    summary_en: "US urges AI firms to ID, then secretly switch, Chinese users to less-capable models.",
+    title_zh: "", summary_zh: "",
+    translation_status: { en: "original", zh: "untranslated" },
     url: "https://arstechnica.com/tech-policy/2026/09/example" }], next_cursor: "opaque", ...overrides }; }
 function response(value, url) { return { ok: true, redirected: false, url,
   text: async () => JSON.stringify(value) }; }
