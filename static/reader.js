@@ -1298,7 +1298,7 @@
       const mode = document.getElementById("m2-mode");
       if (!m2Active || !mode) return;
       const reason = mode.dataset.rankingReason || "";
-      mode.textContent = `${reason}${reason ? " " : ""}${localeCopy()[status]}.`;
+      mode.textContent = `${reason}${reason ? " " : ""}${localeCopy()[status]}${displayLanguage === "zh" ? "。" : "."}`;
     }
     function enqueueBehavior(operation, recordsActivity = false) {
       const epoch = authEpoch;
@@ -1414,7 +1414,7 @@
         (response.history_revision > 0 || activityCommittedSequence > 0) ? "activity" : "activityNone";
       if (mode) {
         mode.dataset.rankingReason = reason;
-        mode.textContent = `${reason} ${localeCopy()[activityStatus]}.`;
+        mode.textContent = `${reason} ${localeCopy()[activityStatus]}${displayLanguage === "zh" ? "。" : "."}`;
       }
       if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
       applyLocaleLabels();
