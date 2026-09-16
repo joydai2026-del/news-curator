@@ -318,7 +318,21 @@ reddit:
 # ---------------------------------------------------------------------------
 translation:
   enabled: false
-  provider: google
+  # The provider is selected here, never in business logic. `google` is the
+  # original adapter; `openai` is the Phase 1 model adapter, chosen because the
+  # Google Cloud path was never provisioned (no GOOGLE_* variables, no
+  # `translation` environment). Flipping this back is a config change.
+  provider: openai
+  model: gpt-5-mini
+  api_key_env: NEWS_CURATOR_MODEL_API_KEY
+  api_origin: https://api.openai.com
+  # Characters bound volume. Dollars bound spend. Both are checked.
+  daily_cost_limit_usd: 0.5
+  cost_per_1k_characters_usd: 0.002
+  cache_ttl_days: 30
+  # There is deliberately no drop value. A failed translation shows the
+  # original, marked, and never removes the story from the feed.
+  on_failure: show_original_marked
   targets: [en, zh]
   max_items_per_language: 25
   max_characters_per_language: 2000
@@ -342,6 +356,19 @@ translation:
   project_id_env: GOOGLE_CLOUD_PROJECT_ID
   supabase_url_env: NEWS_CURATOR_SUPABASE_URL
   supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY
+
+# ---------------------------------------------------------------------------
+# Reading-surface language policy. Phase 1 is English direction only: the flip
+# logic stays in the design, so turning the Chinese site on later is this
+# config plus a translation run, never a redesign.
+# ---------------------------------------------------------------------------
+language:
+  default_display: en
+  other_lane_enabled: true
+  exclusive_category_id: only-other-language-press
+
+reader:
+  chinese_site_mode_enabled: false
 
 # ---------------------------------------------------------------------------
 # The newsletter lane. Reads a dedicated newsletter-only Gmail account through

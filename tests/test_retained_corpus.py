@@ -98,3 +98,50 @@ def test_corpus_coalesces_language_variants_without_changing_m1_deduper():
     ], observed_at=NOW)
     assert len(rows) == 1
     assert rows[0].category_ids == frozenset({"us-news", "world"})
+
+
+def _pair_items():
+    from datetime import timedelta
+    en = Item(title="Nvidia beats on earnings with 3 Blackwell chips", url="https://e.com/1",
+              canonical_url="https://e.com/1", source_id="fixture", source_name="Fixture",
+              published_at=NOW, language="en", description="")
+    zh = Item(title="英伟达 Nvidia 发布 3 款 Blackwell 芯片 earnings", url="https://e.cn/1",
+              canonical_url="https://e.cn/1", source_id="fixture", source_name="Fixture",
+              published_at=NOW - timedelta(hours=1), language="zh", description="")
+    lone = Item(title="独家：某部门发布 7 项新规", url="https://e.cn/2", canonical_url="https://e.cn/2",
+                source_id="fixture", source_name="Fixture", published_at=NOW, language="zh", description="")
+    return en, zh, lone
+
+
+def test_retain_assigns_an_event_group_to_a_cross_language_pair():
+    from curator.retained_corpus import language_exclusive_story_ids
+    en, zh, lone = _pair_items()
+    rows = retain([en, zh, lone], categories=[], observed_at=NOW)
+    by_language = {row.item.language + row.item.canonical_url: row for row in rows}
+    grouped = [row for row in rows if row.event_group_id]
+    assert len(grouped) == 2 and len({row.event_group_id for row in grouped}) == 1
+    assert by_language["zhhttps://e.cn/2"].event_group_id is None
+
+
+def test_language_exclusive_ids_exclude_a_story_an_english_outlet_also_carried():
+    from curator.retained_corpus import language_exclusive_story_ids
+    en, zh, lone = _pair_items()
+    rows = retain([en, zh, lone], categories=[], observed_at=NOW)
+    exclusive = language_exclusive_story_ids(rows, display_language="en")
+    lone_id = next(row.story_id for row in rows if row.item.canonical_url == "https://e.cn/2")
+    paired_zh_id = next(row.story_id for row in rows if row.item.canonical_url == "https://e.cn/1")
+    assert lone_id in exclusive and paired_zh_id not in exclusive
+
+
+def test_ingest_rows_carry_the_overlay_only_when_present():
+    from curator.retained_corpus import apply_translations
+    from curator.translation.ingest import TranslationOverlay, TRANSLATED
+    en, zh, lone = _pair_items()
+    rows = retain([lone], categories=[], observed_at=NOW)
+    story_id = rows[0].story_id
+    plain = public_ingest_rows(rows, allowed_source_ids={"fixture"})
+    assert "title_translations" not in plain[0] and "event_group_id" not in plain[0]
+    translated = apply_translations(rows, {story_id: TranslationOverlay(
+        {"en": "Exclusive: 7 new rules"}, {}, TRANSLATED)})
+    payload = public_ingest_rows(translated, allowed_source_ids={"fixture"})
+    assert payload[0]["title_translations"] == {"en": "Exclusive: 7 new rules"}
