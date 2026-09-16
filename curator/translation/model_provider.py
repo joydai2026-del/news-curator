@@ -213,3 +213,81 @@ class ModelTranslationAdapter:
 
     def _fail(self, reason: TranslationErrorReason) -> None:
         raise TranslationProviderError(self._config.provider_id, reason) from None
+
+
+class ModelPairingAdapter:
+    """Asks the exclusivity question on the SAME endpoint, model and key.
+
+    Deterministic decoding: temperature 0, strict JSON object. Any deviation
+    raises, and the caller treats a raise as UNDECIDED, never as exclusive.
+    """
+
+    def __init__(self, *, config: ModelTranslationConfig, transport: SafeHttpTransport,
+                 api_key: Callable[[], str]) -> None:
+        self._adapter = ModelTranslationAdapter(config=config, transport=transport, api_key=api_key)
+        self._config = config
+
+    @property
+    def provider_id(self) -> str:
+        return self._config.provider_id
+
+    @property
+    def model_version(self) -> str:
+        from .pairing import PAIRING_POLICY_ID
+        return f"{self._config.model}:{PAIRING_POLICY_ID}"
+
+    def decide(self, *, story, context):
+        from .pairing import SYSTEM_PROMPT, UNDECIDED, build_question, parse_match_index
+
+        payload = {
+            "model": self._config.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(build_question(story, context),
+                                                       ensure_ascii=False, separators=(",", ":"))},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0,
+        }
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(body) > self._config.max_request_bytes:
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.INVALID_REQUEST)
+        key = self._adapter._load_key()
+        credential = OriginBoundCredential(origin=self._config.api_origin,
+                                           header_name="Authorization", value="Bearer " + key)
+        try:
+            response = self._transport_request(body, credential)
+        except SafeTransportError:
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.TRANSPORT_FAILURE) from None
+        if response.status_code != 200:
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.PROVIDER_REJECTED)
+        if len(response.body) > self._config.max_response_bytes:
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.RESPONSE_TOO_LARGE)
+        try:
+            envelope = json.loads(response.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.MALFORMED_RESPONSE) from None
+        content = self._content(envelope)
+        decided = parse_match_index(content, context_size=len(context))
+        usage = ModelTranslationAdapter._usage(envelope)
+        if decided == UNDECIDED:
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.MALFORMED_RESPONSE)
+        return decided, usage[0], usage[1]
+
+    def _transport_request(self, body, credential):
+        return self._adapter._transport.request(
+            "model-pairing", "POST", self._config.api_origin + self._config.api_path,
+            headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
+            body=body, credential=credential, allowed_mime_types=("application/json",))
+
+    def _content(self, envelope) -> str:
+        if not isinstance(envelope, Mapping):
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.MALFORMED_RESPONSE)
+        choices = envelope.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], Mapping):
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.MALFORMED_RESPONSE)
+        message = choices[0].get("message")
+        content = message.get("content") if isinstance(message, Mapping) else None
+        if not isinstance(content, str) or not content or len(content) > self._config.max_response_bytes:
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.MALFORMED_RESPONSE)
+        return content

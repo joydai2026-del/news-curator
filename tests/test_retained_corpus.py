@@ -101,43 +101,35 @@ def test_corpus_coalesces_language_variants_without_changing_m1_deduper():
     assert rows[0].category_ids == frozenset({"us-news", "world"})
 
 
-def _pair_items():
-    from datetime import timedelta
-    en = Item(title="Nvidia beats on earnings with 3 Blackwell chips", url="https://e.com/1",
-              canonical_url="https://e.com/1", source_id="fixture", source_name="Fixture",
-              published_at=NOW, language="en", description="")
-    zh = Item(title="英伟达 Nvidia 发布 3 款 Blackwell 芯片 earnings", url="https://e.cn/1",
-              canonical_url="https://e.cn/1", source_id="fixture", source_name="Fixture",
-              published_at=NOW - timedelta(hours=1), language="zh", description="")
-    lone = Item(title="独家：某部门发布 7 项新规", url="https://e.cn/2", canonical_url="https://e.cn/2",
-                source_id="fixture", source_name="Fixture", published_at=NOW, language="zh", description="")
-    return en, zh, lone
+def test_retain_claims_only_certain_cross_language_matches():
+    """The heuristic is gone. Only an identical title or URL is claimed here.
 
-
-def test_retain_assigns_an_event_group_to_a_cross_language_pair():
-    from curator.retained_corpus import language_exclusive_story_ids
-    en, zh, lone = _pair_items()
-    rows = retain([en, zh, lone], categories=[], observed_at=NOW)
-    by_language = {row.item.language + row.item.canonical_url: row for row in rows}
+    Two rows sharing a canonical URL already coalesce into one retained row
+    upstream (story_id is derived from that URL), so the case that actually
+    reaches the pre-filter is a Chinese-language outlet running the English
+    headline verbatim.
+    """
+    en = Item(title="Nvidia beats on earnings", url="https://e.com/1", canonical_url="https://e.com/1",
+              source_id="fixture", source_name="Fixture", published_at=NOW, language="en",
+              description="Revenue of 46 billion dollars in 2026.")
+    zh = Item(title="Nvidia beats on earnings", url="https://e.cn/1", canonical_url="https://e.cn/1",
+              source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
+              description="2026 年营收 467 亿美元。")
+    unrelated = Item(title="某地铁线路延长 3 公里", url="https://e.cn/2", canonical_url="https://e.cn/2",
+                     source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
+                     description="该工程于 2026 年完工。")
+    rows = retain([en, zh, unrelated], categories=[], observed_at=NOW)
     grouped = [row for row in rows if row.event_group_id]
     assert len(grouped) == 2 and len({row.event_group_id for row in grouped}) == 1
-    assert by_language["zhhttps://e.cn/2"].event_group_id is None
-
-
-def test_language_exclusive_ids_exclude_a_story_an_english_outlet_also_carried():
-    from curator.retained_corpus import language_exclusive_story_ids
-    en, zh, lone = _pair_items()
-    rows = retain([en, zh, lone], categories=[], observed_at=NOW)
-    exclusive = language_exclusive_story_ids(rows, display_language="en")
-    lone_id = next(row.story_id for row in rows if row.item.canonical_url == "https://e.cn/2")
-    paired_zh_id = next(row.story_id for row in rows if row.item.canonical_url == "https://e.cn/1")
-    assert lone_id in exclusive and paired_zh_id not in exclusive
+    assert next(row for row in rows if row.item.canonical_url == "https://e.cn/2").event_group_id is None
 
 
 def test_ingest_rows_carry_the_overlay_only_when_present():
     from curator.retained_corpus import apply_translations
     from curator.translation.ingest import TranslationOverlay, TRANSLATED
-    en, zh, lone = _pair_items()
+    lone = Item(title="独家：某部门发布七项新规", url="https://e.cn/2", canonical_url="https://e.cn/2",
+                source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
+                description="该通知自 2026 年起执行。")
     rows = retain([lone], categories=[], observed_at=NOW)
     story_id = rows[0].story_id
     plain = public_ingest_rows(rows, allowed_source_ids={"fixture"})
@@ -146,44 +138,3 @@ def test_ingest_rows_carry_the_overlay_only_when_present():
         {"en": "Exclusive: 7 new rules"}, {}, TRANSLATED)})
     payload = public_ingest_rows(translated, allowed_source_ids={"fixture"})
     assert payload[0]["title_translations"] == {"en": "Exclusive: 7 new rules"}
-
-
-def test_grouping_sees_stories_ingested_by_an_earlier_run():
-    """Twelve ingests an hour: the pair almost never lands in one batch."""
-    from curator.grouping import GroupingCandidate
-    from curator.retained_corpus import language_exclusive_story_ids, regroup_with_corpus
-    english = Item(title="Nvidia beats on earnings with 3 Blackwell chips",
-                   url="https://e.com/1", canonical_url="https://e.com/1", source_id="fixture",
-                   source_name="Fixture", published_at=NOW, language="en",
-                   description="Nvidia reported revenue of 46 billion dollars, 56 percent above a year "
-                               "ago, and said 7 new sites are live in 2026.")
-    chinese = Item(title="英伟达 Nvidia 发布 Blackwell 芯片 earnings 超预期",
-                   url="https://e.cn/1", canonical_url="https://e.cn/1", source_id="fixture",
-                   source_name="Fixture", published_at=NOW, language="zh",
-                   description="英伟达公布季度营收 467 亿美元，同比增长 56%，并称 2026 年将有 3 座新数据中心投入使用。")
-    # Run N ingested the English story; run N+1 brings the Chinese one alone.
-    earlier = retain([english], categories=[], observed_at=NOW)
-    batch = retain([chinese], categories=[], observed_at=NOW)
-    assert batch[0].event_group_id is None
-    corpus = tuple(GroupingCandidate(story_id=row.story_id, language=row.item.language,
-                                     title=row.item.title, summary=row.item.description,
-                                     published_at=row.item.published_at,
-                                     event_group_id=row.event_group_id) for row in earlier)
-    regrouped = regroup_with_corpus(batch, corpus)
-    assert regrouped[0].event_group_id is not None
-    # And it is therefore NOT language exclusive: an English outlet ran it.
-    covered = tuple(GroupingCandidate(story_id=row.story_id, language=row.language, title=row.title,
-                                      summary=row.summary, published_at=row.published_at,
-                                      event_group_id=regrouped[0].event_group_id) for row in corpus)
-    assert language_exclusive_story_ids(regrouped, display_language="en", corpus=covered) == ()
-
-
-def test_regrouping_never_downgrades_an_id_the_row_already_carries():
-    from curator.retained_corpus import regroup_with_corpus
-    lone = Item(title="独家：某部门发布 7 项新规", url="https://e.cn/2", canonical_url="https://e.cn/2",
-                source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
-                description="该通知自 2026 年起执行。")
-    rows = retain([lone], categories=[], observed_at=NOW)
-    kept = "group:" + "9" * 32
-    rows = (replace(rows[0], event_group_id=kept),)
-    assert regroup_with_corpus(rows, ())[0].event_group_id == kept

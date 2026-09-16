@@ -772,6 +772,9 @@ def load_sources(path: Path) -> dict[str, Any]:
     for key, low, high in (
         ("characters_per_token", 1, 100),
         ("max_output_tokens_per_story", 1, 100000),
+        ("pairing_window_hours", 1, 168),
+        ("pairing_max_context_titles", 1, 500),
+        ("pairing_daily_call_limit", 0, 5000),
     ):
         value = translation.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, int)
@@ -800,15 +803,11 @@ def load_sources(path: Path) -> dict[str, Any]:
     cross_language = grouping.get("cross_language_enabled")
     if cross_language is not None and not isinstance(cross_language, bool):
         raise ConfigError(f"{path.name}: 'grouping.cross_language_enabled' must be true or false.")
-    for key, low, high in (
-        ("min_shared_entity_tokens", 1, 10),
-        ("window_hours", 1, 168),
-        ("max_pairs_per_bucket", 100, 100000),
-    ):
-        value = grouping.get(key)
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int)
-                                  or not low <= value <= high):
-            raise ConfigError(f"{path.name}: 'grouping.{key}' must be an integer between {low} and {high}.")
+    for key in ("min_shared_entity_tokens", "window_hours", "max_pairs_per_bucket"):
+        if key in grouping:
+            raise ConfigError(
+                f"{path.name}: 'grouping.{key}' was removed with the token heuristic; "
+                "the pairing window is 'translation.pairing_window_hours'.")
 
     reader = raw.get("reader") or {}
     chinese_site = reader.get("chinese_site_mode_enabled")

@@ -23,7 +23,8 @@ def test_shipped_config_declares_every_phase1_key():
     cfg = load_config(ROOT)
     for key in ("provider", "model", "api_key_env", "api_origin", "daily_cost_limit_usd",
                 "input_cost_per_million_tokens_usd", "output_cost_per_million_tokens_usd",
-                "characters_per_token", "max_output_tokens_per_story", "cache_ttl_days", "on_failure"):
+                "characters_per_token", "max_output_tokens_per_story", "cache_ttl_days", "on_failure",
+                "pairing_window_hours", "pairing_max_context_titles", "pairing_daily_call_limit"):
         assert key in cfg.translation, key
     assert cfg.translation["on_failure"] == "show_original_marked"
     # Phase 1 ships enabled: the missing translation surface is a bug, not a flag.
@@ -33,9 +34,10 @@ def test_shipped_config_declares_every_phase1_key():
     assert cfg.language["exclusive_category_id"]
     # Phase 1 is English direction only. The flip stays in the design, off.
     assert cfg.reader["chinese_site_mode_enabled"] is False
-    # Grouping reads its own keys; the 48-hour window is the spec default.
-    assert cfg.grouping["window_hours"] == 48
-    assert cfg.grouping["min_shared_entity_tokens"] == 2
+    # The pairing window is a translation key; grouping keeps only its switch.
+    assert cfg.translation["pairing_window_hours"] == 48
+    assert cfg.translation["pairing_daily_call_limit"] == 600
+    assert set(cfg.grouping) == {"cross_language_enabled"}
 
 
 @pytest.mark.parametrize("mutation", [
@@ -54,11 +56,15 @@ def test_shipped_config_declares_every_phase1_key():
     lambda raw: raw["language"].__setitem__("other_lane_enabled", "yes"),
     lambda raw: raw["language"].__setitem__("exclusive_category_id", "Not A Category"),
     lambda raw: raw["reader"].__setitem__("chinese_site_mode_enabled", "false"),
-    lambda raw: raw["grouping"].__setitem__("window_hours", 0),
-    lambda raw: raw["grouping"].__setitem__("window_hours", 169),
-    lambda raw: raw["grouping"].__setitem__("min_shared_entity_tokens", 0),
-    lambda raw: raw["grouping"].__setitem__("max_pairs_per_bucket", 99),
     lambda raw: raw["grouping"].__setitem__("cross_language_enabled", "yes"),
+    # The removed heuristic keys must fail the boot, not be silently ignored.
+    lambda raw: raw["grouping"].__setitem__("window_hours", 48),
+    lambda raw: raw["grouping"].__setitem__("min_shared_entity_tokens", 2),
+    lambda raw: raw["grouping"].__setitem__("max_pairs_per_bucket", 2000),
+    lambda raw: raw["translation"].__setitem__("pairing_window_hours", 0),
+    lambda raw: raw["translation"].__setitem__("pairing_window_hours", 169),
+    lambda raw: raw["translation"].__setitem__("pairing_max_context_titles", 501),
+    lambda raw: raw["translation"].__setitem__("pairing_daily_call_limit", 5001),
 ])
 def test_out_of_range_values_fail_the_boot(tmp_path, mutation):
     with pytest.raises(ConfigError):

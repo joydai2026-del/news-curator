@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """Build or service-ingest a public-only retained-corpus artifact."""
 from __future__ import annotations
-import argparse, json, os, sys, urllib.request
+import argparse, json, os, sys, urllib.error, urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from curator.config import load_config
 from curator.pipeline import configured_source_specs
-from curator.grouping import GroupingCandidate, GroupingPolicy
-from curator.retained_corpus import (apply_translations, language_exclusive_story_ids,
-                                     public_ingest_rows, regroup_with_corpus, retain)
+from curator.grouping import GroupingCandidate, GroupingPolicy, exact_matches
+from curator.retained_corpus import apply_translations, public_ingest_rows, retain
 from curator.source_snapshot import load_source_snapshot, snapshot_config_digest
 from curator.recommendation.supabase_http import _NoRedirect, validate_https_origin
 from curator.sources import SafeHttpPolicy, SafeHttpTransport
 from curator.translation import (
+    ModelPairingAdapter,
     ModelTranslationAdapter,
     ModelTranslationConfig,
     SupabaseTranslationConfig,
     SupabaseTranslationStore,
 )
+from curator.translation.base import TranslationPrivacyError, TranslationProviderError
 from curator.translation.ingest import IngestTranslationPolicy, translate_exclusive_stories
+from curator.translation.pairing import ExclusivityDecision, PairingPolicy, decide_exclusivity
+from curator.translation.store import TranslationStoreError
 
 
 def _ingest_translation_policy(cfg) -> IngestTranslationPolicy:
@@ -46,16 +49,55 @@ def _ingest_translation_policy(cfg) -> IngestTranslationPolicy:
     )
 
 
-def read_corpus_window(url, key, *, policy: GroupingPolicy, now, pages: int = 10):
-    """Read the newest corpus rows inside the grouping window, newest first.
-
-    Grouping must see stories ingested by EARLIER runs, not only this batch.
-    The read RPC caps at 100 rows per call, so this pages until it leaves the
-    window or hits the page cap, and the cap is reported rather than hidden.
-    """
+def _service_headers(key):
     headers = {'apikey': key, 'content-type': 'application/json'}
     if not key.startswith('sb_secret_'):
         headers['authorization'] = 'Bearer ' + key
+    return headers
+
+
+def _rpc(url, key, name, body, *, timeout=30):
+    request = urllib.request.Request(url + '/rest/v1/rpc/' + name,
+                                     data=json.dumps(body).encode(),
+                                     headers=_service_headers(key), method='POST')
+    with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as response:
+        if response.status != 200:
+            raise ValueError(f'{name} failed')
+        return json.loads(response.read() or b'null')
+
+
+def read_exclusivity_decisions(url, key, story_ids):
+    """Decisions already on record. A decided story is never re-asked."""
+    if not story_ids:
+        return {}
+    rows = _rpc(url, key, 'm2_read_exclusivity_decisions', {'p_story_ids': list(story_ids)})
+    decisions = {}
+    for row in rows or ():
+        decisions[str(row['story_id'])] = ExclusivityDecision(
+            story_id=str(row['story_id']),
+            decided_at=datetime.fromisoformat(str(row['decided_at']).replace('Z', '+00:00')),
+            model=str(row.get('model') or ''), policy_id=str(row.get('policy_id') or ''),
+            match_story_id=row.get('match_story_id'))
+    return decisions
+
+
+def record_exclusivity_decisions(url, key, decisions):
+    """Write once. The RPC keeps the first decision on a replay."""
+    for decision in decisions:
+        _rpc(url, key, 'm2_record_exclusivity_decision', {
+            'p_story_id': decision.story_id, 'p_model': decision.model,
+            'p_policy_id': decision.policy_id, 'p_match_story_id': decision.match_story_id})
+
+
+def read_corpus_window(url, key, *, policy, now, pages: int = 40):
+    """Read every corpus row inside the PAIRING window, newest first.
+
+    Pairing must see stories ingested by EARLIER runs, not only this batch. The
+    read RPC caps at 100 rows per call, so this pages until it leaves the window
+    or hits the page cap. Hitting the cap means the window was NOT fully read,
+    which the caller treats as a reason to skip paid work, not to guess.
+    """
+    headers = _service_headers(key)
     horizon = now - timedelta(hours=policy.window_hours)
     collected, before_published, before_story, truncated = [], None, None, False
     for page in range(pages):
@@ -77,24 +119,29 @@ def read_corpus_window(url, key, *, policy: GroupingPolicy, now, pages: int = 10
             collected.append(GroupingCandidate(
                 story_id=str(row['story_id']), language=str(row['language']),
                 title=str(row['title']), summary=str(row.get('summary') or ''),
-                published_at=published, event_group_id=row.get('event_group_id')))
+                published_at=published, canonical_url=str(row.get('canonical_url') or ''),
+                category_ids=tuple(row.get('category_ids') or ()),
+                event_group_id=row.get('event_group_id')))
         before_published, before_story = rows[-1]['published_at'], rows[-1]['story_id']
         if len(rows) < 100:
-            break
+            # The corpus itself ran out inside the window: fully read.
+            return tuple(collected), False
         truncated = page == pages - 1
     return tuple(collected), truncated
 
 
-def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=()):
-    """Translate the language-exclusive stories, or say plainly why not.
+def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
+                   pairing_provider=None, decisions=None, truncated=False, on_decision=None):
+    """Decide exclusivity with the model, then translate what it ruled exclusive.
 
-    Returns ``(rows, message)``. A missing credential, a switched-off feature,
-    a provider failure or an unavailable cache is always a SKIP, never an
-    exception: the hourly ingest must keep running and no story is ever
-    dropped for a translation problem.
+    Returns ``(rows, message)``. A missing credential, a switched-off feature, a
+    provider failure or an unavailable cache is always a named SKIP with exit 0:
+    the hourly ingest must keep running and no story is ever dropped for a
+    translation problem. A programmer error is NOT swallowed.
     """
     try:
         policy = _ingest_translation_policy(cfg)
+        pairing_policy = PairingPolicy.from_config(cfg.translation or {})
     except ValueError as error:
         return rows, f'translation unavailable: invalid policy ({error})'
     if not policy.enabled:
@@ -103,28 +150,73 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=())
     key_env = str(translation.get('api_key_env') or '')
     api_key = env.get(key_env, '') if key_env else ''
     if not api_key:
-        # Name the switch that is off, so the hourly log says what to fix.
-        return rows, f'translation skipped: {key_env or "translation.api_key_env"} is not set'
-    exclusive = set(language_exclusive_story_ids(rows, display_language=policy.display_language, corpus=corpus))
-    stories = [(row.story_id, row.item) for row in rows if row.story_id in exclusive]
-    if not stories:
-        return rows, 'translation skipped: no language-exclusive stories'
+        # Exit 0, but make it impossible to miss in the Actions log.
+        name = key_env or 'translation.api_key_env'
+        print(f'::warning::translation skipped: {name} not configured', file=sys.stderr)
+        return rows, f'translation skipped: {name} is not set'
+    if truncated:
+        # Exclusivity is unproven when the window was not fully read, and a
+        # wrong exclusivity claim spends money on a story already covered.
+        return rows, 'translation skipped: corpus read-back truncated'
+
+    batch = tuple(_pairing_candidate(row) for row in rows)
     try:
-        if store is None or provider is None:
+        if store is None or provider is None or pairing_provider is None:
             built = _build_translation_clients(translation, api_key, env)
             if built is None:
                 return rows, 'translation skipped: store not configured'
             store = store or built[0]
             provider = provider or built[1]
+            pairing_provider = pairing_provider or built[2]
+    except (TranslationProviderError, TranslationStoreError, ValueError) as error:
+        return rows, f'translation unavailable: client not built ({type(error).__name__})'
+
+    prefilter = exact_matches(batch + tuple(corpus), policy=GroupingPolicy.from_config(cfg.grouping or {}))
+    try:
+        decision = decide_exclusivity(
+            batch, corpus, display_language=policy.display_language, policy=pairing_policy,
+            provider=pairing_provider, now=now, already_decided=dict(decisions or {}),
+            prefilter=prefilter)
+    except (TranslationProviderError, TranslationStoreError) as error:
+        return rows, f'pairing unavailable: {type(error).__name__}'
+    if on_decision is not None:
+        for record in decision.decisions.values():
+            on_decision(record)
+    rows = _apply_group_ids(rows, decision.group_ids)
+
+    exclusive = set(decision.exclusive_story_ids)
+    stories = [(row.story_id, row.item) for row in rows if row.story_id in exclusive]
+    if not stories:
+        return rows, (f'translation skipped: no language-exclusive stories '
+                      f'(pairing calls={decision.calls} undecided={len(decision.undecided)})')
+    try:
         result = translate_exclusive_stories(
             stories, policy=policy, store=store, provider=provider,
             run_id=f"retained-corpus-{now.strftime('%Y%m%dT%H%M%SZ')}", now=now)
-    except Exception:
-        # Never let a translation problem take the ingest down with it.
-        return rows, 'translation unavailable: original text retained'
+    except (TranslationProviderError, TranslationStoreError, TranslationPrivacyError) as error:
+        # Provider and store degradation only. A TypeError here is a code defect
+        # and must surface, not hide behind "original text retained".
+        return rows, f'translation unavailable: {type(error).__name__}, original text retained'
     translated = result.counters.get('translated', 0) + result.counters.get('cache_hit', 0)
     return (apply_translations(rows, result.overlays),
-            f'translated={translated} untranslated_shown={result.untranslated_shown}')
+            f'translated={translated} untranslated_shown={result.untranslated_shown} '
+            f'pairing_calls={decision.calls} undecided={len(decision.undecided)}')
+
+
+def _pairing_candidate(row):
+    return GroupingCandidate(
+        story_id=row.story_id, language=row.item.language, title=row.item.title,
+        summary=row.item.description or '', published_at=row.item.published_at,
+        canonical_url=row.item.canonical_url, category_ids=tuple(sorted(row.category_ids)),
+        event_group_id=row.event_group_id)
+
+
+def _apply_group_ids(rows, group_ids):
+    """An id a row already carries is authoritative and is never replaced."""
+    from dataclasses import replace as _replace
+    return tuple(_replace(row, event_group_id=row.event_group_id or group_ids[row.story_id])
+                 if not row.event_group_id and row.story_id in group_ids else row
+                 for row in rows)
 
 
 def _build_translation_clients(translation, api_key, env):
@@ -139,6 +231,13 @@ def _build_translation_clients(translation, api_key, env):
         max_decoded_bytes=int(translation.get('max_response_bytes', 524288)),
         per_host_concurrency=int(translation.get('per_host_concurrency', 2))))
     store = SupabaseTranslationStore(SupabaseTranslationConfig(url, service_key), transport=transport)
+    pairing = ModelPairingAdapter(
+        config=ModelTranslationConfig(
+            provider_id=str(translation.get('provider') or 'openai'),
+            model=str(translation.get('model') or ''),
+            api_origin=str(translation.get('api_origin') or 'https://api.openai.com'),
+            max_response_bytes=int(translation.get('max_response_bytes', 524288))),
+        transport=transport, api_key=lambda: api_key)
     provider = ModelTranslationAdapter(
         config=ModelTranslationConfig(
             provider_id=str(translation.get('provider') or 'openai'),
@@ -146,7 +245,7 @@ def _build_translation_clients(translation, api_key, env):
             api_origin=str(translation.get('api_origin') or 'https://api.openai.com'),
             max_response_bytes=int(translation.get('max_response_bytes', 524288))),
         transport=transport, api_key=lambda: api_key)
-    return store, provider
+    return store, provider, pairing
 
 def main() -> int:
     p=argparse.ArgumentParser(); p.add_argument('command', choices=('build','ingest')); p.add_argument('--root',type=Path,default=Path.cwd()); p.add_argument('--source-snapshot',type=Path,required=True); p.add_argument('--output',type=Path); a=p.parse_args()
@@ -167,24 +266,34 @@ def main() -> int:
     if unexpected:
         raise ValueError("snapshot contains an unconfigured source")
     grouping_policy = GroupingPolicy.from_config(cfg.grouping or {})
+    pairing_policy = PairingPolicy.from_config(cfg.translation or {})
     retained = retain(source_items, categories=cfg.categories, observed_at=snap.generated_at,
                       grouping=grouping_policy)
-    corpus = ()
+    corpus, truncated, decisions = (), False, {}
     url = os.environ.get('NEWS_CURATOR_SUPABASE_URL', '')
     key = os.environ.get('NEWS_CURATOR_SUPABASE_SECRET_KEY', '')
     if a.command == 'ingest' and url and key:
         validate_https_origin(url)
         try:
-            corpus, truncated = read_corpus_window(url, key, policy=grouping_policy, now=snap.generated_at)
-            retained = regroup_with_corpus(retained, corpus, policy=grouping_policy)
-            print(f'grouping corpus rows={len(corpus)} truncated={truncated}', file=sys.stderr)
-        except Exception:
-            # Grouping against the corpus is an improvement, never a gate. The
-            # batch-local grouping from retain() still stands.
-            print('grouping corpus unavailable: batch-local grouping only', file=sys.stderr)
-    retained, translation_message = translate_rows(cfg, retained, env=os.environ, now=snap.generated_at,
-                                                   corpus=corpus)
+            corpus, truncated = read_corpus_window(url, key, policy=pairing_policy, now=snap.generated_at)
+            decisions = read_exclusivity_decisions(url, key, [row.story_id for row in retained])
+            print(f'pairing corpus rows={len(corpus)} truncated={truncated} '
+                  f'decisions={len(decisions)}', file=sys.stderr)
+        except (urllib.error.URLError, ValueError, json.JSONDecodeError) as error:
+            # Without the window we cannot prove exclusivity, so this run does
+            # not pay for translation. It is a skip, never a wrong claim.
+            truncated = True
+            print(f'pairing corpus unavailable: {type(error).__name__}', file=sys.stderr)
+    recorded = []
+    retained, translation_message = translate_rows(
+        cfg, retained, env=os.environ, now=snap.generated_at, corpus=corpus,
+        decisions=decisions, truncated=truncated, on_decision=recorded.append)
     print(translation_message, file=sys.stderr)
+    if a.command == 'ingest' and url and key and recorded:
+        try:
+            record_exclusivity_decisions(url, key, recorded)
+        except (urllib.error.URLError, ValueError) as error:
+            print(f'exclusivity decisions not persisted: {type(error).__name__}', file=sys.stderr)
     rows=public_ingest_rows(retained, allowed_source_ids=allowed)
     if a.command == 'build':
         if not a.output: raise ValueError('output required')

@@ -9,7 +9,7 @@ from typing import Iterable, Mapping
 from .config import Category
 from .dedup import dedupe
 from .filter import topic_match
-from .grouping import GroupingCandidate, GroupingPolicy, assign_event_groups
+from .grouping import GroupingCandidate, GroupingPolicy, exact_matches
 from .identity import story_id_for_item
 from .models import Item
 from .normalize import fold_text
@@ -54,38 +54,19 @@ def retain(items: Iterable[Item], *, categories: Iterable[Category], observed_at
             retained[story_id] = RetainedCandidate(
                 story_id=story_id, item=item,
                 observed_at=observed_at.astimezone(timezone.utc), category_ids=ids)
-    groups = assign_event_groups(
+    # Only CERTAIN matches are claimed here (same canonical URL or identical
+    # normalized title). Everything else is decided by the model at pairing time.
+    groups = exact_matches(
         [GroupingCandidate(story_id=row.story_id, language=row.item.language, title=row.item.title,
-                           summary=row.item.description or "", published_at=row.item.published_at)
+                           summary=row.item.description or "", published_at=row.item.published_at,
+                           canonical_url=row.item.canonical_url,
+                           category_ids=tuple(sorted(row.category_ids)))
          for row in retained.values()],
         policy=grouping or GroupingPolicy(),
     )
     for story_id, group_id in groups.items():
         retained[story_id] = replace(retained[story_id], event_group_id=group_id)
     return tuple(sorted(retained.values(), key=lambda row: (row.item.published_at, row.story_id), reverse=True))
-
-
-def regroup_with_corpus(rows, existing, *, policy: GroupingPolicy | None = None):
-    """Group this batch against rows ALREADY in the corpus, not only itself.
-
-    The ingest runs about twelve times an hour, so an English story from an
-    earlier run must still be able to join this run's Chinese story. Without
-    this, a covered story looks language exclusive, which is the reported bug
-    inverted. An id a row already carries is never downgraded.
-    """
-
-    rows = list(rows)
-    batch_ids = {row.story_id for row in rows}
-    candidates = [GroupingCandidate(story_id=row.story_id, language=row.item.language,
-                                    title=row.item.title, summary=row.item.description or "",
-                                    published_at=row.item.published_at) for row in rows]
-    candidates.extend(row for row in existing if row.story_id not in batch_ids)
-    groups = assign_event_groups(candidates, policy=policy or GroupingPolicy())
-    return tuple(
-        replace(row, event_group_id=row.event_group_id or groups.get(row.story_id))
-        if groups.get(row.story_id) or row.event_group_id else row
-        for row in rows
-    )
 
 
 def language_exclusive_story_ids(rows: Iterable[RetainedCandidate], *, display_language: str,

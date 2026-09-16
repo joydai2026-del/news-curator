@@ -14,6 +14,8 @@ from curator.models import Item
 from curator.retained_corpus import retain
 from curator.translation import InMemoryTranslationStore
 from curator.translation.base import TranslationProviderResult, TranslationResultItem
+from curator.grouping import GroupingCandidate, event_group_id_for
+from curator.translation.pairing import ExclusivityDecision
 from scripts.retained_corpus_ingest import translate_rows
 
 NOW = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
@@ -24,10 +26,33 @@ KEY_ENV = "NEWS_CURATOR_MODEL_API_KEY"
 class FakeConfig:
     translation: dict
     language: dict
+    grouping: dict = None
+
+
+class StubPairing:
+    """Stands in for the model. `answers` maps story_id -> match story id or None."""
+
+    provider_id = "openai"
+    model_version = "gpt-5-mini:pairing-json-v1"
+
+    def __init__(self, answers=None, default=None):
+        self.answers, self.default, self.asked = dict(answers or {}), default, []
+
+    def decide(self, *, story, context):
+        self.asked.append(story.story_id)
+        target = self.answers.get(story.story_id, self.default)
+        if target is None:
+            return None, 500, 6
+        for index, row in enumerate(context):
+            if row.story_id == target:
+                return index, 500, 6
+        return None, 500, 6
 
 
 def config(**overrides):
     translation = {"enabled": True, "provider": "openai", "model": "gpt-5-mini",
+                   "pairing_window_hours": 48, "pairing_max_context_titles": 60,
+                   "pairing_daily_call_limit": 600,
                    "api_key_env": KEY_ENV, "run_character_limit": 2000,
                    "day_character_limit": 15000, "month_character_limit": 450000,
                    "daily_cost_limit_usd": 0.5, "cost_per_1k_characters_usd": 0.002,
@@ -37,7 +62,8 @@ def config(**overrides):
     translation.update(overrides)
     return FakeConfig(translation=translation,
                       language={"default_display": "en", "other_lane_enabled": True,
-                                "exclusive_category_id": "only-other-language-press"})
+                                "exclusive_category_id": "only-other-language-press"},
+                      grouping={"cross_language_enabled": True})
 
 
 class StubProvider:
@@ -70,16 +96,32 @@ def fixture_rows():
     return retain([english, paired, exclusive], categories=[], observed_at=NOW)
 
 
+def _ids(rows):
+    """story_id by canonical url, so tests can name the fixture stories."""
+    return {row.item.canonical_url: row.story_id for row in rows}
+
+
+def pairing_for(rows):
+    """The model's answers: the paired story matches the English one, the
+    exclusive story matches nothing."""
+    ids = _ids(rows)
+    return StubPairing(answers={ids["https://e.cn/1"]: ids["https://e.com/1"],
+                                ids["https://e.cn/2"]: None})
+
+
 def test_only_the_language_exclusive_story_is_translated():
+    batch = fixture_rows()
     provider = StubProvider()
-    rows, message = translate_rows(config(), fixture_rows(), env={KEY_ENV: "test-key"}, now=NOW,
-                                   store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider)
+    rows, message = translate_rows(config(), batch, env={KEY_ENV: "test-key"}, now=NOW,
+                                   store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider,
+                                   pairing_provider=pairing_for(batch))
     by_url = {row.item.canonical_url: row for row in rows}
     assert provider.calls == 1
     assert by_url["https://e.cn/2"].title_translations == {"en": "Exclusive: seven new rules"}
-    # The zh story an English outlet also covered is not exclusive, so it is
-    # not translated, and the English story is never a candidate at all.
+    # The zh story the model matched to an English one is not exclusive, so it
+    # is not translated, and it joins that story's group.
     assert by_url["https://e.cn/1"].title_translations == {}
+    assert by_url["https://e.cn/1"].event_group_id == event_group_id_for(_ids(batch)["https://e.com/1"])
     assert by_url["https://e.com/1"].title_translations == {}
     assert "translated=1" in message
 
@@ -87,7 +129,7 @@ def test_only_the_language_exclusive_story_is_translated():
 def test_a_missing_key_skips_cleanly_and_never_breaks_the_ingest():
     rows = fixture_rows()
     result, message = translate_rows(config(), rows, env={}, now=NOW,
-                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider())
+                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider(), pairing_provider=StubPairing())
     assert message == "translation skipped: NEWS_CURATOR_MODEL_API_KEY is not set"
     assert result == rows
 
@@ -95,7 +137,7 @@ def test_a_missing_key_skips_cleanly_and_never_breaks_the_ingest():
 def test_the_feature_switch_off_is_reported_and_changes_nothing():
     rows = fixture_rows()
     result, message = translate_rows(config(enabled=False), rows, env={KEY_ENV: "test-key"}, now=NOW,
-                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider())
+                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider(), pairing_provider=StubPairing())
     assert message == "translation skipped: sources.yaml translation.enabled is false"
     assert result == rows
 
@@ -110,7 +152,8 @@ def test_a_translation_failure_degrades_and_never_drops_a_row():
 
     rows = fixture_rows()
     result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
-                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=Broken())
+                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=Broken(),
+                                     pairing_provider=pairing_for(rows))
     assert len(result) == len(rows)
     assert all(row.title_translations == {} for row in result)
     assert "untranslated_shown=1" in message
@@ -136,7 +179,7 @@ def test_an_unexpected_failure_inside_translation_leaves_the_ingest_intact():
 
     rows = fixture_rows()
     result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
-                                     store=BrokenStore(), provider=Exploding())
+                                     store=BrokenStore(), provider=Exploding(), pairing_provider=StubPairing())
     assert result == rows or len(result) == len(rows)
     assert "untranslated_shown" in message or message.startswith("translation unavailable")
 
@@ -155,9 +198,11 @@ def test_the_shipped_config_translates_language_exclusive_stories_with_a_key():
     from curator.config import load_config
     cfg = load_config(Path(__file__).resolve().parents[1])
     assert cfg.translation["enabled"] is True, "Phase 1 ships enabled"
+    batch = fixture_rows()
     provider = StubProvider()
-    rows, message = translate_rows(cfg, fixture_rows(), env={cfg.translation["api_key_env"]: "test-key"},
-                                   now=NOW, store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider)
+    rows, message = translate_rows(cfg, batch, env={cfg.translation["api_key_env"]: "test-key"},
+                                   now=NOW, store=InMemoryTranslationStore(clock=lambda: NOW),
+                                   provider=provider, pairing_provider=pairing_for(batch))
     translated = [row for row in rows if row.title_translations]
     assert provider.calls == 1 and len(translated) == 1
     assert translated[0].item.language == "zh"

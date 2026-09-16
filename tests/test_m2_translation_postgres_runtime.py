@@ -23,6 +23,10 @@ MIGRATIONS = (
     'supabase/migrations/202609140002_m2_retained_corpus.sql',
     'supabase/migrations/202609160001_m2_translation_columns.sql',
 )
+SPEND_MIGRATIONS = (
+    'supabase/migrations/202608290002_translation_store.sql',
+    'supabase/migrations/202609160002_m2_translation_spend_and_decisions.sql',
+)
 
 
 def _run(*args, input_text=None, check=True):
@@ -74,6 +78,8 @@ def db():
           grant execute on function auth.uid(), auth.jwt() to anon,authenticated,service_role;
         """)
         for migration in MIGRATIONS:
+            _sql(container, (ROOT / migration).read_text())
+        for migration in SPEND_MIGRATIONS:
             _sql(container, (ROOT / migration).read_text())
         yield container
     finally:
@@ -181,3 +187,44 @@ def test_the_exclusive_rpc_refuses_an_unsupported_display_language(db):
     denied = _sql(db, "set role service_role;"
                       "select public.m2_retained_candidates_language_exclusive('fr',null,null,null,10);", check=False)
     assert denied.returncode != 0 and 'invalid display language' in denied.stderr
+
+
+def _spend(container, expression):
+    result = _sql(container, "set role service_role;"
+                  "set request.jwt.claims = '{\"role\":\"service_role\"}';"
+                  f"select {expression};")
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+def test_the_daily_dollar_cap_is_persisted_and_shared_across_runs(db):
+    """An in-memory ledger resets twelve times an hour; this one does not."""
+    start = _spend(db, "public.m2_read_translation_spend()")
+    limit = float(start['usd_settled']) + float(start['usd_reserved']) + 0.01
+    first = _spend(db, f"public.m2_reserve_translation_spend(0.006, {limit})")
+    assert first['status'] == 'reserved'
+    _spend(db, "public.m2_settle_translation_spend(0.006, 0.006)")
+    # A SECOND run, same UTC day, same cap: the remaining room is what is left.
+    second = _spend(db, f"public.m2_reserve_translation_spend(0.006, {limit})")
+    assert second['status'] == 'cost_limit_reached'
+    room = _spend(db, f"public.m2_reserve_translation_spend(0.003, {limit})")
+    assert room['status'] == 'reserved'
+
+
+def test_an_exclusivity_decision_is_recorded_once_and_replayed_not_rewritten(db):
+    story = _story_id('https://example.test/decision-one')
+    other = _story_id('https://example.test/decision-match')
+    first = _spend(db, f"public.m2_record_exclusivity_decision({_quote(story)}, 'gpt-5-mini', 'pairing-json-v1', null)")
+    assert first['match_story_id'] is None
+    # A later run must not be able to flip a published story into a group.
+    second = _spend(db, f"public.m2_record_exclusivity_decision({_quote(story)}, 'gpt-5-mini', 'pairing-json-v1', {_quote(other)})")
+    assert second['match_story_id'] is None and second['decided_at'] == first['decided_at']
+    rows = _candidates(db, f"public.m2_read_exclusivity_decisions(array[{_quote(story)}]::text[])")
+    assert len(rows) == 1 and rows[0]['policy_id'] == 'pairing-json-v1'
+
+
+def test_the_spend_and_decision_rpcs_are_service_role_only(db):
+    for expression in ("public.m2_read_translation_spend()",
+                       "public.m2_reserve_translation_spend(0.001, 1)",
+                       "public.m2_read_exclusivity_decisions(array[]::text[])"):
+        denied = _sql(db, f"set role authenticated; select {expression};", check=False)
+        assert denied.returncode != 0 and 'permission denied' in denied.stderr.lower()

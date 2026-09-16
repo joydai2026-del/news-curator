@@ -337,6 +337,11 @@ translation:
   output_cost_per_million_tokens_usd: 2.0
   characters_per_token: 4
   max_output_tokens_per_story: 1000
+  # Exclusivity is decided by the model, one small question per story, and the
+  # answer is persisted so a story is decided once.
+  pairing_window_hours: 48
+  pairing_max_context_titles: 60
+  pairing_daily_call_limit: 600
   cache_ttl_days: 30
   # There is deliberately no drop value. A failed translation shows the
   # original, marked, and never removes the story from the feed.
@@ -381,10 +386,10 @@ reader:
 # Cross-language same-event grouping (tier 1). Every value is its own key here;
 # nothing reads the trend block, which measures a different thing.
 grouping:
+  # Only the exact pre-filter survives here (same canonical URL or identical
+  # normalized title). The judgement call belongs to the model, and its window
+  # is translation.pairing_window_hours.
   cross_language_enabled: true
-  min_shared_entity_tokens: 2
-  window_hours: 48
-  max_pairs_per_bucket: 2000
 
 # ---------------------------------------------------------------------------
 # The newsletter lane. Reads a dedicated newsletter-only Gmail account through
