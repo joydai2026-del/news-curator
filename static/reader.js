@@ -1619,7 +1619,7 @@
         loadButton.textContent = loadMoreLabel(m2Config.page_size, busy);
         loadButton.hidden = initializing || !m2Active || !m2Cursor;
         loadButton.disabled = busy;
-        loadButton.toggleAttribute("aria-busy", busy);
+        if (busy) loadButton.setAttribute("aria-busy", "true"); else loadButton.removeAttribute("aria-busy");
         loadButton.classList.toggle("is-loading", busy);
         return;
       }
@@ -1629,7 +1629,7 @@
       loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
       loadButton.disabled = busy;
-      loadButton.toggleAttribute("aria-busy", busy);
+      if (busy) loadButton.setAttribute("aria-busy", "true"); else loadButton.removeAttribute("aria-busy");
       loadButton.classList.toggle("is-loading", busy);
     }
     function topicIdForSlug(slug) {

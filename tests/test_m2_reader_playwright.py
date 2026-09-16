@@ -546,7 +546,7 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                 disabled:document.querySelector("#load-more").disabled,
                 status:document.querySelector("#reader-status").textContent,
               })''')
-            assert pending=={'label':'Loading 25 more…','busy':'','disabled':True,
+            assert pending=={'label':'Loading 25 more…','busy':'true','disabled':True,
                 'status':'Loading 25 more stories…'}
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading")')
             assert page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')==preceding_ids
