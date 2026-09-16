@@ -41,6 +41,8 @@ class RankingStore(Protocol):
     def history_snapshot(self, access_token: str) -> Mapping[str, object]: ...
     def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int,
                             before_published_at: str | None = None, before_story_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
+    def retained_candidates_language_exclusive(self, *, display_language: str, query: str | None, limit: int,
+                            before_published_at: str | None = None, before_story_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
@@ -61,6 +63,19 @@ class ServicePolicy:
     daily_cost_limit_usd: float = 2.0
     preview_owner_ids: tuple[str, ...] = ()
     enabled: bool = False
+    # The reader's display language. Exclusivity is always stated against this
+    # value, never against "is Chinese", so the mirror direction is config.
+    display_language: str = "en"
+    # The language-exclusive corpus is one more value of the topic selector.
+    # Empty disables the section without touching any other code path.
+    exclusive_category_id: str = ""
+    other_lane_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if self.display_language not in ("en", "zh"):
+            raise ValueError("display_language must be a supported language")
+        if self.exclusive_category_id and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", self.exclusive_category_id):
+            raise ValueError("exclusive_category_id must be a category id")
 
 
 class RankingService:
@@ -97,10 +112,19 @@ class RankingService:
         before_story = self._optional_string(corpus_cursor.get("before_story_id"))
         if (before_published is None) != (before_story is None):
             raise ValueError("invalid_corpus_cursor")
-        rows = self._store.retained_candidates(
-            category_id=category_id, query=query, limit=self._policy.candidate_limit + len(excluded_set) + 1,
-            before_published_at=before_published, before_story_id=before_story,
-        )
+        # The language-exclusive section is served by the same M2 path: same
+        # recipe, same pagination, same frozen order. Only the corpus narrows.
+        if self._is_exclusive_category(category_id):
+            rows = self._store.retained_candidates_language_exclusive(
+                display_language=self._policy.display_language, query=query,
+                limit=self._policy.candidate_limit + len(excluded_set) + 1,
+                before_published_at=before_published, before_story_id=before_story,
+            )
+        else:
+            rows = self._store.retained_candidates(
+                category_id=category_id, query=query, limit=self._policy.candidate_limit + len(excluded_set) + 1,
+                before_published_at=before_published, before_story_id=before_story,
+            )
         filtered = [row for row in rows if row.get("story_id") not in excluded_set]
         has_more = len(filtered) > self._policy.candidate_limit
         rows = filtered[:self._policy.candidate_limit]
@@ -298,14 +322,38 @@ class RankingService:
         if not isinstance(value, str) or value != value.strip() or not value: raise ValueError("invalid_optional_string")
         return value
 
+    def _is_exclusive_category(self, category_id) -> bool:
+        return bool(self._policy.other_lane_enabled and self._policy.exclusive_category_id
+                    and category_id == self._policy.exclusive_category_id)
+
     @staticmethod
     def _card(row, owner_state):
-        return {"card_schema_version": 1, "story_id": row["story_id"], "title": row["title"],
+        language = str(row["language"])
+        titles = row.get("title_translations") or {}
+        summaries = row.get("summary_translations") or {}
+        if not isinstance(titles, Mapping) or not isinstance(summaries, Mapping):
+            raise ValueError("invalid_translation_overlay")
+        card = {"card_schema_version": 1, "story_id": row["story_id"], "title": row["title"],
             "summary": row.get("summary", ""), "source_name": row["source_name"], "published_at": row["published_at"],
-            "url": row["canonical_url"], "source_id": row["source_id"], "language": row["language"],
+            "url": row["canonical_url"], "source_id": row["source_id"], "language": language,
             "category_ids": row.get("category_ids", []), "read_at": owner_state.get("read_at"),
             "saved_at": owner_state.get("saved_at"), "state_revision": owner_state.get("state_revision", 0),
             "interests": owner_state.get("interests", [])}
+        status = {}
+        for target in ("en", "zh"):
+            if target == language:
+                card[f"title_{target}"] = str(row["title"])
+                card[f"summary_{target}"] = str(row.get("summary", ""))
+                status[target] = "original"
+                continue
+            title = titles.get(target)
+            summary = summaries.get(target)
+            card[f"title_{target}"] = str(title) if isinstance(title, str) else ""
+            card[f"summary_{target}"] = str(summary) if isinstance(summary, str) else ""
+            # A story with no translation is still served. The reader marks it.
+            status[target] = "translated" if card[f"title_{target}"] else "untranslated"
+        card["translation_status"] = status
+        return card
 
     @staticmethod
     def _bindings(receipt):

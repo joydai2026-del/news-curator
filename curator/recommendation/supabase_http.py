@@ -72,6 +72,23 @@ class SupabaseHTTP:
             before_published, before_story = page[-1]["published_at"], page[-1]["story_id"]
         return rows
 
+    def retained_candidates_language_exclusive(self, *, display_language: str, query: str | None, limit: int,
+                            before_published_at: str | None = None, before_story_id: str | None = None):
+        rows, before_published, before_story = [], before_published_at, before_story_id
+        while len(rows) < limit:
+            take = min(100, limit - len(rows))
+            page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_language_exclusive",
+                token=self._service_token(), key=self._service,
+                body={"p_display_language": display_language, "p_query": query,
+                    "p_before_published_at": before_published, "p_before_story_id": before_story, "p_limit": take})
+            if not isinstance(page, list):
+                raise SupabaseHTTPError("candidate RPC returned a non-list")
+            rows.extend(page)
+            if len(page) < take:
+                break
+            before_published, before_story = page[-1]["published_at"], page[-1]["story_id"]
+        return rows
+
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool:
         result = self._request("POST", "/rest/v1/rpc/m2_reserve_ranker_budget", token=self._service_token(),
             key=self._service, body={"p_user_id": user_id, "p_request_id": request_id,

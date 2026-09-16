@@ -87,7 +87,10 @@ def build_application(*, environ=None, policy_path: str | None = None):
         tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
         maximum_excluded_story_ids=policy["maximum_excluded_story_ids"],
         cursor_ttl_seconds=policy["cursor_ttl_seconds"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
-        preview_owner_ids=tuple(preview_ids), enabled=enabled)
+        preview_owner_ids=tuple(preview_ids), enabled=enabled,
+        display_language=policy.get("display_language", "en"),
+        exclusive_category_id=policy.get("exclusive_category_id", ""),
+        other_lane_enabled=policy.get("other_lane_enabled", True))
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,

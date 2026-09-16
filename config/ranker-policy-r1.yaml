@@ -29,3 +29,8 @@ maximum_page_size: 25
 maximum_excluded_story_ids: 1000
 cursor_ttl_seconds: 900
 service_enabled: true
+# M2.1 Phase 1 reading-surface language policy. Mirrors sources.yaml
+# `language:` for the request path; exclusivity is stated against this value.
+display_language: en
+other_lane_enabled: true
+exclusive_category_id: only-other-language-press
