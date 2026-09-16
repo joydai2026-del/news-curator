@@ -1097,11 +1097,13 @@
       previousHidden: staleMeta.previousElementSibling?.hidden,
     } : null;
     function editionTime(iso) {
-      const formatted = new Intl.DateTimeFormat(displayLanguage === "zh" ? "zh-CN" : "en-US", {
+      const options = {
         month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric',
-        minute: '2-digit', timeZoneName: 'short',
+        minute: '2-digit',
         timeZone: editionMeta?.dataset.timezone || 'America/New_York',
-      }).format(new Date(iso));
+      };
+      if (displayLanguage !== "zh") options.timeZoneName = 'short';
+      const formatted = new Intl.DateTimeFormat(displayLanguage === "zh" ? "zh-CN" : "en-US", options).format(new Date(iso));
       return displayLanguage === "zh" ? formatted : formatted.replace(/^([^,]+), (\d{4}), (.+)$/, '$1, $2 at $3');
     }
     function showPrivateEditionMeta(edition) {
