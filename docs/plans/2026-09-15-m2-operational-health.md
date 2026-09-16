@@ -8,7 +8,7 @@ Operational health uses configurable window rates and minimum volume. It cannot 
 
 The initial policy uses a 60-minute window and requires at least five handled requests. More than 10% failed deliveries reports FAIL. Lower volume reports insufficient volume, not PASS. These are delivery-alert thresholds, not evidence that recommendations are relevant.
 
-The owner UI is a later change. It may say `Latest activity used` only for model mode, exact used/current revision and generation, current consent, and no pending client writes. Otherwise it says waiting, fallback, or unavailable. It never claims all recorded activity was included.
+The owner UI is implemented in the feedback branch and awaits browser verification and deployment. It may say `Latest activity used` only for model mode, exact used/current revision and generation, current consent, and no pending client writes. Otherwise it says waiting, fallback, or unavailable. It never claims all recorded activity was included.
 
 ## QA
 

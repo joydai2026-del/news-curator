@@ -14,4 +14,3 @@ def test_card_uses_display_overlay_without_relabeling_source_language():
 
 def test_public_bindings_include_frozen_display_language():
     assert RankingService._public_bindings({"display_language":"zh"}) == {"display_language":"zh"}
-

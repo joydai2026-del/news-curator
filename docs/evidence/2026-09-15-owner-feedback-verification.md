@@ -1,6 +1,6 @@
 # Reader feedback verification
 
-Status: local integration in progress. Production still serves the previous release. This record does not mark M2 relevance or coverage qualification complete.
+Status: local integration in progress, preserved in draft PR #41 (https://github.com/joydai2026-del/news-curator/pull/41). Production still serves the previous release. This record does not mark M2 relevance or coverage qualification complete.
 
 ## Changes under verification
 
@@ -16,6 +16,8 @@ The release checks below are requirements, not claims that live verification has
 
 ## Existing evidence
 
+- Independent reader review passed at `2e21b86`, including pending activity, empty history, failed writes, model revision checks and sign-out/session fencing.
+- Python compilation, offline shell rendering and 130 reader/render contract checks passed. Offline rendering is structural evidence only, with no coverage or translation-quality claim.
 - Independent backend review passed at `e94e195`. It covered translation dispatch bounds, shared spending limits, category scheduling and preservation of native newsletter projections.
 - A disposable local PostgreSQL test at `4b3e37c` proved pre-send release, retained unknown-charge holds, exact usage settlement, idempotent replay, and rejection of a third call that would exceed the shared cap. This is a local protocol test, not a real provider call.
 - The localized SQL verification passed nine local checks, including original/display search, missing translations, stale content digests, quarantine and access rules.
