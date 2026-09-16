@@ -40,6 +40,13 @@
     "Synced reading features are temporarily unavailable. Try checking sign-in again.":"同步阅读功能暂不可用，请重新检查登录状态。",
     "No published edition is available yet.":"暂时没有已发布的新闻。",
     "Checking sign-in. Reading state is syncing.":"正在检查登录状态并同步阅读记录。",
+    "Signed out. Public stories are syncing.":"已退出登录，正在同步公开新闻。",
+    "Signed out. Public stories are ready.":"已退出登录，公开新闻已就绪。",
+    "Signed out. Public stories could not be synced. Try again.":"已退出登录，但无法同步公开新闻，请重试。",
+    "Original opened. Learning could not be saved.":"已打开原文，但无法保存学习记录。",
+    "Search learning could not be saved.":"无法保存搜索学习记录。",
+    "More like this could not be saved. Try again.":"无法保存此偏好，请重试。",
+    "Sign-in could not be checked. Use Check sign-in again to retry.":"无法检查登录状态，请再次选择“检查登录”。",
   });
 
   function fail(message) { throw new Error(message); }
@@ -897,11 +904,17 @@
       if (consentLabels[1]) consentLabels[1].lastChild.textContent = ` ${localeCopy().provider}`;
       set("#m2-provider-retention", localeCopy().policy); set("footer a", localeCopy().privacy);
       const metaSpans = document.querySelectorAll(".edition-meta > span:not(.dot):not(.stale)");
-      if (metaSpans[0] && displayLanguage === "zh") metaSpans[0].textContent = metaSpans[0].textContent.replace(/^Built /, "生成于 ");
+      if (metaSpans[0]) {
+        if (!metaSpans[0].dataset.en) metaSpans[0].dataset.en = metaSpans[0].textContent;
+        metaSpans[0].textContent = displayLanguage === "zh" ? metaSpans[0].dataset.en.replace(/^Built /, "生成于 ") : metaSpans[0].dataset.en;
+      }
       if (metaSpans[1]) metaSpans[1].textContent = displayLanguage === "zh" ? "每小时计划更新" : "scheduled hourly";
       if (metaSpans[2]) { const count = parseInt(metaSpans[2].textContent, 10); if (Number.isFinite(count)) metaSpans[2].textContent = displayLanguage === "zh" ? `${count} 篇新闻` : `${count} ${count === 1 ? "story" : "stories"}`; }
       const stale = document.getElementById("stale");
-      if (stale && displayLanguage === "zh" && /^last build /.test(stale.textContent)) stale.textContent = stale.textContent.replace(/^last build /, "上次生成于 ").replace(/ days? ago$/, " 天前");
+      if (stale) {
+        if (!stale.dataset.en) stale.dataset.en = stale.textContent;
+        stale.textContent = displayLanguage === "zh" ? stale.dataset.en.replace(/^last build /, "上次生成于 ").replace(/ days? ago$/, " 天前") : stale.dataset.en;
+      }
       {
         document.querySelectorAll(".read-action").forEach((node) => { node.textContent = node.closest(".card")?.classList.contains("is-read") ? localeCopy().unread : localeCopy().read; });
         document.querySelectorAll(".save-action").forEach((node) => { if (!node.classList.contains("is-pending")) node.textContent = node.closest(".card")?.classList.contains("is-saved") ? localeCopy().savedAction : localeCopy().save; });
@@ -991,7 +1004,7 @@
       payload.categories.forEach((category) => {
         if (!isObject(category) || !boundedString(category.id, 80) || !boundedString(category.name, 120) || !Array.isArray(category.items)) fail("The localized story projection was invalid.");
         const categoryName = category.id === "china-news" ? (displayLanguage === "zh" ? "中国新闻" : "China News") : category.name;
-        document.querySelectorAll(`[data-topic-id="${CSS.escape(category.id)}"]`).forEach((node) => { node.textContent = categoryName; });
+        document.querySelectorAll(`.chip[data-topic-id="${CSS.escape(category.id)}"]`).forEach((node) => { node.textContent = categoryName; });
         document.querySelectorAll(`.topic-section[data-topic-id="${CSS.escape(category.id)}"] .section-title`).forEach((node) => { node.textContent = categoryName; });
         category.items.forEach((item) => {
           if (!isObject(item) || !STORY_ID.test(item.story_id) || item.display_language !== displayLanguage || !boundedString(item.title, 2000) || typeof item.description !== "string") fail("The localized story projection was invalid.");
@@ -1267,17 +1280,31 @@
       const topic = selectedTopic();
       return { category: topic === "__all__" ? null : topicIdForSlug(topic), query: searchBox?.value.trim() || null };
     }
-    function enqueueBehavior(operation) {
+    function markActivityPending() {
+      const mode = document.getElementById("m2-mode");
+      if (!m2Active || !mode || !mode.textContent.includes(localeCopy().activityUsed)) return null;
+      const previous = mode.textContent;
+      mode.textContent = mode.textContent.replace(localeCopy().activityUsed, localeCopy().activity);
+      return previous;
+    }
+    function restoreActivityClaim(previous) {
+      const mode = document.getElementById("m2-mode");
+      if (previous && mode && mode.textContent.includes(localeCopy().activity)) mode.textContent = previous;
+    }
+    function enqueueBehavior(operation, recordsActivity = false) {
       const epoch = authEpoch;
+      let previousActivityClaim = null;
       const pending = behaviorWrites.catch(() => {}).then(async () => {
         if (epoch !== authEpoch || !signedIn()) fail("The signed-in account changed.");
         const snapshot = await api.historySnapshot();
         if (epoch !== authEpoch) fail("The signed-in account changed.");
+        if (recordsActivity && snapshot.learning_enabled) previousActivityClaim = markActivityPending();
         const value = await operation(snapshot);
         if (epoch !== authEpoch) fail("The signed-in account changed.");
         return value;
       });
       behaviorWrites = pending;
+      if (recordsActivity) pending.catch(() => restoreActivityClaim(previousActivityClaim));
       return pending;
     }
     async function behaviorIdentity(snapshot) {
@@ -1289,9 +1316,10 @@
       if (!m2?.enabled || !signedIn()) return Promise.resolve();
       return enqueueBehavior(async (snapshot) => {
         if (!snapshot.learning_enabled) return;
-        return api.appendBehaviorEvent({ ...await behaviorIdentity(snapshot), p_event_type: type,
+        const result = await api.appendBehaviorEvent({ ...await behaviorIdentity(snapshot), p_event_type: type,
           p_payload: { ...payload, surface: "reader" }, p_schema_version: 1 });
-      });
+        return result;
+      }, true);
     }
     function clearM2Cards() {
       cards.forEach((card, id) => {
@@ -1324,11 +1352,11 @@
         m2PublicCards.forEach(({ card }) => { clearPrivateCardState(card); view.removeCard(card); card.remove(); });
         cards.clear(); m2Active = true;
         if (editionMeta) editionMeta.style.display = "none";
-        editionLabels.forEach(({ node, text }) => {
-          node.textContent = node.matches('.crumb') ? text.replace(/Today's edition/i, "Reading feed")
-            : node.matches('.eyebrow') ? "Reading feed"
-            : node.matches('.railnote') ? "Refresh the feed for the latest available stories."
-            : "Reading Companion";
+        editionLabels.forEach(({ node }) => {
+          node.textContent = node.matches('.crumb') ? (displayLanguage === "zh" ? "News Curator / 阅读新闻" : "News Curator / Reading feed")
+            : node.matches('.eyebrow') ? (displayLanguage === "zh" ? "阅读新闻" : "Reading feed")
+            : node.matches('.railnote') ? (displayLanguage === "zh" ? "刷新新闻，查看最新内容。" : "Refresh the feed for the latest available stories.")
+            : displayLanguage === "zh" ? "阅读助手" : "Reading Companion";
         });
       }
       if (!append) clearM2Cards();
@@ -1336,7 +1364,9 @@
         m2Section = element("section", "topic-section"); m2Section.dataset.section = "__m2__";
         m2Section.append(element("div", "grid")); document.getElementById("sections").append(m2Section);
       }
-      const reason = response.result_mode === "model" ? "Ranked using your current query and permitted reading history." : "Freshness order. Model ranking was not used.";
+      const reason = response.result_mode === "model"
+        ? (displayLanguage === "zh" ? "已根据当前搜索和获准使用的阅读记录排序。" : "Ranked using your current query and permitted reading history.")
+        : (displayLanguage === "zh" ? "按新鲜度排序，本次未使用模型排序。" : "Freshness order. Model ranking was not used.");
       response.cards.forEach((entry) => {
         if (cards.has(entry.story_id)) return;
         const row = { ...entry, canonical_url: entry.url, topic_ids: entry.category_ids,
@@ -1377,7 +1407,7 @@
         if (!append || !m2Active) leaveM2(false);
         if (m2Controls) m2Controls.hidden = false;
         const mode = document.getElementById("m2-mode");
-        if (mode) mode.textContent = "Personalized feed is still loading.";
+        if (mode) mode.textContent = displayLanguage === "zh" ? "个性化新闻仍在加载。" : "Personalized feed is still loading.";
         announce("Personalized feed is still loading.");
       };
       const terminalFallback = () => {
@@ -1388,10 +1418,10 @@
         m2Sequence += 1;
         const mode = document.getElementById("m2-mode");
         if (retainedPage) {
-          if (mode) mode.textContent = "Could not load more. Your current stories are still available.";
+          if (mode) mode.textContent = displayLanguage === "zh" ? MESSAGE_ZH["Could not load more. Your current stories are still available."] : "Could not load more. Your current stories are still available.";
           announce("Could not load more. Your current stories are still available.");
         } else {
-          if (mode) mode.textContent = "Captured edition fallback. Personalized ranking did not finish.";
+          if (mode) mode.textContent = displayLanguage === "zh" ? "正在显示已采集新闻，本次个性化排序未完成。" : "Captured edition fallback. Personalized ranking did not finish.";
           announce("Showing the captured edition. Personalized ranking did not finish.");
         }
       };
@@ -1471,9 +1501,13 @@
       if (displayLanguage === "zh") {
         message = MESSAGE_ZH[message] || message
           .replace(/^(\d+) stories loaded\.$/, "$1 篇新闻已加载。")
-          .replace(/^Loading (\d+) more stories…$/, "正在加载 $1 篇更多新闻…");
+          .replace(/^Loading (\d+) more stories…$/, "正在加载更多新闻（$1 篇）…");
       }
       status.textContent = message;
+    }
+    function loadMoreLabel(count, busy = false) {
+      if (displayLanguage === "zh") return busy ? `正在加载更多新闻（${count} 篇）…` : `再加载 ${count} 篇`;
+      return busy ? `Loading ${count} more…` : `Load ${count} more`;
     }
     function abortOwnerExport() {
       ownerExportEpoch += 1;
@@ -1549,7 +1583,7 @@
       const topic = selectedTopic();
       if (usesM2()) {
         const busy = [...pageRequests].some((request) => request.epoch === authEpoch);
-        loadButton.textContent = busy ? `${localeCopy().loading} ${m2Config.page_size} ${localeCopy().more}…` : `${localeCopy().load} ${m2Config.page_size} ${localeCopy().more}`;
+        loadButton.textContent = loadMoreLabel(m2Config.page_size, busy);
         loadButton.hidden = initializing || !m2Active || !m2Cursor;
         loadButton.disabled = busy;
         loadButton.toggleAttribute("aria-busy", busy);
@@ -1558,7 +1592,7 @@
       }
       const busy = [...pageRequests].some((request) =>
         request.topic === topic && request.epoch === authEpoch);
-      if (latest) loadButton.textContent = busy ? `${localeCopy().loading} ${latest.page_size} ${localeCopy().more}…` : `${localeCopy().load} ${latest.page_size} ${localeCopy().more}`;
+      if (latest) loadButton.textContent = loadMoreLabel(latest.page_size, busy);
       loadButton.hidden = discoveryActive || initializing || !latest || exhausted.has(topic) ||
         (topic === "__saved__" && !signedIn());
       loadButton.disabled = busy;
@@ -2000,7 +2034,7 @@
         const key = idempotencyKey();
         const result = m2?.enabled && signedIn() && (eventType !== "read_more" || read)
           ? await enqueueBehavior(async (snapshot) => api.setStoryStateWithEvent(card.dataset.storyId, read, saved,
-              previous.state_revision, key, { ...await behaviorIdentity(snapshot), p_event_type: eventType, p_surface: "reader" }))
+              previous.state_revision, key, { ...await behaviorIdentity(snapshot), p_event_type: eventType, p_surface: "reader" }), true)
           : await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, key);
         if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
         if (result.status === "conflict") fail("Story state changed in another session.");
@@ -2093,7 +2127,7 @@
         const key = idempotencyKey();
         const operation = m2?.enabled
           ? enqueueBehavior(async (snapshot) => api.setStoryInterestWithEvent(card.dataset.storyId, topicId,
-              signal, revision, key, { ...await behaviorIdentity(snapshot), p_surface: "reader" }))
+              signal, revision, key, { ...await behaviorIdentity(snapshot), p_surface: "reader" }), true)
           : api.setStoryInterest(card.dataset.storyId, topicId, revision, key);
         operation
           .then((result) => {
@@ -2133,14 +2167,21 @@
     }
     async function selectLocale(locale) {
       if (!validLocale(locale) || locale === displayLanguage) return;
+      const previousLocale = displayLanguage;
       displayLanguage = locale; localeEpoch += 1; m2Sequence += 1;
-      try { localStorage.setItem(LOCALE_KEY, locale); } catch (_) {}
       applyLocaleLabels();
       document.body?.classList.add("locale-pending");
       try {
-        await Promise.all([localizeVisibleCards(localeEpoch), persistLocale()]);
+        await localizeVisibleCards(localeEpoch);
+        await persistLocale();
+        try { localStorage.setItem(LOCALE_KEY, locale); } catch (_) {}
         if (usesM2()) await loadM2();
-      } catch (_) { announce(locale === "zh" ? "语言切换失败，请重试。" : "Language change failed. Try again."); }
+      } catch (_) {
+        displayLanguage = previousLocale; localeEpoch += 1; m2Sequence += 1;
+        applyLocaleLabels();
+        try { await localizeVisibleCards(localeEpoch); } catch (_) {}
+        announce(previousLocale === "zh" ? "语言切换失败，请重试。" : "Language change failed. Try again.");
+      }
       finally { document.body?.classList.remove("locale-pending"); }
     }
     document.querySelectorAll("[data-locale]").forEach((button) => button.addEventListener("click", () => { void selectLocale(button.dataset.locale); }));
@@ -2207,13 +2248,14 @@
         document.body?.classList.remove("locale-pending");
       } catch (_) {
         announce(displayLanguage === "zh" ? "所选语言的新闻暂不可用。" : "Stories in the selected language are unavailable.");
+        document.body?.classList.remove("locale-pending");
         return;
       }
       if (!apiAvailable) return;
       latest = usesM2() ? await api.latestPublication().catch(() => null) : await api.latestPublication();
       if (!usesM2()) void fetchDiscovery(true);
       if (usesM2()) {
-        loadButton.textContent = `Load ${m2Config.page_size} more`;
+        loadButton.textContent = loadMoreLabel(m2Config.page_size);
         await loadM2();
         return;
       }
@@ -2223,7 +2265,7 @@
         announce("No published edition is available yet.");
         return;
       }
-      loadButton.textContent = `Load ${latest.page_size} more`;
+      loadButton.textContent = loadMoreLabel(latest.page_size);
       publicationSeq = latest.publication_seq;
       const poll = async () => {
         void fetchDiscovery(false);
@@ -2240,7 +2282,7 @@
           rows.forEach((row) => pendingUpdates.set(row.story_id, row));
           const target = Math.max(...rows.map((row) => row.publication_seq));
           const count = pendingUpdates.size;
-          updatesButton.textContent = `${count} new ${count === 1 ? "story" : "stories"} available`;
+          updatesButton.textContent = displayLanguage === "zh" ? `${count} 篇新新闻可查看` : `${count} new ${count === 1 ? "story" : "stories"} available`;
           updatesButton.dataset.publicationSeq = String(target);
           updatesStatus.hidden = false;
           if (updatePage.drained) {

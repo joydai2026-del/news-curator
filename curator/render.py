@@ -96,7 +96,7 @@ body{
   font-size:17px; line-height:1.5;
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
-body.locale-pending .sections,body.locale-pending .countline,body.locale-pending .history-tools{visibility:hidden}
+body.locale-pending .shell{visibility:hidden}
 .card[data-locale-hidden="true"]{display:none!important}
 .wrap{max-width:78rem; margin:0 auto; padding:4rem 1.5rem 6rem}
 header{margin-bottom:2rem}
@@ -282,7 +282,7 @@ body{overflow-x:hidden;overflow-x:clip;background:
 .profile-link,.dashboard-link{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);border-radius:999px;padding:.5rem .9rem;color:var(--accent);font-size:.78rem;font-weight:650;text-decoration:none;background:var(--card)}
 .profile-link:hover,.dashboard-link:hover{background:var(--accent-soft)}
 .profile-link:focus-visible,.dashboard-link:focus-visible,.accordion-toggle:focus-visible,.state-action:focus-visible,.load-more:focus-visible,.updates-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.intro{border:1px solid var(--line);background:color-mix(in srgb,var(--card) 92%,transparent);border-radius:1.5rem;padding:1.75rem 1.9rem;box-shadow:var(--shadow)}
+.intro{border:1px solid color-mix(in srgb,var(--line) 82%,transparent);background:color-mix(in srgb,var(--card) 84%,transparent);border-radius:1.5rem;padding:1.75rem 1.9rem;box-shadow:var(--shadow);backdrop-filter:blur(18px);transition:box-shadow .18s ease,border-color .18s ease}
 .intro .eyebrow{font-size:.625rem;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
 .intro h1{margin:.5rem 0 .45rem;font:600 clamp(2rem,4vw,3rem)/1.04 var(--serif);letter-spacing:-.04em;max-width:16ch}
 .intro p{margin:0;color:var(--muted);max-width:68ch;font-size:.9rem}
@@ -307,19 +307,19 @@ input.q{min-width:0;min-height:44px;border-radius:999px;background:var(--card)}
 .topic-section{min-width:0}
 .section-title,.active-topic{margin:0 0 .55rem;padding:0 .15rem;font:650 1.35rem/1.25 var(--serif);letter-spacing:-.02em;color:var(--fg)}
 .active-topic[hidden]{display:none}
-.grid{display:flex;flex-direction:column;gap:0;align-items:stretch;margin:0;border:1px solid var(--line);border-radius:1.1rem;background:var(--card);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05)}
+.grid{display:flex;flex-direction:column;gap:0;align-items:stretch;margin:0;border:1px solid color-mix(in srgb,var(--line) 82%,transparent);border-radius:1.1rem;background:color-mix(in srgb,var(--card) 90%,transparent);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05);backdrop-filter:blur(14px)}
 .sections.filtered{gap:0;border:1px solid var(--line);border-radius:1.1rem;background:var(--card);overflow:hidden;box-shadow:0 8px 28px rgba(38,46,41,.05)}
 .sections.filtered .topic-section,.sections.filtered .grid{display:contents}
 .sections.filtered .section-title{display:none}
 .sections.filtered .card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
-.card{display:block;width:100%;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible;cursor:default;transition:none}
+.card{display:block;width:100%;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible;cursor:default;transition:background-color .16s ease}
 .card+.card{border-top:1px solid color-mix(in srgb,var(--line) 64%,transparent)}
 .card:hover,.card.open{border-color:transparent;transform:none;box-shadow:none}
 .card[hidden]{display:none}
 .card.is-read .headline{color:var(--faint)}
 .card.is-read{background:color-mix(in srgb,var(--line) 16%,transparent)}
 .story-heading{margin:0;font:inherit}
-.accordion-toggle{width:100%;min-height:58px;border:0;background:transparent;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:.65rem;align-items:center;padding:1.05rem 1.15rem;cursor:pointer}
+.accordion-toggle{width:100%;min-height:58px;border:0;background:transparent;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:.65rem;align-items:center;padding:1.05rem 1.15rem;cursor:pointer;transition:background-color .16s ease}
 .accordion-toggle:hover{background:color-mix(in srgb,var(--accent-soft) 38%,transparent)}
 .headline{font:600 1.06rem/1.34 var(--serif);letter-spacing:-.012em}
 .chev{display:grid;place-items:center;width:30px;height:30px;margin:0;border:1px solid var(--line);border-radius:50%;padding:0;color:var(--faint);background:transparent;transition:transform .2s ease}
@@ -364,15 +364,17 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
   .tools{top:0}.mobiletopics{display:flex}.panelin{grid-template-columns:1fr;gap:1rem}.topbar{align-items:flex-start}
 }
 @media (max-width:620px){
-  .wrap{padding:.75rem .75rem 0}.maincol{padding-bottom:3rem}.intro{padding:1.35rem 1.15rem;border-radius:1.15rem}
-  .intro h1{font-size:2.15rem}.topbar{gap:.5rem;flex-wrap:wrap}.crumb{padding-top:.5rem}
+  .wrap{padding:.55rem .65rem 0}.maincol{padding-bottom:3rem}.intro{padding:.9rem 1rem;border-radius:1.05rem}
+  .intro h1{font-size:1.7rem;margin:.3rem 0 .25rem}.intro p{font-size:.8rem;line-height:1.4}.intro .eyebrow{font-size:.58rem}
+  .edition-meta{margin-top:.6rem;gap:.3rem}.edition-meta span{padding:.22rem .5rem;font-size:.64rem}
+  .topbar{gap:.35rem;flex-wrap:wrap;margin-bottom:.55rem}.crumb{padding-top:.35rem}
   .profile-slot{width:100%;max-width:100%;justify-content:flex-start}
-  .tools{margin-left:-.1rem;margin-right:-.1rem;flex-direction:column;align-items:stretch}
+  .tools{margin:.6rem -.1rem .55rem;padding:.55rem;flex-direction:column;align-items:stretch}
   .mobiletopics{width:100%;max-width:100%;box-sizing:border-box;flex:none;padding-right:2px}
   .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
   .panel{padding:0 .85rem 1rem}.detail .row{grid-template-columns:1fr;gap:.05rem}
 }
-@media (prefers-reduced-motion:reduce){.chev,.load-more{transition:none}.load-more:not(:disabled):hover,.load-more[aria-busy="true"]{transform:none}}
+@media (prefers-reduced-motion:reduce){.intro,.card,.accordion-toggle,.chev,.load-more{transition:none}.load-more:not(:disabled):hover,.load-more[aria-busy="true"]{transform:none}}
 """
 
 JS = """
