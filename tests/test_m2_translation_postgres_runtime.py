@@ -6,6 +6,7 @@ as tests/test_discovery_postgres_runtime.py.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -79,10 +80,15 @@ def db():
         _run('docker', 'stop', container, check=False)
 
 
-def _row(story_id, *, language='zh', title='独家：某部门发布七项新规', url=None, extra=None):
+def _story_id(url):
+    """canonical_stories requires story_id == 'story:' + sha256(canonical_url)."""
+    return 'story:' + hashlib.sha256(url.encode('utf-8')).hexdigest()
+
+
+def _row(url, *, language='zh', title='独家：某部门发布七项新规', extra=None):
     payload = {
-        'story_id': story_id, 'origin_class': 'public_outlet', 'source_kind': 'outlet',
-        'canonical_url': url or f'https://example.test/{story_id[-6:]}',
+        'story_id': _story_id(url), 'origin_class': 'public_outlet', 'source_kind': 'outlet',
+        'canonical_url': url,
         'title': title, 'summary': '摘要内容。', 'language': language,
         'source_id': 'fixture', 'source_name': 'Fixture Wire', 'source_is_aggregator': False,
         'published_at': '2026-09-16T10:00:00Z', 'source_observed_at': '2026-09-16T10:00:00Z',
@@ -114,9 +120,10 @@ def test_the_migration_applies_and_the_columns_exist(db):
 
 
 def test_the_overlay_check_accepts_supported_languages_and_refuses_everything_else(db):
-    story = 'story:' + 'a' * 58
-    assert _ingest(db, [_row(story, extra={'title_translations': {'en': 'Exclusive: seven new rules'}})]).returncode == 0
-    rejected = _ingest(db, [_row('story:' + 'b' * 58, extra={'title_translations': {'fr': 'Interdit'}})], check=False)
+    assert _ingest(db, [_row('https://example.test/overlay-ok',
+                             extra={'title_translations': {'en': 'Exclusive: seven new rules'}})]).returncode == 0
+    rejected = _ingest(db, [_row('https://example.test/overlay-bad',
+                                 extra={'title_translations': {'fr': 'Interdit'}})], check=False)
     assert rejected.returncode != 0 and 'invalid translation overlay' in rejected.stderr
     # The CHECK itself, reached directly rather than through the RPC guard.
     direct = _sql(db, "update public.retained_corpus_observations "
@@ -125,12 +132,13 @@ def test_the_overlay_check_accepts_supported_languages_and_refuses_everything_el
 
 
 def test_a_later_observation_merges_translations_and_never_downgrades_a_group(db):
-    story = 'story:' + 'c' * 58
+    url = 'https://example.test/merge-case'
+    story = _story_id(url)
     group = 'group:' + '0' * 32
-    _ingest(db, [_row(story, extra={'title_translations': {'en': 'First English title'},
+    _ingest(db, [_row(url, extra={'title_translations': {'en': 'First English title'},
                                     'event_group_id': group,
                                     'source_observed_at': '2026-09-16T10:00:00Z'})])
-    _ingest(db, [_row(story, extra={'summary_translations': {'en': 'A later summary'},
+    _ingest(db, [_row(url, extra={'summary_translations': {'en': 'A later summary'},
                                     'source_observed_at': '2026-09-16T11:00:00Z'})])
     result = _sql(db, "select title_translations->>'en', summary_translations->>'en', event_group_id "
                       f"from public.retained_corpus_observations where story_id={_quote(story)};")
@@ -141,14 +149,15 @@ def test_a_later_observation_merges_translations_and_never_downgrades_a_group(db
 
 
 def test_the_read_rpc_returns_the_overlay_and_the_exclusive_rpc_filters_by_group(db):
-    zh_paired = 'story:' + 'd' * 58
-    en_paired = 'story:' + 'e' * 58
-    zh_alone = 'story:' + 'f' * 58
+    zh_paired_url = 'https://example.test/zh-paired'
+    en_paired_url = 'https://example.test/en-paired'
+    zh_alone_url = 'https://example.test/zh-alone'
+    zh_paired, en_paired, zh_alone = (_story_id(zh_paired_url), _story_id(en_paired_url), _story_id(zh_alone_url))
     group = 'group:' + '1' * 32
     _ingest(db, [
-        _row(zh_paired, extra={'event_group_id': group}),
-        _row(en_paired, language='en', title='An English wire story', extra={'event_group_id': group}),
-        _row(zh_alone, extra={'title_translations': {'en': 'Only the Chinese press ran this'}}),
+        _row(zh_paired_url, extra={'event_group_id': group}),
+        _row(en_paired_url, language='en', title='An English wire story', extra={'event_group_id': group}),
+        _row(zh_alone_url, extra={'title_translations': {'en': 'Only the Chinese press ran this'}}),
     ])
     rows = _candidates(db, "public.m2_retained_candidates(null,null,null,null,100)")
     assert rows and all({'title_translations', 'summary_translations', 'event_group_id'} <= set(row) for row in rows)
