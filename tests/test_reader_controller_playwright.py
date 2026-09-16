@@ -357,7 +357,7 @@ def test_state_actions_preserve_dom_and_update_requires_explicit_refresh(tmp_pat
         ),
         encoding="utf-8",
     )
-    (site / "data").mkdir()
+    (site / "data").mkdir(exist_ok=True)
     (site / "data" / "news-en.json").write_text(
         json.dumps({"schema_version": 1, "language": "en", "categories": []}),
         encoding="utf-8",
