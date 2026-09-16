@@ -14,10 +14,11 @@
   const encoder = new TextEncoder();
   const LOCALE_KEY = "news-curator-display-language";
   const COPY = Object.freeze({
-    en: { all:"All", saved:"Saved", topics:"Topics", today:"Today's edition", companion:"Your reading companion", intro:"Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.", rail:"One current edition. Open any headline for the source summary and ranking context.", preferences:"Feed preferences", learn:"Learn from my reading", provider:"Use my history for model ranking", policy:"Provider data policy", privacy:"Privacy", search:"Search all retained stories", load:"Load", loading:"Loading", more:"more", stories:"stories", noMatches:"No matching stories found.", translationUnavailable:"Translation unavailable", translationSummary:"This saved story is not available in English yet. Open the original or try again later.", refresh:"Refresh feed", download:"Download my data", clear:"Clear learning history", activity:"Activity recorded", activityUsed:"Latest activity used", read:"Mark read", unread:"Mark unread", save:"Save", savedAction:"Saved ✓", moreLike:"More like this", lessLike:"Less like this", close:"Close", original:"Read original", source:"Source", newsletter:"Newsletter", published:"Published", coverage:"Also covered by", signals:"Ranking signals" },
-    zh: { all:"全部", saved:"已收藏", topics:"主题", today:"今日新闻", companion:"你的阅读助手", intro:"打开标题即可查看可靠摘要、来源和入选原因。", rail:"每小时更新一期。打开任意标题，查看来源摘要和排序说明。", preferences:"新闻偏好", learn:"根据我的阅读学习", provider:"使用我的阅读记录进行模型排序", policy:"服务商数据政策", privacy:"隐私", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityUsed:"已使用最新活动", read:"标为已读", unread:"标为未读", save:"收藏", savedAction:"已收藏 ✓", moreLike:"更多类似内容", lessLike:"减少类似内容", close:"关闭", original:"阅读原文", source:"来源", newsletter:"新闻通讯", published:"发布时间", coverage:"其他报道", signals:"排序依据" },
+    en: { all:"All", saved:"Saved", topics:"Topics", today:"Today's edition", companion:"Your reading companion", intro:"Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.", rail:"One current edition. Open any headline for the source summary and ranking context.", preferences:"Feed preferences", learn:"Learn from my reading", provider:"Use my history for model ranking", policy:"Provider data policy", privacy:"Privacy", search:"Search all retained stories", load:"Load", loading:"Loading", more:"more", stories:"stories", noMatches:"No matching stories found.", translationUnavailable:"Translation unavailable", translationSummary:"This saved story is not available in English yet. Open the original or try again later.", refresh:"Refresh feed", download:"Download my data", clear:"Clear learning history", activity:"Activity recorded", activityUsed:"Latest activity used", read:"Mark read", unread:"Mark unread", save:"Save", savedAction:"Saved ✓", moreLike:"More like this", lessLike:"Less like this", close:"Close", original:"Read original", source:"Source", newsletter:"Newsletter", published:"Published", coverage:"Also covered by", signals:"Ranking signals", why:"Why this appeared", matched:"Matched on" },
+    zh: { all:"全部", saved:"已收藏", topics:"主题", today:"今日新闻", companion:"你的阅读助手", intro:"打开标题即可查看可靠摘要、来源和入选原因。", rail:"每小时更新一期。打开任意标题，查看来源摘要和排序说明。", preferences:"新闻偏好", learn:"根据我的阅读学习", provider:"使用我的阅读记录进行模型排序", policy:"服务商数据政策", privacy:"隐私", search:"搜索所有已保留新闻", load:"加载", loading:"正在加载", more:"更多", stories:"篇新闻", noMatches:"没有找到相关新闻。", translationUnavailable:"翻译暂不可用", translationSummary:"这篇已收藏新闻暂时没有中文版本。你可以阅读原文，或稍后重试。", refresh:"刷新新闻", download:"下载我的数据", clear:"清除学习记录", activity:"已记录活动", activityUsed:"已使用最新活动", read:"标为已读", unread:"标为未读", save:"收藏", savedAction:"已收藏 ✓", moreLike:"更多类似内容", lessLike:"减少类似内容", close:"关闭", original:"阅读原文", source:"来源", newsletter:"新闻通讯", published:"发布时间", coverage:"其他报道", signals:"排序依据", why:"入选原因", matched:"匹配依据" },
   });
   function validLocale(value) { return value === "en" || value === "zh"; }
+  function activeCopy() { return COPY[document.documentElement?.lang === "zh" ? "zh" : "en"]; }
   const MESSAGE_ZH = Object.freeze({
     "Personalized feed configuration is unavailable. Public stories remain available.":"个性化新闻配置暂不可用。你仍可阅读公开新闻。",
     "Sign in to use synced reading controls.":"登录后可使用同步阅读功能。",
@@ -573,8 +574,9 @@
     if (Number.isSafeInteger(state.state_revision)) card.dataset.stateRevision = String(state.state_revision);
     const saveButton = card.querySelector(".save-action");
     if (saveButton && hasSaved) {
-      saveButton.textContent = saved ? "Saved ✓" : "Save";
-      saveButton.setAttribute("aria-label", saved ? "Remove from Saved" : "Save story");
+      const copy = activeCopy();
+      saveButton.textContent = saved ? copy.savedAction : copy.save;
+      saveButton.setAttribute("aria-label", saved ? (document.documentElement?.lang === "zh" ? "从已收藏中移除" : "Remove from Saved") : (document.documentElement?.lang === "zh" ? "收藏新闻" : "Save story"));
       saveButton.setAttribute("aria-pressed", String(saved));
     }
     if (interestButton && interestButton.dataset.topicId) {
@@ -885,6 +887,8 @@
     const localeCopy = () => COPY[displayLanguage];
     function applyLocaleLabels() {
       if (document.documentElement) document.documentElement.lang = displayLanguage;
+      const localeLoading = document.querySelector(".locale-loading span");
+      if (localeLoading) localeLoading.textContent = displayLanguage === "zh" ? "正在加载所选语言" : "Loading selected language";
       document.querySelectorAll('[data-filter="__all__"]').forEach((node) => { node.textContent = localeCopy().all; });
       document.querySelectorAll('[data-filter="__saved__"]').forEach((node) => { node.textContent = localeCopy().saved; });
       document.querySelectorAll('[data-locale]').forEach((node) => node.setAttribute("aria-pressed", String(node.dataset.locale === displayLanguage)));
@@ -904,16 +908,17 @@
       if (consentLabels[1]) consentLabels[1].lastChild.textContent = ` ${localeCopy().provider}`;
       set("#m2-provider-retention", localeCopy().policy); set("footer a", localeCopy().privacy);
       const metaSpans = document.querySelectorAll(".edition-meta > span:not(.dot):not(.stale)");
-      if (metaSpans[0]) {
-        if (!metaSpans[0].dataset.en) metaSpans[0].dataset.en = metaSpans[0].textContent;
-        metaSpans[0].textContent = displayLanguage === "zh" ? metaSpans[0].dataset.en.replace(/^Built /, "生成于 ") : metaSpans[0].dataset.en;
-      }
+      if (metaSpans[0] && editionMeta?.dataset.generatedAt) metaSpans[0].textContent = `${displayLanguage === "zh" ? "生成于 " : "Built "}${editionTime(editionMeta.dataset.generatedAt)}`;
       if (metaSpans[1]) metaSpans[1].textContent = displayLanguage === "zh" ? "每小时计划更新" : "scheduled hourly";
       if (metaSpans[2]) { const count = parseInt(metaSpans[2].textContent, 10); if (Number.isFinite(count)) metaSpans[2].textContent = displayLanguage === "zh" ? `${count} 篇新闻` : `${count} ${count === 1 ? "story" : "stories"}`; }
       const stale = document.getElementById("stale");
       if (stale) {
-        if (!stale.dataset.en) stale.dataset.en = stale.textContent;
-        stale.textContent = displayLanguage === "zh" ? stale.dataset.en.replace(/^last build /, "上次生成于 ").replace(/ days? ago$/, " 天前") : stale.dataset.en;
+        const ageHours = stale.dataset.built ? Math.max(0, Math.round((Date.now() - new Date(stale.dataset.built).getTime()) / 3600000)) : null;
+        if (Number.isFinite(ageHours)) {
+          const unit = ageHours >= 48 ? "day" : "hour", value = unit === "day" ? Math.round(ageHours / 24) : ageHours;
+          const relative = new Intl.RelativeTimeFormat(displayLanguage === "zh" ? "zh-CN" : "en-US", { numeric:"always" }).format(-value, unit);
+          stale.textContent = displayLanguage === "zh" ? `上次生成于${relative}` : `last build ${relative}`;
+        }
       }
       {
         document.querySelectorAll(".read-action").forEach((node) => { node.textContent = node.closest(".card")?.classList.contains("is-read") ? localeCopy().unread : localeCopy().read; });
@@ -922,7 +927,7 @@
         document.querySelectorAll(".less-interest-action").forEach((node) => { node.textContent = localeCopy().lessLike; });
         document.querySelectorAll(".shut").forEach((node) => { node.textContent = localeCopy().close; });
         document.querySelectorAll(".acts a").forEach((node) => { if (/Read original|阅读原文/i.test(node.textContent)) node.textContent = localeCopy().original; });
-        const detailMap = {Source:"source",来源:"source",Newsletter:"newsletter",新闻通讯:"newsletter",Published:"published",发布时间:"published","Also covered by":"coverage",其他报道:"coverage","Ranking signals":"signals",排序依据:"signals"};
+        const detailMap = {Source:"source",来源:"source",Newsletter:"newsletter",新闻通讯:"newsletter",Published:"published",发布时间:"published","Also covered by":"coverage",其他报道:"coverage","Ranking signals":"signals",排序依据:"signals","Why this appeared":"why",入选原因:"why","Matched on":"matched",匹配依据:"matched"};
         document.querySelectorAll(".detail .row b,.signal b").forEach((node) => { const key = detailMap[node.textContent]; if (key) node.textContent = localeCopy()[key]; });
       }
       document.querySelectorAll(".locale-switch").forEach((node) => node.setAttribute("aria-label", displayLanguage === "zh" ? "显示语言" : "Display language"));
@@ -1293,12 +1298,12 @@
     }
     function enqueueBehavior(operation, recordsActivity = false) {
       const epoch = authEpoch;
-      let previousActivityClaim = null;
+      let previousActivityClaim = recordsActivity ? markActivityPending() : null;
       const pending = behaviorWrites.catch(() => {}).then(async () => {
         if (epoch !== authEpoch || !signedIn()) fail("The signed-in account changed.");
         const snapshot = await api.historySnapshot();
         if (epoch !== authEpoch) fail("The signed-in account changed.");
-        if (recordsActivity && snapshot.learning_enabled) previousActivityClaim = markActivityPending();
+        if (recordsActivity && !snapshot.learning_enabled) restoreActivityClaim(previousActivityClaim);
         const value = await operation(snapshot);
         if (epoch !== authEpoch) fail("The signed-in account changed.");
         return value;
@@ -2023,8 +2028,8 @@
         const saveButton = card.querySelector(".save-action");
         card.classList.toggle("is-saved", Boolean(previous.saved_at));
         if (saveButton) {
-          saveButton.textContent = saved ? "Saving…" : "Removing…";
-          saveButton.setAttribute("aria-label", saved ? "Saving story" : "Removing story from Saved");
+          saveButton.textContent = displayLanguage === "zh" ? (saved ? "正在收藏…" : "正在取消收藏…") : (saved ? "Saving…" : "Removing…");
+          saveButton.setAttribute("aria-label", displayLanguage === "zh" ? (saved ? "正在收藏新闻" : "正在从已收藏中移除新闻") : (saved ? "Saving story" : "Removing story from Saved"));
           saveButton.setAttribute("aria-pressed", String(Boolean(previous.saved_at)));
           saveButton.setAttribute("aria-busy", "true");
           saveButton.classList.add("is-pending");
@@ -2152,13 +2157,13 @@
         void hydrate().catch(() => { announce("This section could not be synced. Try again."); });
       });
     });
-    async function persistLocale() {
+    async function persistLocale(requestedLocale) {
       const personalization = window.NewsCuratorPersonalization;
       if (!signedIn() || !personalization) return;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await personalization.get();
         const base = current || { revision:0, interests:[], saved_searches:[] };
-        const outcome = await personalization.set({ expected_revision:base.revision, locale:displayLanguage,
+        const outcome = await personalization.set({ expected_revision:base.revision, locale:requestedLocale,
           interests:base.interests, saved_searches:base.saved_searches });
         if (outcome.status === "updated") return;
         if (outcome.status !== "conflict") fail("Language preference could not be saved.");
@@ -2169,20 +2174,25 @@
       if (!validLocale(locale) || locale === displayLanguage) return;
       const previousLocale = displayLanguage;
       displayLanguage = locale; localeEpoch += 1; m2Sequence += 1;
+      const requestEpoch = localeEpoch;
       applyLocaleLabels();
       document.body?.classList.add("locale-pending");
       try {
         await localizeVisibleCards(localeEpoch);
-        await persistLocale();
+        if (requestEpoch !== localeEpoch) return;
+        await persistLocale(locale);
+        if (requestEpoch !== localeEpoch) return;
         try { localStorage.setItem(LOCALE_KEY, locale); } catch (_) {}
         if (usesM2()) await loadM2();
       } catch (_) {
+        if (requestEpoch !== localeEpoch) return;
         displayLanguage = previousLocale; localeEpoch += 1; m2Sequence += 1;
         applyLocaleLabels();
         try { await localizeVisibleCards(localeEpoch); } catch (_) {}
         announce(previousLocale === "zh" ? "语言切换失败，请重试。" : "Language change failed. Try again.");
+        document.body?.classList.remove("locale-pending");
       }
-      finally { document.body?.classList.remove("locale-pending"); }
+      finally { if (requestEpoch === localeEpoch) document.body?.classList.remove("locale-pending"); }
     }
     document.querySelectorAll("[data-locale]").forEach((button) => button.addEventListener("click", () => { void selectLocale(button.dataset.locale); }));
     loadButton.addEventListener("click", () => { void loadMore(); });

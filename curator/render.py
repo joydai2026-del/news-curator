@@ -97,6 +97,11 @@ body{
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
 body.locale-pending .shell{visibility:hidden}
+.locale-loading{display:none;position:fixed;inset:0;z-index:100;place-items:center;color:var(--muted)}
+body.locale-pending .locale-loading{display:grid}
+.locale-loading::before{content:"";width:1.5rem;height:1.5rem;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:locale-spin .7s linear infinite}
+.locale-loading span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+@keyframes locale-spin{to{transform:rotate(360deg)}}
 .card[data-locale-hidden="true"]{display:none!important}
 .wrap{max-width:78rem; margin:0 auto; padding:4rem 1.5rem 6rem}
 header{margin-bottom:2rem}
@@ -374,7 +379,7 @@ footer{margin-top:2rem;padding:1.25rem .25rem 0}
   .find{min-width:0;width:100%}.accordion-toggle{padding:.95rem .85rem}.headline{font-size:1rem}
   .panel{padding:0 .85rem 1rem}.detail .row{grid-template-columns:1fr;gap:.05rem}
 }
-@media (prefers-reduced-motion:reduce){.intro,.card,.accordion-toggle,.chev,.load-more{transition:none}.load-more:not(:disabled):hover,.load-more[aria-busy="true"]{transform:none}}
+@media (prefers-reduced-motion:reduce){.intro,.card,.accordion-toggle,.chev,.load-more{transition:none}.locale-loading::before{animation:none}.load-more:not(:disabled):hover,.load-more[aria-busy="true"]{transform:none}}
 """
 
 JS = """
@@ -1069,6 +1074,7 @@ def render_html(
 <style>{CSS}</style>
 </head>
 <body class="locale-pending">
+<div class="locale-loading" role="status" aria-live="polite"><span>Loading selected language</span></div>
 <div class="wrap">
 <div class="shell">
   <aside class="rail" aria-label="News Curator navigation">
@@ -1087,7 +1093,7 @@ def render_html(
       <div class="eyebrow">Today's edition</div>
       <h1>Your reading companion</h1>
       <p>Open a headline for a grounded summary, provenance, and a plain explanation of why it appeared.</p>
-      <div class="edition-meta" data-timezone="{_e(timezone_name)}">
+      <div class="edition-meta" data-timezone="{_e(timezone_name)}" data-generated-at="{_e(built.isoformat())}">
         <span>Built {_e(stamp)}</span><span>scheduled hourly</span><span>{total} stories</span>{stale}
       </div>
     </header>
