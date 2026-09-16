@@ -208,3 +208,115 @@ def test_the_shipped_config_translates_language_exclusive_stories_with_a_key():
     assert translated[0].item.language == "zh"
     assert translated[0].title_translations == {"en": "Exclusive: seven new rules"}
     assert "translated=1" in message
+
+
+def _corpus_row(row, *, group=None):
+    """A row as the corpus read-back returns it, group id included."""
+    return GroupingCandidate(story_id=row.story_id, language=row.item.language, title=row.item.title,
+                             summary=row.item.description or "", published_at=row.item.published_at,
+                             canonical_url=row.item.canonical_url,
+                             category_ids=tuple(sorted(row.category_ids)), event_group_id=group)
+
+
+def test_run_n_then_run_n_plus_1_the_chinese_story_is_not_exclusive():
+    """The real sequence: the English story arrived in an EARLIER run, and the
+    database stored it with a NULL group id. The Chinese story shows up alone in
+    the next run and must still not be sold as 'Only in Chinese press'."""
+    english = Item(title="Nvidia beats on earnings with 3 Blackwell chips", url="https://e.com/1",
+                   canonical_url="https://e.com/1", source_id="fixture", source_name="Fixture",
+                   published_at=NOW, language="en", description="Revenue rose in 2026.")
+    chinese = Item(title="英伟达 Nvidia 发布 3 款 Blackwell 芯片", url="https://e.cn/1",
+                   canonical_url="https://e.cn/1", source_id="fixture", source_name="Fixture",
+                   published_at=NOW, language="zh", description="2026 年营收增长。")
+    run_n = retain([english], categories=[], observed_at=NOW)
+    assert run_n[0].event_group_id is None, "a group of one has no id in the database"
+    run_n1 = retain([chinese], categories=[], observed_at=NOW)
+    # Exactly what the read-back yields: the English row, group id NULL.
+    corpus = (_corpus_row(run_n[0], group=None),)
+    provider = StubProvider()
+    rows, message = translate_rows(config(), run_n1, env={KEY_ENV: "test-key"}, now=NOW,
+                                   store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider,
+                                   pairing_provider=StubPairing(answers={run_n1[0].story_id: run_n[0].story_id}),
+                                   corpus=corpus)
+    assert provider.calls == 0, "a covered story is never paid for"
+    assert rows[0].event_group_id == event_group_id_for(run_n[0].story_id)
+    assert "no language-exclusive stories" in message
+
+
+def test_a_decision_made_in_an_earlier_run_is_reused_and_never_re_asked():
+    rows = fixture_rows()
+    zh_alone = next(row for row in rows if row.item.canonical_url == "https://e.cn/2")
+    zh_paired = next(row for row in rows if row.item.canonical_url == "https://e.cn/1")
+    english = next(row for row in rows if row.item.canonical_url == "https://e.com/1")
+    decided = {
+        zh_alone.story_id: ExclusivityDecision(story_id=zh_alone.story_id, decided_at=NOW,
+                                               model="gpt-5-mini", policy_id="pairing-json-v1",
+                                               match_story_id=None),
+        zh_paired.story_id: ExclusivityDecision(story_id=zh_paired.story_id, decided_at=NOW,
+                                                model="gpt-5-mini", policy_id="pairing-json-v1",
+                                                match_story_id=english.story_id),
+    }
+    pairing = StubPairing()
+    provider = StubProvider()
+    result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider,
+                                     pairing_provider=pairing, decisions=decided)
+    assert pairing.asked == [], "a decided story is never re-asked"
+    assert provider.calls == 1 and "pairing_calls=0" in message
+    by_url = {row.item.canonical_url: row for row in result}
+    assert by_url["https://e.cn/2"].title_translations == {"en": "Exclusive: seven new rules"}
+    assert by_url["https://e.cn/1"].event_group_id == event_group_id_for(english.story_id)
+
+
+def test_a_truncated_read_back_skips_pairing_and_translation_entirely():
+    """Exclusivity is unproven when the window was not fully read, and a wrong
+    claim spends money on a story an English outlet already ran."""
+    rows = fixture_rows()
+    provider, pairing = StubProvider(), StubPairing()
+    result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider,
+                                     pairing_provider=pairing, truncated=True)
+    assert message == "translation skipped: corpus read-back truncated"
+    assert provider.calls == 0 and pairing.asked == []
+    assert result == rows
+
+
+def test_an_undecided_story_is_neither_translated_nor_claimed_exclusive():
+    rows = fixture_rows()
+
+    class Refusing:
+        provider_id = "openai"
+        model_version = "gpt-5-mini:pairing-json-v1"
+
+        def decide(self, *, story, context):
+            raise RuntimeError("model unavailable")
+
+    provider = StubProvider()
+    result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                                     store=InMemoryTranslationStore(clock=lambda: NOW), provider=provider,
+                                     pairing_provider=Refusing())
+    assert provider.calls == 0
+    assert "undecided=2" in message
+    assert all(row.title_translations == {} for row in result)
+
+
+def test_a_missing_key_emits_an_actions_warning_and_still_exits_zero(capsys):
+    rows = fixture_rows()
+    result, message = translate_rows(config(), rows, env={}, now=NOW,
+                                     store=InMemoryTranslationStore(clock=lambda: NOW),
+                                     provider=StubProvider(), pairing_provider=StubPairing())
+    captured = capsys.readouterr()
+    assert "::warning::translation skipped: NEWS_CURATOR_MODEL_API_KEY not configured" in captured.err
+    assert message == "translation skipped: NEWS_CURATOR_MODEL_API_KEY is not set"
+    assert result == rows
+
+
+def test_the_decision_callback_receives_every_new_decision_for_persistence():
+    rows = fixture_rows()
+    recorded = []
+    translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                   store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider(),
+                   pairing_provider=pairing_for(rows), on_decision=recorded.append)
+    assert {decision.story_id for decision in recorded} == {
+        row.story_id for row in rows if row.item.language == "zh"}
+    assert {decision.policy_id for decision in recorded} == {"pairing-json-v1"}
