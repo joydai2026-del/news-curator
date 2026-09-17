@@ -451,3 +451,32 @@ def test_the_overlay_write_lands_where_a_second_corpus_ingest_would_not(db):
     # A malformed overlay is refused outright.
     rejected = _apply_overlay(db, [{'story_id': story, 'title_translations': {'fr': 'Non'}}], check=False)
     assert rejected.returncode != 0
+
+
+def test_the_overlay_rpc_is_service_role_only_and_isolates_a_bad_row(db):
+    """F11: the revoke must stay. F7/F8: one bad row and an empty string."""
+    for role in ('anon', 'authenticated'):
+        denied = _sql(db, f"set role {role};"
+                          "set request.jwt.claims = '{\"role\":\"service_role\"}';"
+                          "select public.m2_apply_retained_overlay('[]'::jsonb);", check=False)
+        assert denied.returncode != 0 and 'permission denied' in denied.stderr
+
+    good_url, bad_url = 'https://overlay.example.com/good', 'https://overlay.example.com/bad'
+    _ingest(db, [_row(good_url), _row(bad_url)])
+    good, bad = _story_id(good_url), _story_id(bad_url)
+    # An oversized summary trips the table CHECK. The good row in the SAME call
+    # must still land, and the call must not fail.
+    isolated = _apply_overlay(db, [
+        {'story_id': good, 'title_translations': {'en': 'Kept'}},
+        {'story_id': bad, 'summary_translations': {'en': 'x' * 40000}},
+    ])
+    assert isolated.returncode == 0 and isolated.stdout.strip().endswith('1')
+    kept = _sql(db, f"select title_translations->>'en' from public.retained_corpus_observations where story_id = {_quote(good)};")
+    assert kept.stdout.strip() == 'Kept'
+    # An empty string never replaces a stored translation.
+    _apply_overlay(db, [{'story_id': good, 'title_translations': {'en': ''}}])
+    still = _sql(db, f"select title_translations->>'en' from public.retained_corpus_observations where story_id = {_quote(good)};")
+    assert still.stdout.strip() == 'Kept'
+    # A re-sent, unchanged overlay changes nothing and is not counted.
+    noop = _apply_overlay(db, [{'story_id': good, 'title_translations': {'en': 'Kept'}}])
+    assert noop.stdout.strip().endswith('0')
