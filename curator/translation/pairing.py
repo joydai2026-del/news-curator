@@ -156,10 +156,11 @@ class PairingResult:
     output_tokens: int = 0
     budget_refusals: int = 0
     persistence_failures: int = 0
-    # Set when the per-run bound stopped the loop: "calls" or "time".
-    # Every provider.decide invocation, answered or not: a failed attempt still
-    # costs money and time, so it is what the per-run bound counts.
+    # Every ATTEMPT at a paid call, counted at the reservation rather than at the
+    # answer: a refused reservation and a provider failure each cost a round
+    # trip, so both are what the per-run bound counts.
     attempted_calls: int = 0
+    # Set when a bound stopped the loop: "calls", "time" or "daily_cap".
     budget_stop: str | None = None
     # Stories this run did not ask about because the bound was already reached.
     budget_skipped: int = 0
@@ -205,6 +206,7 @@ def decide_exclusivity(
     recheck=None,
     cost: "PairingCost | None" = None,
     monotonic=time.monotonic,
+    started: float | None = None,
 ) -> PairingResult:
     """Ask once per undecided story, reuse every decision already on record.
 
@@ -216,11 +218,17 @@ def decide_exclusivity(
         was made. English coverage routinely lags the Chinese wire by hours, so
         the first look is the wrong moment to decide for ever.
 
-    A run also stops on its own bound (`max_calls_per_run`, `run_time_budget_seconds`).
-    Reaching it is not a failure: every decision already made is persisted, the
-    stories not reached stay undecided and claim nothing, and the next run asks
-    about them. Before this bound existed, a backlog of hundreds of stories ran
-    the job past its timeout and the whole run, corpus write included, was lost.
+    A run also stops on its own bound (`max_calls_per_run`, `run_time_budget_seconds`,
+    or the first refusal from the persisted daily ledger). Reaching one is not a
+    failure: every decision already made is persisted, the stories not reached
+    stay undecided and claim nothing, and the next run asks about them. Before
+    this bound existed, a backlog of hundreds of stories ran the job past its
+    timeout and the whole run, corpus write included, was lost.
+
+    `stories` is the work QUEUE, not only the current fetch. The ingest merges
+    the retained batch with the undecided other-language rows already in the
+    corpus window, or a story skipped for budget would be re-asked only while it
+    happened to stay in the feed.
     """
 
     result = PairingResult()
@@ -237,7 +245,10 @@ def decide_exclusivity(
         pool_by_id.setdefault(row.story_id, row)
     display_pool = list(pool_by_id.values())
 
-    started = monotonic()
+    # The clock belongs to the RUN, not to this loop: the ingest passes the value
+    # it read at entry, so the corpus read-back that precedes pairing spends the
+    # same budget. Defaulting to now() keeps a direct caller honest.
+    started = monotonic() if started is None else started
     # Newest first, and everything inside the pairing window before anything
     # older, so the section a reader is looking at fills before the tail does.
     ordered = sorted(stories, key=lambda row: (now - row.published_at > window,
@@ -279,13 +290,19 @@ def decide_exclusivity(
             result.undecided.add(story.story_id)
             continue
         estimate = pricing.estimate_usd(build_question(story, context))
+        result.attempted_calls += 1
         if ledger is not None and not ledger.reserve_call(estimate):
-            # The day's pairing budget is spent. Claim nothing.
+            # The DAY's budget is spent, not this run's share, and that ledger is
+            # persisted: every later story, in this run and in every later run
+            # today, gets the same answer. Asking again is one Supabase round
+            # trip per story for the rest of the day, so this refusal is
+            # terminal and the rest of the batch is skipped without asking.
             result.budget_refusals += 1
+            result.budget_stop = "daily_cap"
+            result.budget_skipped += 1
             result.undecided.add(story.story_id)
             continue
         remaining -= 1
-        result.attempted_calls += 1
         try:
             index, input_tokens, output_tokens = provider.decide(story=story, context=context)
         except PAIRING_TRANSIENT_ERRORS:
