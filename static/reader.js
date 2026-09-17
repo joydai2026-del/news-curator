@@ -1240,6 +1240,18 @@
       const chip = document.querySelector('.chip[data-language-exclusive="true"]');
       return Boolean(chip && selectedTopic() === chip.dataset.filter);
     }
+    // The rerender rebuilds every card from m2Entries, which is the SERVER
+    // snapshot. Without this, saving a story and then switching language shows
+    // the card unsaved again, because the local mutation lived only in the DOM.
+    function rememberM2State(card, state) {
+      const storyId = card?.dataset?.storyId;
+      if (!storyId || !m2Active) return;
+      const entry = m2Entries.find((candidate) => candidate.story_id === storyId);
+      if (!entry) return;
+      ["read_at", "saved_at", "state_revision", "interests"].forEach((field) => {
+        if (Object.prototype.hasOwnProperty.call(state, field)) entry[field] = state[field];
+      });
+    }
     function rerenderM2Cards() {
       if (!m2Active || !m2Binding) return;
       const entries = m2Entries.slice();
@@ -1926,6 +1938,7 @@
       }
       pending.previousRead = confirmedRead;
       applyServerState(card, { read_at: pending.read ? "local" : null });
+      rememberM2State(card, { read_at: pending.read ? "local" : null });
     }
     async function mutateState(card, read, saved, previousRead = card.classList.contains("is-read"), eventType = "read_more") {
       const focusedAction = document.activeElement;
@@ -1942,6 +1955,7 @@
       };
       card.newsCuratorStateMutationBaseline = { token: mutationToken, ...previous };
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
+      rememberM2State(card, { read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
         const key = idempotencyKey();
         const result = m2?.enabled && signedIn() && (eventType !== "read_more" || read)
@@ -1955,6 +1969,7 @@
           ? { ...baseline, ...result }
           : baseline;
         applyServerState(card, confirmed);
+        rememberM2State(card, confirmed);
         reconcilePendingRead(card, Boolean(confirmed.read_at));
         reapplyCurrentMembership(card, restoreFocusOnRollback ? focusedAction : null);
         announce("Reading state saved.");

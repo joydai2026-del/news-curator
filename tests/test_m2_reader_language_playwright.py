@@ -68,6 +68,7 @@ class LanguageStore:
         self.rows = rows
         self.frozen = {}
         self.events = []
+        self.states = {}
         self.exclusive_calls = []
 
     def history_snapshot(self, token):
@@ -90,7 +91,9 @@ class LanguageStore:
         return rows[:limit]
 
     def owner_states(self, token, story_ids):
-        return {sid: {'read_at': None, 'saved_at': None, 'state_revision': 0, 'interests': []} for sid in story_ids}
+        return {sid: copy.deepcopy(self.states.get(
+            sid, {'read_at': None, 'saved_at': None, 'state_revision': 0, 'interests': []}))
+            for sid in story_ids}
 
     def reserve_budget(self, **kwargs):
         raise AssertionError('Unpriced local fallback must not reserve provider spend')
@@ -171,6 +174,16 @@ def test_language_toggle_section_and_untranslated_mark(tmp_path):
                 payload = {'schema_version': 1, 'status': 'unavailable', 'reason_code': 'no_private_edition', 'edition': None}
             elif name == 'append_behavior_event':
                 payload = {'status': 'recorded', 'event_id': body.get('p_event_id'), 'event_revision': 1}
+            elif name == 'set_story_state_with_event':
+                state = store.states.setdefault(body['p_story_id'],
+                                                {'read_at': None, 'saved_at': None, 'state_revision': 0, 'interests': []})
+                state.update(read_at=body['p_occurred_at'] if body['p_read'] else None,
+                             saved_at=body['p_occurred_at'] if body['p_saved'] else None,
+                             state_revision=state['state_revision'] + 1)
+                payload = {'status': 'updated', 'revision': state['state_revision'],
+                           'read_at': state['read_at'], 'saved_at': state['saved_at'],
+                           'behavior_event': {'status': 'recorded', 'event_id': body.get('p_event_id'),
+                                              'event_revision': 1}}
             else:
                 raise AssertionError(name)
             return route.fulfill(status=200, content_type='application/json', body=json.dumps(payload))
@@ -231,6 +244,29 @@ def test_language_toggle_section_and_untranslated_mark(tmp_path):
             # Toggling twice returns to the start with the same visible count.
             page.wait_for_function(VISIBLE_CARDS + " === 3")
             assert visible_headlines(page) == texts
+
+            # A local save must survive the language toggle: the rerender reads
+            # the entries snapshot, so a mutation that lived only in the DOM
+            # silently reverted.
+            # A local save must survive the language toggle: the rerender reads
+            # the entries snapshot, so a mutation that lived only in the DOM
+            # silently reverted. The controls live inside the card panel, so the
+            # card is expanded first, exactly as a reader would.
+            saved_story = page.evaluate(
+                "() => document.querySelector('[data-m2-card=true]').dataset.storyId")
+            page.locator('[data-m2-card=true] .accordion-toggle').first.click()
+            page.locator('[data-m2-card=true] .save-action').first.click()
+            page.wait_for_function(
+                "(id) => document.querySelector(`[data-story-id=\"${id}\"]`)?.classList.contains('is-saved')",
+                arg=saved_story)
+            toggle.click()
+            page.wait_for_function("() => document.getElementById('m2-language-toggle').innerText === 'EN'")
+            page.wait_for_function(VISIBLE_CARDS + " === 3")
+            assert page.evaluate(
+                "(id) => document.querySelector(`[data-story-id=\"${id}\"]`)?.classList.contains('is-saved')",
+                saved_story), "the save survived the language toggle"
+            toggle.click()
+            page.wait_for_function("() => document.getElementById('m2-language-toggle').innerText === '中文'")
 
             # Opening the section serves only language-exclusive stories.
             page.locator('.chip[data-language-exclusive=true]').nth(1).click()
