@@ -54,7 +54,7 @@ def main() -> int:
         # M2.1 Phase 1: the reader needs the translation overlay and the
         # language-exclusive corpus to come back from the RPCs, not from a file.
         "select bool_and(value ? 'title_translations' and value ? 'summary_translations' and value ? 'event_group_id') as translation_fields_returned from public.m2_retained_candidates(null,null,null,null,100) as candidates(value);",
-        "select bool_and((value->>'language') <> 'en') as exclusive_rows_are_other_language from public.m2_retained_candidates_language_exclusive('en',null,null,null,100) as candidates(value);",
+        "select coalesce(bool_and((value->>'language') <> 'en'), true) as exclusive_rows_are_other_language from public.m2_retained_candidates_language_exclusive('en',null,null,null,100,'pairing-json-v1') as candidates(value);",
     )
     category_sql = (
         "begin;",

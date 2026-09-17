@@ -180,7 +180,8 @@ def test_the_exclusive_lane_returns_only_the_stories_the_model_ruled_exclusive(d
     _decide(db, matched, 'matched', match=peer)
     _decide(db, undecided, 'undecided')
     _decide(db, exclusive, 'exclusive')
-    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive('en',null,null,null,100)")
+    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive("
+                           f"'en',null,null,null,100,{_quote(POLICY)})")
     assert [row['story_id'] for row in rows] == [exclusive], [row['story_id'] for row in rows]
 
 
@@ -208,7 +209,8 @@ def test_a_matched_pair_sharing_a_group_id_is_never_exclusive(db):
     # Even a stale EXCLUSIVE decision cannot resurrect a story whose group has
     # a display-language member.
     _decide(db, zh_story, 'exclusive')
-    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive('en',null,null,null,100)")
+    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive("
+                           f"'en',null,null,null,100,{_quote(POLICY)})")
     assert zh_story not in {row['story_id'] for row in rows}
 
 
@@ -220,14 +222,16 @@ def test_the_read_rpc_still_returns_the_translation_overlay(db):
 def test_the_exclusive_rpc_is_service_role_only(db):
     for role in ('anon', 'authenticated'):
         denied = _sql(db, f"set role {role}; "
-                          "select public.m2_retained_candidates_language_exclusive('en',null,null,null,10);",
+                          "select public.m2_retained_candidates_language_exclusive("
+                          f"'en',null,null,null,10,{_quote(POLICY)});",
                       check=False)
         assert denied.returncode != 0 and 'permission denied' in denied.stderr.lower()
 
 
 def test_the_exclusive_rpc_refuses_an_unsupported_display_language(db):
     denied = _sql(db, "set role service_role;"
-                      "select public.m2_retained_candidates_language_exclusive('fr',null,null,null,10);", check=False)
+                      "select public.m2_retained_candidates_language_exclusive("
+                      f"'fr',null,null,null,10,{_quote(POLICY)});", check=False)
     assert denied.returncode != 0 and 'invalid display language' in denied.stderr
 
 
