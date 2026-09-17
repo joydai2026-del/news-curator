@@ -455,3 +455,32 @@ def test_every_action_is_pinned_to_a_full_commit_sha() -> None:
                 assert re.fullmatch(r"[0-9a-f]{40}", ref), (
                     f"{path.name}:{name}:{action} is not pinned to a full SHA"
                 )
+
+
+# The pairing run budget must fit INSIDE the ingest job, with room for the work
+# that surrounds it. 2026-09-17: the pairing loop ran until GitHub cancelled the
+# job at timeout-minutes, and the run's corpus write was lost with it.
+INGEST_PATH = ROOT / ".github" / "workflows" / "retained-corpus-ingest.yml"
+# Checkout, setup-python, pip install and the source collection step all run
+# before the ingest command, and the corpus read-back runs before the pairing
+# loop the budget covers. Four minutes is the allowance for all of it.
+INGEST_OVERHEAD_SECONDS = 240
+
+
+def test_the_pairing_run_budget_fits_inside_the_ingest_job_timeout() -> None:
+    from curator.config import load_config
+
+    job = _workflow(INGEST_PATH)["jobs"]["ingest"]
+    assert isinstance(job, dict)
+    timeout_seconds = int(job["timeout-minutes"]) * 60
+    budget = int(load_config(ROOT).translation["run_time_budget_seconds"])
+    assert budget <= timeout_seconds - INGEST_OVERHEAD_SECONDS, (
+        f"translation.run_time_budget_seconds={budget} leaves no room inside a "
+        f"{timeout_seconds}s job"
+    )
+
+
+def test_the_ingest_job_still_declares_a_timeout_at_all() -> None:
+    job = _workflow(INGEST_PATH)["jobs"]["ingest"]
+    assert isinstance(job, dict)
+    assert isinstance(job.get("timeout-minutes"), int)

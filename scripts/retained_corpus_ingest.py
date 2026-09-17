@@ -233,6 +233,50 @@ def record_exclusivity_decision(url, key, decision):
         'p_retry_after': decision.retry_after.isoformat() if decision.retry_after else None})
 
 
+def ingest_corpus_rows(url, key, rows):
+    """STEP ONE of the hourly run: the corpus itself, before any paid work.
+
+    Translation is an enrichment; the corpus is the product. Writing it first is
+    what makes a cancelled run survivable: the rows are already in, and only the
+    overlay is missing until the next run fills it.
+    """
+    body = json.dumps({'p_rows': rows}).encode()
+    request = urllib.request.Request(url + '/rest/v1/rpc/m2_ingest_retained_corpus',
+                                     data=body, headers=_service_headers(key), method='POST')
+    with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
+        if response.status != 200:
+            raise ValueError('retained corpus ingest failed')
+
+
+def overlay_rows(rows):
+    """STEP TWO's payload: only what pairing and translation decided."""
+    payload = []
+    for row in rows:
+        entry = {'story_id': row.story_id}
+        if row.title_translations:
+            entry['title_translations'] = dict(row.title_translations)
+        if row.summary_translations:
+            entry['summary_translations'] = dict(row.summary_translations)
+        if row.event_group_id:
+            entry['event_group_id'] = row.event_group_id
+        if len(entry) > 1:
+            payload.append(entry)
+    return payload
+
+
+def apply_overlay_rows(url, key, rows):
+    """Write the overlay onto rows the corpus write already put in.
+
+    NOT a second m2_ingest_retained_corpus call: that upsert only fires when the
+    incoming source_observed_at is NEWER, so re-sending the same rows would be a
+    no-op and the overlay would never land. This RPC touches the three overlay
+    columns only, merging translations and never replacing an existing group id.
+    """
+    if not rows:
+        return 0
+    return _rpc(url, key, 'm2_apply_retained_overlay', {'p_rows': rows})
+
+
 def read_corpus_window(url, key, *, policy, now, pages: int = 40):
     """Read every corpus row inside the PAIRING window, newest first.
 
@@ -345,6 +389,12 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
     except TRANSLATION_TRANSPORT_ERRORS as error:
         print(f'::warning::pairing unavailable: {type(error).__name__}', file=sys.stderr)
         return rows, f'pairing unavailable: {type(error).__name__}'
+    if decision.budget_stop is not None:
+        # Not a failure: this run took its share, persisted every answer it got
+        # and left the rest undecided for the next run. Exit stays 0.
+        print(f'pairing budget reached: calls={decision.attempted_calls} '
+              f'elapsed={decision.elapsed_seconds:.1f} '
+              f'remaining_undecided={decision.budget_skipped}', file=sys.stderr)
     if on_decision is not None:
         for record in decision.pending:
             on_decision(record)
@@ -450,8 +500,17 @@ def main() -> int:
     truncation_reason = 'page_ceiling'
     url = os.environ.get('NEWS_CURATOR_SUPABASE_URL', '')
     key = os.environ.get('NEWS_CURATOR_SUPABASE_SECRET_KEY', '')
-    if a.command == 'ingest' and url and key:
+    if a.command == 'ingest':
+        # STEP ONE, before the corpus read-back, the pairing loop and any paid
+        # call: the retained rows go in. Everything after this point may be
+        # cancelled (a job timeout, a stopped run) and the hour's corpus still
+        # lands. Losing an overlay costs one run of translation; losing the
+        # corpus write loses the stories.
+        if not url or not key:
+            raise ValueError('retained corpus ingest unavailable')
         validate_https_origin(url)
+        ingest_corpus_rows(url, key, public_ingest_rows(retained, allowed_source_ids=allowed))
+    if a.command == 'ingest' and url and key:
         try:
             corpus, truncated = read_corpus_window(
                 url, key, policy=pairing_policy, now=snap.generated_at,
@@ -492,18 +551,15 @@ def main() -> int:
     print(translation_message, file=sys.stderr)
     if recorded:
         print(f'exclusivity decisions persisted={len(recorded)}', file=sys.stderr)
-    rows=public_ingest_rows(retained, allowed_source_ids=allowed)
     if a.command == 'build':
         if not a.output: raise ValueError('output required')
+        rows = public_ingest_rows(retained, allowed_source_ids=allowed)
         a.output.write_text(json.dumps({'schema_version':1,'generated_at':snap.generated_at.isoformat(),'rows':rows}, ensure_ascii=False), encoding='utf-8'); return 0
-    url=os.environ.get('NEWS_CURATOR_SUPABASE_URL',''); key=os.environ.get('NEWS_CURATOR_SUPABASE_SECRET_KEY','')
-    if not url or not key: raise ValueError('retained corpus ingest unavailable')
-    validate_https_origin(url)
-    headers={'apikey':key,'content-type':'application/json'}
-    if not key.startswith('sb_secret_'): headers['authorization']='Bearer '+key
-    body=json.dumps({'p_rows':rows}).encode(); request=urllib.request.Request(url+'/rest/v1/rpc/m2_ingest_retained_corpus', data=body, headers=headers, method='POST')
-    with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
-        if response.status != 200: raise ValueError('retained corpus ingest failed')
+    # STEP TWO: only what pairing and translation decided, merged onto the rows
+    # step one already wrote.
+    overlay = overlay_rows(retained)
+    applied = apply_overlay_rows(url, key, overlay)
+    print(f'overlay rows={len(overlay)} applied={applied}', file=sys.stderr)
     return 0
 if __name__ == '__main__':
     try: raise SystemExit(main())
