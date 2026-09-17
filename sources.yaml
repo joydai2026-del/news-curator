@@ -356,7 +356,7 @@ translation:
   # Settlement is clamped to the reservation plus this much.
   settle_overrun_tolerance_usd: 0.05
   # How many 100-row pages of the pairing window the ingest will read back.
-  corpus_readback_max_pages: 40
+  corpus_readback_max_pages: 120
   cache_ttl_days: 30
   # There is deliberately no drop value. A failed translation shows the
   # original, marked, and never removes the story from the feed.
