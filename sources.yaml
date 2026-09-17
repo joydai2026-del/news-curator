@@ -319,7 +319,7 @@ reddit:
 translation:
   # Phase 1 acceptance: JJ calls the missing translation surface a bug, so this
   # ships ON. With no API key the hourly ingest logs a named skip and exits 0.
-  enabled: true
+  enabled: false  # CONTAINMENT 2026-09-17: pairing ran past the 14-minute ingest job; re-enable after the per-run bound lands
   # The provider is selected here, never in business logic. `google` is the
   # original adapter; `openai` is the Phase 1 model adapter, chosen because the
   # Google Cloud path was never provisioned (no GOOGLE_* variables, no
