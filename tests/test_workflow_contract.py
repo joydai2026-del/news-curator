@@ -461,10 +461,22 @@ def test_every_action_is_pinned_to_a_full_commit_sha() -> None:
 # that surrounds it. 2026-09-17: the pairing loop ran until GitHub cancelled the
 # job at timeout-minutes, and the run's corpus write was lost with it.
 INGEST_PATH = ROOT / ".github" / "workflows" / "retained-corpus-ingest.yml"
-# Checkout, setup-python, pip install and the source collection step all run
-# before the ingest command, and the corpus read-back runs before the pairing
-# loop the budget covers. Four minutes is the allowance for all of it.
-INGEST_OVERHEAD_SECONDS = 240
+# MEASURED, not invented. Run 35232307729 (the cancelled 2026-09-17 ingest),
+# job 105239287260, step timestamps from `gh run view --json jobs`:
+#   set up job      14:15:07 -> 14:15:08   1s
+#   checkout        14:15:08 -> 14:15:09   1s
+#   setup-python    14:15:09 -> 14:15:12   3s
+#   pip install     14:15:12 -> 14:15:14   2s
+#   collect batch   14:15:14 -> 14:15:35  21s
+#   ingest command started 14:15:35, cancelled 14:30:20
+# So everything before the ingest command took 28s. 60s is that doubled, which
+# covers a cold pip cache and a slower collection.
+INGEST_OVERHEAD_SECONDS = 60
+# run_time_budget_seconds now starts at ingest entry, so it covers the corpus
+# write, the corpus read-back and the pairing loop. The translation stage runs
+# AFTER the bounded loop and is bounded by max_items_per_language, not by the
+# clock; this is its allowance inside the same job.
+TRANSLATION_STAGE_ALLOWANCE_SECONDS = 180
 
 
 def test_the_pairing_run_budget_fits_inside_the_ingest_job_timeout() -> None:
@@ -474,9 +486,11 @@ def test_the_pairing_run_budget_fits_inside_the_ingest_job_timeout() -> None:
     assert isinstance(job, dict)
     timeout_seconds = int(job["timeout-minutes"]) * 60
     budget = int(load_config(ROOT).translation["run_time_budget_seconds"])
-    assert budget <= timeout_seconds - INGEST_OVERHEAD_SECONDS, (
-        f"translation.run_time_budget_seconds={budget} leaves no room inside a "
-        f"{timeout_seconds}s job"
+    total = budget + INGEST_OVERHEAD_SECONDS + TRANSLATION_STAGE_ALLOWANCE_SECONDS
+    assert total < timeout_seconds, (
+        f"run_time_budget_seconds={budget} + {INGEST_OVERHEAD_SECONDS}s measured overhead "
+        f"+ {TRANSLATION_STAGE_ALLOWANCE_SECONDS}s translation allowance = {total}s, "
+        f"which does not fit a {timeout_seconds}s job"
     )
 
 

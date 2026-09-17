@@ -341,6 +341,14 @@ translation:
   # answer is persisted so a story is decided once.
   pairing_window_hours: 48
   pairing_max_context_titles: 60
+  # SIZING, stated rather than discovered later. The schedule runs 4 full ingests
+  # an hour; at pairing_max_calls_per_run: 40 that is 160 pairing calls an hour,
+  # so this 600-call day budget is spent about 3.75 hours into each UTC day, and
+  # the shared daily_cost_limit_usd (0.50, shared with translation) can bind
+  # sooner. After that every run stops on the FIRST ledger refusal, costing one
+  # Supabase round trip, and prints an ::warning:: with budget_refusals so a
+  # backlog that never drains is visible. Raising the caps is a config change;
+  # it is deliberately not made here.
   pairing_daily_call_limit: 600
   # An unusable answer is re-asked at most this many times, never every run.
   pairing_max_attempts: 2
