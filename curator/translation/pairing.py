@@ -21,10 +21,18 @@ from datetime import datetime, timedelta
 from typing import Mapping, Protocol, Sequence
 
 from curator.grouping import GroupingCandidate, event_group_id_for
+from curator.sources import SafeTransportError
+
+from .base import TranslationProviderError
+from .store import TranslationStoreError
+
+# A provider or transport failure is "undecided". A TypeError in our own code is
+# a defect and must reach the caller, not become a silent non-answer.
+PAIRING_TRANSIENT_ERRORS = (TranslationProviderError, TranslationStoreError, SafeTransportError)
 
 
 PAIRING_POLICY_ID = "pairing-json-v1"
-MATCH = "match"
+MATCH = "matched"
 EXCLUSIVE = "exclusive"
 UNDECIDED = "undecided"
 _SUMMARY_CONTEXT_CHARS = 200
@@ -46,6 +54,8 @@ class PairingPolicy:
     window_hours: int = 48
     max_context_titles: int = 60
     daily_call_limit: int = 600
+    max_attempts: int = 2
+    recheck_hours: int = 6
     model: str = ""
     policy_id: str = PAIRING_POLICY_ID
 
@@ -54,6 +64,8 @@ class PairingPolicy:
             ("translation.pairing_window_hours", self.window_hours, 1, 168),
             ("translation.pairing_max_context_titles", self.max_context_titles, 1, 500),
             ("translation.pairing_daily_call_limit", self.daily_call_limit, 0, 5_000),
+            ("translation.pairing_max_attempts", self.max_attempts, 1, 10),
+            ("translation.pairing_recheck_hours", self.recheck_hours, 1, 48),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
                 raise ValueError(f"{label} must be an integer in [{low}, {high}]")
@@ -64,38 +76,70 @@ class PairingPolicy:
             window_hours=int(translation.get("pairing_window_hours", 48)),
             max_context_titles=int(translation.get("pairing_max_context_titles", 60)),
             daily_call_limit=int(translation.get("pairing_daily_call_limit", 600)),
+            max_attempts=int(translation.get("pairing_max_attempts", 2)),
+            recheck_hours=int(translation.get("pairing_recheck_hours", 6)),
             model=str(translation.get("model") or ""),
         )
 
 
 @dataclass(frozen=True)
 class ExclusivityDecision:
-    """One persisted decision. `match_story_id` None means language exclusive."""
+    """One persisted decision, keyed by (story, display language, policy)."""
 
     story_id: str
     decided_at: datetime
     model: str
     policy_id: str
     match_story_id: str | None
+    outcome: str = EXCLUSIVE
+    display_language: str = "en"
+    attempts: int = 1
+    retry_after: datetime | None = None
+    rechecked_at: datetime | None = None
 
     @property
-    def outcome(self) -> str:
-        return MATCH if self.match_story_id else EXCLUSIVE
+    def settled(self) -> bool:
+        return self.outcome in (EXCLUSIVE, MATCH)
 
     def as_dict(self) -> dict[str, object]:
-        return {"story_id": self.story_id, "decided_at": self.decided_at.isoformat(),
-                "model": self.model, "policy_id": self.policy_id,
-                "match_story_id": self.match_story_id}
+        return {"story_id": self.story_id, "display_language": self.display_language,
+                "decided_at": self.decided_at.isoformat(), "model": self.model,
+                "policy_id": self.policy_id, "outcome": self.outcome,
+                "match_story_id": self.match_story_id, "attempts": self.attempts,
+                "retry_after": self.retry_after.isoformat() if self.retry_after else None}
+
+
+@dataclass(frozen=True)
+class PairingCost:
+    """Pairing is a paid call. Its price comes from the same config keys."""
+
+    input_cost_per_million_tokens_usd: float = 0.25
+    output_cost_per_million_tokens_usd: float = 2.0
+    characters_per_token: int = 4
+    output_allowance_tokens: int = 32
+
+    def cost_usd(self, input_tokens: int, output_tokens: int) -> float:
+        return (input_tokens * self.input_cost_per_million_tokens_usd
+                + output_tokens * self.output_cost_per_million_tokens_usd) / 1_000_000
+
+    def estimate_usd(self, question: Mapping[str, object]) -> float:
+        characters = len(json.dumps(question, ensure_ascii=False)) + len(_SYSTEM_PROMPT)
+        input_tokens = -(-characters // max(1, self.characters_per_token))
+        return self.cost_usd(input_tokens, self.output_allowance_tokens)
 
 
 @dataclass
 class PairingResult:
     decisions: dict[str, ExclusivityDecision] = field(default_factory=dict)
     group_ids: dict[str, str] = field(default_factory=dict)
+    matched_pairs: dict[str, str] = field(default_factory=dict)
     undecided: set[str] = field(default_factory=set)
+    pending: list = field(default_factory=list)
     calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    budget_refusals: int = 0
+    persistence_failures: int = 0
 
     @property
     def exclusive_story_ids(self) -> tuple[str, ...]:
@@ -115,6 +159,13 @@ class PairingProvider(Protocol):
         """
 
 
+class PairingLedger(Protocol):
+    """Reserves one pairing call against the persisted UTC-day budget."""
+
+    def reserve_call(self, amount_usd: float) -> bool: ...
+    def settle_call(self, reserved_usd: float, settled_usd: float) -> None: ...
+
+
 def decide_exclusivity(
     stories: Sequence[GroupingCandidate],
     corpus: Sequence[GroupingCandidate],
@@ -125,19 +176,28 @@ def decide_exclusivity(
     now: datetime,
     already_decided: Mapping[str, ExclusivityDecision] | None = None,
     prefilter: Mapping[str, str] | None = None,
-    call_budget: int | None = None,
+    ledger: PairingLedger | None = None,
+    persist=None,
+    cost: "PairingCost | None" = None,
 ) -> PairingResult:
-    """Ask once per undecided story, reuse every decision already on record."""
+    """Ask once per undecided story, reuse every decision already on record.
+
+    Three rules keep the answer honest over time:
+      * a decision from a DIFFERENT policy id is ignored (the caller filters),
+      * an UNDECIDED answer is re-asked at most `max_attempts` times, and
+      * an EXCLUSIVE answer is re-checked once, after `recheck_hours`, when new
+        display-language stories have arrived in the same categories since it
+        was made. English coverage routinely lags the Chinese wire by hours, so
+        the first look is the wrong moment to decide for ever.
+    """
 
     result = PairingResult()
     decided = dict(already_decided or {})
     grouped = dict(prefilter or {})
     window = timedelta(hours=policy.window_hours)
-    remaining = policy.daily_call_limit if call_budget is None else min(call_budget, policy.daily_call_limit)
+    pricing = cost or PairingCost()
+    remaining = policy.daily_call_limit
 
-    # Context is every display-language story in the window, whether it arrived
-    # in THIS batch or in an earlier run. Restricting it to the corpus would
-    # make a same-batch pair undecidable for no reason.
     pool_by_id = {}
     for row in list(corpus) + list(stories):
         if row.language != display_language or now - row.published_at > window:
@@ -149,51 +209,122 @@ def decide_exclusivity(
         if story.language == display_language:
             continue
         if story.story_id in grouped:
-            # The exact pre-filter already decided this one, for free.
             result.group_ids[story.story_id] = grouped[story.story_id]
             continue
         prior = decided.get(story.story_id)
-        if prior is not None:
-            # Decided once, in an earlier run. Never re-asked, never re-billed.
+        if prior is not None and not _needs_asking(prior, story, display_pool, policy=policy, now=now):
             result.decisions[story.story_id] = prior
-            if prior.match_story_id:
+            if prior.outcome == MATCH and prior.match_story_id:
                 result.group_ids[story.story_id] = event_group_id_for(prior.match_story_id)
+                result.matched_pairs[story.story_id] = prior.match_story_id
+            elif prior.outcome == UNDECIDED:
+                result.undecided.add(story.story_id)
             continue
         context = _context_for(story, display_pool, policy=policy, window=window, now=now)
         if not context:
-            # Nothing to compare against is not evidence of exclusivity.
             result.undecided.add(story.story_id)
             continue
         if remaining <= 0:
             result.undecided.add(story.story_id)
             continue
+        estimate = pricing.estimate_usd(build_question(story, context))
+        if ledger is not None and not ledger.reserve_call(estimate):
+            # The day's pairing budget is spent. Claim nothing.
+            result.budget_refusals += 1
+            result.undecided.add(story.story_id)
+            continue
         remaining -= 1
         try:
             index, input_tokens, output_tokens = provider.decide(story=story, context=context)
-        except Exception:
+        except PAIRING_TRANSIENT_ERRORS:
+            # A provider failure is undecided, and it still cost money.
+            if ledger is not None:
+                ledger.settle_call(estimate, estimate)
             result.undecided.add(story.story_id)
+            _record(result, persist, _undecided_decision(story, policy, display_language, prior, now))
             continue
         result.calls += 1
         result.input_tokens += max(0, int(input_tokens or 0))
         result.output_tokens += max(0, int(output_tokens or 0))
+        if ledger is not None:
+            observed = pricing.cost_usd(int(input_tokens or 0), int(output_tokens or 0))
+            ledger.settle_call(estimate, observed if observed > 0 else estimate)
         if index is None:
-            decision = ExclusivityDecision(story_id=story.story_id, decided_at=now,
-                                           model=policy.model, policy_id=policy.policy_id,
-                                           match_story_id=None)
-            result.decisions[story.story_id] = decision
+            decision = ExclusivityDecision(story_id=story.story_id, decided_at=now, model=policy.model,
+                                           policy_id=policy.policy_id, match_story_id=None,
+                                           outcome=EXCLUSIVE, display_language=display_language)
+            if _record(result, persist, decision):
+                result.decisions[story.story_id] = decision
+            else:
+                # Not persisted means not trusted: it cannot drive money or
+                # visibility this run, and it will be asked again next run.
+                result.undecided.add(story.story_id)
             continue
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(context):
             result.undecided.add(story.story_id)
+            _record(result, persist, _undecided_decision(story, policy, display_language, prior, now))
             continue
         matched = context[index]
-        decision = ExclusivityDecision(story_id=story.story_id, decided_at=now,
-                                       model=policy.model, policy_id=policy.policy_id,
-                                       match_story_id=matched.story_id)
+        decision = ExclusivityDecision(story_id=story.story_id, decided_at=now, model=policy.model,
+                                       policy_id=policy.policy_id, match_story_id=matched.story_id,
+                                       outcome=MATCH, display_language=display_language)
+        if not _record(result, persist, decision):
+            result.undecided.add(story.story_id)
+            continue
         result.decisions[story.story_id] = decision
-        # Derived from the MATCHED story, so the id is identical in every run
-        # and an existing group on that story is what new members join.
-        result.group_ids[story.story_id] = matched.event_group_id or event_group_id_for(matched.story_id)
+        group = matched.event_group_id or event_group_id_for(matched.story_id)
+        result.group_ids[story.story_id] = group
+        # BOTH rows carry the group. Writing only the foreign one left the peer
+        # at NULL, which is what made a matched story look exclusive.
+        result.group_ids[matched.story_id] = group
+        result.matched_pairs[story.story_id] = matched.story_id
     return result
+
+
+def _undecided_decision(story, policy, display_language, prior, now):
+    attempts = (prior.attempts if prior else 0) + 1
+    return ExclusivityDecision(
+        story_id=story.story_id, decided_at=now, model=policy.model, policy_id=policy.policy_id,
+        match_story_id=None, outcome=UNDECIDED, display_language=display_language,
+        attempts=attempts, retry_after=now + timedelta(hours=policy.recheck_hours))
+
+
+def _record(result, persist, decision) -> bool:
+    """Persist BEFORE the decision is allowed to matter. False means undecided."""
+
+    if persist is None:
+        result.pending.append(decision)
+        return True
+    try:
+        persist(decision)
+    except Exception:
+        result.persistence_failures += 1
+        return False
+    result.pending.append(decision)
+    return True
+
+
+def _needs_asking(prior: ExclusivityDecision, story, display_pool, *, policy, now) -> bool:
+    if prior.policy_id != policy.policy_id:
+        return True
+    if prior.outcome == UNDECIDED:
+        if prior.attempts >= policy.max_attempts:
+            return False
+        return prior.retry_after is None or now >= prior.retry_after
+    if prior.outcome == MATCH:
+        return False
+    # EXCLUSIVE: re-check once, after the recheck window, and only when a
+    # display-language story in the same categories arrived since the decision.
+    if prior.rechecked_at is not None:
+        return False
+    if now - prior.decided_at < timedelta(hours=policy.recheck_hours):
+        return False
+    if now - story.published_at > timedelta(hours=policy.window_hours):
+        return False
+    categories = set(story.category_ids)
+    return any(row.published_at > prior.decided_at
+               and (not categories or not row.category_ids or categories & set(row.category_ids))
+               for row in display_pool)
 
 
 def _context_for(story, display_pool, *, policy, window, now):
