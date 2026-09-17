@@ -789,6 +789,11 @@ def load_sources(path: Path) -> dict[str, Any]:
         ("pairing_recheck_hours", 1, 48),
         ("pairing_output_tokens", 1, 100000),
         ("corpus_readback_max_pages", 1, 200),
+        # One run's share of the pairing work. The time budget must stay below
+        # the ingest job's timeout minus checkout and install; the workflow
+        # contract test asserts that against the shipped workflow.
+        ("pairing_max_calls_per_run", 0, 500),
+        ("run_time_budget_seconds", 30, 780),
     ):
         value = translation.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, int)

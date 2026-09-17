@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Mapping, Protocol, Sequence
@@ -56,6 +57,13 @@ class PairingPolicy:
     daily_call_limit: int = 600
     max_attempts: int = 2
     recheck_hours: int = 6
+    # ONE RUN's share of the work, so an hourly job that finds a backlog of
+    # hundreds of undecided stories stops on its own terms instead of being
+    # cancelled by the job timeout with the run's writes lost. Progress is not
+    # thrown away: every decision is persisted as it is made and the next run
+    # resumes with what is still undecided.
+    max_calls_per_run: int = 40
+    run_time_budget_seconds: int = 300
     model: str = ""
     policy_id: str = PAIRING_POLICY_ID
 
@@ -66,6 +74,8 @@ class PairingPolicy:
             ("translation.pairing_daily_call_limit", self.daily_call_limit, 0, 5_000),
             ("translation.pairing_max_attempts", self.max_attempts, 1, 10),
             ("translation.pairing_recheck_hours", self.recheck_hours, 1, 48),
+            ("translation.pairing_max_calls_per_run", self.max_calls_per_run, 0, 500),
+            ("translation.run_time_budget_seconds", self.run_time_budget_seconds, 30, 780),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
                 raise ValueError(f"{label} must be an integer in [{low}, {high}]")
@@ -78,6 +88,8 @@ class PairingPolicy:
             daily_call_limit=int(translation.get("pairing_daily_call_limit", 600)),
             max_attempts=int(translation.get("pairing_max_attempts", 2)),
             recheck_hours=int(translation.get("pairing_recheck_hours", 6)),
+            max_calls_per_run=int(translation.get("pairing_max_calls_per_run", 40)),
+            run_time_budget_seconds=int(translation.get("run_time_budget_seconds", 300)),
             model=str(translation.get("model") or ""),
             # One source of truth for the policy id: the reader reads the same
             # value, and a mismatch makes the section silently empty.
@@ -144,6 +156,15 @@ class PairingResult:
     output_tokens: int = 0
     budget_refusals: int = 0
     persistence_failures: int = 0
+    # Every ATTEMPT at a paid call, counted at the reservation rather than at the
+    # answer: a refused reservation and a provider failure each cost a round
+    # trip, so both are what the per-run bound counts.
+    attempted_calls: int = 0
+    # Set when a bound stopped the loop: "calls", "time" or "daily_cap".
+    budget_stop: str | None = None
+    # Stories this run did not ask about because the bound was already reached.
+    budget_skipped: int = 0
+    elapsed_seconds: float = 0.0
 
     @property
     def exclusive_story_ids(self) -> tuple[str, ...]:
@@ -184,6 +205,8 @@ def decide_exclusivity(
     persist=None,
     recheck=None,
     cost: "PairingCost | None" = None,
+    monotonic=time.monotonic,
+    started: float | None = None,
 ) -> PairingResult:
     """Ask once per undecided story, reuse every decision already on record.
 
@@ -194,6 +217,18 @@ def decide_exclusivity(
         display-language stories have arrived in the same categories since it
         was made. English coverage routinely lags the Chinese wire by hours, so
         the first look is the wrong moment to decide for ever.
+
+    A run also stops on its own bound (`max_calls_per_run`, `run_time_budget_seconds`,
+    or the first refusal from the persisted daily ledger). Reaching one is not a
+    failure: every decision already made is persisted, the stories not reached
+    stay undecided and claim nothing, and the next run asks about them. Before
+    this bound existed, a backlog of hundreds of stories ran the job past its
+    timeout and the whole run, corpus write included, was lost.
+
+    `stories` is the work QUEUE, not only the current fetch. The ingest merges
+    the retained batch with the undecided other-language rows already in the
+    corpus window, or a story skipped for budget would be re-asked only while it
+    happened to stay in the feed.
     """
 
     result = PairingResult()
@@ -210,7 +245,15 @@ def decide_exclusivity(
         pool_by_id.setdefault(row.story_id, row)
     display_pool = list(pool_by_id.values())
 
-    for story in stories:
+    # The clock belongs to the RUN, not to this loop: the ingest passes the value
+    # it read at entry, so the corpus read-back that precedes pairing spends the
+    # same budget. Defaulting to now() keeps a direct caller honest.
+    started = monotonic() if started is None else started
+    # Newest first, and everything inside the pairing window before anything
+    # older, so the section a reader is looking at fills before the tail does.
+    ordered = sorted(stories, key=lambda row: (now - row.published_at > window,
+                                               -row.published_at.timestamp(), row.story_id))
+    for story in ordered:
         if story.language == display_language:
             continue
         if story.story_id in grouped:
@@ -234,10 +277,29 @@ def decide_exclusivity(
         if remaining <= 0:
             result.undecided.add(story.story_id)
             continue
+        if result.budget_stop is None:
+            if result.attempted_calls >= policy.max_calls_per_run:
+                result.budget_stop = "calls"
+            elif monotonic() - started >= policy.run_time_budget_seconds:
+                result.budget_stop = "time"
+        if result.budget_stop is not None:
+            # Out of this run's share. Nothing is claimed and nothing is
+            # persisted for this story: it was never asked, so it keeps its
+            # attempt count and the next run asks it first.
+            result.budget_skipped += 1
+            result.undecided.add(story.story_id)
+            continue
         estimate = pricing.estimate_usd(build_question(story, context))
+        result.attempted_calls += 1
         if ledger is not None and not ledger.reserve_call(estimate):
-            # The day's pairing budget is spent. Claim nothing.
+            # The DAY's budget is spent, not this run's share, and that ledger is
+            # persisted: every later story, in this run and in every later run
+            # today, gets the same answer. Asking again is one Supabase round
+            # trip per story for the rest of the day, so this refusal is
+            # terminal and the rest of the batch is skipped without asking.
             result.budget_refusals += 1
+            result.budget_stop = "daily_cap"
+            result.budget_skipped += 1
             result.undecided.add(story.story_id)
             continue
         remaining -= 1
@@ -304,6 +366,7 @@ def decide_exclusivity(
         # at NULL, which is what made a matched story look exclusive.
         result.group_ids[matched.story_id] = group
         result.matched_pairs[story.story_id] = matched.story_id
+    result.elapsed_seconds = monotonic() - started
     return result
 
 
