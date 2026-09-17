@@ -21,8 +21,24 @@ from curator.translation import (
 )
 from curator.translation.base import TranslationPrivacyError, TranslationProviderError
 from curator.translation.ingest import IngestTranslationPolicy, translate_exclusive_stories
-from curator.translation.pairing import ExclusivityDecision, PairingPolicy, decide_exclusivity
+from curator.translation.pairing import (ExclusivityDecision, PairingCost, PairingPolicy,
+                                         decide_exclusivity)
 from curator.translation.store import TranslationStoreError
+
+
+# Everything remote that translation depends on. An outage in any of them is a
+# named skip with exit 0: the hourly corpus ingest must still complete, because
+# every retained row for the run would otherwise be lost with it.
+TRANSLATION_TRANSPORT_ERRORS = (
+    TranslationProviderError,
+    TranslationStoreError,
+    TranslationPrivacyError,
+    urllib.error.URLError,      # HTTPError is a subclass
+    TimeoutError,
+    OSError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _ingest_translation_policy(cfg) -> IngestTranslationPolicy:
@@ -66,6 +82,25 @@ def _rpc(url, key, name, body, *, timeout=30):
         return json.loads(response.read() or b'null')
 
 
+class PersistedPairingLedger:
+    """The pairing call budget: dollars AND a per-UTC-day call count, in SQL."""
+
+    def __init__(self, url, key, *, daily_limit_usd, daily_call_limit):
+        self._url, self._key = url, key
+        self._limit, self._calls = float(daily_limit_usd), int(daily_call_limit)
+
+    def reserve_call(self, amount_usd: float) -> bool:
+        result = _rpc(self._url, self._key, 'm2_reserve_pairing_call',
+                      {'p_amount_usd': round(float(amount_usd), 6),
+                       'p_daily_limit_usd': self._limit, 'p_daily_call_limit': self._calls})
+        return bool(result) and result.get('status') == 'reserved'
+
+    def settle_call(self, reserved_usd: float, settled_usd: float) -> None:
+        _rpc(self._url, self._key, 'm2_settle_translation_spend',
+             {'p_reserved_usd': round(float(reserved_usd), 6),
+              'p_settled_usd': round(float(settled_usd), 6)})
+
+
 class PersistedSpendLedger:
     """The daily dollar cap, held in SQL so it survives twelve runs an hour."""
 
@@ -86,28 +121,44 @@ class PersistedSpendLedger:
         # is the point. It keeps protecting the cap until the day rolls over.
         return None
 
+    def release(self, reserved_usd: float) -> None:
+        """A pre-send abort cost nothing, so the day gets its money back."""
+        _rpc(self._url, self._key, 'm2_release_translation_spend',
+             {'p_reserved_usd': round(float(reserved_usd), 6)})
 
-def read_exclusivity_decisions(url, key, story_ids):
+
+def read_exclusivity_decisions(url, key, story_ids, *, display_language, policy_id):
     """Decisions already on record. A decided story is never re-asked."""
     if not story_ids:
         return {}
-    rows = _rpc(url, key, 'm2_read_exclusivity_decisions', {'p_story_ids': list(story_ids)})
+    rows = _rpc(url, key, 'm2_read_exclusivity_decisions',
+                {'p_story_ids': list(story_ids), 'p_display_language': display_language,
+                 'p_policy_id': policy_id})
     decisions = {}
     for row in rows or ():
         decisions[str(row['story_id'])] = ExclusivityDecision(
             story_id=str(row['story_id']),
             decided_at=datetime.fromisoformat(str(row['decided_at']).replace('Z', '+00:00')),
             model=str(row.get('model') or ''), policy_id=str(row.get('policy_id') or ''),
-            match_story_id=row.get('match_story_id'))
+            match_story_id=row.get('match_story_id'),
+            outcome=str(row.get('outcome') or 'exclusive'),
+            display_language=str(row.get('display_language') or display_language),
+            attempts=int(row.get('attempts') or 1),
+            retry_after=(datetime.fromisoformat(str(row['retry_after']).replace('Z', '+00:00'))
+                         if row.get('retry_after') else None),
+            rechecked_at=(datetime.fromisoformat(str(row['rechecked_at']).replace('Z', '+00:00'))
+                          if row.get('rechecked_at') else None))
     return decisions
 
 
-def record_exclusivity_decisions(url, key, decisions):
-    """Write once. The RPC keeps the first decision on a replay."""
-    for decision in decisions:
-        _rpc(url, key, 'm2_record_exclusivity_decision', {
-            'p_story_id': decision.story_id, 'p_model': decision.model,
-            'p_policy_id': decision.policy_id, 'p_match_story_id': decision.match_story_id})
+def record_exclusivity_decision(url, key, decision):
+    """Write BEFORE the decision is allowed to matter. A settled answer is
+    written once; an undecided one carries its attempt count and retry time."""
+    _rpc(url, key, 'm2_record_exclusivity_decision', {
+        'p_story_id': decision.story_id, 'p_display_language': decision.display_language,
+        'p_policy_id': decision.policy_id, 'p_model': decision.model,
+        'p_outcome': decision.outcome, 'p_match_story_id': decision.match_story_id,
+        'p_retry_after': decision.retry_after.isoformat() if decision.retry_after else None})
 
 
 def read_corpus_window(url, key, *, policy, now, pages: int = 40):
@@ -153,7 +204,7 @@ def read_corpus_window(url, key, *, policy, now, pages: int = 40):
 
 def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
                    pairing_provider=None, decisions=None, truncated=False, on_decision=None,
-                   spend_ledger=None):
+                   spend_ledger=None, pairing_ledger=None, persist_decision=None):
     """Decide exclusivity with the model, then translate what it ruled exclusive.
 
     Returns ``(rows, message)``. A missing credential, a switched-off feature, a
@@ -190,7 +241,7 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
             store = store or built[0]
             provider = provider or built[1]
             pairing_provider = pairing_provider or built[2]
-    except (TranslationProviderError, TranslationStoreError, ValueError) as error:
+    except TRANSLATION_TRANSPORT_ERRORS as error:
         return rows, f'translation unavailable: client not built ({type(error).__name__})'
 
     prefilter = exact_matches(batch + tuple(corpus), policy=GroupingPolicy.from_config(cfg.grouping or {}))
@@ -198,11 +249,16 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
         decision = decide_exclusivity(
             batch, corpus, display_language=policy.display_language, policy=pairing_policy,
             provider=pairing_provider, now=now, already_decided=dict(decisions or {}),
-            prefilter=prefilter)
-    except (TranslationProviderError, TranslationStoreError) as error:
+            prefilter=prefilter, ledger=pairing_ledger, persist=persist_decision,
+            cost=PairingCost(
+                input_cost_per_million_tokens_usd=policy.input_cost_per_million_tokens_usd,
+                output_cost_per_million_tokens_usd=policy.output_cost_per_million_tokens_usd,
+                characters_per_token=policy.characters_per_token))
+    except TRANSLATION_TRANSPORT_ERRORS as error:
+        print(f'::warning::pairing unavailable: {type(error).__name__}', file=sys.stderr)
         return rows, f'pairing unavailable: {type(error).__name__}'
     if on_decision is not None:
-        for record in decision.decisions.values():
+        for record in decision.pending:
             on_decision(record)
     rows = _apply_group_ids(rows, decision.group_ids)
 
@@ -216,7 +272,7 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
             stories, policy=policy, store=store, provider=provider,
             run_id=f"retained-corpus-{now.strftime('%Y%m%dT%H%M%SZ')}", now=now,
             spend_ledger=spend_ledger)
-    except (TranslationProviderError, TranslationStoreError, TranslationPrivacyError) as error:
+    except TRANSLATION_TRANSPORT_ERRORS as error:
         # Provider and store degradation only. A TypeError here is a code defect
         # and must surface, not hide behind "original text retained".
         return rows, f'translation unavailable: {type(error).__name__}, original text retained'
@@ -299,7 +355,10 @@ def main() -> int:
         validate_https_origin(url)
         try:
             corpus, truncated = read_corpus_window(url, key, policy=pairing_policy, now=snap.generated_at)
-            decisions = read_exclusivity_decisions(url, key, [row.story_id for row in retained])
+            decisions = read_exclusivity_decisions(
+                url, key, [row.story_id for row in retained],
+                display_language=str((cfg.language or {}).get('default_display') or 'en'),
+                policy_id=pairing_policy.policy_id)
             print(f'pairing corpus rows={len(corpus)} truncated={truncated} '
                   f'decisions={len(decisions)}', file=sys.stderr)
         except (urllib.error.URLError, ValueError, json.JSONDecodeError) as error:
@@ -308,19 +367,24 @@ def main() -> int:
             truncated = True
             print(f'pairing corpus unavailable: {type(error).__name__}', file=sys.stderr)
     recorded = []
+    live = a.command == 'ingest' and url and key
+    translation_cfg = cfg.translation or {}
     spend_ledger = (PersistedSpendLedger(url, key,
-                        daily_limit_usd=(cfg.translation or {}).get('daily_cost_limit_usd', 0.5))
-                    if a.command == 'ingest' and url and key else None)
+                        daily_limit_usd=translation_cfg.get('daily_cost_limit_usd', 0.5))
+                    if live else None)
+    pairing_ledger = (PersistedPairingLedger(url, key,
+                          daily_limit_usd=translation_cfg.get('daily_cost_limit_usd', 0.5),
+                          daily_call_limit=translation_cfg.get('pairing_daily_call_limit', 600))
+                      if live else None)
+    # Persist BEFORE the answer is allowed to move money or change what is shown.
+    persist = ((lambda decision: record_exclusivity_decision(url, key, decision)) if live else None)
     retained, translation_message = translate_rows(
         cfg, retained, env=os.environ, now=snap.generated_at, corpus=corpus,
         decisions=decisions, truncated=truncated, on_decision=recorded.append,
-        spend_ledger=spend_ledger)
+        spend_ledger=spend_ledger, pairing_ledger=pairing_ledger, persist_decision=persist)
     print(translation_message, file=sys.stderr)
-    if a.command == 'ingest' and url and key and recorded:
-        try:
-            record_exclusivity_decisions(url, key, recorded)
-        except (urllib.error.URLError, ValueError) as error:
-            print(f'exclusivity decisions not persisted: {type(error).__name__}', file=sys.stderr)
+    if recorded:
+        print(f'exclusivity decisions persisted={len(recorded)}', file=sys.stderr)
     rows=public_ingest_rows(retained, allowed_source_ids=allowed)
     if a.command == 'build':
         if not a.output: raise ValueError('output required')

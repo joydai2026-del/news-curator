@@ -77,7 +77,11 @@ def test_the_request_is_exactly_the_documented_chat_completions_call():
     assert call["credential"].header_name == "Authorization"
     assert "test-key" not in call["url"] and b"test-key" not in call["body"]
     sent = json.loads(call["body"])
-    assert set(sent) == {"model", "messages", "response_format"}
+    assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens"}
+    assert sent["max_completion_tokens"] == 1000
+    # No temperature on either call: the configured model family rejects a
+    # non-default value, and a 400 would make the whole feature silently dead.
+    assert "temperature" not in sent
     assert sent["model"] == "gpt-5-mini", "the model id comes from config, never a literal"
     assert sent["response_format"] == {"type": "json_object"}
     assert [message["role"] for message in sent["messages"]] == ["system", "user"]
@@ -133,6 +137,9 @@ def test_the_pairing_call_is_the_same_endpoint_with_deterministic_decoding():
     assert (index, input_tokens, output_tokens) == (0, 412, 37)
     sent = json.loads(transport.calls[0]["body"])
     assert transport.calls[0]["url"] == "https://api.openai.com/v1/chat/completions"
-    assert sent["temperature"] == 0, "pairing must be deterministic"
+    assert "temperature" not in sent, "a non-default temperature is rejected by this model family"
     assert sent["response_format"] == {"type": "json_object"}
     assert sent["model"] == "gpt-5-mini"
+    assert sent["max_completion_tokens"] == 32
+    # Both calls must be the same shape, or one of them is untested in practice.
+    assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens"}

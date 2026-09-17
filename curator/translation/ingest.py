@@ -129,6 +129,7 @@ class SpendLedger(Protocol):
     def reserve(self, amount_usd: float) -> bool: ...
     def settle(self, reserved_usd: float, settled_usd: float) -> None: ...
     def retain(self, reserved_usd: float) -> None: ...
+    def release(self, reserved_usd: float) -> None: ...
 
 
 class _RunLedger:
@@ -149,6 +150,7 @@ class _RunLedger:
         self._persisted = persisted
         self.settled_usd = 0.0
         self.retained_usd = 0.0
+        self.released_usd = 0.0
 
     @property
     def committed_usd(self) -> float:
@@ -168,7 +170,20 @@ class _RunLedger:
 
     def retain(self, amount_usd: float) -> None:
         self.retained_usd += amount_usd
-        # Nothing to release: a retained reservation stays reserved on purpose.
+        if self._persisted is not None:
+            # The SQL side has nothing to do (the reservation is already held),
+            # but it is told, so "retained" is observable rather than implied.
+            self._persisted.retain(amount_usd)
+
+    def release(self, amount_usd: float) -> None:
+        """A PRE-SEND abort cost nothing, so its reservation goes back.
+
+        Holding it would let a flaky store burn the day's cap on attempts that
+        never reached the provider, and translation would stop for the day.
+        """
+        self.released_usd += amount_usd
+        if self._persisted is not None:
+            self._persisted.release(amount_usd)
 
 
 @dataclass(frozen=True)
@@ -258,6 +273,7 @@ def translate_exclusive_stories(
             spent_characters += content.character_count
     counters["settled_usd_millionths"] = round(ledger.settled_usd * 1_000_000)
     counters["retained_usd_millionths"] = round(ledger.retained_usd * 1_000_000)
+    counters["released_usd_millionths"] = round(ledger.released_usd * 1_000_000)
     return IngestTranslationResult(overlays, dict(counters))
 
 
@@ -296,20 +312,27 @@ def _paid_translation(*, store, provider, policy, key, candidate, target, run_id
         acquired = store.acquire(request)
     except TranslationStoreError:
         counters["acquire_failed"] += 1
+        ledger.release(reservation_usd)
         return _untranslated("acquire_failed")
     if acquired.status == AcquireStatus.CACHE_HIT and acquired.cache is not None and acquired.cache.key == key:
         counters["cache_hit"] += 1
+        # A cache hit is free: the reservation must not be held against the day.
+        ledger.release(reservation_usd)
         return _translated(acquired.cache.translated_title, acquired.cache.translated_description, target)
     if acquired.status != AcquireStatus.LEASED:
         counters[acquired.status.value] += 1
+        ledger.release(reservation_usd)
         return _untranslated(acquired.status.value)
     try:
         sent = store.mark_sent(idempotency_key)
     except TranslationStoreError:
         counters["mark_sent_failed"] += 1
+        # mark_sent never committed, so the provider was never entered.
+        ledger.release(reservation_usd)
         return _untranslated("mark_sent_failed")
     if sent.state != ReservationState.SENT:
         counters["charge_unknown"] += 1
+        ledger.release(reservation_usd)
         return _untranslated("charge_unknown")
     # From here the provider has been entered: every exit either settles a real
     # cost or retains the reservation. None of them is free.

@@ -249,6 +249,78 @@ def test_model_adapter_rejects_an_over_length_translation():
     assert error.value.reason is TranslationErrorReason.RESPONSE_TOO_LARGE
 
 
+class ReleasingLedger:
+    """Records what each abort branch does to the day's reservation."""
+
+    def __init__(self):
+        self.reserved = self.released = self.settled = self.retained = 0.0
+
+    def reserve(self, amount_usd):
+        self.reserved += amount_usd
+        return True
+
+    def settle(self, reserved_usd, settled_usd):
+        self.settled += settled_usd
+
+    def retain(self, reserved_usd):
+        self.retained += reserved_usd
+
+    def release(self, reserved_usd):
+        self.released += reserved_usd
+
+
+class RefusingStore:
+    """A store whose acquire never leases, the commonest pre-send abort."""
+
+    def __init__(self, status):
+        self.status = status
+
+    def lookup(self, key):
+        return None
+
+    def recover_stale(self, key, **kwargs):
+        return None
+
+    def acquire(self, request):
+        from curator.translation import AcquireResult
+        return AcquireResult(status=self.status)
+
+
+def test_a_pre_send_abort_releases_its_reservation_rather_than_burning_the_day():
+    from curator.translation import AcquireStatus
+    ledger = ReleasingLedger()
+    provider = StubProvider()
+    result = translate_exclusive_stories([("story:a", zh_item())], policy=policy(),
+                                         store=RefusingStore(AcquireStatus.BLOCKED), provider=provider,
+                                         run_id="run-1", now=NOW, spend_ledger=ledger)
+    assert provider.calls == 0, "the provider was never entered"
+    assert ledger.released == pytest.approx(ledger.reserved), "the day gets its money back"
+    assert ledger.settled == 0 and ledger.retained == 0
+    assert result.overlays["story:a"].status == UNTRANSLATED
+
+
+def test_a_store_that_fails_before_the_send_also_releases():
+    ledger = ReleasingLedger()
+
+    class FailingAcquire(RefusingStore):
+        def acquire(self, request):
+            from curator.translation import StoreErrorReason, TranslationStoreError
+            raise TranslationStoreError(StoreErrorReason.UNAVAILABLE)
+
+    translate_exclusive_stories([("story:a", zh_item())], policy=policy(),
+                                store=FailingAcquire(None), provider=StubProvider(),
+                                run_id="run-1", now=NOW, spend_ledger=ledger)
+    assert ledger.released == pytest.approx(ledger.reserved) and ledger.retained == 0
+
+
+def test_a_failure_after_the_send_still_retains_and_never_releases():
+    ledger = ReleasingLedger()
+    translate_exclusive_stories([("story:a", zh_item())], policy=policy(), store=store(),
+                                provider=StubProvider("error"), run_id="run-1", now=NOW,
+                                spend_ledger=ledger)
+    assert ledger.retained > 0 and ledger.released == 0
+
+
 class FakePersistedLedger:
     """Stands in for the SQL day counter shared by every run on one UTC day."""
 
@@ -265,6 +337,9 @@ class FakePersistedLedger:
     def settle(self, reserved_usd, settled_usd):
         self.reserved = max(0.0, self.reserved - reserved_usd)
         self.settled += settled_usd
+
+    def release(self, reserved_usd):
+        self.reserved = max(0.0, self.reserved - reserved_usd)
 
 
 def test_two_runs_on_one_utc_day_share_the_persisted_cap():

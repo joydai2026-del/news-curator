@@ -775,6 +775,8 @@ def load_sources(path: Path) -> dict[str, Any]:
         ("pairing_window_hours", 1, 168),
         ("pairing_max_context_titles", 1, 500),
         ("pairing_daily_call_limit", 0, 5000),
+        ("pairing_max_attempts", 1, 10),
+        ("pairing_recheck_hours", 1, 48),
     ):
         value = translation.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, int)

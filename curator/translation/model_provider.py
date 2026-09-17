@@ -57,6 +57,10 @@ class ModelTranslationConfig:
     api_path: str = "/v1/chat/completions"
     max_request_bytes: int = 32 * 1024
     max_response_bytes: int = 512 * 1024
+    # The provider's name for the output cap, and the two caps themselves.
+    output_cap_field: str = "max_completion_tokens"
+    max_output_tokens: int = 1_000
+    pairing_output_tokens: int = 32
     max_output_title_chars: int = DEFAULT_MAX_TRANSLATION_OUTPUT_TITLE_CHARS
     max_output_description_chars: int = DEFAULT_MAX_TRANSLATION_OUTPUT_DESCRIPTION_CHARS
 
@@ -69,8 +73,11 @@ class ModelTranslationConfig:
             raise ValueError("translation api origin must be an https origin")
         if not _PATH.fullmatch(self.api_path or ""):
             raise ValueError("translation api path is invalid")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", self.output_cap_field or ""):
+            raise ValueError("translation output cap field is invalid")
         bounds = (self.max_request_bytes, self.max_response_bytes,
-                  self.max_output_title_chars, self.max_output_description_chars)
+                  self.max_output_title_chars, self.max_output_description_chars,
+                  self.max_output_tokens, self.pairing_output_tokens)
         if any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in bounds):
             raise ValueError("translation model bounds must be positive integers")
         if self.max_output_title_chars > DEFAULT_MAX_TRANSLATION_OUTPUT_TITLE_CHARS:
@@ -121,6 +128,8 @@ class ModelTranslationAdapter:
                     ensure_ascii=False, separators=(",", ":"))},
             ],
             "response_format": {"type": "json_object"},
+            # The budget reserves as if this cap is enforced, so it is sent.
+            self._config.output_cap_field: self._config.max_output_tokens,
         }
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > self._config.max_request_bytes:
@@ -247,7 +256,9 @@ class ModelPairingAdapter:
                                                        ensure_ascii=False, separators=(",", ":"))},
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0,
+            # Deliberately no `temperature`: the configured model family rejects
+            # a non-default value, and a 400 here turns every story undecided.
+            self._config.output_cap_field: self._config.pairing_output_tokens,
         }
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > self._config.max_request_bytes:

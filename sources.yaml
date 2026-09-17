@@ -342,6 +342,11 @@ translation:
   pairing_window_hours: 48
   pairing_max_context_titles: 60
   pairing_daily_call_limit: 600
+  # An unusable answer is re-asked at most this many times, never every run.
+  pairing_max_attempts: 2
+  # An exclusive answer is re-checked once after this long, when a
+  # display-language peer has arrived since. English coverage lags the wire.
+  pairing_recheck_hours: 6
   cache_ttl_days: 30
   # There is deliberately no drop value. A failed translation shows the
   # original, marked, and never removes the story from the feed.

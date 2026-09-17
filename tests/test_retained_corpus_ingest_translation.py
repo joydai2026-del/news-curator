@@ -247,10 +247,10 @@ def test_a_decision_made_in_an_earlier_run_is_reused_and_never_re_asked():
     decided = {
         zh_alone.story_id: ExclusivityDecision(story_id=zh_alone.story_id, decided_at=NOW,
                                                model="gpt-5-mini", policy_id="pairing-json-v1",
-                                               match_story_id=None),
+                                               match_story_id=None, outcome="exclusive"),
         zh_paired.story_id: ExclusivityDecision(story_id=zh_paired.story_id, decided_at=NOW,
                                                 model="gpt-5-mini", policy_id="pairing-json-v1",
-                                                match_story_id=english.story_id),
+                                                match_story_id=english.story_id, outcome="matched"),
     }
     pairing = StubPairing()
     provider = StubProvider()
@@ -285,7 +285,7 @@ def test_an_undecided_story_is_neither_translated_nor_claimed_exclusive():
         model_version = "gpt-5-mini:pairing-json-v1"
 
         def decide(self, *, story, context):
-            raise RuntimeError("model unavailable")
+            raise TranslationProviderError(self.provider_id, TranslationErrorReason.TRANSPORT_FAILURE)
 
     provider = StubProvider()
     result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
@@ -356,3 +356,79 @@ def test_a_programmer_error_is_not_swallowed_as_a_provider_outage():
     with pytest.raises(TypeError):
         translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW, store=BrokenStore(),
                        provider=StubProvider(), pairing_provider=pairing_for(rows))
+
+
+def test_a_503_from_the_spend_ledger_degrades_instead_of_killing_the_ingest():
+    """The reviewer reproduced this escaping translate_rows and exiting 2, which
+    loses every retained row for the run, not just the translations."""
+    import urllib.error
+
+    class FailingLedger:
+        def reserve(self, amount_usd):
+            raise urllib.error.HTTPError("https://db.test/rpc", 503, "Service Unavailable", {}, None)
+
+        def settle(self, reserved_usd, settled_usd):
+            raise AssertionError("never reached")
+
+        def retain(self, reserved_usd):
+            return None
+
+        def release(self, reserved_usd):
+            return None
+
+    rows = fixture_rows()
+    result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                                     store=InMemoryTranslationStore(clock=lambda: NOW),
+                                     provider=StubProvider(), pairing_provider=pairing_for(rows),
+                                     spend_ledger=FailingLedger())
+    assert "translation unavailable" in message and "HTTPError" in message
+    assert len(result) == len(rows), "every retained row survives the outage"
+
+
+def test_a_503_from_the_pairing_ledger_degrades_too():
+    import urllib.error
+
+    class FailingPairingLedger:
+        def reserve_call(self, amount_usd):
+            raise urllib.error.HTTPError("https://db.test/rpc", 503, "Service Unavailable", {}, None)
+
+        def settle_call(self, reserved_usd, settled_usd):
+            return None
+
+    rows = fixture_rows()
+    result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                                     store=InMemoryTranslationStore(clock=lambda: NOW),
+                                     provider=StubProvider(), pairing_provider=pairing_for(rows),
+                                     pairing_ledger=FailingPairingLedger())
+    assert "pairing unavailable" in message
+    assert len(result) == len(rows)
+
+
+def test_a_decision_that_cannot_be_persisted_does_not_drive_translation():
+    rows = fixture_rows()
+
+    def failing_persist(decision):
+        raise ConnectionError("supabase unreachable")
+
+    provider = StubProvider()
+    result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                                     store=InMemoryTranslationStore(clock=lambda: NOW),
+                                     provider=provider, pairing_provider=pairing_for(rows),
+                                     persist_decision=failing_persist)
+    assert provider.calls == 0, "an unpersisted decision buys nothing"
+    assert "no language-exclusive stories" in message
+    assert all(row.title_translations == {} for row in result)
+
+
+def test_a_matched_pair_puts_the_group_id_on_both_rows_before_ingest():
+    """The English peer kept NULL before, which is what made the matched story
+    come back from the exclusive lane."""
+    batch = fixture_rows()
+    ids = _ids(batch)
+    rows, _ = translate_rows(config(), batch, env={KEY_ENV: "test-key"}, now=NOW,
+                             store=InMemoryTranslationStore(clock=lambda: NOW),
+                             provider=StubProvider(), pairing_provider=pairing_for(batch))
+    by_url = {row.item.canonical_url: row for row in rows}
+    group = event_group_id_for(ids["https://e.com/1"])
+    assert by_url["https://e.cn/1"].event_group_id == group
+    assert by_url["https://e.com/1"].event_group_id == group, "the English peer carries it too"
