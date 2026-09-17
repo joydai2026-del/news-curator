@@ -383,7 +383,9 @@ translation:
   location: global
   project_id_env: GOOGLE_CLOUD_PROJECT_ID
   supabase_url_env: NEWS_CURATOR_SUPABASE_URL
-  supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY
+  # The ingest job's environment holds the new-style secret key (service role
+  # privileges); the translation store uses the same key as the ingest RPCs.
+  supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SECRET_KEY
 
 # ---------------------------------------------------------------------------
 # Reading-surface language policy. Phase 1 is English direction only: the flip

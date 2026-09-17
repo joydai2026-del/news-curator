@@ -332,11 +332,11 @@ def test_the_two_supabase_key_env_names_are_deliberate_and_documented():
     workflow = (root / ".github/workflows/retained-corpus-ingest.yml").read_text(encoding="utf-8")
     # The corpus read and ingest RPCs use the ingest key.
     assert "NEWS_CURATOR_SUPABASE_SECRET_KEY" in script
-    # The translation cache/budget store uses the service-role key from config.
-    assert cfg.translation["supabase_service_role_key_env"] == "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"
-    # Both must be present in the job, or one half of the feature is dark.
-    for name in ("NEWS_CURATOR_SUPABASE_SECRET_KEY", "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY"):
-        assert name in workflow, name
+    # The translation cache/budget store uses the SAME key as the ingest RPCs:
+    # the job's environment holds the new-style secret key, which carries
+    # service-role privileges, and no separate service-role secret exists there.
+    assert cfg.translation["supabase_service_role_key_env"] == "NEWS_CURATOR_SUPABASE_SECRET_KEY"
+    assert "NEWS_CURATOR_SUPABASE_SECRET_KEY" in workflow
 
 
 def test_a_programmer_error_is_not_swallowed_as_a_provider_outage():
