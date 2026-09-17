@@ -26,7 +26,9 @@ MIGRATIONS = (
 SPEND_MIGRATIONS = (
     'supabase/migrations/202608290002_translation_store.sql',
     'supabase/migrations/202609160002_m2_translation_spend_and_decisions.sql',
+    'supabase/migrations/202609160003_m2_exclusive_lane_from_decisions.sql',
 )
+POLICY = 'pairing-json-v1'
 
 
 def _run(*args, input_text=None, check=True):
@@ -154,25 +156,65 @@ def test_a_later_observation_merges_translations_and_never_downgrades_a_group(db
     assert stored_group == group               # not downgraded to null
 
 
-def test_the_read_rpc_returns_the_overlay_and_the_exclusive_rpc_filters_by_group(db):
-    zh_paired_url = 'https://example.test/zh-paired'
-    en_paired_url = 'https://example.test/en-paired'
-    zh_alone_url = 'https://example.test/zh-alone'
-    zh_paired, en_paired, zh_alone = (_story_id(zh_paired_url), _story_id(en_paired_url), _story_id(zh_alone_url))
-    group = 'group:' + '1' * 32
+def _decide(container, story_id, outcome, *, match=None, language='en'):
+    match_sql = _quote(match) if match else 'null'
+    return _spend(container, f"public.m2_record_exclusivity_decision({_quote(story_id)}, {_quote(language)}, "
+                             f"{_quote(POLICY)}, 'gpt-5-mini', {_quote(outcome)}, {match_sql})")
+
+
+def test_the_exclusive_lane_returns_only_the_stories_the_model_ruled_exclusive(db):
+    """Matched and undecided stories must NOT appear. Absence of a group id is
+    not evidence of exclusivity: it is what an unasked story looks like."""
+    matched_url = 'https://example.test/lane-matched'
+    undecided_url = 'https://example.test/lane-undecided'
+    exclusive_url = 'https://example.test/lane-exclusive'
+    peer_url = 'https://example.test/lane-english-peer'
+    matched, undecided, exclusive, peer = (_story_id(matched_url), _story_id(undecided_url),
+                                           _story_id(exclusive_url), _story_id(peer_url))
     _ingest(db, [
-        _row(zh_paired_url, extra={'event_group_id': group}),
-        _row(en_paired_url, language='en', title='An English wire story', extra={'event_group_id': group}),
-        _row(zh_alone_url, extra={'title_translations': {'en': 'Only the Chinese press ran this'}}),
+        _row(matched_url),
+        _row(undecided_url),
+        _row(exclusive_url),
+        _row(peer_url, language='en', title='An English wire story about the same event'),
     ])
+    _decide(db, matched, 'matched', match=peer)
+    _decide(db, undecided, 'undecided')
+    _decide(db, exclusive, 'exclusive')
+    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive('en',null,null,null,100)")
+    assert [row['story_id'] for row in rows] == [exclusive], [row['story_id'] for row in rows]
+
+
+def test_a_decision_from_another_policy_is_not_inherited(db):
+    url = 'https://example.test/lane-old-policy'
+    story = _story_id(url)
+    _ingest(db, [_row(url)])
+    _spend(db, f"public.m2_record_exclusivity_decision({_quote(story)}, 'en', 'pairing-json-v0', "
+               f"'gpt-5-mini', 'exclusive', null)")
+    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive("
+                           f"'en',null,null,null,100,{_quote(POLICY)})")
+    assert story not in {row['story_id'] for row in rows}
+
+
+def test_a_matched_pair_sharing_a_group_id_is_never_exclusive(db):
+    """Both rows carry the group id, which is what the ingest now writes."""
+    zh_url = 'https://example.test/lane-pair-zh'
+    en_url = 'https://example.test/lane-pair-en'
+    zh_story, en_story = _story_id(zh_url), _story_id(en_url)
+    group = 'group:' + '2' * 32
+    _ingest(db, [
+        _row(zh_url, extra={'event_group_id': group}),
+        _row(en_url, language='en', title='The English peer', extra={'event_group_id': group}),
+    ])
+    # Even a stale EXCLUSIVE decision cannot resurrect a story whose group has
+    # a display-language member.
+    _decide(db, zh_story, 'exclusive')
+    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive('en',null,null,null,100)")
+    assert zh_story not in {row['story_id'] for row in rows}
+
+
+def test_the_read_rpc_still_returns_the_translation_overlay(db):
     rows = _candidates(db, "public.m2_retained_candidates(null,null,null,null,100)")
     assert rows and all({'title_translations', 'summary_translations', 'event_group_id'} <= set(row) for row in rows)
-    exclusive = _candidates(db, "public.m2_retained_candidates_language_exclusive('en',null,null,null,100)")
-    ids = {row['story_id'] for row in exclusive}
-    assert zh_alone in ids                       # no English outlet carried it
-    assert zh_paired not in ids                  # its group has an English member
-    assert en_paired not in ids                  # already in the display language
-    assert all(row['language'] != 'en' for row in exclusive)
 
 
 def test_the_exclusive_rpc_is_service_role_only(db):
@@ -210,21 +252,54 @@ def test_the_daily_dollar_cap_is_persisted_and_shared_across_runs(db):
     assert room['status'] == 'reserved'
 
 
-def test_an_exclusivity_decision_is_recorded_once_and_replayed_not_rewritten(db):
+def test_a_settled_decision_is_written_once_but_an_undecided_one_may_be_retried(db):
     story = _story_id('https://example.test/decision-one')
     other = _story_id('https://example.test/decision-match')
-    first = _spend(db, f"public.m2_record_exclusivity_decision({_quote(story)}, 'gpt-5-mini', 'pairing-json-v1', null)")
-    assert first['match_story_id'] is None
-    # A later run must not be able to flip a published story into a group.
-    second = _spend(db, f"public.m2_record_exclusivity_decision({_quote(story)}, 'gpt-5-mini', 'pairing-json-v1', {_quote(other)})")
-    assert second['match_story_id'] is None and second['decided_at'] == first['decided_at']
-    rows = _candidates(db, f"public.m2_read_exclusivity_decisions(array[{_quote(story)}]::text[])")
-    assert len(rows) == 1 and rows[0]['policy_id'] == 'pairing-json-v1'
+    first = _decide(db, story, 'exclusive')
+    assert first['outcome'] == 'exclusive' and first['attempts'] == 1
+    # A later run must not flip a published story into a group.
+    second = _decide(db, story, 'matched', match=other)
+    assert second['outcome'] == 'exclusive' and second['decided_at'] == first['decided_at']
+    # An UNDECIDED row is different: it is the "ask again, but not for ever" state.
+    pending = _story_id('https://example.test/decision-pending')
+    one = _decide(db, pending, 'undecided')
+    two = _decide(db, pending, 'undecided')
+    assert one['attempts'] == 1 and two['attempts'] == 2
+    settled = _decide(db, pending, 'exclusive')
+    assert settled['outcome'] == 'exclusive'
+    rows = _candidates(db, f"public.m2_read_exclusivity_decisions(array[{_quote(story)}]::text[], 'en', {_quote(POLICY)})")
+    assert len(rows) == 1 and rows[0]['policy_id'] == POLICY
+
+
+def test_a_pre_send_release_returns_the_reservation_to_the_day(db):
+    start = _spend(db, "public.m2_read_translation_spend()")
+    limit = float(start['usd_settled']) + float(start['usd_reserved']) + 0.02
+    assert _spend(db, f"public.m2_reserve_translation_spend(0.01, {limit})")['status'] == 'reserved'
+    _spend(db, "public.m2_release_translation_spend(0.01)")
+    after = _spend(db, "public.m2_read_translation_spend()")
+    assert float(after['usd_reserved']) == float(start['usd_reserved'])
+
+
+def test_pairing_calls_are_capped_per_utc_day_not_per_process(db):
+    before = _spend(db, "public.m2_read_translation_spend()")
+    calls = int(before['pairing_calls'])
+    assert _spend(db, f"public.m2_reserve_pairing_call(0.0001, 100, {calls + 1})")['status'] == 'reserved'
+    refused = _spend(db, f"public.m2_reserve_pairing_call(0.0001, 100, {calls + 1})")
+    assert refused['status'] == 'call_limit_reached'
+
+
+def test_settlement_lands_on_the_day_it_reserved_against(db):
+    """A run that crosses midnight must not lose its charge."""
+    yesterday = '2026-09-15'
+    settled = _spend(db, f"public.m2_settle_translation_spend(0, 0.004, {_quote(yesterday)})")
+    assert settled['scope_key'] == yesterday
 
 
 def test_the_spend_and_decision_rpcs_are_service_role_only(db):
     for expression in ("public.m2_read_translation_spend()",
                        "public.m2_reserve_translation_spend(0.001, 1)",
-                       "public.m2_read_exclusivity_decisions(array[]::text[])"):
+                       "public.m2_reserve_pairing_call(0.001, 1, 10)",
+                       "public.m2_release_translation_spend(0.001)",
+                       "public.m2_read_exclusivity_decisions(array[]::text[], 'en', 'pairing-json-v1')"):
         denied = _sql(db, f"set role authenticated; select {expression};", check=False)
         assert denied.returncode != 0 and 'permission denied' in denied.stderr.lower()
