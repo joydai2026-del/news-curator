@@ -76,22 +76,25 @@ begin
     from translation_private.translation_spend_counters
     where scope_type = 'day' and scope_key = day_key for update;
   if settled + reserved + p_amount_usd > p_daily_limit_usd then
-    return jsonb_build_object('status', 'cost_limit_reached',
+    return jsonb_build_object('status', 'cost_limit_reached', 'scope_key', day_key,
       'usd_reserved', reserved, 'usd_settled', settled);
   end if;
   update translation_private.translation_spend_counters
     set usd_reserved = usd_reserved + p_amount_usd, updated_at = now()
     where scope_type = 'day' and scope_key = day_key;
-  return jsonb_build_object('status', 'reserved', 'usd_reserved', reserved + p_amount_usd, 'usd_settled', settled);
+  return jsonb_build_object('status', 'reserved', 'scope_key', day_key,
+    'usd_reserved', reserved + p_amount_usd, 'usd_settled', settled);
 end;
 $$;
 
 -- Settle an attempt. `p_settled_usd` is the observed cost; passing the same
 -- amount as the reservation is how an unknown charge stays charged.
 create or replace function public.m2_settle_translation_spend(
-  p_reserved_usd numeric, p_settled_usd numeric, p_day_key text default null)
+  p_reserved_usd numeric, p_settled_usd numeric, p_day_key text default null,
+  p_overrun_tolerance_usd numeric default 0.05)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public, translation_private as $$
-declare day_key text := coalesce(p_day_key, (now() at time zone 'utc')::date::text); touched integer;
+declare day_key text := coalesce(p_day_key, (now() at time zone 'utc')::date::text);
+  touched integer; capped numeric;
 begin
   if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' then
     raise exception 'service role required' using errcode = '42501';
@@ -101,23 +104,31 @@ begin
   end if;
   -- The caller passes the day it RESERVED against, so a run that crosses
   -- midnight settles where it reserved instead of silently losing the charge.
+  --
+  -- A settlement is also CLAMPED to what was reserved plus a small tolerance.
+  -- Nothing downstream can stop a provider returning more than the cap allows,
+  -- and an unclamped settle would drive the day far past the limit before the
+  -- NEXT attempt is refused. The overrun is reported so the caller can warn.
+  capped := least(p_settled_usd, p_reserved_usd + greatest(0, p_overrun_tolerance_usd));
   insert into translation_private.translation_spend_counters(scope_type, scope_key)
     values ('day', day_key) on conflict do nothing;
   update translation_private.translation_spend_counters
     set usd_reserved = greatest(0, usd_reserved - p_reserved_usd),
-        usd_settled = usd_settled + p_settled_usd, updated_at = now()
+        usd_settled = usd_settled + capped, updated_at = now()
     where scope_type = 'day' and scope_key = day_key;
   get diagnostics touched = row_count;
   if touched = 0 then
     raise exception 'translation settlement lost its day row';
   end if;
-  return jsonb_build_object('status', 'settled', 'scope_key', day_key);
+  return jsonb_build_object('status', 'settled', 'scope_key', day_key,
+    'usd_settled_recorded', capped, 'overrun', p_settled_usd > capped);
 end;
 $$;
 
-create or replace function public.m2_release_translation_spend(p_reserved_usd numeric)
+create or replace function public.m2_release_translation_spend(
+  p_reserved_usd numeric, p_day_key text default null)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public, translation_private as $$
-declare day_key text := (now() at time zone 'utc')::date::text;
+declare day_key text := coalesce(p_day_key, (now() at time zone 'utc')::date::text); touched integer;
 begin
   if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' then
     raise exception 'service role required' using errcode = '42501';
@@ -130,7 +141,13 @@ begin
   update translation_private.translation_spend_counters
     set usd_reserved = greatest(0, usd_reserved - p_reserved_usd), updated_at = now()
     where scope_type = 'day' and scope_key = day_key;
-  return jsonb_build_object('status', 'released');
+  get diagnostics touched = row_count;
+  if touched = 0 then
+    -- Reporting success while touching nothing is how a reservation made
+    -- before midnight stayed held for ever.
+    raise exception 'translation release found no day row';
+  end if;
+  return jsonb_build_object('status', 'released', 'scope_key', day_key);
 end;
 $$;
 
@@ -160,7 +177,7 @@ begin
   update translation_private.translation_spend_counters
     set usd_reserved = usd_reserved + p_amount_usd, pairing_calls = pairing_calls + 1, updated_at = now()
     where scope_type = 'day' and scope_key = day_key;
-  return jsonb_build_object('status', 'reserved', 'pairing_calls', calls + 1);
+  return jsonb_build_object('status', 'reserved', 'scope_key', day_key, 'pairing_calls', calls + 1);
 end;
 $$;
 
@@ -216,18 +233,46 @@ begin
 end;
 $$;
 
--- Mark an exclusive decision as re-checked, so the recheck happens once rather
--- than on every run inside the window.
-create or replace function public.m2_mark_exclusivity_rechecked(
-  p_story_id text, p_display_language text, p_policy_id text)
+-- A re-check must be able to CHANGE the answer, not just note that it happened.
+-- The record RPC deliberately refuses to rewrite a settled decision (that is
+-- what stops a published story moving under a reader), so the one transition
+-- that is legitimate gets its own entry point: exclusive -> matched, once,
+-- stamped with rechecked_at. It returns the PERSISTED row, so the caller can
+-- trust what is stored rather than what it attempted.
+create or replace function public.m2_recheck_exclusivity_decision(
+  p_story_id text, p_display_language text, p_policy_id text,
+  p_outcome text, p_match_story_id text default null)
 returns jsonb language plpgsql security definer set search_path = pg_catalog, public, translation_private as $$
+declare current translation_private.exclusivity_decisions;
 begin
   if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' then
     raise exception 'service role required' using errcode = '42501';
   end if;
-  update translation_private.exclusivity_decisions set rechecked_at = now()
-    where story_id = p_story_id and display_language = p_display_language and policy_id = p_policy_id;
-  return jsonb_build_object('status', 'rechecked');
+  if p_outcome not in ('exclusive', 'matched') then
+    raise exception 'invalid recheck outcome';
+  end if;
+  update translation_private.exclusivity_decisions
+    set rechecked_at = now(),
+        outcome = p_outcome,
+        match_story_id = case when p_outcome = 'matched' then p_match_story_id else null end,
+        decided_at = case when p_outcome = 'matched' then now() else decided_at end
+    where story_id = p_story_id and display_language = p_display_language
+      and policy_id = p_policy_id and outcome = 'exclusive' and rechecked_at is null
+    returning * into current;
+  if current.story_id is null then
+    -- Already re-checked, already matched, or never decided: return whatever
+    -- IS stored so the caller never acts on an imagined write.
+    select * into current from translation_private.exclusivity_decisions
+      where story_id = p_story_id and display_language = p_display_language and policy_id = p_policy_id;
+  end if;
+  if current.story_id is null then
+    return jsonb_build_object('story_id', null);
+  end if;
+  return jsonb_build_object('story_id', current.story_id, 'display_language', current.display_language,
+    'policy_id', current.policy_id, 'decided_at', current.decided_at, 'model', current.model,
+    'outcome', current.outcome, 'match_story_id', current.match_story_id,
+    'attempts', current.attempts, 'retry_after', current.retry_after,
+    'rechecked_at', current.rechecked_at);
 end;
 $$;
 
@@ -257,20 +302,20 @@ end;
 $$;
 
 revoke all on function public.m2_reserve_translation_spend(numeric, numeric),
-  public.m2_settle_translation_spend(numeric, numeric, text),
-  public.m2_release_translation_spend(numeric),
+  public.m2_settle_translation_spend(numeric, numeric, text, numeric),
+  public.m2_release_translation_spend(numeric, text),
   public.m2_reserve_pairing_call(numeric, numeric, integer),
   public.m2_read_translation_spend(),
   public.m2_record_exclusivity_decision(text, text, text, text, text, text, timestamptz),
-  public.m2_mark_exclusivity_rechecked(text, text, text),
+  public.m2_recheck_exclusivity_decision(text, text, text, text, text),
   public.m2_read_exclusivity_decisions(text[], text, text) from public, anon, authenticated;
 grant execute on function public.m2_reserve_translation_spend(numeric, numeric),
-  public.m2_settle_translation_spend(numeric, numeric, text),
-  public.m2_release_translation_spend(numeric),
+  public.m2_settle_translation_spend(numeric, numeric, text, numeric),
+  public.m2_release_translation_spend(numeric, text),
   public.m2_reserve_pairing_call(numeric, numeric, integer),
   public.m2_read_translation_spend(),
   public.m2_record_exclusivity_decision(text, text, text, text, text, text, timestamptz),
-  public.m2_mark_exclusivity_rechecked(text, text, text),
+  public.m2_recheck_exclusivity_decision(text, text, text, text, text),
   public.m2_read_exclusivity_decisions(text[], text, text) to service_role;
 
 commit;

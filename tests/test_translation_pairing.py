@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -364,3 +365,136 @@ def test_no_new_peer_means_no_recheck_and_no_new_spend():
                                 now=NOW, ledger=ledger, already_decided={"story:zh1": prior})
     assert model.asked == [] and ledger.reserved == []
     assert result.exclusive_story_ids == ("story:zh1",)
+
+
+class DecisionStore:
+    """Stands in for the SQL table, with the SAME refusal rules.
+
+    The point of using this instead of hand-built decisions is that a test can
+    no longer fabricate `rechecked_at`: only a real recheck call sets it.
+    """
+
+    def __init__(self):
+        self.rows = {}
+        self.records = 0
+        self.rechecks = 0
+
+    def key(self, decision):
+        return (decision.story_id, decision.display_language, decision.policy_id)
+
+    def record(self, decision):
+        self.records += 1
+        current = self.rows.get(self.key(decision))
+        if current is not None and current.outcome in (EXCLUSIVE, MATCH):
+            return current
+        if current is not None:
+            decision = replace(decision, attempts=current.attempts + 1)
+        self.rows[self.key(decision)] = decision
+        return decision
+
+    def recheck(self, decision):
+        self.rechecks += 1
+        current = self.rows.get(self.key(decision))
+        if current is None or current.outcome != EXCLUSIVE or current.rechecked_at is not None:
+            return current
+        stored = replace(current, outcome=decision.outcome, match_story_id=decision.match_story_id,
+                         rechecked_at=decision.rechecked_at or NOW)
+        self.rows[self.key(decision)] = stored
+        return stored
+
+    def snapshot(self):
+        return {story_id: decision for (story_id, _, _), decision in self.rows.items()}
+
+
+def test_a_recheck_can_flip_exclusive_to_matched_through_the_real_store():
+    """No fabricated rechecked_at: the store sets it, and the lane follows."""
+    store = DecisionStore()
+    first = decide_exclusivity([ZH], [], display_language="en", policy=policy(),
+                               provider=StubModel([(None, 10, 2)]), now=NOW - timedelta(hours=8),
+                               persist=store.record, recheck=store.recheck)
+    # Nothing to compare against yet, so the first look is undecided...
+    assert first.undecided == {"story:zh1"}
+
+    # A real first decision, made when no peer existed yet.
+    early_peer = story("story:en9", "en", "An unrelated English story", hours=9)
+    decided = decide_exclusivity([story("story:zh1", "zh", "英伟达发布新芯片", hours=9)], [early_peer],
+                                 display_language="en", policy=policy(),
+                                 provider=StubModel([(None, 10, 2)]), now=NOW - timedelta(hours=8),
+                                 persist=store.record, recheck=store.recheck)
+    assert decided.exclusive_story_ids == ("story:zh1",)
+
+    # The English peer arrives afterwards; the recheck window has passed.
+    peer = story("story:en1", "en", "Nvidia announces a new chip", hours=6)
+    model = StubModel([(0, 10, 2)])
+    rechecked = decide_exclusivity([story("story:zh1", "zh", "英伟达发布新芯片", hours=9)], [early_peer, peer],
+                                   display_language="en", policy=policy(recheck_hours=6), provider=model,
+                                   now=NOW, already_decided=store.snapshot(),
+                                   persist=store.record, recheck=store.recheck)
+    assert model.asked == ["story:zh1"]
+    assert rechecked.decisions["story:zh1"].outcome == MATCH
+    assert rechecked.exclusive_story_ids == (), "the story leaves the section"
+    assert store.rows[("story:zh1", "en", "pairing-json-v1")].rechecked_at is not None
+
+    # A SECOND run makes no paid call at all.
+    quiet = StubModel([])
+    again = decide_exclusivity([story("story:zh1", "zh", "英伟达发布新芯片", hours=9)], [early_peer, peer],
+                               display_language="en", policy=policy(recheck_hours=6), provider=quiet,
+                               now=NOW + timedelta(hours=1), already_decided=store.snapshot(),
+                               persist=store.record, recheck=store.recheck)
+    assert quiet.asked == [], "a re-checked decision is final"
+    assert again.exclusive_story_ids == ()
+
+
+def test_one_exclusive_story_costs_exactly_one_recheck_over_two_days_of_hourly_runs():
+    """The recheck bound is what stops pairing eating the day's budget."""
+    store = DecisionStore()
+    zh = story("story:zh1", "zh", "英伟达发布新芯片", hours=1)
+    # Present from the start, so the first run has something to compare against.
+    early_peer = story("story:en9", "en", "An unrelated English story", hours=1)
+    # Published THREE HOURS AFTER the first decision: this is what earns a recheck.
+    late_peer = story("story:en1", "en", "Nvidia announces a new chip", hours=-3)
+    model = StubModel([(None, 10, 2), (0, 10, 2)] + [(None, 10, 2)] * 60)
+    ledger = StubLedger()
+    start = NOW
+    for hour in range(48):
+        corpus = [early_peer] + ([late_peer] if hour >= 3 else [])
+        decide_exclusivity([zh], corpus, display_language="en", policy=policy(recheck_hours=6),
+                           provider=model, now=start + timedelta(hours=hour),
+                           already_decided=store.snapshot(), persist=store.record,
+                           recheck=store.recheck, ledger=ledger)
+    # One first decision plus one re-check. Not 48.
+    assert len(model.asked) == 2, model.asked
+    assert len(ledger.reserved) == 2
+
+
+def test_an_undecided_story_is_asked_at_most_max_attempts_over_many_runs():
+    from curator.translation import TranslationErrorReason, TranslationProviderError
+    store = DecisionStore()
+    zh = story("story:zh1", "zh", "英伟达发布新芯片", hours=1)
+    peer = story("story:en1", "en", "Nvidia announces a new chip", hours=1)
+    model = StubModel([TranslationProviderError("openai", TranslationErrorReason.PROVIDER_REJECTED)] * 60)
+    start = NOW
+    for hour in range(48):
+        decide_exclusivity([zh], [peer], display_language="en",
+                           policy=policy(max_attempts=2, recheck_hours=6), provider=model,
+                           now=start + timedelta(hours=hour), already_decided=store.snapshot(),
+                           persist=store.record, recheck=store.recheck)
+    assert len(model.asked) == 2, model.asked
+
+
+def test_a_recheck_the_store_refuses_leaves_the_stored_answer_in_place():
+    store = DecisionStore()
+    zh = story("story:zh1", "zh", "英伟达发布新芯片", hours=9)
+    early_peer = story("story:en9", "en", "An unrelated English story", hours=9)
+    decide_exclusivity([zh], [early_peer], display_language="en", policy=policy(),
+                       provider=StubModel([(None, 10, 2)]), now=NOW - timedelta(hours=8),
+                       persist=store.record, recheck=store.recheck)
+    # Someone already re-checked it, so the store refuses a second transition.
+    key = ("story:zh1", "en", "pairing-json-v1")
+    store.rows[key] = replace(store.rows[key], rechecked_at=NOW - timedelta(hours=2))
+    peer = story("story:en1", "en", "Nvidia announces a new chip", hours=6)
+    result = decide_exclusivity([zh], [early_peer, peer], display_language="en",
+                                policy=policy(recheck_hours=6), provider=StubModel([(0, 10, 2)]),
+                                now=NOW, already_decided=store.snapshot(),
+                                persist=store.record, recheck=store.recheck)
+    assert result.exclusive_story_ids == ("story:zh1",), "the persisted answer wins"

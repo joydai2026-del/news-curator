@@ -90,7 +90,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
         preview_owner_ids=tuple(preview_ids), enabled=enabled,
         display_language=policy.get("display_language", "en"),
         exclusive_category_id=policy.get("exclusive_category_id", ""),
-        other_lane_enabled=policy.get("other_lane_enabled", True))
+        other_lane_enabled=policy.get("other_lane_enabled", True),
+        exclusivity_policy_id=policy.get("exclusivity_policy_id", "pairing-json-v1"))
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,

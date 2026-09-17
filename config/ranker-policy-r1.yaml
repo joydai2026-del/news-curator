@@ -34,3 +34,5 @@ service_enabled: true
 display_language: en
 other_lane_enabled: true
 exclusive_category_id: only-other-language-press
+# Only decisions made by THIS pairing policy are served in the lane.
+exclusivity_policy_id: pairing-json-v1

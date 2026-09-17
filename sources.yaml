@@ -347,6 +347,13 @@ translation:
   # An exclusive answer is re-checked once after this long, when a
   # display-language peer has arrived since. English coverage lags the wire.
   pairing_recheck_hours: 6
+  # A reasoning model spends the completion budget on reasoning first.
+  reasoning_effort: minimal
+  pairing_output_tokens: 64
+  # Settlement is clamped to the reservation plus this much.
+  settle_overrun_tolerance_usd: 0.05
+  # How many 100-row pages of the pairing window the ingest will read back.
+  corpus_readback_max_pages: 40
   cache_ttl_days: 30
   # There is deliberately no drop value. A failed translation shows the
   # original, marked, and never removes the story from the feed.

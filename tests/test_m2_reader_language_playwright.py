@@ -352,3 +352,31 @@ def test_the_empty_exclusive_section_shows_exactly_one_message(tmp_path):
             context.close()
             browser.close()
     assert page_errors == []
+
+
+def test_the_lane_call_carries_the_pairing_policy_id():
+    """A superseded prompt's decisions must not be served after an upgrade."""
+    seen = {}
+
+    class RecordingStore(LanguageStore):
+        def retained_candidates_language_exclusive(self, **kwargs):
+            seen.update(kwargs)
+            return super().retained_candidates_language_exclusive(**{
+                key: value for key, value in kwargs.items() if key != 'policy_id'})
+
+    store = RecordingStore(FIXTURE_ROWS)
+    service = RankingService(auth=LocalAuth(), store=store, adapter=RankLLMAdapter(
+        policy=RankerPolicy('test-provider', 'test-model', 'https://provider.example', 'test-prompt'),
+        engine=NoProvider()),
+        policy=ServicePolicy('test-policy', 'test-model', 'test-policy', 'test-tenant', enabled=True,
+                             display_language='en', exclusive_category_id=EXCLUSIVE,
+                             other_lane_enabled=True, exclusivity_policy_id='pairing-json-v7'),
+        cursor_key=b'k' * 32)
+    history = store.history_snapshot('local-auth-token')
+    service.rank(authorization='Bearer local-auth-token', body={
+        'history_revision': history['included_history_revision'],
+        'server_commit_revision': history['history_revision'],
+        'history_generation': history['history_generation'],
+        'consent_revision': history['consent_revision'],
+        'page_size': 25, 'eligibility': {'category': EXCLUSIVE, 'query': None}})
+    assert seen.get('policy_id') == 'pairing-json-v7'

@@ -29,16 +29,36 @@ from curator.translation.store import TranslationStoreError
 # Everything remote that translation depends on. An outage in any of them is a
 # named skip with exit 0: the hourly corpus ingest must still complete, because
 # every retained row for the run would otherwise be lost with it.
+# WHY THIS TUPLE IS EXACTLY THIS WIDE, decided once so it stops oscillating.
+#
+# Round 2 said the bare `except Exception` hid code defects. Round 3 narrowed it
+# to three typed errors. Round 4 widened it again, because a 503 from the spend
+# RPC was escaping and killing the whole hourly ingest, losing every retained
+# row for that run. Round 5 settles it on a second-order principle:
+#
+#   Recoverability beats strictness for the CORPUS, strictness beats
+#   recoverability for OUR OWN BUGS.
+#
+# Translation is an enrichment; the corpus ingest is the product. So anything
+# shaped like a remote failure (transport, timeout, malformed remote payload,
+# typed provider/store errors) degrades to a named skip with exit 0. Anything
+# shaped like a defect in this repository (TypeError, KeyError, AttributeError,
+# and a bare ValueError from our own validation) stays loud, because a silent
+# ValueError is how a bad int() or a dataclass guard turns into "translation
+# unavailable" for ever with nobody looking.
+#
+# Before widening this again, answer: what does the new entry REFUSE when its
+# assumption is wrong? If the answer is "a real bug, silently", do not add it.
 TRANSLATION_TRANSPORT_ERRORS = (
     TranslationProviderError,
     TranslationStoreError,
     TranslationPrivacyError,
-    urllib.error.URLError,      # HTTPError is a subclass
+    urllib.error.URLError,        # HTTPError is a subclass
     TimeoutError,
-    OSError,
-    ValueError,
-    json.JSONDecodeError,
+    ConnectionError,
+    json.JSONDecodeError,         # a remote payload we could not parse
 )
+
 
 
 def _ingest_translation_policy(cfg) -> IngestTranslationPolicy:
@@ -85,36 +105,57 @@ def _rpc(url, key, name, body, *, timeout=30):
 class PersistedPairingLedger:
     """The pairing call budget: dollars AND a per-UTC-day call count, in SQL."""
 
-    def __init__(self, url, key, *, daily_limit_usd, daily_call_limit):
+    def __init__(self, url, key, *, daily_limit_usd, daily_call_limit, overrun_tolerance_usd=0.05):
         self._url, self._key = url, key
         self._limit, self._calls = float(daily_limit_usd), int(daily_call_limit)
+        self._tolerance = float(overrun_tolerance_usd)
+        self._scope_key = None
 
     def reserve_call(self, amount_usd: float) -> bool:
         result = _rpc(self._url, self._key, 'm2_reserve_pairing_call',
                       {'p_amount_usd': round(float(amount_usd), 6),
                        'p_daily_limit_usd': self._limit, 'p_daily_call_limit': self._calls})
-        return bool(result) and result.get('status') == 'reserved'
+        if not result or result.get('status') != 'reserved':
+            return False
+        # Remember the day this reservation belongs to: a run that crosses
+        # midnight must settle where it reserved.
+        self._scope_key = result.get('scope_key')
+        return True
 
     def settle_call(self, reserved_usd: float, settled_usd: float) -> None:
-        _rpc(self._url, self._key, 'm2_settle_translation_spend',
-             {'p_reserved_usd': round(float(reserved_usd), 6),
-              'p_settled_usd': round(float(settled_usd), 6)})
+        outcome = _rpc(self._url, self._key, 'm2_settle_translation_spend',
+                       {'p_reserved_usd': round(float(reserved_usd), 6),
+                        'p_settled_usd': round(float(settled_usd), 6),
+                        'p_day_key': self._scope_key,
+                        'p_overrun_tolerance_usd': self._tolerance})
+        if isinstance(outcome, dict) and outcome.get('overrun'):
+            print('::warning::pairing settlement exceeded its reservation and was clamped', file=sys.stderr)
 
 
 class PersistedSpendLedger:
     """The daily dollar cap, held in SQL so it survives twelve runs an hour."""
 
-    def __init__(self, url, key, *, daily_limit_usd):
+    def __init__(self, url, key, *, daily_limit_usd, overrun_tolerance_usd=0.05):
         self._url, self._key, self._limit = url, key, float(daily_limit_usd)
+        self._tolerance = float(overrun_tolerance_usd)
+        self._scope_key = None
 
     def reserve(self, amount_usd: float) -> bool:
         result = _rpc(self._url, self._key, 'm2_reserve_translation_spend',
                       {'p_amount_usd': round(float(amount_usd), 6), 'p_daily_limit_usd': self._limit})
-        return bool(result) and result.get('status') == 'reserved'
+        if not result or result.get('status') != 'reserved':
+            return False
+        self._scope_key = result.get('scope_key')
+        return True
 
     def settle(self, reserved_usd: float, settled_usd: float) -> None:
-        _rpc(self._url, self._key, 'm2_settle_translation_spend',
-             {'p_reserved_usd': round(float(reserved_usd), 6), 'p_settled_usd': round(float(settled_usd), 6)})
+        outcome = _rpc(self._url, self._key, 'm2_settle_translation_spend',
+                       {'p_reserved_usd': round(float(reserved_usd), 6),
+                        'p_settled_usd': round(float(settled_usd), 6),
+                        'p_day_key': self._scope_key,
+                        'p_overrun_tolerance_usd': self._tolerance})
+        if isinstance(outcome, dict) and outcome.get('overrun'):
+            print('::warning::translation settlement exceeded its reservation and was clamped', file=sys.stderr)
 
     def retain(self, reserved_usd: float) -> None:
         # A retained reservation stays reserved in SQL: nothing to do, and that
@@ -122,9 +163,13 @@ class PersistedSpendLedger:
         return None
 
     def release(self, reserved_usd: float) -> None:
-        """A pre-send abort cost nothing, so the day gets its money back."""
+        """A pre-send abort cost nothing, so the day gets its money back.
+
+        Released against the day it was RESERVED on, or a reservation made
+        before midnight stays held for ever.
+        """
         _rpc(self._url, self._key, 'm2_release_translation_spend',
-             {'p_reserved_usd': round(float(reserved_usd), 6)})
+             {'p_reserved_usd': round(float(reserved_usd), 6), 'p_day_key': self._scope_key})
 
 
 def read_exclusivity_decisions(url, key, story_ids, *, display_language, policy_id):
@@ -149,6 +194,30 @@ def read_exclusivity_decisions(url, key, story_ids, *, display_language, policy_
             rechecked_at=(datetime.fromisoformat(str(row['rechecked_at']).replace('Z', '+00:00'))
                           if row.get('rechecked_at') else None))
     return decisions
+
+
+def recheck_exclusivity_decision(url, key, decision):
+    """Persist a re-check and return what the STORE now holds, never our attempt."""
+    row = _rpc(url, key, 'm2_recheck_exclusivity_decision', {
+        'p_story_id': decision.story_id, 'p_display_language': decision.display_language,
+        'p_policy_id': decision.policy_id, 'p_outcome': decision.outcome,
+        'p_match_story_id': decision.match_story_id})
+    return _decision_from_row(row, decision.display_language) if row and row.get('story_id') else None
+
+
+def _decision_from_row(row, display_language):
+    return ExclusivityDecision(
+        story_id=str(row['story_id']),
+        decided_at=datetime.fromisoformat(str(row['decided_at']).replace('Z', '+00:00')),
+        model=str(row.get('model') or ''), policy_id=str(row.get('policy_id') or ''),
+        match_story_id=row.get('match_story_id'),
+        outcome=str(row.get('outcome') or 'exclusive'),
+        display_language=str(row.get('display_language') or display_language),
+        attempts=int(row.get('attempts') or 1),
+        retry_after=(datetime.fromisoformat(str(row['retry_after']).replace('Z', '+00:00'))
+                     if row.get('retry_after') else None),
+        rechecked_at=(datetime.fromisoformat(str(row['rechecked_at']).replace('Z', '+00:00'))
+                      if row.get('rechecked_at') else None))
 
 
 def record_exclusivity_decision(url, key, decision):
@@ -204,7 +273,8 @@ def read_corpus_window(url, key, *, policy, now, pages: int = 40):
 
 def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
                    pairing_provider=None, decisions=None, truncated=False, on_decision=None,
-                   spend_ledger=None, pairing_ledger=None, persist_decision=None):
+                   spend_ledger=None, pairing_ledger=None, persist_decision=None,
+                   recheck_decision=None):
     """Decide exclusivity with the model, then translate what it ruled exclusive.
 
     Returns ``(rows, message)``. A missing credential, a switched-off feature, a
@@ -230,6 +300,10 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
     if truncated:
         # Exclusivity is unproven when the window was not fully read, and a
         # wrong exclusivity claim spends money on a story already covered.
+        # Silent-off for ever if the corpus outgrows the ceiling, so this is a
+        # warning, not a plain log line.
+        print('::warning::translation skipped: corpus read-back truncated '
+              '(raise translation.corpus_readback_max_pages)', file=sys.stderr)
         return rows, 'translation skipped: corpus read-back truncated'
 
     batch = tuple(_pairing_candidate(row) for row in rows)
@@ -250,6 +324,7 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
             batch, corpus, display_language=policy.display_language, policy=pairing_policy,
             provider=pairing_provider, now=now, already_decided=dict(decisions or {}),
             prefilter=prefilter, ledger=pairing_ledger, persist=persist_decision,
+            recheck=recheck_decision,
             cost=PairingCost(
                 input_cost_per_million_tokens_usd=policy.input_cost_per_million_tokens_usd,
                 output_cost_per_million_tokens_usd=policy.output_cost_per_million_tokens_usd,
@@ -315,14 +390,20 @@ def _build_translation_clients(translation, api_key, env):
             provider_id=str(translation.get('provider') or 'openai'),
             model=str(translation.get('model') or ''),
             api_origin=str(translation.get('api_origin') or 'https://api.openai.com'),
-            max_response_bytes=int(translation.get('max_response_bytes', 524288))),
+            max_response_bytes=int(translation.get('max_response_bytes', 524288)),
+            max_output_tokens=int(translation.get('max_output_tokens_per_story', 1000)),
+            pairing_output_tokens=int(translation.get('pairing_output_tokens', 64)),
+            reasoning_effort=str(translation.get('reasoning_effort') or 'minimal')),
         transport=transport, api_key=lambda: api_key)
     provider = ModelTranslationAdapter(
         config=ModelTranslationConfig(
             provider_id=str(translation.get('provider') or 'openai'),
             model=str(translation.get('model') or ''),
             api_origin=str(translation.get('api_origin') or 'https://api.openai.com'),
-            max_response_bytes=int(translation.get('max_response_bytes', 524288))),
+            max_response_bytes=int(translation.get('max_response_bytes', 524288)),
+            max_output_tokens=int(translation.get('max_output_tokens_per_story', 1000)),
+            pairing_output_tokens=int(translation.get('pairing_output_tokens', 64)),
+            reasoning_effort=str(translation.get('reasoning_effort') or 'minimal')),
         transport=transport, api_key=lambda: api_key)
     return store, provider, pairing
 
@@ -354,7 +435,9 @@ def main() -> int:
     if a.command == 'ingest' and url and key:
         validate_https_origin(url)
         try:
-            corpus, truncated = read_corpus_window(url, key, policy=pairing_policy, now=snap.generated_at)
+            corpus, truncated = read_corpus_window(
+                url, key, policy=pairing_policy, now=snap.generated_at,
+                pages=int((cfg.translation or {}).get('corpus_readback_max_pages', 40)))
             decisions = read_exclusivity_decisions(
                 url, key, [row.story_id for row in retained],
                 display_language=str((cfg.language or {}).get('default_display') or 'en'),
@@ -369,19 +452,24 @@ def main() -> int:
     recorded = []
     live = a.command == 'ingest' and url and key
     translation_cfg = cfg.translation or {}
+    tolerance = translation_cfg.get('settle_overrun_tolerance_usd', 0.05)
     spend_ledger = (PersistedSpendLedger(url, key,
-                        daily_limit_usd=translation_cfg.get('daily_cost_limit_usd', 0.5))
+                        daily_limit_usd=translation_cfg.get('daily_cost_limit_usd', 0.5),
+                        overrun_tolerance_usd=tolerance)
                     if live else None)
     pairing_ledger = (PersistedPairingLedger(url, key,
                           daily_limit_usd=translation_cfg.get('daily_cost_limit_usd', 0.5),
-                          daily_call_limit=translation_cfg.get('pairing_daily_call_limit', 600))
+                          daily_call_limit=translation_cfg.get('pairing_daily_call_limit', 600),
+                          overrun_tolerance_usd=tolerance)
                       if live else None)
     # Persist BEFORE the answer is allowed to move money or change what is shown.
     persist = ((lambda decision: record_exclusivity_decision(url, key, decision)) if live else None)
+    recheck = ((lambda decision: recheck_exclusivity_decision(url, key, decision)) if live else None)
     retained, translation_message = translate_rows(
         cfg, retained, env=os.environ, now=snap.generated_at, corpus=corpus,
         decisions=decisions, truncated=truncated, on_decision=recorded.append,
-        spend_ledger=spend_ledger, pairing_ledger=pairing_ledger, persist_decision=persist)
+        spend_ledger=spend_ledger, pairing_ledger=pairing_ledger, persist_decision=persist,
+        recheck_decision=recheck)
     print(translation_message, file=sys.stderr)
     if recorded:
         print(f'exclusivity decisions persisted={len(recorded)}', file=sys.stderr)

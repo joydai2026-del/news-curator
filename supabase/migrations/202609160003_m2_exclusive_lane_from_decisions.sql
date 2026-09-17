@@ -20,6 +20,11 @@ begin
   if p_display_language is null or p_display_language not in ('en', 'zh') then raise exception 'invalid display language'; end if;
   if num_nonnulls(p_before_published_at, p_before_story_id) not in (0, 2) then raise exception 'invalid cursor'; end if;
   if p_limit is null or p_limit < 1 or p_limit > 100 then raise exception 'invalid limit'; end if;
+  -- Required: a null policy id used to mean "any policy", so decisions made by
+  -- a superseded prompt kept being served after an upgrade.
+  if p_policy_id is null or p_policy_id !~ '^[A-Za-z0-9._-]{1,64}$' then
+    raise exception 'invalid policy id';
+  end if;
   return query
   select jsonb_build_object('schema_version', 1, 'story_id', o.story_id, 'title', o.title, 'summary', o.summary,
     'language', o.language, 'canonical_url', o.canonical_url, 'source_id', o.source_id, 'source_name', o.source_name,
@@ -33,7 +38,7 @@ begin
     on d.story_id = o.story_id
    and d.display_language = p_display_language
    and d.outcome = 'exclusive'
-   and (p_policy_id is null or d.policy_id = p_policy_id)
+   and d.policy_id = p_policy_id
   left join lateral (select jsonb_agg(category_id order by category_id) category_ids
                      from public.retained_corpus_categories where story_id = o.story_id) c on true
   where o.language <> p_display_language

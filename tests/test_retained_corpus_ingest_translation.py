@@ -432,3 +432,96 @@ def test_a_matched_pair_puts_the_group_id_on_both_rows_before_ingest():
     group = event_group_id_for(ids["https://e.com/1"])
     assert by_url["https://e.cn/1"].event_group_id == group
     assert by_url["https://e.com/1"].event_group_id == group, "the English peer carries it too"
+
+
+class RecordingRpc:
+    """Captures every RPC body so a test can assert what production sends."""
+
+    def __init__(self, responses=None):
+        self.calls = []
+        self.responses = responses or {}
+
+    def __call__(self, url, key, name, body, *, timeout=30):
+        self.calls.append((name, body))
+        return self.responses.get(name, {'status': 'reserved', 'scope_key': '2026-09-16'})
+
+    def bodies(self, name):
+        return [body for called, body in self.calls if called == name]
+
+
+def test_the_ledger_settles_and_releases_against_the_day_it_reserved(monkeypatch):
+    """A run that crosses UTC midnight must not settle on the wrong day."""
+    import scripts.retained_corpus_ingest as ingest
+
+    rpc = RecordingRpc({'m2_reserve_translation_spend': {'status': 'reserved', 'scope_key': '2026-09-16'}})
+    monkeypatch.setattr(ingest, '_rpc', rpc)
+    ledger = ingest.PersistedSpendLedger('https://db.test', 'sb_secret_x', daily_limit_usd=0.5)
+    assert ledger.reserve(0.01) is True
+    # ... midnight passes ...
+    ledger.settle(0.01, 0.01)
+    ledger.release(0.01)
+    assert rpc.bodies('m2_settle_translation_spend')[0]['p_day_key'] == '2026-09-16'
+    assert rpc.bodies('m2_release_translation_spend')[0]['p_day_key'] == '2026-09-16'
+
+
+def test_the_pairing_ledger_also_carries_its_reservation_day(monkeypatch):
+    import scripts.retained_corpus_ingest as ingest
+
+    rpc = RecordingRpc({'m2_reserve_pairing_call': {'status': 'reserved', 'scope_key': '2026-09-16'}})
+    monkeypatch.setattr(ingest, '_rpc', rpc)
+    ledger = ingest.PersistedPairingLedger('https://db.test', 'sb_secret_x',
+                                           daily_limit_usd=0.5, daily_call_limit=600)
+    assert ledger.reserve_call(0.001) is True
+    ledger.settle_call(0.001, 0.001)
+    assert rpc.bodies('m2_settle_translation_spend')[0]['p_day_key'] == '2026-09-16'
+
+
+def test_a_refused_pairing_reservation_returns_false_and_keeps_no_day(monkeypatch):
+    import scripts.retained_corpus_ingest as ingest
+
+    rpc = RecordingRpc({'m2_reserve_pairing_call': {'status': 'call_limit_reached'}})
+    monkeypatch.setattr(ingest, '_rpc', rpc)
+    ledger = ingest.PersistedPairingLedger('https://db.test', 'sb_secret_x',
+                                           daily_limit_usd=0.5, daily_call_limit=1)
+    assert ledger.reserve_call(0.001) is False
+
+
+def test_a_clamped_settlement_warns(monkeypatch, capsys):
+    import scripts.retained_corpus_ingest as ingest
+
+    rpc = RecordingRpc({'m2_reserve_translation_spend': {'status': 'reserved', 'scope_key': '2026-09-16'},
+                        'm2_settle_translation_spend': {'status': 'settled', 'overrun': True}})
+    monkeypatch.setattr(ingest, '_rpc', rpc)
+    ledger = ingest.PersistedSpendLedger('https://db.test', 'sb_secret_x', daily_limit_usd=0.5)
+    ledger.reserve(0.01)
+    ledger.settle(0.01, 5.0)
+    assert '::warning::translation settlement exceeded its reservation' in capsys.readouterr().err
+
+
+def test_a_value_error_from_our_own_code_is_not_swallowed_as_an_outage():
+    """The boundary catches remote failures, never our own defects."""
+    rows = fixture_rows()
+
+    class BuggyStore:
+        def lookup(self, key):
+            raise ValueError("invalid literal for int() with base 10: 'x'")
+
+        def recover_stale(self, key, **kwargs):
+            raise ValueError("bug")
+
+        def acquire(self, request):
+            raise ValueError("bug")
+
+    with pytest.raises(ValueError):
+        translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW, store=BuggyStore(),
+                       provider=StubProvider(), pairing_provider=pairing_for(rows))
+
+
+def test_a_truncated_read_back_warns_and_names_the_config_key(capsys):
+    rows = fixture_rows()
+    translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                   store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider(),
+                   pairing_provider=StubPairing(), truncated=True)
+    captured = capsys.readouterr().err
+    assert '::warning::translation skipped: corpus read-back truncated' in captured
+    assert 'translation.corpus_readback_max_pages' in captured

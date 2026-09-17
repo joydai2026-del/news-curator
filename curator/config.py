@@ -756,6 +756,9 @@ def load_sources(path: Path) -> dict[str, Any]:
     origin = translation.get("api_origin")
     if origin is not None and (not isinstance(origin, str) or not re.fullmatch(r"https://[a-z0-9.-]{1,253}(?::[0-9]{1,5})?", origin)):
         raise ConfigError(f"{path.name}: 'translation.api_origin' must be an https origin.")
+    effort = translation.get("reasoning_effort")
+    if effort is not None and effort not in ("minimal", "low", "medium", "high"):
+        raise ConfigError(f"{path.name}: 'translation.reasoning_effort' must be minimal, low, medium or high.")
     # A failed translation shows the original, marked. There is no drop value.
     on_failure = translation.get("on_failure")
     if on_failure is not None and on_failure not in ("show_original_marked", "show_original_silent"):
@@ -764,6 +767,7 @@ def load_sources(path: Path) -> dict[str, Any]:
         ("daily_cost_limit_usd", 0.0, 25.0),
         ("input_cost_per_million_tokens_usd", 0.0, 1000.0),
         ("output_cost_per_million_tokens_usd", 0.0, 1000.0),
+        ("settle_overrun_tolerance_usd", 0.0, 5.0),
     ):
         value = translation.get(key)
         if value is not None:
@@ -777,6 +781,8 @@ def load_sources(path: Path) -> dict[str, Any]:
         ("pairing_daily_call_limit", 0, 5000),
         ("pairing_max_attempts", 1, 10),
         ("pairing_recheck_hours", 1, 48),
+        ("pairing_output_tokens", 1, 100000),
+        ("corpus_readback_max_pages", 1, 200),
     ):
         value = translation.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, int)

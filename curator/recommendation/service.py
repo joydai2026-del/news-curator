@@ -42,7 +42,8 @@ class RankingStore(Protocol):
     def retained_candidates(self, *, category_id: str | None, query: str | None, limit: int,
                             before_published_at: str | None = None, before_story_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
     def retained_candidates_language_exclusive(self, *, display_language: str, query: str | None, limit: int,
-                            before_published_at: str | None = None, before_story_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
+                            before_published_at: str | None = None, before_story_id: str | None = None,
+                            policy_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
@@ -70,6 +71,9 @@ class ServicePolicy:
     # Empty disables the section without touching any other code path.
     exclusive_category_id: str = ""
     other_lane_enabled: bool = True
+    # The pairing policy whose decisions this lane is allowed to serve. A
+    # superseded prompt's answers must not survive an upgrade.
+    exclusivity_policy_id: str = "pairing-json-v1"
 
     def __post_init__(self) -> None:
         if self.display_language not in ("en", "zh"):
@@ -119,6 +123,7 @@ class RankingService:
                 display_language=self._policy.display_language, query=query,
                 limit=self._policy.candidate_limit + len(excluded_set) + 1,
                 before_published_at=before_published, before_story_id=before_story,
+                policy_id=self._policy.exclusivity_policy_id,
             )
         else:
             rows = self._store.retained_candidates(

@@ -73,14 +73,16 @@ class SupabaseHTTP:
         return rows
 
     def retained_candidates_language_exclusive(self, *, display_language: str, query: str | None, limit: int,
-                            before_published_at: str | None = None, before_story_id: str | None = None):
+                            before_published_at: str | None = None, before_story_id: str | None = None,
+                            policy_id: str | None = None):
         rows, before_published, before_story = [], before_published_at, before_story_id
         while len(rows) < limit:
             take = min(100, limit - len(rows))
             page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_language_exclusive",
                 token=self._service_token(), key=self._service,
                 body={"p_display_language": display_language, "p_query": query,
-                    "p_before_published_at": before_published, "p_before_story_id": before_story, "p_limit": take})
+                    "p_before_published_at": before_published, "p_before_story_id": before_story,
+                    "p_limit": take, "p_policy_id": policy_id})
             if not isinstance(page, list):
                 raise SupabaseHTTPError("candidate RPC returned a non-list")
             rows.extend(page)

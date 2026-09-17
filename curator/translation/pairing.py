@@ -178,6 +178,7 @@ def decide_exclusivity(
     prefilter: Mapping[str, str] | None = None,
     ledger: PairingLedger | None = None,
     persist=None,
+    recheck=None,
     cost: "PairingCost | None" = None,
 ) -> PairingResult:
     """Ask once per undecided story, reuse every decision already on record.
@@ -212,6 +213,8 @@ def decide_exclusivity(
             result.group_ids[story.story_id] = grouped[story.story_id]
             continue
         prior = decided.get(story.story_id)
+        rechecking = prior is not None and prior.outcome == EXCLUSIVE and _needs_asking(
+            prior, story, display_pool, policy=policy, now=now)
         if prior is not None and not _needs_asking(prior, story, display_pool, policy=policy, now=now):
             result.decisions[story.story_id] = prior
             if prior.outcome == MATCH and prior.match_story_id:
@@ -252,9 +255,17 @@ def decide_exclusivity(
         if index is None:
             decision = ExclusivityDecision(story_id=story.story_id, decided_at=now, model=policy.model,
                                            policy_id=policy.policy_id, match_story_id=None,
-                                           outcome=EXCLUSIVE, display_language=display_language)
-            if _record(result, persist, decision):
-                result.decisions[story.story_id] = decision
+                                           outcome=EXCLUSIVE, display_language=display_language,
+                                           rechecked_at=now if rechecking else None)
+            stored = (_recheck(result, recheck, decision) if rechecking
+                      else (decision if _record(result, persist, decision) else None))
+            if stored is not None and stored.outcome == EXCLUSIVE:
+                result.decisions[story.story_id] = stored
+            elif stored is not None:
+                # The store says this story is no longer exclusive. Believe it.
+                result.decisions[story.story_id] = stored
+                if stored.match_story_id:
+                    result.group_ids[story.story_id] = event_group_id_for(stored.match_story_id)
             else:
                 # Not persisted means not trusted: it cannot drive money or
                 # visibility this run, and it will be asked again next run.
@@ -267,11 +278,20 @@ def decide_exclusivity(
         matched = context[index]
         decision = ExclusivityDecision(story_id=story.story_id, decided_at=now, model=policy.model,
                                        policy_id=policy.policy_id, match_story_id=matched.story_id,
-                                       outcome=MATCH, display_language=display_language)
-        if not _record(result, persist, decision):
+                                       outcome=MATCH, display_language=display_language,
+                                       rechecked_at=now if rechecking else None)
+        # A recheck must be able to CHANGE the answer, and the persisted row is
+        # the answer. The attempted write is not evidence of anything.
+        stored = (_recheck(result, recheck, decision) if rechecking
+                  else (decision if _record(result, persist, decision) else None))
+        if stored is None:
             result.undecided.add(story.story_id)
             continue
-        result.decisions[story.story_id] = decision
+        if stored.outcome != MATCH:
+            # The store kept the older answer, so the lane keeps it too.
+            result.decisions[story.story_id] = stored
+            continue
+        result.decisions[story.story_id] = stored
         group = matched.event_group_id or event_group_id_for(matched.story_id)
         result.group_ids[story.story_id] = group
         # BOTH rows carry the group. Writing only the foreign one left the peer
@@ -287,6 +307,28 @@ def _undecided_decision(story, policy, display_language, prior, now):
         story_id=story.story_id, decided_at=now, model=policy.model, policy_id=policy.policy_id,
         match_story_id=None, outcome=UNDECIDED, display_language=display_language,
         attempts=attempts, retry_after=now + timedelta(hours=policy.recheck_hours))
+
+
+def _recheck(result, recheck, decision):
+    """Persist a re-check and return the PERSISTED decision, or None.
+
+    The RPC refuses a second re-check and refuses to move a matched decision, so
+    what it returns is what the lane will serve, whatever we attempted.
+    """
+
+    if recheck is None:
+        result.pending.append(decision)
+        return decision
+    try:
+        stored = recheck(decision)
+    except Exception:
+        result.persistence_failures += 1
+        return None
+    if stored is None:
+        result.persistence_failures += 1
+        return None
+    result.pending.append(stored)
+    return stored
 
 
 def _record(result, persist, decision) -> bool:
