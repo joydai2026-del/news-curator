@@ -164,6 +164,10 @@ class TranslationProviderResult:
     target_language: str
     provider: str
     model_version: str
+    # Observed usage, when the provider reports it. Zero means "not reported",
+    # and the caller must then settle on its estimate rather than on nothing.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     def __post_init__(self) -> None:
         if not self.items:
@@ -181,6 +185,9 @@ class TranslationProviderResult:
         ids = [item.request_id for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("translation result ids must be unique")
+        for value in (self.input_tokens, self.output_tokens):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("translation usage tokens must be non-negative integers")
 
 
 @dataclass(frozen=True)

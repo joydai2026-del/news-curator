@@ -15,6 +15,7 @@ from .base import (
     TranslationResultItem,
 )
 from .google import GoogleTranslationAdapter, GoogleTranslationConfig
+from .model_provider import ModelPairingAdapter, ModelTranslationAdapter, ModelTranslationConfig
 from .registry import TranslationProviderRegistry
 from .selector import TranslationCandidatePolicy, select_translation_candidates
 from .memory import InMemoryTranslationStore
@@ -40,6 +41,9 @@ __all__ = (
     "DEFAULT_MAX_TRANSLATION_OUTPUT_DESCRIPTION_CHARS",
     "DEFAULT_MAX_TRANSLATION_OUTPUT_TITLE_CHARS",
     "InMemoryTranslationStore",
+    "ModelPairingAdapter",
+    "ModelTranslationAdapter",
+    "ModelTranslationConfig",
     "AcquireRequest",
     "AcquireResult",
     "AcquireStatus",

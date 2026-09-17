@@ -41,6 +41,8 @@ from curator.translation import (  # noqa: E402
     BudgetLimits,
     GoogleTranslationAdapter,
     GoogleTranslationConfig,
+    ModelTranslationAdapter,
+    ModelTranslationConfig,
     ReservationState,
     SupabaseTranslationConfig,
     SupabaseTranslationStore,
@@ -551,7 +553,33 @@ def main(argv: list[str] | None = None) -> int:
             transport=transport,
             access_token=lambda: token,
         )
-        registry = TranslationProviderRegistry({google.provider_id: google})
+        # Provider selection is config, never code. A second implementation
+        # registers beside the first; the job still asks the registry by id.
+        adapters = {google.provider_id: google}
+        model_id = policy.get("model")
+        api_key_env = policy.get("api_key_env")
+        if model_id and api_key_env:
+            model_adapter = ModelTranslationAdapter(
+                config=ModelTranslationConfig(
+                    provider_id=_text(policy, "provider"),
+                    model=str(model_id),
+                    api_origin=str(policy.get("api_origin") or "https://api.openai.com"),
+                    max_response_bytes=_positive_int(policy, "max_response_bytes"),
+                    max_output_title_chars=_positive_int_with_default(
+                        policy, "max_output_title_characters",
+                        DEFAULT_MAX_TRANSLATION_OUTPUT_TITLE_CHARS,
+                    ),
+                    max_output_description_chars=_positive_int_with_default(
+                        policy, "max_output_description_characters",
+                        DEFAULT_MAX_TRANSLATION_OUTPUT_DESCRIPTION_CHARS,
+                    ),
+                ),
+                transport=transport,
+                api_key=lambda: os.environ.get(str(api_key_env), ""),
+            )
+            if model_adapter.provider_id != google.provider_id:
+                adapters[model_adapter.provider_id] = model_adapter
+        registry = TranslationProviderRegistry(adapters)
         provider = registry.get(_text(policy, "provider"))
         results = authoritative_results if authoritative_results is not None else collect(cfg)
         ranked = {

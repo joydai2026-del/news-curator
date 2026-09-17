@@ -4,6 +4,7 @@ from xml.etree import ElementTree
 
 from curator.config import Category
 from curator.models import Item
+from dataclasses import replace
 from curator.retained_corpus import candidate_response, candidates, public_ingest_rows, retain
 
 
@@ -98,3 +99,42 @@ def test_corpus_coalesces_language_variants_without_changing_m1_deduper():
     ], observed_at=NOW)
     assert len(rows) == 1
     assert rows[0].category_ids == frozenset({"us-news", "world"})
+
+
+def test_retain_claims_only_certain_cross_language_matches():
+    """The heuristic is gone. Only an identical title or URL is claimed here.
+
+    Two rows sharing a canonical URL already coalesce into one retained row
+    upstream (story_id is derived from that URL), so the case that actually
+    reaches the pre-filter is a Chinese-language outlet running the English
+    headline verbatim.
+    """
+    en = Item(title="Nvidia beats on earnings", url="https://e.com/1", canonical_url="https://e.com/1",
+              source_id="fixture", source_name="Fixture", published_at=NOW, language="en",
+              description="Revenue of 46 billion dollars in 2026.")
+    zh = Item(title="Nvidia beats on earnings", url="https://e.cn/1", canonical_url="https://e.cn/1",
+              source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
+              description="2026 年营收 467 亿美元。")
+    unrelated = Item(title="某地铁线路延长 3 公里", url="https://e.cn/2", canonical_url="https://e.cn/2",
+                     source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
+                     description="该工程于 2026 年完工。")
+    rows = retain([en, zh, unrelated], categories=[], observed_at=NOW)
+    grouped = [row for row in rows if row.event_group_id]
+    assert len(grouped) == 2 and len({row.event_group_id for row in grouped}) == 1
+    assert next(row for row in rows if row.item.canonical_url == "https://e.cn/2").event_group_id is None
+
+
+def test_ingest_rows_carry_the_overlay_only_when_present():
+    from curator.retained_corpus import apply_translations
+    from curator.translation.ingest import TranslationOverlay, TRANSLATED
+    lone = Item(title="独家：某部门发布七项新规", url="https://e.cn/2", canonical_url="https://e.cn/2",
+                source_id="fixture", source_name="Fixture", published_at=NOW, language="zh",
+                description="该通知自 2026 年起执行。")
+    rows = retain([lone], categories=[], observed_at=NOW)
+    story_id = rows[0].story_id
+    plain = public_ingest_rows(rows, allowed_source_ids={"fixture"})
+    assert "title_translations" not in plain[0] and "event_group_id" not in plain[0]
+    translated = apply_translations(rows, {story_id: TranslationOverlay(
+        {"en": "Exclusive: 7 new rules"}, {}, TRANSLATED)})
+    payload = public_ingest_rows(translated, allowed_source_ids={"fixture"})
+    assert payload[0]["title_translations"] == {"en": "Exclusive: 7 new rules"}

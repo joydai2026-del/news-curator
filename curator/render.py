@@ -290,6 +290,9 @@ body{overflow-x:hidden;overflow-x:clip;background:
 #m2-controls details{width:100%}#m2-controls summary{min-height:44px;line-height:44px;cursor:pointer;font-weight:650}
 #m2-controls label{display:flex;gap:.45rem;align-items:center;min-height:44px;cursor:pointer}
 #m2-controls button{min-width:44px;min-height:44px;font:inherit;color:var(--fg);border:1px solid var(--line);background:transparent;border-radius:100px;padding:.4rem .7rem;cursor:pointer}
+.translation-mark{margin:.1rem 0 .4rem;font-size:.78rem;color:var(--muted)}
+.m2-empty{margin:1rem 0;color:var(--muted)}
+#m2-language-toggle{min-width:44px;min-height:44px;font:inherit;font-weight:650;color:var(--fg);border:1px solid var(--line);background:transparent;border-radius:100px;padding:.4rem .9rem;cursor:pointer}
 #m2-controls a{display:inline-flex;align-items:center;min-width:44px;min-height:44px;color:var(--fg)}#m2-mode{margin:.2rem 0 0;color:var(--muted)}
 .mobiletopics{display:none;flex-wrap:nowrap;gap:.45rem;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}
 .mobiletopics::-webkit-scrollbar{display:none}
@@ -458,8 +461,12 @@ JS = """
     }
     if(count){count.textContent=q?(shown+(shown===1?' matching story':' matching stories')):'';}
     if(empty){
+      // One empty element, whatever the surface. A section that wants its
+      // own wording supplies it through the selected chip, so the page can
+      // never show two contradictory empty messages at once.
       empty.hidden=shown>0;
-      empty.textContent=q?('No story here matches \\u201c'+q+'\\u201d.'):'Nothing matched in this window.';
+      var chipEmpty=(chips.find(function(c){return c.dataset.filter===tab;})||{}).dataset;
+      empty.textContent=q?('No story here matches \\u201c'+q+'\\u201d.'):((chipEmpty&&chipEmpty.emptyText)||'Nothing matched in this window.');
     }
   }
 
@@ -957,6 +964,7 @@ def render_html(
     require_summaries: bool = True,
     topic_ids_by_name: dict[str, str] | None = None,
     discovery_enabled: bool = False,
+    language_policy: dict[str, object] | None = None,
 ) -> str:
     built = built_at or now
     stamp = _display_time(built, timezone_name)
@@ -989,6 +997,20 @@ def render_html(
             f'<button class="chip" data-filter="{_e(slug)}" '
             f'data-topic-id="{_e(topic_ids_by_slug[slug])}" '
             f'aria-pressed="false">{_e(name)}</button>'
+        )
+    policy = language_policy or {}
+    display_language = str(policy.get("default_display") or "en")
+    if display_language not in ("en", "zh"):
+        raise ValueError("language.default_display must be en or zh")
+    exclusive_category_id = str(policy.get("exclusive_category_id") or "")
+    if policy.get("other_lane_enabled", False) and exclusive_category_id:
+        # Appended after the categories JJ already knows, so the rail order
+        # she is used to does not shift. The label text is filled in by the
+        # reader from the display language, never baked in here.
+        chips.append(
+            f'<button class="chip" data-filter="{_e(exclusive_category_id)}" '
+            f'data-topic-id="{_e(exclusive_category_id)}" '
+            f'data-language-exclusive="true" aria-pressed="false"></button>'
         )
 
     rendered: dict[str, list[str]] = {slug: [] for slug in names}
@@ -1051,6 +1073,7 @@ def render_html(
 <meta name="news-curator-m2-endpoint" content="">
 <meta name="news-curator-m2-policy-version" content="">
 <meta name="news-curator-m2-model-version" content="">
+<meta name="news-curator-display-language" content="{_e(display_language)}">
 <meta name="news-curator-m2-provider-policy-id" content="">
 <meta name="news-curator-m2-provider-retention-url" content="">
 <meta name="news-curator-m2-page-size" content="">
@@ -1082,6 +1105,7 @@ def render_html(
     </header>
     {discovery_markup}
       <section id="m2-controls" aria-label="Personalized feed controls" hidden>
+        <button id="m2-language-toggle" type="button" aria-label="Switch reading language"></button>
         <details><summary>Feed preferences</summary>
         <label><input id="m2-local-learning" type="checkbox"> Learn from my reading</label>
         <label><input id="m2-provider-processing" type="checkbox"> Use my history for model ranking</label>
@@ -1186,6 +1210,7 @@ def render_site(
     require_summaries: bool = True,
     topic_ids_by_name: dict[str, str] | None = None,
     discovery_enabled: bool = False,
+    language_policy: dict[str, object] | None = None,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
@@ -1209,6 +1234,7 @@ def render_site(
         require_summaries=require_summaries,
         topic_ids_by_name=topic_ids_by_name,
         discovery_enabled=discovery_enabled,
+        language_policy=language_policy,
     )
     payload = payload.replace(
         '<script src="auth/client.js" defer></script>',

@@ -72,6 +72,9 @@ _SOURCE_FILE_KEYS = frozenset(
         "summaries",
         "newsletter",
         "translation",
+        "language",
+        "reader",
+        "grouping",
     }
 )
 _BUILTIN_SOURCE_TYPES = frozenset(
@@ -184,6 +187,11 @@ class Config:
     # Translation is an optional backend lane. It is dark unless explicitly
     # enabled and its server-side credentials are supplied at runtime.
     translation: dict[str, Any] = field(default_factory=dict)
+    # Reading-surface language policy (`language:` / `reader:` in sources.yaml).
+    language: dict[str, Any] = field(default_factory=dict)
+    reader: dict[str, Any] = field(default_factory=dict)
+    # Cross-language same-event grouping policy (`grouping:` in sources.yaml).
+    grouping: dict[str, Any] = field(default_factory=dict)
 
     @property
     def topics(self) -> list[Category]:
@@ -607,7 +615,7 @@ def load_sources(path: Path) -> dict[str, Any]:
 
     for key in (
         "settings", "ranking", "dedup", "hackernews", "reddit", "images",
-        "summaries", "newsletter", "translation",
+        "summaries", "newsletter", "translation", "language", "reader", "grouping",
     ):
         if raw.get(key) is not None and not isinstance(raw[key], dict):
             raise ConfigError(f"{path.name}: '{key}' must be a mapping.")
@@ -738,10 +746,87 @@ def load_sources(path: Path) -> dict[str, Any]:
         value = translation.get(key)
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ConfigError(f"{path.name}: 'translation.{key}' must be non-empty text.")
-    for key in ("project_id_env", "supabase_url_env", "supabase_service_role_key_env"):
+    for key in ("project_id_env", "supabase_url_env", "supabase_service_role_key_env", "api_key_env"):
         value = translation.get(key)
         if value is not None and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", value):
             raise ConfigError(f"{path.name}: 'translation.{key}' must be an environment variable name.")
+    model = translation.get("model")
+    if model is not None and (not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", model)):
+        raise ConfigError(f"{path.name}: 'translation.model' must be a model id.")
+    origin = translation.get("api_origin")
+    if origin is not None and (not isinstance(origin, str) or not re.fullmatch(r"https://[a-z0-9.-]{1,253}(?::[0-9]{1,5})?", origin)):
+        raise ConfigError(f"{path.name}: 'translation.api_origin' must be an https origin.")
+    policy_id = translation.get("pairing_policy_id")
+    if policy_id is not None and (not isinstance(policy_id, str)
+                                  or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", policy_id)):
+        raise ConfigError(f"{path.name}: 'translation.pairing_policy_id' must be a policy id.")
+    effort = translation.get("reasoning_effort")
+    if effort is not None and effort not in ("none", "minimal", "low", "medium", "high"):
+        raise ConfigError(
+            f"{path.name}: 'translation.reasoning_effort' must be none, minimal, low, medium or high "
+            "('none' omits the parameter for providers that reject it).")
+    # A failed translation shows the original, marked. There is no drop value.
+    on_failure = translation.get("on_failure")
+    if on_failure is not None and on_failure not in ("show_original_marked", "show_original_silent"):
+        raise ConfigError(f"{path.name}: 'translation.on_failure' must be show_original_marked or show_original_silent.")
+    for key, low, high in (
+        ("daily_cost_limit_usd", 0.0, 25.0),
+        ("input_cost_per_million_tokens_usd", 0.0, 1000.0),
+        ("output_cost_per_million_tokens_usd", 0.0, 1000.0),
+        ("settle_overrun_tolerance_usd", 0.0, 5.0),
+    ):
+        value = translation.get(key)
+        if value is not None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= float(value) <= high:
+                raise ConfigError(f"{path.name}: 'translation.{key}' must be a number between {low} and {high}.")
+    for key, low, high in (
+        ("characters_per_token", 1, 100),
+        ("max_output_tokens_per_story", 1, 100000),
+        ("pairing_window_hours", 1, 168),
+        ("pairing_max_context_titles", 1, 500),
+        ("pairing_daily_call_limit", 0, 5000),
+        ("pairing_max_attempts", 1, 10),
+        ("pairing_recheck_hours", 1, 48),
+        ("pairing_output_tokens", 1, 100000),
+        ("corpus_readback_max_pages", 1, 200),
+    ):
+        value = translation.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)
+                                  or not low <= value <= high):
+            raise ConfigError(f"{path.name}: 'translation.{key}' must be an integer between {low} and {high}.")
+    ttl = translation.get("cache_ttl_days")
+    if ttl is not None and (isinstance(ttl, bool) or not isinstance(ttl, int) or not 1 <= ttl <= 365):
+        raise ConfigError(f"{path.name}: 'translation.cache_ttl_days' must be an integer between 1 and 365.")
+
+    # Reading-surface language policy. Nothing here hardcodes English: the
+    # display language is a configured value that the reader may override.
+    language = raw.get("language") or {}
+    display = language.get("default_display")
+    if display is not None and display not in ("en", "zh"):
+        raise ConfigError(f"{path.name}: 'language.default_display' must be en or zh.")
+    other_lane = language.get("other_lane_enabled")
+    if other_lane is not None and not isinstance(other_lane, bool):
+        raise ConfigError(f"{path.name}: 'language.other_lane_enabled' must be true or false.")
+    exclusive_category = language.get("exclusive_category_id")
+    if exclusive_category is not None and (
+        not isinstance(exclusive_category, str)
+        or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", exclusive_category)
+    ):
+        raise ConfigError(f"{path.name}: 'language.exclusive_category_id' must be a category id.")
+    grouping = raw.get("grouping") or {}
+    cross_language = grouping.get("cross_language_enabled")
+    if cross_language is not None and not isinstance(cross_language, bool):
+        raise ConfigError(f"{path.name}: 'grouping.cross_language_enabled' must be true or false.")
+    for key in ("min_shared_entity_tokens", "window_hours", "max_pairs_per_bucket"):
+        if key in grouping:
+            raise ConfigError(
+                f"{path.name}: 'grouping.{key}' was removed with the token heuristic; "
+                "the pairing window is 'translation.pairing_window_hours'.")
+
+    reader = raw.get("reader") or {}
+    chinese_site = reader.get("chinese_site_mode_enabled")
+    if chinese_site is not None and not isinstance(chinese_site, bool):
+        raise ConfigError(f"{path.name}: 'reader.chinese_site_mode_enabled' must be true or false.")
 
     raw["_rss_objects"] = rss
     return raw
@@ -762,6 +847,9 @@ def load_config(root: Path) -> Config:
         summaries=src.get("summaries") or {},
         newsletter=src.get("newsletter") or {},
         translation=src.get("translation") or {},
+        language=src.get("language") or {},
+        reader=src.get("reader") or {},
+        grouping=src.get("grouping") or {},
     )
 
     # Feed ids must be unique across BOTH files. A duplicate id is not cosmetic:

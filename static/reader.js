@@ -697,8 +697,33 @@
     return { rows: collected, cursor: nextCursor, drained: false };
   }
 
-  const M2_CARD_FIELDS = ["card_schema_version", "published_at", "source_name", "story_id", "summary", "title", "url",
+  const M2_CARD_FIELDS_V1 = ["card_schema_version", "published_at", "source_name", "story_id", "summary", "title", "url",
     "source_id", "language", "category_ids", "read_at", "saved_at", "state_revision", "interests"];
+  const M2_TRANSLATION_FIELDS = ["title_en", "title_zh", "summary_en", "summary_zh", "translation_status"];
+  const M2_CARD_FIELDS = [...M2_CARD_FIELDS_V1, ...M2_TRANSLATION_FIELDS];
+  // Same bound the database column carries, so an oversized translated summary
+  // is rejected here rather than rendered.
+  const MAX_TRANSLATED_SUMMARY = 32000;
+  const DISPLAY_LANGUAGES = ["en", "zh"];
+  const TRANSLATION_STATUS = ["original", "translated", "untranslated"];
+  // The other language's name, in the language currently being read. The
+  // section title and the untranslated mark are derived from this, never
+  // written out in English, so the site flip renames them for free.
+  const OTHER_LANGUAGE_NAME = { en: { zh: "Chinese", en: "English" }, zh: { en: "English", zh: "Chinese" } };
+  const LANGUAGE_STRINGS = {
+    en: {
+      toggleLabel: "中文", exclusiveSection: (other) => `Only in ${other} press`,
+      emptyExclusive: (other) => `No stories that only the ${other} press carried today`,
+      untranslated: (other) => `Not translated. Shown in ${other}.`,
+      search: "Search all retained stories",
+    },
+    zh: {
+      toggleLabel: "EN", exclusiveSection: (other) => `只有${other === "English" ? "英文" : "中文"}媒体报道`,
+      emptyExclusive: (other) => `今天没有只有${other === "English" ? "英文" : "中文"}媒体报道的新闻`,
+      untranslated: (other) => `未翻译，按原文显示。`,
+      search: "搜索全部保留的报道",
+    },
+  };
   const M2_RESPONSE_FIELDS = ["cards", "consent_revision", "fallback_reason", "history_generation",
     "history_revision", "model_version", "next_cursor", "policy_version", "request_id",
     "result_mode", "schema_version", "server_commit_revision"];
@@ -734,7 +759,17 @@
         !(value.next_cursor === null || boundedString(value.next_cursor, 4096))) fail("The M2 feed response was invalid.");
     const seen = new Set();
     value.cards.forEach((card) => {
-      if (!exactFields(card, M2_CARD_FIELDS) || card.card_schema_version !== 1 || !STORY_ID.test(card.story_id) ||
+      // One release accepts both card schemas, so the reader and the ranker can
+      // deploy in either order without every card failing validation.
+      const translated = card.card_schema_version === 2;
+      if (![1, 2].includes(card.card_schema_version) ||
+          !exactFields(card, translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) || !STORY_ID.test(card.story_id) ||
+          (translated && (
+            !DISPLAY_LANGUAGES.every((code) => typeof card[`title_${code}`] === "string" &&
+              card[`title_${code}`].length <= 2000 && typeof card[`summary_${code}`] === "string" &&
+              card[`summary_${code}`].length <= MAX_TRANSLATED_SUMMARY) ||
+            !isObject(card.translation_status) || !exactFields(card.translation_status, DISPLAY_LANGUAGES) ||
+            !DISPLAY_LANGUAGES.every((code) => TRANSLATION_STATUS.includes(card.translation_status[code])))) ||
           !boundedString(card.title, 2000) || typeof card.summary !== "string" ||
           !boundedString(card.source_name, 200) || !validTimestamp(card.published_at) ||
           !safeDestination(card.url) || !boundedString(card.source_id, 512) || !["en", "zh"].includes(card.language) ||
@@ -745,6 +780,15 @@
             TOPIC_ID.test(interest.topic_id) && ["more_like", "less_like"].includes(interest.signal) &&
             Number.isSafeInteger(interest.revision) && interest.revision >= 0) ||
           seen.has(card.story_id)) fail("The M2 feed response was invalid.");
+      if (!translated) {
+        const other = card.language === "en" ? "zh" : "en";
+        card[`title_${card.language}`] = card.title;
+        card[`summary_${card.language}`] = card.summary;
+        card[`title_${other}`] = "";
+        card[`summary_${other}`] = "";
+        card.translation_status = { [card.language]: "original", [other]: "untranslated" };
+        card.card_schema_version = 2;
+      }
       seen.add(card.story_id);
     });
     return value;
@@ -848,7 +892,18 @@
       m2 = createM2Service(m2Config, () => auth.sessionForRequest());
     } catch (_) { announce("Personalized feed configuration is unavailable. Public stories remain available."); }
     let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null;
-    let m2Section = null, m2PublicCards = [], m2Position = 0;
+    let m2Section = null, m2PublicCards = [], m2Position = 0, m2Entries = [];
+    const LANGUAGE_STORAGE_KEY = "news-curator-display-language";
+    const configuredLanguage = document.querySelector('meta[name="news-curator-display-language"]')?.content;
+    // The reader's own choice wins over the site default; neither is hardcoded.
+    let displayLanguage = DISPLAY_LANGUAGES.includes(configuredLanguage) ? configuredLanguage : "en";
+    try {
+      const stored = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+      if (DISPLAY_LANGUAGES.includes(stored)) displayLanguage = stored;
+    } catch (_) { /* a browser with storage denied still reads the site default */ }
+    const strings = () => LANGUAGE_STRINGS[displayLanguage];
+    const otherLanguageName = () =>
+      OTHER_LANGUAGE_NAME[displayLanguage][displayLanguage === "en" ? "zh" : "en"];
     let behaviorWrites = Promise.resolve();
     let m2SearchTimer = null;
     const searchBox = document.getElementById("q");
@@ -1121,7 +1176,7 @@
         if (card.dataset.m2Card !== "true") return;
         clearPrivateCardState(card); view.removeCard(card); card.replaceChildren(); card.remove(); cards.delete(id);
       });
-      m2Section?.remove(); m2Section = null; m2Position = 0;
+      m2Section?.remove(); m2Section = null; m2Position = 0; m2Entries = [];
     }
     function leaveM2(invalidate = true) {
       if (invalidate) m2Sequence += 1;
@@ -1139,6 +1194,117 @@
       if (searchBox) searchBox.placeholder = "Search this edition";
       restorePublicEditionMeta();
       view.apply();
+    }
+    // Switching the language must never cost a request: every card already
+    // carries both language slots, so the toggle only chooses which to read.
+    function displayRow(entry, reason) {
+      const status = entry.translation_status[displayLanguage];
+      const translated = status !== "untranslated";
+      const title = translated ? entry[`title_${displayLanguage}`] : entry.title;
+      const summary = translated ? entry[`summary_${displayLanguage}`] : entry.summary;
+      // The language-exclusive section is a SERVER-side selection, so no story
+      // carries it in its own category_ids. Without this the client-side
+      // membership filter hides every card the section just fetched.
+      const selectedId = topicIdForSlug(selectedTopic());
+      const topicIds = exclusiveSelected() && !entry.category_ids.includes(selectedId)
+        ? [...entry.category_ids, selectedId] : entry.category_ids;
+      return { ...entry, title: title || entry.title, summary: summary || entry.summary,
+        canonical_url: entry.url, topic_ids: topicIds, source_kind: "outlet",
+        coverage_mentions: [], topic_ranks: {}, ranking_explanation: reason,
+        translation_mark: status === "untranslated"
+          ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "" };
+    }
+    function markUntranslated(card, row) {
+      if (!row.translation_mark) return;
+      const mark = element("p", "translation-mark", row.translation_mark);
+      mark.dataset.translationStatus = "untranslated";
+      card.querySelector(".story-heading")?.after(mark);
+    }
+    function refreshLanguageLabels() {
+      const toggle = document.getElementById("m2-language-toggle");
+      if (toggle) {
+        toggle.textContent = strings().toggleLabel;
+        toggle.dataset.displayLanguage = displayLanguage;
+      }
+      document.querySelectorAll('.chip[data-language-exclusive="true"]').forEach((chip) => {
+        chip.textContent = strings().exclusiveSection(otherLanguageName());
+        // The ONE empty element on the page renders this wording when the
+        // section is selected and nothing came back.
+        chip.dataset.emptyText = strings().emptyExclusive(otherLanguageName());
+      });
+      const title = m2Section?.querySelector(".section-title");
+      if (title && exclusiveSelected()) title.textContent = strings().exclusiveSection(otherLanguageName());
+      if (searchBox && m2Active) searchBox.placeholder = strings().search;
+    }
+    function exclusiveSelected() {
+      const chip = document.querySelector('.chip[data-language-exclusive="true"]');
+      return Boolean(chip && selectedTopic() === chip.dataset.filter);
+    }
+    // The rerender rebuilds every card from m2Entries, which is the SERVER
+    // snapshot. Without this, saving a story and then switching language shows
+    // the card unsaved again, because the local mutation lived only in the DOM.
+    function rememberM2State(card, state) {
+      const storyId = card?.dataset?.storyId;
+      if (!storyId || !m2Active) return;
+      const entry = m2Entries.find((candidate) => candidate.story_id === storyId);
+      if (!entry) return;
+      ["read_at", "saved_at", "state_revision", "interests"].forEach((field) => {
+        if (Object.prototype.hasOwnProperty.call(state, field)) entry[field] = state[field];
+      });
+    }
+    function rerenderM2Cards() {
+      if (!m2Active || !m2Binding) return;
+      const entries = m2Entries.slice();
+      const reason = m2Binding.result_mode === "model"
+        ? "Ranked using your current query and permitted reading history."
+        : "Freshness order. Model ranking was not used.";
+      clearM2Cards();
+      m2Entries = entries;
+      if (!m2Section) {
+        m2Section = element("section", "topic-section"); m2Section.dataset.section = "__m2__";
+        m2Section.append(element("div", "grid")); document.getElementById("sections").append(m2Section);
+      }
+      entries.forEach((entry) => {
+        const row = displayRow(entry, reason);
+        const card = createStoryCard(row, selectedTopic(), topicSlugForId, topicIdForSlug(selectedTopic()));
+        card.dataset.m2Card = "true"; card.dataset.m2Position = String(++m2Position);
+        // The view filter hides any remote card whose m2Query differs from the
+        // live search box. Omitting it here blanked the page on every toggle.
+        card.dataset.m2Query = (searchBox?.value.trim() || "").toLowerCase();
+        markUntranslated(card, row);
+        const interest = card.querySelector(".interest-action");
+        if (interest) {
+          const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
+          interest.after(less);
+        }
+        cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
+        m2Section.querySelector(".grid").append(card); view.addCard(card);
+      });
+      applyExclusiveSectionTitle();
+      view.apply(); refreshStateControls(); refreshInterestControls();
+    }
+    function applyExclusiveSectionTitle() {
+      if (!m2Section) return;
+      let title = m2Section.querySelector(".section-title");
+      if (!exclusiveSelected()) { title?.remove(); return; }
+      if (!title) {
+        title = element("h2", "section-title");
+        m2Section.prepend(title);
+      }
+      title.textContent = strings().exclusiveSection(otherLanguageName());
+      // ONE empty element on the page. The section supplies its wording through
+      // the chip, and the view renders it; a second node beside the generic one
+      // showed two contradictory messages at once.
+      document.querySelectorAll('.chip[data-language-exclusive="true"]').forEach((chip) => {
+        chip.dataset.emptyText = strings().emptyExclusive(otherLanguageName());
+      });
+    }
+    function switchDisplayLanguage() {
+      displayLanguage = displayLanguage === "en" ? "zh" : "en";
+      try { localStorage.setItem(LANGUAGE_STORAGE_KEY, displayLanguage); } catch (_) { /* ignore */ }
+      refreshLanguageLabels();
+      rerenderM2Cards();
+      announce(strings().toggleLabel);
     }
     function applyM2Page(response, append, eligibility) {
       if (!m2Active) {
@@ -1162,8 +1328,8 @@
       const reason = response.result_mode === "model" ? "Ranked using your current query and permitted reading history." : "Freshness order. Model ranking was not used.";
       response.cards.forEach((entry) => {
         if (cards.has(entry.story_id)) return;
-        const row = { ...entry, canonical_url: entry.url, topic_ids: entry.category_ids,
-          source_kind: "outlet", coverage_mentions: [], topic_ranks: {}, ranking_explanation: reason };
+        m2Entries.push(entry);
+        const row = displayRow(entry, reason);
         const card = createStoryCard(row, selectedTopic(), topicSlugForId, topicIdForSlug(selectedTopic()));
         card.dataset.m2Card = "true"; card.dataset.m2Position = String(++m2Position);
         card.dataset.m2Query = (eligibility.query || "").toLowerCase();
@@ -1172,13 +1338,17 @@
           const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
           interest.after(less);
         }
+        markUntranslated(card, row);
         cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });
       m2Cursor = response.next_cursor; m2Binding = response;
+      // The section's own empty state must exist BEFORE the view decides
+      // whether to show the generic one, or both render together.
+      applyExclusiveSectionTitle(); refreshLanguageLabels();
       document.getElementById("discovery-controls")?.setAttribute("hidden", "");
       if (m2Controls) m2Controls.hidden = false;
-      if (searchBox) searchBox.placeholder = "Search all retained stories";
+      if (searchBox) searchBox.placeholder = strings().search;
       const mode = document.getElementById("m2-mode");
       if (mode) mode.textContent = reason;
       if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
@@ -1271,6 +1441,8 @@
     ["m2-local-learning", "m2-provider-processing"].forEach((id) => document.getElementById(id)?.addEventListener("change", () => {
       void saveM2Consent().catch(() => announce("Consent could not be updated. Try again."));
     }));
+    document.getElementById("m2-language-toggle")?.addEventListener("click", () => { switchDisplayLanguage(); });
+    refreshLanguageLabels();
     document.getElementById("m2-refresh")?.addEventListener("click", () => { void loadM2(); });
     document.getElementById("m2-clear-history")?.addEventListener("click", () => {
       abortOwnerExport();
@@ -1766,6 +1938,7 @@
       }
       pending.previousRead = confirmedRead;
       applyServerState(card, { read_at: pending.read ? "local" : null });
+      rememberM2State(card, { read_at: pending.read ? "local" : null });
     }
     async function mutateState(card, read, saved, previousRead = card.classList.contains("is-read"), eventType = "read_more") {
       const focusedAction = document.activeElement;
@@ -1782,6 +1955,7 @@
       };
       card.newsCuratorStateMutationBaseline = { token: mutationToken, ...previous };
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
+      rememberM2State(card, { read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
         const key = idempotencyKey();
         const result = m2?.enabled && signedIn() && (eventType !== "read_more" || read)
@@ -1795,6 +1969,7 @@
           ? { ...baseline, ...result }
           : baseline;
         applyServerState(card, confirmed);
+        rememberM2State(card, confirmed);
         reconcilePendingRead(card, Boolean(confirmed.read_at));
         reapplyCurrentMembership(card, restoreFocusOnRollback ? focusedAction : null);
         announce("Reading state saved.");

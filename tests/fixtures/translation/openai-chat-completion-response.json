@@ -1,0 +1,25 @@
+{
+  "id": "chatcmpl-recorded-shape-only",
+  "object": "chat.completion",
+  "created": 1789000000,
+  "model": "gpt-5-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"title\": \"Exclusive: seven new rules published\", \"summary\": \"The notice takes effect from 2026 and covers 7 areas.\"}",
+        "refusal": null
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 412,
+    "completion_tokens": 37,
+    "total_tokens": 449
+  },
+  "service_tier": "default",
+  "system_fingerprint": "fp_recorded"
+}

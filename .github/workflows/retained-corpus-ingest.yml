@@ -40,7 +40,12 @@ jobs:
                   command.extend(['--source-id', source.id])
           subprocess.run(command, check=True)
           PYTHON
+      # The three translation values below are OPTIONAL. When any of them is
+      # absent the ingest prints "translation skipped: ..." and exits 0, so the
+      # hourly run is never broken by a missing credential.
       - env:
           NEWS_CURATOR_SUPABASE_URL: ${{ vars.NEWS_CURATOR_SUPABASE_URL }}
           NEWS_CURATOR_SUPABASE_SECRET_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SECRET_KEY }}
+          NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY }}
+          NEWS_CURATOR_MODEL_API_KEY: ${{ secrets.NEWS_CURATOR_MODEL_API_KEY }}
         run: python scripts/retained_corpus_ingest.py ingest --root . --source-snapshot "$RUNNER_TEMP/source-snapshot.json"

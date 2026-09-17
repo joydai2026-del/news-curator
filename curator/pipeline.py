@@ -972,6 +972,7 @@ def main(argv: list[str] | None = None) -> int:
         require_summaries=summary_policy_enabled,
         discovery_enabled=args.discovery_enabled,
         topic_ids_by_name={category.name: category.id for category in en_categories},
+        language_policy=cfg.language,
     )
     log.info(
         "wrote %s (%d rows across %d topics)",

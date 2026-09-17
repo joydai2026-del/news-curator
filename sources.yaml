@@ -317,8 +317,50 @@ reddit:
 # workflow switch are enabled after explicit approval.
 # ---------------------------------------------------------------------------
 translation:
-  enabled: false
-  provider: google
+  # Phase 1 acceptance: JJ calls the missing translation surface a bug, so this
+  # ships ON. With no API key the hourly ingest logs a named skip and exits 0.
+  enabled: true
+  # The provider is selected here, never in business logic. `google` is the
+  # original adapter; `openai` is the Phase 1 model adapter, chosen because the
+  # Google Cloud path was never provisioned (no GOOGLE_* variables, no
+  # `translation` environment). Flipping this back is a config change.
+  provider: openai
+  model: gpt-5-mini
+  api_key_env: NEWS_CURATOR_MODEL_API_KEY
+  api_origin: https://api.openai.com
+  # Characters bound volume. Dollars bound spend. Both are checked.
+  # Spend is reserved before each send and settled from the provider's own
+  # reported token usage; an attempt that fails after the send keeps its
+  # reservation, because it may still have been charged.
+  daily_cost_limit_usd: 0.5
+  input_cost_per_million_tokens_usd: 0.25
+  output_cost_per_million_tokens_usd: 2.0
+  characters_per_token: 4
+  max_output_tokens_per_story: 1000
+  # Exclusivity is decided by the model, one small question per story, and the
+  # answer is persisted so a story is decided once.
+  pairing_window_hours: 48
+  pairing_max_context_titles: 60
+  pairing_daily_call_limit: 600
+  # An unusable answer is re-asked at most this many times, never every run.
+  pairing_max_attempts: 2
+  # An exclusive answer is re-checked once after this long, when a
+  # display-language peer has arrived since. English coverage lags the wire.
+  pairing_recheck_hours: 6
+  # The lane serves ONLY decisions made by this policy. The reader's
+  # exclusivity_policy_id must match it, and boot fails if it is malformed.
+  pairing_policy_id: pairing-json-v1
+  # A reasoning model spends the completion budget on reasoning first.
+  reasoning_effort: minimal
+  pairing_output_tokens: 64
+  # Settlement is clamped to the reservation plus this much.
+  settle_overrun_tolerance_usd: 0.05
+  # How many 100-row pages of the pairing window the ingest will read back.
+  corpus_readback_max_pages: 40
+  cache_ttl_days: 30
+  # There is deliberately no drop value. A failed translation shows the
+  # original, marked, and never removes the story from the feed.
+  on_failure: show_original_marked
   targets: [en, zh]
   max_items_per_language: 25
   max_characters_per_language: 2000
@@ -342,6 +384,27 @@ translation:
   project_id_env: GOOGLE_CLOUD_PROJECT_ID
   supabase_url_env: NEWS_CURATOR_SUPABASE_URL
   supabase_service_role_key_env: NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY
+
+# ---------------------------------------------------------------------------
+# Reading-surface language policy. Phase 1 is English direction only: the flip
+# logic stays in the design, so turning the Chinese site on later is this
+# config plus a translation run, never a redesign.
+# ---------------------------------------------------------------------------
+language:
+  default_display: en
+  other_lane_enabled: true
+  exclusive_category_id: only-other-language-press
+
+reader:
+  chinese_site_mode_enabled: false
+
+# Cross-language same-event grouping (tier 1). Every value is its own key here;
+# nothing reads the trend block, which measures a different thing.
+grouping:
+  # Only the exact pre-filter survives here (same canonical URL or identical
+  # normalized title). The judgement call belongs to the model, and its window
+  # is translation.pairing_window_hours.
+  cross_language_enabled: true
 
 # ---------------------------------------------------------------------------
 # The newsletter lane. Reads a dedicated newsletter-only Gmail account through
