@@ -303,3 +303,74 @@ def test_the_spend_and_decision_rpcs_are_service_role_only(db):
                        "public.m2_read_exclusivity_decisions(array[]::text[], 'en', 'pairing-json-v1')"):
         denied = _sql(db, f"set role authenticated; select {expression};", check=False)
         assert denied.returncode != 0 and 'permission denied' in denied.stderr.lower()
+
+
+def test_a_recheck_moves_exclusive_to_matched_once_and_the_lane_follows(db):
+    """The whole point of the recheck: it must be able to CHANGE the answer."""
+    zh_url = 'https://example.test/recheck-zh'
+    en_url = 'https://example.test/recheck-en'
+    zh_story, en_story = _story_id(zh_url), _story_id(en_url)
+    _ingest(db, [_row(zh_url), _row(en_url, language='en', title='The English peer arrives later')])
+    _decide(db, zh_story, 'exclusive')
+    before = _candidates(db, "public.m2_retained_candidates_language_exclusive("
+                             f"'en',null,null,null,100,{_quote(POLICY)})")
+    assert zh_story in {row['story_id'] for row in before}
+
+    flipped = _spend(db, f"public.m2_recheck_exclusivity_decision({_quote(zh_story)}, 'en', "
+                         f"{_quote(POLICY)}, 'matched', {_quote(en_story)})")
+    assert flipped['outcome'] == 'matched' and flipped['match_story_id'] == en_story
+    assert flipped['rechecked_at'] is not None
+    after = _candidates(db, "public.m2_retained_candidates_language_exclusive("
+                            f"'en',null,null,null,100,{_quote(POLICY)})")
+    assert zh_story not in {row['story_id'] for row in after}
+
+
+def test_a_second_recheck_is_refused_and_returns_what_is_stored(db):
+    zh_url = 'https://example.test/recheck-twice'
+    other_url = 'https://example.test/recheck-twice-peer'
+    zh_story, other = _story_id(zh_url), _story_id(other_url)
+    _ingest(db, [_row(zh_url), _row(other_url, language='en', title='Another English story')])
+    _decide(db, zh_story, 'exclusive')
+    first = _spend(db, f"public.m2_recheck_exclusivity_decision({_quote(zh_story)}, 'en', "
+                       f"{_quote(POLICY)}, 'exclusive', null)")
+    assert first['rechecked_at'] is not None and first['outcome'] == 'exclusive'
+    second = _spend(db, f"public.m2_recheck_exclusivity_decision({_quote(zh_story)}, 'en', "
+                        f"{_quote(POLICY)}, 'matched', {_quote(other)})")
+    # Refused: the stored answer is returned unchanged, so the caller cannot act
+    # on a write that did not happen.
+    assert second['outcome'] == 'exclusive' and second['match_story_id'] is None
+    assert second['rechecked_at'] == first['rechecked_at']
+
+
+def test_the_lane_refuses_a_null_policy_id(db):
+    denied = _sql(db, "set role service_role;"
+                      "select public.m2_retained_candidates_language_exclusive('en',null,null,null,10,null);",
+                  check=False)
+    assert denied.returncode != 0 and 'invalid policy id' in denied.stderr
+
+
+def test_release_and_settle_land_on_the_day_they_are_given(db):
+    yesterday = '2026-09-14'
+    reserved = _spend(db, "public.m2_reserve_translation_spend(0.002, 100)")
+    assert reserved['status'] == 'reserved' and reserved['scope_key']
+    # A reservation made yesterday is released against yesterday, not today.
+    _spend(db, f"public.m2_settle_translation_spend(0, 0.002, {_quote(yesterday)})")
+    released = _spend(db, f"public.m2_release_translation_spend(0.002, {_quote(yesterday)})")
+    assert released['scope_key'] == yesterday
+
+
+def test_release_refuses_to_report_success_on_a_missing_day(db):
+    denied = _sql(db, "set role service_role;"
+                      "set request.jwt.claims = '{\"role\":\"service_role\"}';"
+                      "select public.m2_release_translation_spend(0.001, '2001-01-01');", check=False)
+    assert denied.returncode != 0 and 'found no day row' in denied.stderr
+
+
+def test_settlement_is_clamped_to_the_reservation_plus_tolerance(db):
+    reserved = _spend(db, "public.m2_reserve_translation_spend(0.004, 100)")
+    before = _spend(db, "public.m2_read_translation_spend()")
+    outcome = _spend(db, f"public.m2_settle_translation_spend(0.004, 5.0, {_quote(reserved['scope_key'])}, 0.05)")
+    assert outcome['overrun'] is True
+    assert float(outcome['usd_settled_recorded']) == pytest.approx(0.054)
+    after = _spend(db, "public.m2_read_translation_spend()")
+    assert float(after['usd_settled']) - float(before['usd_settled']) == pytest.approx(0.054)
