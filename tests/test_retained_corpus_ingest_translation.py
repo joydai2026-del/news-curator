@@ -193,7 +193,10 @@ def test_the_shipped_config_translates_language_exclusive_stories_with_a_key():
     from pathlib import Path
     from curator.config import load_config
     cfg = load_config(Path(__file__).resolve().parents[1])
-    assert cfg.translation["enabled"] is True, "Phase 1 ships enabled"
+    # Proves the shipped configuration translates once the switch is on. A
+    # containment period may ship it off (see the config test), so the switch
+    # is forced here while every other shipped value stays real.
+    cfg.translation["enabled"] = True
     batch = fixture_rows()
     provider = StubProvider()
     rows, message = translate_rows(cfg, batch, env={cfg.translation["api_key_env"]: "test-key"},

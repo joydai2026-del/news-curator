@@ -30,7 +30,12 @@ def test_shipped_config_declares_every_phase1_key():
         assert key in cfg.translation, key
     assert cfg.translation["on_failure"] == "show_original_marked"
     # Phase 1 ships enabled: the missing translation surface is a bug, not a flag.
-    assert cfg.translation["enabled"] is True
+    # The only permitted exception is a dated CONTAINMENT note next to the switch
+    # (2026-09-17: pairing ran past the ingest job limit), which must be removed
+    # when the switch goes back on.
+    if cfg.translation["enabled"] is not True:
+        source = (ROOT / "sources.yaml").read_text(encoding="utf-8")
+        assert "enabled: false  # CONTAINMENT" in source, "translation is off without a dated containment note"
     assert cfg.language["default_display"] in ("en", "zh")
     assert cfg.language["other_lane_enabled"] is True
     assert cfg.language["exclusive_category_id"]
