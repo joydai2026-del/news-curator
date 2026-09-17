@@ -26,7 +26,7 @@ def test_shipped_config_declares_every_phase1_key():
                 "characters_per_token", "max_output_tokens_per_story", "cache_ttl_days", "on_failure",
                 "pairing_window_hours", "pairing_max_context_titles", "pairing_daily_call_limit",
                 "pairing_max_attempts", "pairing_recheck_hours", "pairing_policy_id",
-                "reasoning_effort"):
+                "reasoning_effort", "pairing_max_calls_per_run", "run_time_budget_seconds"):
         assert key in cfg.translation, key
     assert cfg.translation["on_failure"] == "show_original_marked"
     # Phase 1 ships enabled: the missing translation surface is a bug, not a flag.
@@ -72,6 +72,10 @@ def test_shipped_config_declares_every_phase1_key():
     lambda raw: raw["translation"].__setitem__("pairing_policy_id", ""),
     lambda raw: raw["translation"].__setitem__("pairing_policy_id", "not a policy id"),
     lambda raw: raw["translation"].__setitem__("reasoning_effort", "extreme"),
+    lambda raw: raw["translation"].__setitem__("pairing_max_calls_per_run", -1),
+    lambda raw: raw["translation"].__setitem__("pairing_max_calls_per_run", 501),
+    lambda raw: raw["translation"].__setitem__("run_time_budget_seconds", 29),
+    lambda raw: raw["translation"].__setitem__("run_time_budget_seconds", 781),
 ])
 def test_out_of_range_values_fail_the_boot(tmp_path, mutation):
     with pytest.raises(ConfigError):

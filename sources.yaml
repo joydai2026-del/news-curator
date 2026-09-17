@@ -357,6 +357,16 @@ translation:
   settle_overrun_tolerance_usd: 0.05
   # How many 100-row pages of the pairing window the ingest will read back.
   corpus_readback_max_pages: 120
+  # ONE RUN's share of the pairing work. A backlog of hundreds of undecided
+  # stories is worked through a run at a time, newest first, instead of running
+  # the hourly job past its timeout (2026-09-17: it was cancelled at 14 minutes
+  # and the corpus write went with it). Every decision made is persisted before
+  # the run stops, so the next run resumes rather than restarting.
+  pairing_max_calls_per_run: 40
+  # Wall-clock budget for the pairing pass. Must stay below the ingest job's
+  # timeout-minutes minus checkout and install; tests/test_workflow_contract.py
+  # asserts it against .github/workflows/retained-corpus-ingest.yml.
+  run_time_budget_seconds: 300
   cache_ttl_days: 30
   # There is deliberately no drop value. A failed translation shows the
   # original, marked, and never removes the story from the feed.
