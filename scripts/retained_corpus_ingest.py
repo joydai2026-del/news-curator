@@ -337,7 +337,11 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
             cost=PairingCost(
                 input_cost_per_million_tokens_usd=policy.input_cost_per_million_tokens_usd,
                 output_cost_per_million_tokens_usd=policy.output_cost_per_million_tokens_usd,
-                characters_per_token=policy.characters_per_token))
+                characters_per_token=policy.characters_per_token,
+                # The SAME key the request cap uses. Matching defaults are not
+                # the same thing as one source of truth: raise the cap in config
+                # and the reservation must move with it.
+                output_allowance_tokens=int(translation.get('pairing_output_tokens', 64))))
     except TRANSLATION_TRANSPORT_ERRORS as error:
         print(f'::warning::pairing unavailable: {type(error).__name__}', file=sys.stderr)
         return rows, f'pairing unavailable: {type(error).__name__}'

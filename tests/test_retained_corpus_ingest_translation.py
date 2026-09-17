@@ -58,7 +58,7 @@ class StubPairing:
 def config(**overrides):
     translation = {"enabled": True, "provider": "openai", "model": "gpt-5-mini",
                    "pairing_window_hours": 48, "pairing_max_context_titles": 60,
-                   "pairing_daily_call_limit": 600,
+                   "pairing_daily_call_limit": 600, "pairing_output_tokens": 64,
                    "api_key_env": KEY_ENV, "run_character_limit": 2000,
                    "day_character_limit": 15000, "month_character_limit": 450000,
                    "daily_cost_limit_usd": 0.5, "cost_per_1k_characters_usd": 0.002,
@@ -535,3 +535,45 @@ def test_a_truncated_read_back_names_the_cause_it_actually_had(capsys):
     outage = capsys.readouterr().err
     assert '::warning::translation skipped: corpus read-back failed (HTTPError)' in outage
     assert 'corpus_readback_max_pages' not in outage
+
+
+def test_the_pairing_reservation_uses_the_configured_output_cap_not_a_default():
+    """Matching defaults are not one source of truth: raise the cap in config
+    and the reservation must move with it."""
+    from curator.translation.pairing import PairingCost
+
+    captured = {}
+    real = None
+
+    class CapturingPairing(StubPairing):
+        def decide(self, *, story, context):
+            return super().decide(story=story, context=context)
+
+    class CapturingLedger:
+        def __init__(self):
+            self.reserved = []
+
+        def reserve_call(self, amount_usd):
+            self.reserved.append(amount_usd)
+            return True
+
+        def settle_call(self, reserved_usd, settled_usd):
+            captured['settled'] = settled_usd
+
+    rows = fixture_rows()
+    ledger = CapturingLedger()
+    cfg = config(pairing_output_tokens=256)
+    translate_rows(cfg, rows, env={KEY_ENV: "test-key"}, now=NOW,
+                   store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider(),
+                   pairing_provider=CapturingPairing(answers={}), pairing_ledger=ledger)
+    assert ledger.reserved, "a pairing call was reserved"
+    # Recompute what the reservation SHOULD be at 256 tokens, and at 64.
+    base = dict(input_cost_per_million_tokens_usd=0.25, output_cost_per_million_tokens_usd=2.0,
+                characters_per_token=4)
+    at_256 = PairingCost(output_allowance_tokens=256, **base)
+    at_64 = PairingCost(output_allowance_tokens=64, **base)
+    # The reservation must carry the 256-token allowance, which is strictly
+    # larger than the 64-token one, so the two are distinguishable.
+    assert at_256.cost_usd(0, 256) > at_64.cost_usd(0, 64)
+    smallest_256 = at_256.cost_usd(0, 256)
+    assert min(ledger.reserved) >= smallest_256, (min(ledger.reserved), smallest_256)

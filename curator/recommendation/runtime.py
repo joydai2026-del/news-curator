@@ -91,7 +91,9 @@ def build_application(*, environ=None, policy_path: str | None = None):
         display_language=policy.get("display_language", "en"),
         exclusive_category_id=policy.get("exclusive_category_id", ""),
         other_lane_enabled=policy.get("other_lane_enabled", True),
-        exclusivity_policy_id=policy.get("exclusivity_policy_id") or "pairing-json-v1")
+        # Required, not defaulted: an empty value used to become a silent
+        # fallback, which made ServicePolicy's boot validation unreachable.
+        exclusivity_policy_id=_required(policy, "exclusivity_policy_id"))
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,

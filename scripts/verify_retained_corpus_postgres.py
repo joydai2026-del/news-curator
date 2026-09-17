@@ -29,10 +29,15 @@ def main() -> int:
     args = parser.parse_args()
     rows = json.loads(args.artifact.read_text(encoding="utf-8"))["rows"]
     # One source of truth: the same key the ingest and the reader use.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root))
     from curator.config import load_config
-    policy_id = str((load_config(Path.cwd()).translation or {}).get("pairing_policy_id")
+    policy_id = str((load_config(repo_root).translation or {}).get("pairing_policy_id")
                     or "pairing-json-v1")
+    # The lane check must fail on an EMPTY lane. bool_and over zero rows is
+    # null, and coalescing that to true is a check that can never go red, so a
+    # decision is seeded first and the row count is asserted.
+    lane_story = next(row["story_id"] for row in rows if row["language"] != "en")
     english = next(re.search(r"[A-Za-z]{4,}", row["title"]).group(0) for row in rows if re.search(r"[A-Za-z]{4,}", row["title"]))
     cjk = next(re.search(r"[\u4e00-\u9fff]{2,}", row["title"]).group(0) for row in rows if re.search(r"[\u4e00-\u9fff]{2,}", row["title"]))
     # Controlled protocol transformations of one real captured publisher row.
@@ -60,7 +65,8 @@ def main() -> int:
         # M2.1 Phase 1: the reader needs the translation overlay and the
         # language-exclusive corpus to come back from the RPCs, not from a file.
         "select bool_and(value ? 'title_translations' and value ? 'summary_translations' and value ? 'event_group_id') as translation_fields_returned from public.m2_retained_candidates(null,null,null,null,100) as candidates(value);",
-        f"select coalesce(bool_and((value->>'language') <> 'en'), true) as exclusive_rows_are_other_language from public.m2_retained_candidates_language_exclusive('en',null,null,null,100,'{text_literal(policy_id)}') as candidates(value);",
+        f"select public.m2_record_exclusivity_decision('{text_literal(lane_story)}','en','{text_literal(policy_id)}','verifier','exclusive',null) is not null as lane_decision_seeded;",
+        f"select count(*) > 0 and bool_and((value->>'language') <> 'en') as exclusive_rows_are_other_language from public.m2_retained_candidates_language_exclusive('en',null,null,null,100,'{text_literal(policy_id)}') as candidates(value);",
     )
     category_sql = (
         "begin;",
@@ -77,7 +83,7 @@ def main() -> int:
     )
     sql = "\n".join(category_sql if args.category_regression_only else standard_sql)
     result = subprocess.run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-h", args.host, args.database], input=sql, text=True, capture_output=True)
-    expected = 7 if args.category_regression_only else 6
+    expected = 7 if args.category_regression_only else 7
     if result.returncode or result.stdout.count(" t\n") < expected:
         raise SystemExit("retained corpus PostgreSQL verification failed")
     print("retained corpus PostgreSQL verification passed")

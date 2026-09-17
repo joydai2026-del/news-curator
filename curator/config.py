@@ -761,8 +761,10 @@ def load_sources(path: Path) -> dict[str, Any]:
                                   or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", policy_id)):
         raise ConfigError(f"{path.name}: 'translation.pairing_policy_id' must be a policy id.")
     effort = translation.get("reasoning_effort")
-    if effort is not None and effort not in ("minimal", "low", "medium", "high"):
-        raise ConfigError(f"{path.name}: 'translation.reasoning_effort' must be minimal, low, medium or high.")
+    if effort is not None and effort not in ("none", "minimal", "low", "medium", "high"):
+        raise ConfigError(
+            f"{path.name}: 'translation.reasoning_effort' must be none, minimal, low, medium or high "
+            "('none' omits the parameter for providers that reject it).")
     # A failed translation shows the original, marked. There is no drop value.
     on_failure = translation.get("on_failure")
     if on_failure is not None and on_failure not in ("show_original_marked", "show_original_silent"):

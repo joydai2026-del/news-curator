@@ -32,7 +32,11 @@ _ORIGIN = re.compile(r"^https://[a-z0-9.-]{1,253}(?::[0-9]{1,5})?$")
 _PATH = re.compile(r"^/[A-Za-z0-9._~/-]{0,200}$")
 _LANGUAGE_NAMES = {"en": "English", "zh": "Simplified Chinese"}
 # The same set this repo's ranker allows (curator/recommendation/async_provider).
-REASONING_EFFORTS = ("minimal", "low", "medium", "high")
+# `none` is an explicit OMIT, for a provider that rejects the parameter. It is a
+# value rather than an absent key so the intent is visible in config and a
+# future reader cannot mistake "not set" for "defaulted".
+REASONING_EFFORT_OMIT = "none"
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
 
 # Title and summary only. Names and numbers are preserved because a changed
 # number is the exact signal cross-language grouping relies on. The reply must
@@ -140,8 +144,8 @@ class ModelTranslationAdapter:
             "response_format": {"type": "json_object"},
             # The budget reserves as if this cap is enforced, so it is sent.
             self._config.output_cap_field: self._config.max_output_tokens,
-            "reasoning_effort": self._config.reasoning_effort,
         }
+        self._apply_reasoning_effort(payload)
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > self._config.max_request_bytes:
             self._fail(TranslationErrorReason.INVALID_REQUEST)
@@ -220,6 +224,12 @@ class ModelTranslationAdapter:
                           and 0 <= value <= 10_000_000 else 0)
         return (values[0], values[1])
 
+    def _apply_reasoning_effort(self, payload: dict) -> None:
+        """Send the effort unless config explicitly says to omit it."""
+
+        if self._config.reasoning_effort != REASONING_EFFORT_OMIT:
+            payload["reasoning_effort"] = self._config.reasoning_effort
+
     def _load_key(self) -> str:
         try:
             key = self._api_key()
@@ -270,8 +280,8 @@ class ModelPairingAdapter:
             # Deliberately no `temperature`: the configured model family rejects
             # a non-default value, and a 400 here turns every story undecided.
             self._config.output_cap_field: self._config.pairing_output_tokens,
-            "reasoning_effort": self._config.reasoning_effort,
         }
+        self._adapter._apply_reasoning_effort(payload)
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > self._config.max_request_bytes:
             raise TranslationProviderError(self.provider_id, TranslationErrorReason.INVALID_REQUEST)

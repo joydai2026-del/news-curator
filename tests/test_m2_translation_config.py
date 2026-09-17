@@ -96,3 +96,27 @@ def test_the_service_refuses_to_boot_with_a_malformed_policy_id():
     for bad in ("", "not a policy id", None):
         with pytest.raises(ValueError):
             ServicePolicy("p", "m", "p", "t", exclusivity_policy_id=bad)
+
+
+def test_reasoning_effort_accepts_the_explicit_omit_value(tmp_path):
+    target = write_sources(tmp_path, lambda raw: raw["translation"].__setitem__("reasoning_effort", "none"))
+    assert load_sources(target)["translation"]["reasoning_effort"] == "none"
+
+
+def test_the_ranker_runtime_requires_an_exclusivity_policy_id():
+    """An empty value used to become a silent fallback, which made the
+    ServicePolicy boot check unreachable and the lane RPC refuse every
+    reader request with `invalid policy id`."""
+    from curator.recommendation.runtime import _required
+
+    for value in ({"exclusivity_policy_id": ""}, {"exclusivity_policy_id": "  "}, {}):
+        with pytest.raises(ValueError, match="exclusivity_policy_id"):
+            _required(value, "exclusivity_policy_id")
+    assert _required({"exclusivity_policy_id": "pairing-json-v1"}, "exclusivity_policy_id") == "pairing-json-v1"
+    # And the runtime really goes through it, rather than defaulting.
+    source = (ROOT / "curator/recommendation/runtime.py").read_text(encoding="utf-8")
+    assert 'exclusivity_policy_id=_required(policy, "exclusivity_policy_id")' in source
+    # The shipped policy file therefore has to carry it.
+    import yaml as _yaml
+    shipped = _yaml.safe_load((ROOT / "config/ranker-policy-r1.yaml").read_text(encoding="utf-8"))
+    assert shipped["exclusivity_policy_id"]

@@ -148,3 +148,31 @@ def test_the_pairing_call_is_the_same_endpoint_with_deterministic_decoding():
     assert sent["reasoning_effort"] == "minimal" and "reasoning" not in sent
     # Both calls must be the same shape, or one of them is untested in practice.
     assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens", "reasoning_effort"}
+
+
+def test_reasoning_effort_none_omits_the_parameter_entirely():
+    """Some providers reject the field outright; `none` is the explicit opt-out."""
+    config = ModelTranslationConfig(provider_id="openai", model="gpt-5-mini", reasoning_effort="none")
+    adapter, transport = build(config=config)
+    adapter.translate(translation_request(zh_item()))
+    sent = json.loads(transport.calls[0]["body"])
+    assert "reasoning_effort" not in sent and "reasoning" not in sent
+    assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens"}
+
+    body = json.loads(json.dumps(RECORDED))
+    body["choices"][0]["message"]["content"] = json.dumps({"match_index": None})
+    pairing_transport = RecordingTransport(body)
+    pairing = ModelPairingAdapter(config=config, transport=pairing_transport, api_key=lambda: "test-key")
+    from curator.grouping import GroupingCandidate
+    story = GroupingCandidate(story_id="story:a", language="zh", title="t", summary="s", published_at=NOW)
+    context = [GroupingCandidate(story_id="story:b", language="en", title="h", summary="b", published_at=NOW)]
+    pairing.decide(story=story, context=context)
+    pairing_sent = json.loads(pairing_transport.calls[0]["body"])
+    assert "reasoning_effort" not in pairing_sent
+
+
+def test_a_configured_effort_is_sent_on_both_calls():
+    config = ModelTranslationConfig(provider_id="openai", model="gpt-5-mini", reasoning_effort="low")
+    adapter, transport = build(config=config)
+    adapter.translate(translation_request(zh_item()))
+    assert json.loads(transport.calls[0]["body"])["reasoning_effort"] == "low"
