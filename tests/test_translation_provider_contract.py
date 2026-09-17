@@ -77,11 +77,12 @@ def test_the_request_is_exactly_the_documented_chat_completions_call():
     assert call["credential"].header_name == "Authorization"
     assert "test-key" not in call["url"] and b"test-key" not in call["body"]
     sent = json.loads(call["body"])
-    assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens", "reasoning"}
+    assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens", "reasoning_effort"}
     assert sent["max_completion_tokens"] == 1000
-    # A reasoning model spends the completion budget on reasoning first, so the
-    # effort is stated explicitly, exactly as this repo's ranker already does.
-    assert sent["reasoning"] == {"effort": "minimal"}
+    # Chat Completions takes a TOP-LEVEL STRING. The object form belongs to the
+    # /responses endpoint and is rejected here as an unknown body argument.
+    assert sent["reasoning_effort"] == "minimal"
+    assert "reasoning" not in sent
     # No temperature on either call: the configured model family rejects a
     # non-default value, and a 400 would make the whole feature silently dead.
     assert "temperature" not in sent
@@ -144,6 +145,6 @@ def test_the_pairing_call_is_the_same_endpoint_with_deterministic_decoding():
     assert sent["response_format"] == {"type": "json_object"}
     assert sent["model"] == "gpt-5-mini"
     assert sent["max_completion_tokens"] == 64
-    assert sent["reasoning"] == {"effort": "minimal"}
+    assert sent["reasoning_effort"] == "minimal" and "reasoning" not in sent
     # Both calls must be the same shape, or one of them is untested in practice.
-    assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens", "reasoning"}
+    assert set(sent) == {"model", "messages", "response_format", "max_completion_tokens", "reasoning_effort"}

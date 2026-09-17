@@ -378,3 +378,33 @@ def test_settlement_is_clamped_to_the_reservation_plus_tolerance(db):
     assert float(outcome['usd_settled_recorded']) == pytest.approx(0.054)
     after = _spend(db, "public.m2_read_translation_spend()")
     assert float(after['usd_settled']) - float(before['usd_settled']) == pytest.approx(0.054)
+
+
+def test_a_failed_recheck_stamps_that_we_looked_without_changing_the_answer(db):
+    """The bound must hold on the failure path, or one story costs 504 calls."""
+    url = 'https://example.test/recheck-failed'
+    story = _story_id(url)
+    _ingest(db, [_row(url)])
+    _decide(db, story, 'exclusive')
+    stamped = _spend(db, f"public.m2_recheck_exclusivity_decision({_quote(story)}, 'en', "
+                         f"{_quote(POLICY)}, 'undecided', null)")
+    assert stamped['outcome'] == 'exclusive', "a failed re-check does not change the answer"
+    assert stamped['rechecked_at'] is not None, "but it does record that we looked"
+    # And a second attempt is refused, so the bound is one.
+    other = _story_id('https://example.test/recheck-failed-peer')
+    again = _spend(db, f"public.m2_recheck_exclusivity_decision({_quote(story)}, 'en', "
+                       f"{_quote(POLICY)}, 'matched', {_quote(other)})")
+    assert again['rechecked_at'] == stamped['rechecked_at']
+    assert again['outcome'] == 'exclusive'
+
+
+def test_the_superseded_function_overloads_are_gone(db):
+    """A half-deployed environment must not keep calling the old behaviour."""
+    result = _sql(db, "select proname, pg_get_function_identity_arguments(oid) from pg_proc "
+                      "where proname in ('m2_settle_translation_spend','m2_release_translation_spend',"
+                      "'m2_mark_exclusivity_rechecked','m2_record_exclusivity_decision',"
+                      "'m2_read_exclusivity_decisions') order by proname;")
+    signatures = set(result.stdout.strip().splitlines())
+    assert 'm2_mark_exclusivity_rechecked|text, text, text' not in signatures
+    assert 'm2_release_translation_spend|numeric' not in signatures
+    assert 'm2_settle_translation_spend|numeric, numeric, text' not in signatures

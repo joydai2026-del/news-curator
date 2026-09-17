@@ -248,12 +248,16 @@ begin
   if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' then
     raise exception 'service role required' using errcode = '42501';
   end if;
-  if p_outcome not in ('exclusive', 'matched') then
+  if p_outcome not in ('exclusive', 'matched', 'undecided') then
     raise exception 'invalid recheck outcome';
   end if;
+  -- 'undecided' means the re-check was ATTEMPTED and produced no usable answer.
+  -- It still stamps rechecked_at and leaves the decision exclusive, because the
+  -- bound must hold on the failure path too: otherwise one story whose provider
+  -- keeps failing is re-asked on every run for the rest of the window.
   update translation_private.exclusivity_decisions
     set rechecked_at = now(),
-        outcome = p_outcome,
+        outcome = case when p_outcome = 'undecided' then outcome else p_outcome end,
         match_story_id = case when p_outcome = 'matched' then p_match_story_id else null end,
         decided_at = case when p_outcome = 'matched' then now() else decided_at end
     where story_id = p_story_id and display_language = p_display_language

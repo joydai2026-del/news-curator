@@ -7,6 +7,7 @@ import copy
 import json
 import re
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -27,6 +28,11 @@ def main() -> int:
     parser.add_argument("--category-regression-only", action="store_true")
     args = parser.parse_args()
     rows = json.loads(args.artifact.read_text(encoding="utf-8"))["rows"]
+    # One source of truth: the same key the ingest and the reader use.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from curator.config import load_config
+    policy_id = str((load_config(Path.cwd()).translation or {}).get("pairing_policy_id")
+                    or "pairing-json-v1")
     english = next(re.search(r"[A-Za-z]{4,}", row["title"]).group(0) for row in rows if re.search(r"[A-Za-z]{4,}", row["title"]))
     cjk = next(re.search(r"[\u4e00-\u9fff]{2,}", row["title"]).group(0) for row in rows if re.search(r"[\u4e00-\u9fff]{2,}", row["title"]))
     # Controlled protocol transformations of one real captured publisher row.
@@ -54,7 +60,7 @@ def main() -> int:
         # M2.1 Phase 1: the reader needs the translation overlay and the
         # language-exclusive corpus to come back from the RPCs, not from a file.
         "select bool_and(value ? 'title_translations' and value ? 'summary_translations' and value ? 'event_group_id') as translation_fields_returned from public.m2_retained_candidates(null,null,null,null,100) as candidates(value);",
-        "select coalesce(bool_and((value->>'language') <> 'en'), true) as exclusive_rows_are_other_language from public.m2_retained_candidates_language_exclusive('en',null,null,null,100,'pairing-json-v1') as candidates(value);",
+        f"select coalesce(bool_and((value->>'language') <> 'en'), true) as exclusive_rows_are_other_language from public.m2_retained_candidates_language_exclusive('en',null,null,null,100,'{text_literal(policy_id)}') as candidates(value);",
     )
     category_sql = (
         "begin;",

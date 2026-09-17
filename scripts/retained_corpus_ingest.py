@@ -23,7 +23,7 @@ from curator.translation.base import TranslationPrivacyError, TranslationProvide
 from curator.translation.ingest import IngestTranslationPolicy, translate_exclusive_stories
 from curator.translation.pairing import (ExclusivityDecision, PairingCost, PairingPolicy,
                                          decide_exclusivity)
-from curator.translation.store import TranslationStoreError
+from curator.translation.store import StoreErrorReason, TranslationStoreError
 
 
 # Everything remote that translation depends on. An outage in any of them is a
@@ -98,7 +98,10 @@ def _rpc(url, key, name, body, *, timeout=30):
                                      headers=_service_headers(key), method='POST')
     with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as response:
         if response.status != 200:
-            raise ValueError(f'{name} failed')
+            # A typed store error, not a bare ValueError: the ingest boundary
+            # deliberately does NOT catch ValueError (that is how our own bugs
+            # stay loud), so a non-200 here would otherwise kill the whole run.
+            raise TranslationStoreError(StoreErrorReason.UNAVAILABLE)
         return json.loads(response.read() or b'null')
 
 
@@ -274,7 +277,7 @@ def read_corpus_window(url, key, *, policy, now, pages: int = 40):
 def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
                    pairing_provider=None, decisions=None, truncated=False, on_decision=None,
                    spend_ledger=None, pairing_ledger=None, persist_decision=None,
-                   recheck_decision=None):
+                   recheck_decision=None, truncation_reason='page_ceiling'):
     """Decide exclusivity with the model, then translate what it ruled exclusive.
 
     Returns ``(rows, message)``. A missing credential, a switched-off feature, a
@@ -301,9 +304,15 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
         # Exclusivity is unproven when the window was not fully read, and a
         # wrong exclusivity claim spends money on a story already covered.
         # Silent-off for ever if the corpus outgrows the ceiling, so this is a
-        # warning, not a plain log line.
-        print('::warning::translation skipped: corpus read-back truncated '
-              '(raise translation.corpus_readback_max_pages)', file=sys.stderr)
+        # warning, not a plain log line. Name the ACTUAL cause: telling an
+        # operator to raise a page limit during a database outage wastes the
+        # one signal this path has.
+        if truncation_reason == 'page_ceiling':
+            print('::warning::translation skipped: corpus read-back hit the page ceiling '
+                  '(raise translation.corpus_readback_max_pages)', file=sys.stderr)
+        else:
+            print(f'::warning::translation skipped: corpus read-back failed ({truncation_reason})',
+                  file=sys.stderr)
         return rows, 'translation skipped: corpus read-back truncated'
 
     batch = tuple(_pairing_candidate(row) for row in rows)
@@ -341,7 +350,9 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
     stories = [(row.story_id, row.item) for row in rows if row.story_id in exclusive]
     if not stories:
         return rows, (f'translation skipped: no language-exclusive stories '
-                      f'(pairing calls={decision.calls} undecided={len(decision.undecided)})')
+                      f'(pairing calls={decision.calls} undecided={len(decision.undecided)} '
+                      f'budget_refusals={decision.budget_refusals} '
+                      f'persistence_failures={decision.persistence_failures})')
     try:
         result = translate_exclusive_stories(
             stories, policy=policy, store=store, provider=provider,
@@ -354,7 +365,9 @@ def translate_rows(cfg, rows, *, env, now, store=None, provider=None, corpus=(),
     translated = result.counters.get('translated', 0) + result.counters.get('cache_hit', 0)
     return (apply_translations(rows, result.overlays),
             f'translated={translated} untranslated_shown={result.untranslated_shown} '
-            f'pairing_calls={decision.calls} undecided={len(decision.undecided)}')
+            f'pairing_calls={decision.calls} undecided={len(decision.undecided)} '
+            f'budget_refusals={decision.budget_refusals} '
+            f'persistence_failures={decision.persistence_failures}')
 
 
 def _pairing_candidate(row):
@@ -430,6 +443,7 @@ def main() -> int:
     retained = retain(source_items, categories=cfg.categories, observed_at=snap.generated_at,
                       grouping=grouping_policy)
     corpus, truncated, decisions = (), False, {}
+    truncation_reason = 'page_ceiling'
     url = os.environ.get('NEWS_CURATOR_SUPABASE_URL', '')
     key = os.environ.get('NEWS_CURATOR_SUPABASE_SECRET_KEY', '')
     if a.command == 'ingest' and url and key:
@@ -444,11 +458,12 @@ def main() -> int:
                 policy_id=pairing_policy.policy_id)
             print(f'pairing corpus rows={len(corpus)} truncated={truncated} '
                   f'decisions={len(decisions)}', file=sys.stderr)
-        except (urllib.error.URLError, ValueError, json.JSONDecodeError) as error:
+        except (urllib.error.URLError, TranslationStoreError, ValueError, json.JSONDecodeError) as error:
             # Without the window we cannot prove exclusivity, so this run does
             # not pay for translation. It is a skip, never a wrong claim.
             truncated = True
-            print(f'pairing corpus unavailable: {type(error).__name__}', file=sys.stderr)
+            truncation_reason = type(error).__name__
+            print(f'pairing corpus unavailable: {truncation_reason}', file=sys.stderr)
     recorded = []
     live = a.command == 'ingest' and url and key
     translation_cfg = cfg.translation or {}
@@ -469,7 +484,7 @@ def main() -> int:
         cfg, retained, env=os.environ, now=snap.generated_at, corpus=corpus,
         decisions=decisions, truncated=truncated, on_decision=recorded.append,
         spend_ledger=spend_ledger, pairing_ledger=pairing_ledger, persist_decision=persist,
-        recheck_decision=recheck)
+        recheck_decision=recheck, truncation_reason=truncation_reason)
     print(translation_message, file=sys.stderr)
     if recorded:
         print(f'exclusivity decisions persisted={len(recorded)}', file=sys.stderr)

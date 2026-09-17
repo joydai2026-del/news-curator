@@ -9,6 +9,7 @@ import pytest
 
 from curator.grouping import GroupingCandidate, GroupingPolicy, event_group_id_for, exact_matches
 from curator.translation.pairing import (
+    PairingCost,
     EXCLUSIVE,
     MATCH,
     UNDECIDED,
@@ -270,7 +271,8 @@ def test_a_programmer_error_in_the_provider_is_not_swallowed_as_undecided():
 def test_a_decision_that_cannot_be_persisted_is_treated_as_undecided():
     """An unpersisted answer must not drive money or visibility this run."""
     def failing_persist(decision):
-        raise RuntimeError("supabase down")
+        from curator.translation import StoreErrorReason, TranslationStoreError
+        raise TranslationStoreError(StoreErrorReason.UNAVAILABLE)
 
     result = decide_exclusivity([ZH], [EN_MATCH], display_language="en", policy=policy(),
                                 provider=StubModel([(None, 10, 2)]), now=NOW, persist=failing_persist)
@@ -397,7 +399,10 @@ class DecisionStore:
         current = self.rows.get(self.key(decision))
         if current is None or current.outcome != EXCLUSIVE or current.rechecked_at is not None:
             return current
-        stored = replace(current, outcome=decision.outcome, match_story_id=decision.match_story_id,
+        # 'undecided' stamps that we looked and leaves the decision exclusive.
+        outcome = current.outcome if decision.outcome == UNDECIDED else decision.outcome
+        match = decision.match_story_id if decision.outcome == MATCH else None
+        stored = replace(current, outcome=outcome, match_story_id=match,
                          rechecked_at=decision.rechecked_at or NOW)
         self.rows[self.key(decision)] = stored
         return stored
@@ -498,3 +503,52 @@ def test_a_recheck_the_store_refuses_leaves_the_stored_answer_in_place():
                                 now=NOW, already_decided=store.snapshot(),
                                 persist=store.record, recheck=store.recheck)
     assert result.exclusive_story_ids == ("story:zh1",), "the persisted answer wins"
+
+
+def test_a_failing_recheck_is_still_bounded_to_one_attempt():
+    """Round 5 bounded the SUCCESS path only: a provider that keeps failing was
+    re-asked every run, 504 paid calls for one story over the window."""
+    from curator.translation import TranslationErrorReason, TranslationProviderError
+    store = DecisionStore()
+    zh = story("story:zh1", "zh", "英伟达发布新芯片", hours=1)
+    early_peer = story("story:en9", "en", "An unrelated English story", hours=1)
+    late_peer = story("story:en1", "en", "Nvidia announces a new chip", hours=-3)
+    # First look succeeds (exclusive); every later call fails.
+    model = StubModel([(None, 10, 2)] +
+                      [TranslationProviderError("openai", TranslationErrorReason.TRANSPORT_FAILURE)] * 200)
+    ledger = StubLedger()
+    for hour in range(48):
+        corpus = [early_peer] + ([late_peer] if hour >= 3 else [])
+        decide_exclusivity([zh], corpus, display_language="en", policy=policy(recheck_hours=6),
+                           provider=model, now=NOW + timedelta(hours=hour),
+                           already_decided=store.snapshot(), persist=store.record,
+                           recheck=store.recheck, ledger=ledger)
+    # One first decision, one failed re-check attempt. Not 48, and not 504.
+    assert len(model.asked) == 2, len(model.asked)
+    assert len(ledger.reserved) == 2
+    stored = store.rows[("story:zh1", "en", "pairing-json-v1")]
+    assert stored.rechecked_at is not None, "the failed re-check still stamps that we looked"
+    assert stored.outcome == EXCLUSIVE, "a failure does not change the answer"
+
+
+def test_a_recheck_that_returns_an_unusable_index_is_also_bounded():
+    store = DecisionStore()
+    zh = story("story:zh1", "zh", "英伟达发布新芯片", hours=1)
+    early_peer = story("story:en9", "en", "An unrelated English story", hours=1)
+    late_peer = story("story:en1", "en", "Nvidia announces a new chip", hours=-3)
+    model = StubModel([(None, 10, 2)] + [(99, 10, 2)] * 200)
+    for hour in range(24):
+        corpus = [early_peer] + ([late_peer] if hour >= 3 else [])
+        decide_exclusivity([zh], corpus, display_language="en", policy=policy(recheck_hours=6),
+                           provider=model, now=NOW + timedelta(hours=hour),
+                           already_decided=store.snapshot(), persist=store.record,
+                           recheck=store.recheck)
+    assert len(model.asked) == 2, len(model.asked)
+
+
+def test_the_pairing_reservation_prices_the_allowance_the_request_sends():
+    """Under-reserving is how a budget silently stops being a budget."""
+    from curator.translation.model_provider import ModelTranslationConfig
+    cost = PairingCost()
+    assert cost.output_allowance_tokens == ModelTranslationConfig(
+        provider_id="openai", model="gpt-5-mini").pairing_output_tokens

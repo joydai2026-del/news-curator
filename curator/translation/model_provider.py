@@ -63,9 +63,10 @@ class ModelTranslationConfig:
     output_cap_field: str = "max_completion_tokens"
     max_output_tokens: int = 1_000
     # A reasoning model spends the completion budget on reasoning FIRST, so a
-    # 32-token cap can return empty content and be billed for nothing. This
-    # repo's ranker already sets an explicit effort; the translation path now
-    # matches it rather than relying on the vendor default.
+    # small cap can return empty content and be billed for nothing, hence an
+    # explicit effort. NOTE the shape: /v1/chat/completions takes a TOP-LEVEL
+    # STRING `reasoning_effort`. The `reasoning: {effort}` object this repo's
+    # ranker sends belongs to /responses, a different endpoint.
     pairing_output_tokens: int = 64
     reasoning_effort: str = "minimal"
     max_output_title_chars: int = DEFAULT_MAX_TRANSLATION_OUTPUT_TITLE_CHARS
@@ -139,7 +140,7 @@ class ModelTranslationAdapter:
             "response_format": {"type": "json_object"},
             # The budget reserves as if this cap is enforced, so it is sent.
             self._config.output_cap_field: self._config.max_output_tokens,
-            "reasoning": {"effort": self._config.reasoning_effort},
+            "reasoning_effort": self._config.reasoning_effort,
         }
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > self._config.max_request_bytes:
@@ -269,7 +270,7 @@ class ModelPairingAdapter:
             # Deliberately no `temperature`: the configured model family rejects
             # a non-default value, and a 400 here turns every story undecided.
             self._config.output_cap_field: self._config.pairing_output_tokens,
-            "reasoning": {"effort": self._config.reasoning_effort},
+            "reasoning_effort": self._config.reasoning_effort,
         }
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > self._config.max_request_bytes:

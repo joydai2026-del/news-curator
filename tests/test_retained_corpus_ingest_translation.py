@@ -408,7 +408,7 @@ def test_a_decision_that_cannot_be_persisted_does_not_drive_translation():
     rows = fixture_rows()
 
     def failing_persist(decision):
-        raise ConnectionError("supabase unreachable")
+        raise TranslationStoreError(StoreErrorReason.UNAVAILABLE)
 
     provider = StubProvider()
     result, message = translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
@@ -517,11 +517,21 @@ def test_a_value_error_from_our_own_code_is_not_swallowed_as_an_outage():
                        provider=StubProvider(), pairing_provider=pairing_for(rows))
 
 
-def test_a_truncated_read_back_warns_and_names_the_config_key(capsys):
+def test_a_truncated_read_back_names_the_cause_it_actually_had(capsys):
+    """Telling an operator to raise a page limit during a database outage
+    wastes the one signal this silent-off path has."""
     rows = fixture_rows()
     translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
                    store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider(),
                    pairing_provider=StubPairing(), truncated=True)
-    captured = capsys.readouterr().err
-    assert '::warning::translation skipped: corpus read-back truncated' in captured
-    assert 'translation.corpus_readback_max_pages' in captured
+    ceiling = capsys.readouterr().err
+    assert '::warning::translation skipped: corpus read-back hit the page ceiling' in ceiling
+    assert 'translation.corpus_readback_max_pages' in ceiling
+
+    translate_rows(config(), rows, env={KEY_ENV: "test-key"}, now=NOW,
+                   store=InMemoryTranslationStore(clock=lambda: NOW), provider=StubProvider(),
+                   pairing_provider=StubPairing(), truncated=True,
+                   truncation_reason='HTTPError')
+    outage = capsys.readouterr().err
+    assert '::warning::translation skipped: corpus read-back failed (HTTPError)' in outage
+    assert 'corpus_readback_max_pages' not in outage

@@ -347,6 +347,9 @@ translation:
   # An exclusive answer is re-checked once after this long, when a
   # display-language peer has arrived since. English coverage lags the wire.
   pairing_recheck_hours: 6
+  # The lane serves ONLY decisions made by this policy. The reader's
+  # exclusivity_policy_id must match it, and boot fails if it is malformed.
+  pairing_policy_id: pairing-json-v1
   # A reasoning model spends the completion budget on reasoning first.
   reasoning_effort: minimal
   pairing_output_tokens: 64

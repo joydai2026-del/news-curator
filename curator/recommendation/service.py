@@ -80,6 +80,11 @@ class ServicePolicy:
             raise ValueError("display_language must be a supported language")
         if self.exclusive_category_id and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", self.exclusive_category_id):
             raise ValueError("exclusive_category_id must be a category id")
+        # The lane RPC refuses a malformed policy id on EVERY request, so an
+        # empty or mistyped value takes the section down for every reader.
+        if not isinstance(self.exclusivity_policy_id, str) or not re.fullmatch(
+                r"[A-Za-z0-9._-]{1,64}", self.exclusivity_policy_id):
+            raise ValueError("exclusivity_policy_id must be a policy id")
 
 
 class RankingService:

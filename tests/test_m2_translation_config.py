@@ -25,7 +25,8 @@ def test_shipped_config_declares_every_phase1_key():
                 "input_cost_per_million_tokens_usd", "output_cost_per_million_tokens_usd",
                 "characters_per_token", "max_output_tokens_per_story", "cache_ttl_days", "on_failure",
                 "pairing_window_hours", "pairing_max_context_titles", "pairing_daily_call_limit",
-                "pairing_max_attempts", "pairing_recheck_hours"):
+                "pairing_max_attempts", "pairing_recheck_hours", "pairing_policy_id",
+                "reasoning_effort"):
         assert key in cfg.translation, key
     assert cfg.translation["on_failure"] == "show_original_marked"
     # Phase 1 ships enabled: the missing translation surface is a bug, not a flag.
@@ -68,6 +69,9 @@ def test_shipped_config_declares_every_phase1_key():
     lambda raw: raw["translation"].__setitem__("pairing_daily_call_limit", 5001),
     lambda raw: raw["translation"].__setitem__("pairing_max_attempts", 0),
     lambda raw: raw["translation"].__setitem__("pairing_recheck_hours", 49),
+    lambda raw: raw["translation"].__setitem__("pairing_policy_id", ""),
+    lambda raw: raw["translation"].__setitem__("pairing_policy_id", "not a policy id"),
+    lambda raw: raw["translation"].__setitem__("reasoning_effort", "extreme"),
 ])
 def test_out_of_range_values_fail_the_boot(tmp_path, mutation):
     with pytest.raises(ConfigError):
@@ -77,3 +81,18 @@ def test_out_of_range_values_fail_the_boot(tmp_path, mutation):
 def test_no_drop_semantics_exist_anywhere_in_the_loader():
     source = (ROOT / "curator/config.py").read_text(encoding="utf-8")
     assert '"drop"' not in source and "'drop'" not in source
+
+
+def test_the_reader_and_the_ingest_agree_on_the_pairing_policy_id():
+    """A mismatch makes the section silently empty for every reader."""
+    import yaml as _yaml
+    cfg = load_config(ROOT)
+    ranker = _yaml.safe_load((ROOT / "config/ranker-policy-r1.yaml").read_text(encoding="utf-8"))
+    assert ranker["exclusivity_policy_id"] == cfg.translation["pairing_policy_id"]
+
+
+def test_the_service_refuses_to_boot_with_a_malformed_policy_id():
+    from curator.recommendation.service import ServicePolicy
+    for bad in ("", "not a policy id", None):
+        with pytest.raises(ValueError):
+            ServicePolicy("p", "m", "p", "t", exclusivity_policy_id=bad)

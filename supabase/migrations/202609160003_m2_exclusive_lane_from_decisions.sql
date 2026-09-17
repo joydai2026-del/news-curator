@@ -64,4 +64,15 @@ grant execute on function public.m2_retained_candidates_language_exclusive(text,
 -- second, group-id-only definition of exclusivity reachable by the service.
 drop function if exists public.m2_retained_candidates_language_exclusive(text, text, timestamptz, text, integer);
 
+-- Same idiom for the three signatures that changed in 202609160002. `create or
+-- replace` with a new parameter list creates a NEW function and leaves the old
+-- overload (and its grant) in place, so an environment that applied an earlier
+-- text of that file would keep calling the superseded behaviour.
+drop function if exists public.m2_settle_translation_spend(numeric, numeric);
+drop function if exists public.m2_settle_translation_spend(numeric, numeric, text);
+drop function if exists public.m2_release_translation_spend(numeric);
+drop function if exists public.m2_mark_exclusivity_rechecked(text, text, text);
+drop function if exists public.m2_record_exclusivity_decision(text, text, text, text);
+drop function if exists public.m2_read_exclusivity_decisions(text[]);
+
 commit;

@@ -756,6 +756,10 @@ def load_sources(path: Path) -> dict[str, Any]:
     origin = translation.get("api_origin")
     if origin is not None and (not isinstance(origin, str) or not re.fullmatch(r"https://[a-z0-9.-]{1,253}(?::[0-9]{1,5})?", origin)):
         raise ConfigError(f"{path.name}: 'translation.api_origin' must be an https origin.")
+    policy_id = translation.get("pairing_policy_id")
+    if policy_id is not None and (not isinstance(policy_id, str)
+                                  or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", policy_id)):
+        raise ConfigError(f"{path.name}: 'translation.pairing_policy_id' must be a policy id.")
     effort = translation.get("reasoning_effort")
     if effort is not None and effort not in ("minimal", "low", "medium", "high"):
         raise ConfigError(f"{path.name}: 'translation.reasoning_effort' must be minimal, low, medium or high.")

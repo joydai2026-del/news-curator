@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Mapping, Protocol, Sequence
 
@@ -79,6 +79,9 @@ class PairingPolicy:
             max_attempts=int(translation.get("pairing_max_attempts", 2)),
             recheck_hours=int(translation.get("pairing_recheck_hours", 6)),
             model=str(translation.get("model") or ""),
+            # One source of truth for the policy id: the reader reads the same
+            # value, and a mismatch makes the section silently empty.
+            policy_id=str(translation.get("pairing_policy_id") or PAIRING_POLICY_ID),
         )
 
 
@@ -116,7 +119,8 @@ class PairingCost:
     input_cost_per_million_tokens_usd: float = 0.25
     output_cost_per_million_tokens_usd: float = 2.0
     characters_per_token: int = 4
-    output_allowance_tokens: int = 32
+    # Must equal the cap the REQUEST sends, or every call under-reserves.
+    output_allowance_tokens: int = 64
 
     def cost_usd(self, input_tokens: int, output_tokens: int) -> float:
         return (input_tokens * self.input_cost_per_million_tokens_usd
@@ -244,7 +248,8 @@ def decide_exclusivity(
             if ledger is not None:
                 ledger.settle_call(estimate, estimate)
             result.undecided.add(story.story_id)
-            _record(result, persist, _undecided_decision(story, policy, display_language, prior, now))
+            _persist_non_answer(result, persist, recheck, story, policy, display_language, prior, now,
+                                rechecking=rechecking)
             continue
         result.calls += 1
         result.input_tokens += max(0, int(input_tokens or 0))
@@ -273,7 +278,8 @@ def decide_exclusivity(
             continue
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(context):
             result.undecided.add(story.story_id)
-            _record(result, persist, _undecided_decision(story, policy, display_language, prior, now))
+            _persist_non_answer(result, persist, recheck, story, policy, display_language, prior, now,
+                                rechecking=rechecking)
             continue
         matched = context[index]
         decision = ExclusivityDecision(story_id=story.story_id, decided_at=now, model=policy.model,
@@ -301,6 +307,23 @@ def decide_exclusivity(
     return result
 
 
+def _persist_non_answer(result, persist, recheck, story, policy, display_language, prior, now, *, rechecking):
+    """Record that we ASKED and got nothing usable.
+
+    On a first look that is an `undecided` row with an attempt count. On a
+    RE-check it must still stamp `rechecked_at`, or a story whose provider keeps
+    failing is re-asked on every run for the rest of the window: 504 paid calls
+    for one story at twelve runs an hour, which is what this bound exists to
+    stop. The decision itself stays exclusive; only the "we looked" mark moves.
+    """
+
+    decision = _undecided_decision(story, policy, display_language, prior, now)
+    if not rechecking:
+        _record(result, persist, decision)
+        return
+    _recheck(result, recheck, replace(decision, outcome=UNDECIDED, rechecked_at=now))
+
+
 def _undecided_decision(story, policy, display_language, prior, now):
     attempts = (prior.attempts if prior else 0) + 1
     return ExclusivityDecision(
@@ -321,7 +344,9 @@ def _recheck(result, recheck, decision):
         return decision
     try:
         stored = recheck(decision)
-    except Exception:
+    except PAIRING_TRANSIENT_ERRORS:
+        # Store and transport failures only. A TypeError in the callable is our
+        # bug and must surface, the same rule the ingest boundary states.
         result.persistence_failures += 1
         return None
     if stored is None:
@@ -339,7 +364,7 @@ def _record(result, persist, decision) -> bool:
         return True
     try:
         persist(decision)
-    except Exception:
+    except PAIRING_TRANSIENT_ERRORS:
         result.persistence_failures += 1
         return False
     result.pending.append(decision)
