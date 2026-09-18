@@ -58,9 +58,7 @@ def build_application(*, environ=None, policy_path: str | None = None):
     service_key = _required(env, "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY")
     cursor_key = _required(env, "NEWS_CURATOR_CURSOR_SIGNING_KEY").encode()
     tenant_id = _required(env, "NEWS_CURATOR_TENANT_ID")
-    preview_ids = json.loads(env.get("NEWS_CURATOR_PREVIEW_OWNER_IDS", "[]"))
-    if not isinstance(preview_ids, list) or any(not isinstance(value, str) or not value for value in preview_ids):
-        raise ValueError("invalid preview owner allowlist")
+    preview_ids = preview_owner_allowlist(env, enabled=enabled)
     provider_key = env.get("NEWS_CURATOR_MODEL_API_KEY", "")
     if enabled and not provider_key:
         raise ValueError("enabled ranker requires a scoped model key")
@@ -98,6 +96,27 @@ def build_application(*, environ=None, policy_path: str | None = None):
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,
         maximum_body_bytes=policy["maximum_request_body_bytes"])
+
+
+def preview_owner_allowlist(env, *, enabled: bool) -> tuple[str, ...]:
+    """Parse NEWS_CURATOR_PREVIEW_OWNER_IDS, failing CLOSED when it is empty.
+
+    ``RankingService`` only applies the gate when the tuple is non-empty
+    (``service.py`` ``if self._policy.preview_owner_ids and ...``), so an unset,
+    blank or ``[]`` variable used to mean "everybody is an owner" on an enabled
+    service: the exact opposite of what an allowlist is for. An empty allowlist
+    now means nobody, and an enabled service refuses to boot without one rather
+    than serving the paid path to every signed-in user.
+    """
+    raw = env.get("NEWS_CURATOR_PREVIEW_OWNER_IDS", "")
+    parsed = json.loads(raw) if raw.strip() else []
+    if not isinstance(parsed, list) or any(
+            not isinstance(value, str) or not value.strip() for value in parsed):
+        raise ValueError("invalid preview owner allowlist")
+    owners = tuple(parsed)
+    if enabled and not owners:
+        raise ValueError("enabled ranker requires a non-empty preview owner allowlist")
+    return owners
 
 
 def _required(values, key):
