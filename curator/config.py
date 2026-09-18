@@ -47,6 +47,7 @@ _SOURCE_ROW_KEYS = frozenset(
         "enabled",
         "language",
         "category",
+        "fallback_category",
         "max_age_hours",
         "weight",
         "aggregator",
@@ -106,6 +107,11 @@ class RssSource:
     # Empty for the shared pool. Set to a category id for a curated feed, which
     # is what lets its items join that category without a keyword hit.
     category: str = ""
+    # The category a story from this route keeps when it matched no configured
+    # term and the route is not native to a section. Empty inherits
+    # settings.retained_corpus_fallback_category_id. This is a category FLOOR,
+    # never a promotion: it applies only when nothing else matched.
+    fallback_category: str = ""
     type: str = "rss"
     language: str = "en"
     # None inherits settings.default_source_max_age_hours.
@@ -270,6 +276,31 @@ class Config:
         return str(self.settings.get("site_name") or "News Curator")
 
     @property
+    def retained_corpus_fallback_category_id(self) -> str:
+        """Category floor for the retained corpus. Empty means no floor.
+
+        19 percent of the captured corpus (50 of 262 rows) carried no category
+        at all, because a shared-pool route declares no category and keyword
+        matching legitimately misses a headline. An uncategorised row can never
+        appear under any section and renders with no label. The floor is a
+        configured value, not a guess in code.
+        """
+        value = str(self.settings.get("retained_corpus_fallback_category_id") or "").strip()
+        if value and value not in {category.id for category in self.categories}:
+            raise ConfigError(
+                f"'settings.retained_corpus_fallback_category_id' is '{value}', "
+                "which is not a category id in topics.yaml."
+            )
+        return value
+
+    def fallback_category_for(self, source_id: str) -> str:
+        """The floor this route uses: its own, else the global default."""
+        for source in self.all_feeds:
+            if source.id == source_id:
+                return source.fallback_category or self.retained_corpus_fallback_category_id
+        return self.retained_corpus_fallback_category_id
+
+    @property
     def display_timezone(self) -> str:
         value = str(self.settings.get("display_timezone") or "America/New_York").strip()
         try:
@@ -429,6 +460,9 @@ def parse_rss_entry(
     configured_category = _source_text(
         entry.get("category", category), path, label, i, "category", required=False
     )
+    fallback_category = _source_text(
+        entry.get("fallback_category"), path, label, i, "fallback_category", required=False
+    )
     return RssSource(
         id=sid,
         name=name,
@@ -437,6 +471,7 @@ def parse_rss_entry(
         is_aggregator=aggregator,
         platform=platform,
         category=configured_category,
+        fallback_category=fallback_category,
         type=source_type,
         language=language,
         max_age_hours=max_age,
@@ -891,5 +926,13 @@ def load_config(root: Path) -> Config:
         cfg.display_timezone,
         cfg.default_source_max_response_bytes,
         cfg.default_source_per_host_concurrency,
+        cfg.retained_corpus_fallback_category_id,
     )
+    category_ids = {category.id for category in cfg.categories}
+    for source in cfg.all_feeds:
+        if source.fallback_category and source.fallback_category not in category_ids:
+            raise ConfigError(
+                f"feed '{source.id}' sets fallback_category '{source.fallback_category}', "
+                "which is not a category id in topics.yaml."
+            )
     return cfg

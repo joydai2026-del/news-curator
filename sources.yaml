@@ -83,6 +83,14 @@ settings:
   # Global ceilings. A source row can choose smaller values, never larger.
   max_response_bytes: 8388608
   per_host_concurrency: 4
+  # Category FLOOR for the retained corpus. A shared-pool route declares no
+  # category (keywords decide), so a headline carrying none of the configured
+  # terms used to enter the corpus with no category at all: invisible to every
+  # section filter and rendered with no label (50 of 262 rows in the committed
+  # capture). A row can set `fallback_category:` to override this for itself.
+  # Empty disables the floor entirely and restores the old behaviour.
+  retained_corpus_fallback_category_id: trending
+
   # Max items shown per category on the rendered page.
   max_items_per_topic: 30
   # Feeds are fetched in parallel. The list is long enough that doing them one
@@ -232,10 +240,10 @@ hackernews:
 rss:
   # Broad general-news sources. News sitemaps use the same bounded feed tier
   # and carry item-level publication dates, never sitemap lastmod values.
-  - {id: cnn-news,   name: CNN,       url: "https://www.cnn.com/sitemap/news.xml",              type: news_sitemap, language: en, max_age_hours: 6, weight: 1.0}
-  - {id: fox-news,   name: Fox News,  url: "https://www.foxnews.com/sitemap.xml?type=news",      type: news_sitemap, language: en, max_age_hours: 6, weight: 1.0}
-  - {id: cbs-news,   name: CBS News,  url: "https://www.cbsnews.com/latest/rss/main",            language: en, max_age_hours: 6, weight: 1.0}
-  - {id: yahoo-news, name: Yahoo News, url: "https://news.yahoo.com/rss/",                       language: en, max_age_hours: 6, weight: 0.95}
+  - {id: cnn-news, fallback_category: us-news,   name: CNN,       url: "https://www.cnn.com/sitemap/news.xml",              type: news_sitemap, language: en, max_age_hours: 6, weight: 1.0}
+  - {id: fox-news, fallback_category: us-news,   name: Fox News,  url: "https://www.foxnews.com/sitemap.xml?type=news",      type: news_sitemap, language: en, max_age_hours: 6, weight: 1.0}
+  - {id: cbs-news, fallback_category: us-news,   name: CBS News,  url: "https://www.cbsnews.com/latest/rss/main",            language: en, max_age_hours: 6, weight: 1.0}
+  - {id: yahoo-news, fallback_category: us-news, name: Yahoo News, url: "https://news.yahoo.com/rss/",                       language: en, max_age_hours: 6, weight: 0.95}
 
   # Chinese technology sources. Google News links stay on news.google.com;
   # without a documented decoder they are useful outbound paths but are never

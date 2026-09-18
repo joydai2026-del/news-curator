@@ -137,10 +137,11 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-browser.txt
       - name: Install the browser the suite launches
-        # The suite launches channel='chrome', so install that channel rather
-        # than bundled chromium. A failure here fails the job, which is the
-        # point: no browser must never mean no evidence.
-        run: python -m playwright install --with-deps chrome
+        # Both browsers the M2 suite actually launches: the chrome CHANNEL
+        # (test_m2_reader_playwright) and bundled chromium
+        # (test_m2_reader_language_playwright). A failure here fails the job,
+        # which is the point: no browser must never mean no evidence.
+        run: python -m playwright install --with-deps chrome chromium
       - name: M2 reader browser tests against the built static reader
         env:
           NEWS_CURATOR_QA_OUTPUT_DIR: ${{ runner.temp }}/reader-qa
@@ -190,4 +191,16 @@ jobs:
           root = ET.parse("/tmp/translation-db.xml").getroot()
           assert not root.findall(".//skipped"), "Translation migration tests must execute, not skip."
           assert root.findall(".//testcase"), "Translation migration evidence is missing."
+          PYTHON
+      # B8: duplicate stories in one result, and the category floor. Both are
+      # projection and ingest contracts that only a real database can prove.
+      # Same must-execute guard: a skip here is a failure, never silent.
+      - name: Verify the candidate dedupe and the category floor
+        run: |
+          python -m pytest -p no:cacheprovider -q tests/test_m2_candidate_dedupe_postgres_runtime.py --junitxml=/tmp/dedupe-db.xml
+          python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("/tmp/dedupe-db.xml").getroot()
+          assert not root.findall(".//skipped"), "Candidate dedupe tests must execute, not skip."
+          assert root.findall(".//testcase"), "Candidate dedupe evidence is missing."
           PYTHON
