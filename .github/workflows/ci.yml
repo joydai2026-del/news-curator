@@ -157,7 +157,7 @@ jobs:
           # personalized feed. Delete this pair together with the xfail marker
           # when that is fixed.
           ALLOWED_XFAIL = ("tests.test_m2_reader_playwright",
-                           "test_real_capture_reader_dispatch_actions_search_and_epochs")
+                           "test_reader_surfaces_after_leaving_the_personalized_feed")
 
           root = ET.parse("/tmp/reader-browser.xml").getroot()
           cases = root.findall(".//testcase")

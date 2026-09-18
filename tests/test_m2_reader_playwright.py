@@ -95,14 +95,9 @@ def asgi_request(app, request):
         return executor.submit(lambda: asyncio.run(dispatch())).result(timeout=10)
 
 
-# XFAIL, strict: the reader empties the tab you switch to after leaving the
-# personalized feed (stale `hydrated` cache, static/reader.js:1181 vs :1847,
-# the asymmetry with :1674). Diagnosis and the smallest fix are in issue #48.
-# strict=True on purpose: the moment the reader is fixed this job goes RED
-# again and the marker has to be removed WITH the fix, so this can never
-# quietly become the skip that hid the test for its whole life.
-@pytest.mark.xfail(strict=True, reason="reader empties the tab after leaving M2, see issue #48")
-def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
+def _drive_the_reader(tmp_path, *, include_the_tail):
+    """The whole reader drive. `include_the_tail` selects everything from the
+    saved-navigation step onward, which is the part issue #48 breaks."""
     artifact_dir = Path(os.environ.get('NEWS_CURATOR_QA_OUTPUT_DIR', str(tmp_path)))
     artifact_dir.mkdir(parents=True, exist_ok=True)
     capture=json.loads((ROOT/'tests/fixtures/m2-retained-public.json').read_text())
@@ -375,6 +370,11 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
             assert page.locator('.card:not([hidden])').count()>0
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             assert 'Ranked using' in page.locator('#m2-mode').inner_text()
+            # ---- the tail, from here on, depends on leaving the personalized
+            # feed. Issue #48. Split out so the 46 assertions above stay
+            # gating instead of riding under one file-wide expected failure.
+            if not include_the_tail:
+                return
             # Saved navigation makes M2 ineligible while this original request is
             # still delayed. Its timers must not mutate the selected surface.
             page.evaluate('window.__stallM2=true;window.__stallM2Delay=120')
@@ -447,3 +447,24 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
                    "requests":requests[-12:], "remote_cards":page.locator('[data-m2-card=true]').count()})
             raise
         finally:context.close();browser.close()
+
+
+def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
+    """GATING. Everything up to the point issue #48 breaks: first render, the
+    real continuation route past 200 rows, save and read dispatch, the saved
+    surface across a reload, search and its four event types, category
+    selection, less-like-this, the owner export including the oversized refusal
+    and the clear-history race, and the delayed-model-result deadlines."""
+    _drive_the_reader(tmp_path, include_the_tail=False)
+
+
+# The ONE expected failure this suite carries, and the CI guard names exactly
+# this test. TWO assertions in the tail are known to fail, both in issue #48:
+# the saved tab renders empty after leaving the personalized feed (line 376 in
+# the pre-split file), and the intermediate "still loading" state after a
+# load-more whose stall was just switched off (line 394). strict=True means the
+# job goes RED the moment BOTH are fixed, so the marker and the CI allowance
+# have to come out with the fix rather than quietly outliving it.
+@pytest.mark.xfail(strict=True, reason="two reader failures after leaving M2, see issue #48")
+def test_reader_surfaces_after_leaving_the_personalized_feed(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=True)

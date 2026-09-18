@@ -53,9 +53,11 @@ set search_path = pg_catalog, public as $$
   select btrim(regexp_replace(lower(coalesce(p_title, '')), '\s+', ' ', 'g'))
 $$;
 
-create index if not exists retained_corpus_observations_dedupe_key_idx
-  on public.retained_corpus_observations
-  (language, public.m2_story_dedupe_key(title), published_at desc, story_id desc);
+-- NO functional index on the dedupe key. The first draft carried one, and then
+-- the fix for the filtered-set bug below moved the peer test inside a CTE,
+-- where the planner cannot use it: it would be pure write cost on every hourly
+-- ingest for a read path that never touches it. Add one back only with an
+-- EXPLAIN ANALYZE that shows the planner choosing it.
 
 -- The five-argument form is dropped rather than replaced: adding a defaulted
 -- parameter creates a NEW function, and leaving the old overload in place makes
