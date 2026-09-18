@@ -151,6 +151,7 @@ class RankingService:
             raise ValueError("invalid_corpus_cursor")
         composition = self._policy.composition
         exclusive = self._is_exclusive_category(category_id)
+        promotion: list[Mapping[str, object]] = []
         # The reading run: one per visit, at most one open per owner. The profile
         # is computed once at run open and FROZEN on the run row, so every page
         # inside the run is explainable afterwards from one stored version.
@@ -167,11 +168,23 @@ class RankingService:
             )
         elif composition is not None:
             rows = self._pool_rows(category_id, query, profile, composition, before_published, before_story)
+            # Capped promotion: a few stories only the other language's press
+            # carried get to compete for a place in All, on merit. They do NOT
+            # get extra slots; they enter the same pool and take their own
+            # lane's quota like any other candidate.
+            promotion = self._promotion_rows(query, composition, before_published, before_story)
+            known = {row.get("story_id") for row in rows}
+            rows = rows + [row for row in promotion if row.get("story_id") not in known]
         else:
             rows = self._store.retained_candidates(
                 category_id=category_id, query=query, limit=self._policy.candidate_limit + len(excluded_set) + 1,
                 before_published_at=before_published, before_story_id=before_story,
             )
+        # Exclusivity is a property of the STORY, not of the request, so a
+        # promoted card carries the same label in All that it carries in the
+        # section. When the section itself is being served, every row has it.
+        exclusive_ids = ({str(row["story_id"]) for row in rows} if exclusive
+                         else {str(row["story_id"]) for row in promotion})
         filtered = [row for row in rows if row.get("story_id") not in excluded_set]
         has_more = len(filtered) > self._policy.candidate_limit
         rows = filtered[:self._policy.candidate_limit]
@@ -249,13 +262,20 @@ class RankingService:
         if composition is not None:
             lane_by_id = {item.story_id: item for item in laned}
             ordered = [lane_by_id[story_id] for story_id in receipt.ranked_candidate_ids if story_id in lane_by_id]
+            if not exclusive:
+                # The cap is a CEILING, never a floor. The highest-ranked
+                # promoted candidates keep their places and the rest step out,
+                # so All is never padded with stories that did not earn a place.
+                ordered = self._cap_promotions(ordered, exclusive_ids,
+                                               composition.exclusive_promote_to_all_max)
             # The hard diversity pass. Deterministic, replayable, and applied to
             # the model's order rather than asked of the model.
             finalization = finalize_order(ordered, policy=composition, owner_states=owner_states,
                 page_size=min(page_size, composition.page_size), pages=composition.max_pages_per_run,
                 profile=profile)
             cards = [self._card(item.row, owner_states.get(item.story_id, {}), lane=item.lane,
-                                composition=composition, exclusive=exclusive,
+                                composition=composition,
+                                exclusive=item.story_id in exclusive_ids,
                                 also_covered_by=finalization.also_covered_by.get(item.story_id, ()))
                      for item in finalization.cards]
         else:
@@ -457,6 +477,33 @@ class RankingService:
         run = self._store.open_reading_run(user_id=owner.user_id, idle_minutes=composition.idle_minutes,
                                            profile=fresh.as_snapshot())
         return run if isinstance(run, Mapping) else {}
+
+    def _promotion_rows(self, query, composition, before_published, before_story):
+        """Language-exclusive candidates allowed to compete for a place in All.
+
+        Off entirely at a cap of zero, and then not even fetched: a switch that
+        still costs a round trip is not off.
+        """
+        cap = composition.exclusive_promote_to_all_max
+        if not (self._policy.other_lane_enabled and self._policy.exclusive_category_id and cap > 0):
+            return []
+        return list(self._store.retained_candidates_language_exclusive(
+            display_language=self._policy.display_language, query=query,
+            limit=min(100, max(cap * 4, cap)), before_published_at=before_published,
+            before_story_id=before_story, policy_id=self._policy.exclusivity_policy_id))
+
+    @staticmethod
+    def _cap_promotions(ordered, exclusive_ids, cap):
+        if not exclusive_ids:
+            return ordered
+        kept, promoted = [], 0
+        for item in ordered:
+            if item.story_id in exclusive_ids:
+                if promoted >= cap:
+                    continue
+                promoted += 1
+            kept.append(item)
+        return kept
 
     def _pool_rows(self, category_id, query, profile, composition, before_published, before_story):
         """Ask the corpus for each lane, then merge.

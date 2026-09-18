@@ -242,6 +242,80 @@ def test_coverage_for_an_unknown_story_is_skipped_not_inserted(db):
     assert result.stdout.strip().splitlines()[-1] == '0'
 
 
+def test_the_writer_path_produces_coverage_that_lands_in_the_hot_pool(db):
+    """End to end from the deduper to the hot lane, through the REAL writer.
+
+    Three routes carry one link. `retain` merges them into one canonical story
+    with three coverage mentions, `coverage_ingest_rows` turns those into the
+    exact payload the RPC accepts, and the lane RPC then counts three
+    independent publishers and returns the story in the hot pool. Nothing in
+    this test hand-writes a coverage row.
+    """
+    from datetime import datetime, timezone
+
+    from curator.config import Category
+    from curator.models import Item
+    from curator.retained_corpus import coverage_ingest_rows, retain
+
+    url = 'https://example.test/writer-path'
+    observed = datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)
+
+    def route(source_id, *, aggregator=False, echo_eligible=True):
+        return Item(title='Three outlets carried this', url=url, canonical_url=url,
+                    source_id=source_id, source_name=source_id.title(), published_at=observed,
+                    language='en', description='Body.', is_aggregator=aggregator,
+                    echo_eligible=echo_eligible)
+
+    retained = retain([route('reuters'), route('cnn'), route('cnbeta'),
+                       route('buzzing', aggregator=True)],
+                      categories=(Category(name='World', id='world', keywords=['outlets']),),
+                      observed_at=observed)
+    assert len(retained) == 1
+    rows = [{'story_id': retained[0].story_id, 'origin_class': 'public_outlet',
+             'source_kind': 'outlet', 'canonical_url': url, 'title': retained[0].item.title,
+             'summary': 'Body.', 'language': 'en', 'source_id': retained[0].item.source_id,
+             'source_name': retained[0].item.source_name, 'source_is_aggregator': False,
+             'published_at': observed.isoformat(), 'source_observed_at': observed.isoformat(),
+             'category_ids': ['world']}]
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+
+    coverage = coverage_ingest_rows(retained, independent_source_ids={'reuters', 'cnn', 'cnbeta'})
+    assert len(coverage) == 4, 'every route is recorded, including the aggregator'
+    written = _service(db, "select public.m2_ingest_retained_coverage("
+                       f"{_quote(json.dumps(coverage))}::jsonb);")
+    assert _last(written) == '4'
+
+    row = _by_story(_lane(db))[retained[0].story_id]
+    assert row['independent_source_count'] == 3, 'the aggregator must not be counted'
+    assert retained[0].story_id in _by_story(_lane(db, 'hot')), 'three outlets must be hot'
+
+
+def test_the_writer_is_idempotent_across_runs(db):
+    """The hourly ingest re-sends the same rows every run. A second write must
+    not double a count, or every story would be hot by the end of the day."""
+    from datetime import datetime, timezone
+
+    from curator.config import Category
+    from curator.models import Item
+    from curator.retained_corpus import coverage_ingest_rows, retain
+
+    url = 'https://example.test/writer-path'
+    observed = datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)
+    retained = retain([Item(title='Three outlets carried this', url=url, canonical_url=url,
+                            source_id=source, source_name=source, published_at=observed,
+                            language='en', description='Body.') for source in ('reuters', 'cnn')],
+                      categories=(Category(name='World', id='world', keywords=['outlets']),),
+                      observed_at=observed)
+    coverage = coverage_ingest_rows(retained, independent_source_ids={'reuters', 'cnn'})
+    _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
+    again = _service(db, "select public.m2_ingest_retained_coverage("
+                     f"{_quote(json.dumps(coverage))}::jsonb);")
+    assert _last(again) == '0', 'an unchanged re-send writes nothing'
+    total = _sql(db, "select count(*) from public.retained_corpus_coverage "
+                     f"where story_id = {_quote(retained[0].story_id)};")
+    assert int(_last(total)) == 4, 'the earlier four rows, not eight'
+
+
 # --- the lane RPC ----------------------------------------------------------
 
 def test_the_lane_rpc_returns_the_phase_one_overlay_fields(db):

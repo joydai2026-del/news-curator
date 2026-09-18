@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from dataclasses import replace
+
 from curator.recommendation.composition import load_composition_policy
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.service import RankingService, ServicePolicy, StaleRankingError
@@ -61,8 +63,10 @@ def default_corpus():
 class Store:
     """A corpus that answers the lane RPC the way PostgreSQL does."""
 
-    def __init__(self, rows=None, *, events=(), learning=True):
+    def __init__(self, rows=None, *, events=(), learning=True, exclusive=()):
         self.rows = list(rows if rows is not None else default_corpus())
+        self.exclusive = list(exclusive)
+        self.exclusive_calls = 0
         self.events = list(events)
         self.learning = learning
         self.frozen = {}
@@ -122,8 +126,9 @@ class Store:
             selected.sort(key=lambda row: -row["independent_source_count"])
         return selected[:limit]
 
-    def retained_candidates_language_exclusive(self, **kwargs):
-        return []
+    def retained_candidates_language_exclusive(self, *, limit, **kwargs):
+        self.exclusive_calls += 1
+        return self.exclusive[:limit]
 
     # --- runs --------------------------------------------------------------
     def open_reading_run(self, *, user_id, idle_minutes, profile):
@@ -162,12 +167,25 @@ class Store:
                 "bindings": value["bindings"], "cards": value["cards"]}
 
 
-def build(store, *, composition=True, page_size=25):
+def exclusive_corpus(count=6):
+    """Stories only the Chinese press carried, already translated into English."""
+    return [dict(corpus_row(500 + index, hours=8, source=f"zh{index}",
+                            categories=[f"zh-topic{index}"]),
+                 language="zh", title=f"中文独家 {index}",
+                 title_translations={"en": f"Only in the Chinese press {index}"},
+                 summary_translations={"en": f"Translated summary {index}"})
+            for index in range(count)]
+
+
+def build(store, *, composition=True, page_size=25, promote=None, exclusive_category=""):
     adapter = RankLLMAdapter(policy=RankerPolicy("openai", "gpt-5-mini", "https://provider.invalid", "policy",
         input_cost_per_million_tokens_usd=.25, output_cost_per_million_tokens_usd=2), engine=object())
+    loaded = load_composition_policy(POLICY_PATH) if composition else None
+    if loaded is not None and promote is not None:
+        loaded = replace(loaded, exclusive_promote_to_all_max=promote)
     policy = ServicePolicy("policy", "gpt-5-mini", "policy", "tenant", candidate_limit=50,
-        maximum_page_size=page_size, enabled=True,
-        composition=load_composition_policy(POLICY_PATH) if composition else None)
+        maximum_page_size=page_size, enabled=True, composition=loaded,
+        exclusive_category_id=exclusive_category or "")
     return RankingService(auth=Auth(), store=store, adapter=adapter, policy=policy,
                           cursor_key=b"x" * 32, clock=lambda: CLOCK)
 
@@ -337,3 +355,63 @@ def test_the_legacy_window_still_works_when_the_recipe_is_unset():
     response = rank(build(store, composition=False), store)
     assert response["cards"] and "lane" not in response["cards"][0]
     assert response["cards"][0]["card_schema_version"] == 2
+
+
+# --- capped promotion into All --------------------------------------------
+
+def promoted(response):
+    return [card for card in response["cards"] if card["exclusive_label"]]
+
+
+def test_at_most_the_cap_of_chinese_exclusive_stories_reach_all():
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    response = rank(build(store, exclusive_category="only-other-language-press"), store)
+    assert 0 < len(promoted(response)) <= 2, "the cap is a ceiling, and zero would mean no promotion"
+
+
+def test_a_promoted_card_keeps_its_only_in_chinese_press_label():
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    response = rank(build(store, exclusive_category="only-other-language-press"), store)
+    assert all(card["exclusive_label"] == "only in Chinese press" for card in promoted(response))
+
+
+def test_nothing_is_promoted_when_the_section_is_empty():
+    store = Store(events=liked_events(), exclusive=[])
+    response = rank(build(store, exclusive_category="only-other-language-press"), store)
+    assert promoted(response) == []
+    assert len(response["cards"]) == 25, "an empty section must not shrink the page"
+
+
+def test_a_cap_of_zero_turns_promotion_off():
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    response = rank(build(store, promote=0, exclusive_category="only-other-language-press"), store)
+    assert promoted(response) == []
+    assert store.exclusive_calls == 0, "a cap of zero must not even ask"
+
+
+def test_promotion_never_adds_slots():
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    with_promotion = rank(build(store, exclusive_category="only-other-language-press"), store)
+    plain = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    without = rank(build(plain, promote=0, exclusive_category="only-other-language-press"), plain)
+    assert len(with_promotion["cards"]) == len(without["cards"])
+
+
+def test_a_promoted_story_appears_once_on_the_page():
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    response = rank(build(store, exclusive_category="only-other-language-press"), store)
+    ids = [card["story_id"] for card in response["cards"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_the_section_itself_does_not_promote_into_itself():
+    """Serving the section is the section, not the section plus a promotion of
+    the section into the section. Every card there is exclusive exactly once."""
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    subject = build(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None})
+    ids = [card["story_id"] for card in response["cards"]]
+    assert len(ids) == len(set(ids))
+    assert all(card["exclusive_label"] == "only in Chinese press" for card in response["cards"])
+    assert store.exclusive_calls == 1, "the section must not also run the promotion fetch"
