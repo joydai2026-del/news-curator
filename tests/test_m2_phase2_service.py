@@ -115,6 +115,16 @@ class Store:
                                trend_window_hours, trend_min_sources, max_age_hours, min_age_hours,
                                limit, before_published_at=None, before_story_id=None,
                                before_source_count=None):
+        # THE SAME ARGUMENT CONTRACT THE SQL ENFORCES. A fake that ignores the
+        # cursor cannot catch a caller that sends half a keyset, which is exactly
+        # what the hot-lane continuation did: the SQL refused it and no test saw.
+        if before_source_count is not None and (lane != "hot" or before_published_at is None
+                                                or before_story_id is None):
+            raise ValueError("invalid cursor")
+        if lane == "hot" and before_published_at is not None and before_source_count is None:
+            raise ValueError("invalid cursor")
+        if (before_published_at is None) != (before_story_id is None):
+            raise ValueError("invalid cursor")
         selected = []
         for row in self.rows:
             age = (NOW - datetime.fromisoformat(row["published_at"])).total_seconds() / 3600
@@ -130,9 +140,21 @@ class Store:
                 continue
             if lane == "surprise" and (matches or row["source_is_aggregator"]):
                 continue
+            # The keyset, applied the way the SQL applies it.
+            if lane == "hot":
+                if before_source_count is not None and not (
+                        (row["independent_source_count"], row["published_at"], row["story_id"])
+                        < (before_source_count, before_published_at, before_story_id)):
+                    continue
+            elif before_published_at is not None and not (
+                    (row["published_at"], row["story_id"]) < (before_published_at, before_story_id)):
+                continue
             selected.append(row)
         if lane == "hot":
-            selected.sort(key=lambda row: -row["independent_source_count"])
+            selected.sort(key=lambda row: (-row["independent_source_count"],
+                                           row["published_at"], row["story_id"]), reverse=False)
+        else:
+            selected.sort(key=lambda row: (row["published_at"], row["story_id"]), reverse=True)
         return selected[:limit]
 
     def retained_candidates_language_exclusive(self, *, limit, **kwargs):
@@ -657,3 +679,113 @@ def test_a_client_a_revision_behind_is_served_not_refused():
     assert behind["cards"], "a client one behind is not stale, it is a moment behind"
     with pytest.raises(StaleRankingError, match="stale_server_commit_revision"):
         rank(subject, store, server_commit_revision=store.commit_revision + 5)
+
+
+def test_the_hot_lane_continuation_sends_a_whole_keyset_or_none():
+    """The SQL refuses half a hot keyset, and the fake store refuses it too. The
+    general cursor does not describe hot ordering at all, so hot carries its own
+    and the two never get mixed."""
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    exhausted = len(frozen["cards"])
+    # Would raise ValueError("invalid cursor") from the fake if half a keyset
+    # reached the hot lane, which is exactly what the SQL does.
+    subject.page(authorization="Bearer valid",
+                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"])))
+    stored = store.frozen["frozen-1"]["bindings"]["corpus_cursor"]
+    assert set(stored) >= {"before_published_at", "before_story_id"}
+    if "hot" in stored:
+        assert set(stored["hot"]) == {"before_source_count", "before_published_at", "before_story_id"}
+    # And a second continuation resumes from it without raising.
+    frozen = store.frozen["frozen-1"]
+    subject.page(authorization="Bearer valid",
+                 cursor=subject._cursor("frozen-1", len(frozen["cards"]), int(frozen["expires_at"])))
+
+
+def test_a_half_written_hot_cursor_is_ignored_rather_than_sent():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    assert subject._hot_cursor({"hot": {"before_source_count": 2}}) is None
+    assert subject._hot_cursor({"hot": {"before_published_at": "x", "before_story_id": "y"}}) is None
+    assert subject._hot_cursor({}) is None
+    assert subject._hot_cursor({"hot": {"before_source_count": 2, "before_published_at": "x",
+                                        "before_story_id": "y"}}) == ("x", "y", 2)
+
+
+# --- the page is full, whatever the corpus looks like ---------------------
+
+def test_learning_off_still_fills_the_page():
+    """No profile means no aligned and no surprise pool. The page must still be
+    a page: the window admits the leftovers rather than leaving slots empty."""
+    store = PaidStore(events=liked_events(), learning=False)
+    response = rank(paid(store), store)
+    assert len(response["cards"]) == 25, f"page collapsed to {len(response['cards'])} cards"
+
+
+def test_a_first_visit_with_no_history_fills_the_page():
+    store = PaidStore(events=[])
+    response = rank(paid(store), store)
+    assert len(response["cards"]) == 25, f"page collapsed to {len(response['cards'])} cards"
+
+
+def test_two_hundred_rows_over_two_days_with_no_profile_fill_the_page():
+    rows = [corpus_row(index, hours=1 + (index % 47), source=f"src{index}",
+                       categories=[f"topic{index % 6}"]) for index in range(200)]
+    store = PaidStore(rows, events=[])
+    response = rank(paid(store), store)
+    assert len(response["cards"]) == 25, f"page collapsed to {len(response['cards'])} cards"
+    sources = [card["source_id"] for card in response["cards"]]
+    assert all(left != right for left, right in zip(sources, sources[1:]))
+
+
+# --- the continuation degrades instead of misleading or 500ing -------------
+
+def test_a_capped_order_ends_the_run_instead_of_repeating_the_last_page():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    # The store refuses to grow the order any further, exactly as the RPC does
+    # when the card cap is reached.
+    store.extend_frozen_order = lambda **kwargs: len(store.frozen["frozen-1"]["cards"])
+    response = subject.page(authorization="Bearer valid",
+                            cursor=subject._cursor("frozen-1", len(frozen["cards"]),
+                                                   int(frozen["expires_at"])))
+    assert response["cards"] == [], "a capped order served the same stories again"
+    assert response["next_cursor"] is None
+    assert response.get("end_of_run") is True, "the end of a run must be said, not implied"
+
+
+def test_a_failed_extend_degrades_rather_than_five_hundreds():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+
+    def explode(**kwargs):
+        raise RuntimeError("the store is unavailable")
+
+    store.extend_frozen_order = explode
+    response = subject.page(authorization="Bearer valid",
+                            cursor=subject._cursor("frozen-1", len(frozen["cards"]),
+                                                   int(frozen["expires_at"])))
+    assert response["cards"] == [] and response.get("end_of_run") is True
+
+
+def test_the_filter_is_recorded_even_after_the_run_has_closed():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    removed = first["cards"][0]["source_id"]
+    store.events.append({"event_id": "dislike", "event_type": "less_like_this", "event_revision": 9,
+                         "occurred_at": NOW.isoformat(),
+                         "payload": {"story_id": first["cards"][0]["story_id"], "surface": "reader"},
+                         "story_title": "", "story_summary": "", "source_id": removed})
+    store.revision += 1
+    # The run closed between the page being served and the filter being written.
+    store.runs[0]["closed_at"] = NOW.isoformat()
+    subject.page(authorization="Bearer valid",
+                 cursor=subject._cursor("frozen-1", 0, int(store.frozen["frozen-1"]["expires_at"])))
+    assert store.filtered.get("run-1"), "a closed run still owns the page it served"

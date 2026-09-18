@@ -10,7 +10,7 @@ begin;
 -- One row per distinct publisher per story. The primary key is what collapses a
 -- same-publisher echo: two observations from cnbeta are one coverage row, never
 -- two, by construction rather than by a de-duplicating query.
-create table public.retained_corpus_coverage (
+create table if not exists public.retained_corpus_coverage (
   story_id text not null references public.retained_corpus_observations(story_id) on delete restrict,
   publisher_id text not null check (publisher_id <> '' and octet_length(publisher_id) <= 512),
   -- Computed at ingest from the route flags that already exist in config
@@ -20,7 +20,7 @@ create table public.retained_corpus_coverage (
   first_seen_at timestamptz not null,
   primary key (story_id, publisher_id)
 );
-create index retained_corpus_coverage_independent_idx
+create index if not exists retained_corpus_coverage_independent_idx
   on public.retained_corpus_coverage(story_id, first_seen_at desc) where is_independent;
 
 alter table public.retained_corpus_coverage enable row level security;

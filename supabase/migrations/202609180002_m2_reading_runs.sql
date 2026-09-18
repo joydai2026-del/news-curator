@@ -9,7 +9,7 @@ begin;
 -- At most one OPEN run per owner, ever: the partial unique index is the
 -- constraint and the advisory lock in the RPC is what makes two concurrent first
 -- ranks join the same run instead of racing to create two.
-create table public.m2_reading_runs (
+create table if not exists public.m2_reading_runs (
   run_id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   opened_at timestamptz not null default now(),
@@ -22,9 +22,9 @@ create table public.m2_reading_runs (
     check (jsonb_typeof(filtered_story_ids) = 'array' and jsonb_array_length(filtered_story_ids) <= 2000),
   closed_at timestamptz
 );
-create unique index m2_reading_runs_one_open_per_owner
+create unique index if not exists m2_reading_runs_one_open_per_owner
   on public.m2_reading_runs(user_id) where closed_at is null;
-create index m2_reading_runs_owner_recent_idx on public.m2_reading_runs(user_id, opened_at desc);
+create index if not exists m2_reading_runs_owner_recent_idx on public.m2_reading_runs(user_id, opened_at desc);
 
 alter table public.m2_reading_runs enable row level security;
 alter table public.m2_reading_runs force row level security;
@@ -33,8 +33,10 @@ grant select, insert, update, delete on public.m2_reading_runs to service_role;
 -- The owner may read her own runs. She may not write them: a run is opened by
 -- the ranker, never by a client that could mint its own run id.
 grant select on public.m2_reading_runs to authenticated;
+drop policy if exists m2_reading_runs_owner_select on public.m2_reading_runs;
 create policy m2_reading_runs_owner_select on public.m2_reading_runs
   for select to authenticated using (user_id = auth.uid());
+drop policy if exists m2_reading_runs_service_all on public.m2_reading_runs;
 create policy m2_reading_runs_service_all on public.m2_reading_runs
   for all to service_role using (true) with check (true);
 
@@ -105,7 +107,10 @@ begin
       from (select jsonb_array_elements_text(r.filtered_story_ids) as value
             union select unnest(p_story_ids)) merged_ids
     ), last_activity_at = now()
-    where r.run_id = p_run_id and r.user_id = p_user_id and r.closed_at is null
+    -- A CLOSED run still accepts its own filter record. The page was served from
+    -- that run, and a run closing between the page being served and the filter
+    -- being written is not a reason to lose what the reader was actually shown.
+    where r.run_id = p_run_id and r.user_id = p_user_id
     returning r.filtered_story_ids into merged;
   return case when merged is null then 0 else jsonb_array_length(merged) end;
 end;

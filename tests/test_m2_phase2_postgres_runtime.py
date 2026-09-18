@@ -206,6 +206,33 @@ def _by_story(rows):
 
 # --- coverage and hot ------------------------------------------------------
 
+def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
+    """Applying a migration twice must not error. A recovery re-run should not
+    depend on anyone remembering whether it already ran."""
+    for migration in ('supabase/migrations/202609180001_m2_retained_coverage_and_lanes.sql',
+                      'supabase/migrations/202609180002_m2_reading_runs.sql',
+                      'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
+                      'supabase/migrations/202609180004_m2_retained_corpus_prune.sql'):
+        again = _sql(db, (ROOT / migration).read_text(), check=False)
+        assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
+
+
+def test_the_hot_lane_continuation_cursor_is_accepted_by_the_real_rpc(db):
+    """The service's continuation sends the hot lane its own keyset. This is the
+    same call shape, against the real function, across a page boundary."""
+    first = _lane(db, 'hot', limit=1)
+    if not first:
+        pytest.skip('no hot rows in the fixture corpus')
+    head = first[0]
+    second = _lane(db, 'hot', limit=5,
+                   before=(head['independent_source_count'], head['published_at'], head['story_id']))
+    assert head['story_id'] not in {row['story_id'] for row in second}
+    # And the general cursor shape the other lanes use is still refused for hot.
+    assert _service(db, "select public.m2_retained_candidates_v2(p_lane => 'hot', "
+                    f"p_before_published_at => {_quote(head['published_at'])}::timestamptz, "
+                    f"p_before_story_id => {_quote(head['story_id'])});", check=False).returncode != 0
+
+
 def test_the_migrations_apply_and_the_new_objects_exist(db):
     result = _sql(db, "select table_name from information_schema.tables "
                       "where table_name in ('retained_corpus_coverage','m2_reading_runs') order by table_name;")

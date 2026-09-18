@@ -57,6 +57,30 @@ function response(value, url) { return { ok: true, redirected: false, url,
   await assert.rejects(() => stale.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
   assert.throws(() => reader.validateM2Config({ ...config, provider_retention_url: "javascript:bad" }), /configuration/);
 
+  // Load more after a read or a save: /page returns the FROZEN order's binding,
+  // and the reader must validate against THAT, not against the live revision.
+  // Validating against the live one made a valid frozen page look invalid and
+  // dropped the reader to the captured-edition fallback.
+  const frozenBinding = { ...history, policy_version: config.policy_version,
+    model_version: config.model_version, page_size: config.page_size,
+    history_revision: history.included_history_revision,
+    server_commit_revision: history.history_revision };
+  const pager = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => response(payload(), url));
+  // The behavior revision has since moved (she read a card and saved one), but
+  // the frozen order still carries the revisions it was computed against.
+  const pagedAfterReads = await pager.page("cursor-token", frozenBinding);
+  assert.equal(pagedAfterReads.server_commit_revision, history.history_revision,
+    "a page must keep answering with the frozen order's own binding");
+  assert.equal(pagedAfterReads.cards.length > 0, true, "load more fell back after a read or save");
+
+  // end_of_run is optional on the wire, so reader and ranker deploy in either
+  // order: an older ranker never sends it, and the reader defaults it to false.
+  assert.equal(reader.validateM2Response(payload(), frozenBinding).end_of_run, false);
+  assert.equal(reader.validateM2Response({ ...payload(), end_of_run: true }, frozenBinding).end_of_run, true);
+  assert.throws(() => reader.validateM2Response({ ...payload(), end_of_run: "yes" }, frozenBinding),
+    /feed response/);
+
   // A prompt revision bump is a QUESTION the reader can answer in one tap, so
   // it must not collapse into the generic failure that shows a dead feed.
   const consentService = reader.createM2Service(config, async () => ({ access_token: token }),

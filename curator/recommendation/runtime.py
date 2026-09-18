@@ -11,7 +11,7 @@ import httpx
 import yaml
 
 from .asgi import RankingASGI
-from .composition import load_composition_policy
+from .composition import configured_retention_days, load_composition_policy
 from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder, ScoringPolicy
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import RankingService, ServicePolicy
@@ -73,7 +73,12 @@ def build_application(*, environ=None, policy_path: str | None = None):
     # for action predictions or for a bare permutation, which changes the schema,
     # the prompt and the output budget together.
     composition_path = env.get("NEWS_CURATOR_COMPOSITION_POLICY") or policy.get("composition_policy")
-    composition = load_composition_policy(composition_path) if composition_path else None
+    # Cross-file check at boot: the corpus retention window (sources.yaml) must
+    # still cover the window the feed reads back (this policy).
+    composition = load_composition_policy(
+        composition_path,
+        retention_days=configured_retention_days(env.get("NEWS_CURATOR_SOURCES", "sources.yaml")),
+    ) if composition_path else None
     scoring = ScoringPolicy.from_composition(composition) if composition else None
     prompt = ReviewedRankLLMPromptBuilder(env.get("NEWS_CURATOR_RANKLLM_TEMPLATE") or
         _required(policy, "prompt_template"))

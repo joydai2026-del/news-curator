@@ -25,9 +25,12 @@ begin;
 -- whose run is closed, or belongs to someone else, or does not exist, gets the
 -- strict equality check exactly as before. A client cannot mint a run id: the
 -- owner has no insert or update grant on m2_reading_runs.
+-- Idempotent by construction, matching the repository convention: applying this
+-- file twice is a no-op rather than an error, so a re-run during a recovery is
+-- safe and nobody has to know whether it already ran.
 alter table public.m2_frozen_rankings
-  add column run_id uuid references public.m2_reading_runs(run_id) on delete set null;
-create index m2_frozen_rankings_run_idx on public.m2_frozen_rankings(run_id)
+  add column if not exists run_id uuid references public.m2_reading_runs(run_id) on delete set null;
+create index if not exists m2_frozen_rankings_run_idx on public.m2_frozen_rankings(run_id)
   where run_id is not null;
 
 create or replace function public.m2_validate_frozen_ranking_epoch()

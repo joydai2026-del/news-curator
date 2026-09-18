@@ -157,7 +157,12 @@ def test_the_window_is_no_longer_the_newest_fifty(policy):
     lanes = {lane: sum(1 for item in window if item.lane == lane) for lane in policy.lane_priority}
     assert lanes["hot"] > 0 and lanes["interested"] > 0
     # Fresh no longer owns the whole window the way "the 50 newest rows" did.
-    assert lanes["updates"] <= lane_window_quotas(policy, policy.candidate_window_size)["updates"]
+    # It may exceed its own quota, but ONLY as backfill for a lane that could not
+    # fill its own, and never by crowding out a lane that had candidates left.
+    quotas = lane_window_quotas(policy, policy.candidate_window_size)
+    if lanes["updates"] > quotas["updates"]:
+        assert any(lanes[lane] < quotas[lane] for lane in ("hot", "interested", "surprise")), lanes
+    assert lanes["updates"] < len(window), lanes
 
 
 def test_a_short_pool_ships_short_and_never_borrows(policy):

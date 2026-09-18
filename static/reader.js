@@ -719,12 +719,14 @@
       toggleLabel: "中文", exclusiveSection: (other) => `Only in ${other} press`,
       emptyExclusive: (other) => `No stories that only the ${other} press carried today`,
       untranslated: (other) => `Not translated. Shown in ${other}.`,
+      endOfRun: "You have read everything in this run. Come back later for more.",
       search: "Search all retained stories",
     },
     zh: {
       toggleLabel: "EN", exclusiveSection: (other) => `只有${other === "English" ? "英文" : "中文"}媒体报道`,
       emptyExclusive: (other) => `今天没有只有${other === "English" ? "英文" : "中文"}媒体报道的新闻`,
       untranslated: (other) => `未翻译，按原文显示。`,
+      endOfRun: "这一轮的报道你都读完了，稍后再来看看。",
       search: "搜索全部保留的报道",
     },
   };
@@ -750,6 +752,15 @@
     return Object.freeze({ ...value, url: endpoint.replace(/\/$/, "") });
   }
   function validateM2Response(value, expected) {
+    // `end_of_run` is OPTIONAL on the wire, so a reader and a ranker can deploy
+    // in either order: an older ranker simply never sends it. It is lifted out
+    // before the exact-field check and put back after.
+    let endOfRun = false;
+    if (isObject(value) && "end_of_run" in value) {
+      if (typeof value.end_of_run !== "boolean") fail("The M2 feed response was invalid.");
+      endOfRun = value.end_of_run;
+      delete value.end_of_run;
+    }
     if (!exactFields(value, M2_RESPONSE_FIELDS) || value.schema_version !== 1 ||
         value.policy_version !== expected.policy_version || value.model_version !== expected.model_version ||
         value.history_revision !== expected.history_revision ||
@@ -808,6 +819,7 @@
       card.card_schema_version = 3;
       seen.add(card.story_id);
     });
+    value.end_of_run = endOfRun;
     return value;
   }
   function createM2Service(rawConfig, sessionProvider, fetchImpl = fetch) {
@@ -1462,17 +1474,26 @@
         // A new eligible request always carries the committed history. The
         // server freezes existing pages and re-ranks continuation windows.
         const response = canContinue
-          ? await m2.page(m2Cursor, { ...m2Binding, history_revision: history.included_history_revision,
-              server_commit_revision: history.history_revision })
+          // THE CONTRACT, stated once: /page returns the FROZEN order's binding,
+          // so the reader compares against the frozen binding and not against
+          // the live revision. Comparing against the live one meant that reading
+          // or saving a story made a perfectly valid frozen page look invalid
+          // here, and the reader dropped to the captured-edition fallback right
+          // after the server had stopped re-ranking for exactly that reason.
+          ? await m2.page(m2Cursor, { ...m2Binding })
           : await m2.rank(history, eligibility);
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         if (baselineShown) {
           await behaviorWrites.catch(() => {});
           const latest = await api.historySnapshot();
+          // Scoped the same way the server scopes its own staleness check. The
+          // behavior revisions move on every read and every save, and treating
+          // that as a reason to throw away a slow-but-valid response is the
+          // client-side half of the bug the server just stopped having. What
+          // still invalidates a response: a different owner, a different
+          // eligibility, a history reset, a consent change.
           if (epoch !== authEpoch || request !== m2Sequence || !usesM2() || m2InteractionEpoch !== interactionEpoch ||
               JSON.stringify(m2Eligibility()) !== key || latest.history_generation !== history.history_generation ||
-              latest.history_revision !== history.history_revision ||
-              latest.included_history_revision !== history.included_history_revision ||
               latest.consent_revision !== history.consent_revision || latest.learning_enabled !== history.learning_enabled ||
               latest.provider_processing_enabled !== history.provider_processing_enabled ||
               latest.provider_policy_id !== history.provider_policy_id || response.result_mode !== "model") {
@@ -1480,6 +1501,12 @@
           }
         }
         applyM2Page(response, Boolean(canContinue), eligibility); m2Key = key;
+        if (response.end_of_run) {
+          // Not a failure and not an empty page: she has read the whole run.
+          const mode = document.getElementById("m2-mode");
+          if (mode) mode.textContent = strings().endOfRun;
+          announce(strings().endOfRun);
+        }
         announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
         if (!append && eligibility.query && !response.cards.length) {
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });

@@ -398,8 +398,11 @@ class RankingService:
         self._record_filtered(owner, frozen, removed)
         next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
         if offset >= len(cards):
+            # End of the run, said explicitly rather than as an empty page that
+            # looks like a failure. There is nothing more to serve from this
+            # frozen order, and a new reading run is what brings new stories.
             return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
-                    "cards": [], "next_cursor": None}
+                    "cards": [], "next_cursor": None, "end_of_run": True}
         if next_cursor is None and frozen["bindings"].get("corpus_has_more"):
             next_cursor = self._cursor(str(payload["frozen_order_id"]), len(cards), int(frozen["expires_at"]))
         return {"schema_version": 1, **self._public_bindings(frozen["bindings"]), "cards": visible, "next_cursor": next_cursor}
@@ -423,7 +426,8 @@ class RankingService:
         seen = {str(card.get("story_id")) for card in frozen.get("cards", ())}
         rows = [row for row in self._pool_rows(category_id, query, profile, composition,
                                                cursor.get("before_published_at"),
-                                               cursor.get("before_story_id"))
+                                               cursor.get("before_story_id"),
+                                               self._hot_cursor(cursor))
                 if str(row.get("story_id")) not in seen]
         if not rows:
             return ()
@@ -442,12 +446,27 @@ class RankingService:
                  for item in finalization.cards]
         if not added:
             return ()
-        boundary = min(rows, key=lambda item: (str(item["published_at"]), str(item["story_id"])))
-        self._store.extend_frozen_order(user_id=owner.user_id, frozen_order_id=frozen_order_id,
-            cards=added, bindings={"corpus_cursor": {"before_published_at": boundary["published_at"],
-                                                     "before_story_id": boundary["story_id"]},
-                                   "corpus_has_more": len(rows) > len(added),
-                                   "continuation_mode": "recipe_only"})
+        # The return is the whole point: the RPC refuses to grow an order past
+        # its cap and returns 0, and a transport failure raises. Serving cards
+        # this store did not accept would show her the same stories again on the
+        # next page turn, and letting the error out would 500 a page turn.
+        try:
+            total = self._store.extend_frozen_order(user_id=owner.user_id,
+                frozen_order_id=frozen_order_id, cards=added,
+                bindings={"corpus_cursor": self._next_corpus_cursor(rows),
+                          "corpus_has_more": len(rows) > len(added),
+                          "continuation_mode": "recipe_only"})
+        except Exception:
+            print(json.dumps({"event": "m2_continuation_failed", "reason": "store_unavailable"},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+            return ()
+        if not isinstance(total, int) or total <= len(frozen.get("cards", ())):
+            # The order did not grow: it has reached its cap, or the row was not
+            # matched. Either way this run is over, and saying so is better than
+            # silently repeating the page she just read.
+            print(json.dumps({"event": "m2_continuation_exhausted", "reason": "order_at_capacity"},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+            return ()
         return tuple(added)
 
     def _record_filtered(self, owner, frozen, removed):
@@ -462,13 +481,58 @@ class RankingService:
         if not run_id or not removed:
             return
         try:
-            self._store.record_reading_run_filter(user_id=owner.user_id, run_id=str(run_id),
-                                                  story_ids=sorted(removed))
+            # Recorded against the run the page was SERVED FROM, even when that
+            # run has since closed. A run closing mid-visit used to open a window
+            # where the filter still applied and nothing was written down, so a
+            # page reviewed later could not be told apart from one that never had
+            # those cards.
+            recorded = self._store.record_reading_run_filter(user_id=owner.user_id,
+                run_id=str(run_id), story_ids=sorted(removed))
+            if not isinstance(recorded, int) or recorded <= 0:
+                print(json.dumps({"event": "m2_filter_not_recorded", "run_id": str(run_id)},
+                                 separators=(",", ":")), file=sys.stderr, flush=True)
         except Exception:
             # A page must render even when the audit write fails. The filter
             # itself already happened; this only records it.
             print(json.dumps({"event": "m2_filter_record_failed", "run_id": str(run_id)},
                              separators=(",", ":")), file=sys.stderr, flush=True)
+
+    @staticmethod
+    def _hot_cursor(cursor):
+        """The hot lane's keyset out of a stored corpus cursor, or None.
+
+        All three parts or none: the SQL refuses half a keyset, because half a
+        keyset silently drops rows at the page boundary.
+        """
+        hot = cursor.get("hot") if isinstance(cursor, Mapping) else None
+        if not isinstance(hot, Mapping):
+            return None
+        count = hot.get("before_source_count")
+        published, story = hot.get("before_published_at"), hot.get("before_story_id")
+        if not isinstance(count, int) or isinstance(count, bool) or not published or not story:
+            return None
+        return (published, story, count)
+
+    @staticmethod
+    def _next_corpus_cursor(rows):
+        """Where the next continuation resumes, carrying BOTH orderings.
+
+        The general lanes resume from the oldest row read. The hot lane resumes
+        from its OWN sort key, carried alongside rather than approximated from a
+        publication time it does not order by.
+        """
+        oldest = min(rows, key=lambda item: (str(item["published_at"]), str(item["story_id"])))
+        cursor = {"before_published_at": oldest["published_at"], "before_story_id": oldest["story_id"]}
+        hot = [row for row in rows
+               if isinstance(row.get("independent_source_count"), int)
+               and not isinstance(row.get("independent_source_count"), bool)]
+        if hot:
+            last = min(hot, key=lambda item: (item["independent_source_count"],
+                                              str(item["published_at"]), str(item["story_id"])))
+            cursor["hot"] = {"before_source_count": last["independent_source_count"],
+                             "before_published_at": last["published_at"],
+                             "before_story_id": last["story_id"]}
+        return cursor
 
     def _slice(self, cards, offset, size, snapshot):
         """One page of the frozen order, with "less like this" applied at RENDER.
@@ -646,7 +710,8 @@ class RankingService:
             kept.append(item)
         return kept
 
-    def _pool_rows(self, category_id, query, profile, composition, before_published, before_story):
+    def _pool_rows(self, category_id, query, profile, composition, before_published, before_story,
+                   hot_cursor=None):
         """Ask the corpus for each lane, then merge.
 
         One "newest N" window can only ever express one ordering, which is why
@@ -657,6 +722,24 @@ class RankingService:
         sources = sorted({source for source, weight in profile.source_affinity.items() if weight > 0})
         quotas = lane_window_quotas(composition, composition.candidate_window_size)
         merged: dict[str, Mapping[str, object]] = {}
+        # The general pool first, unbounded by any lane's age window. Every lane
+        # query carries an age bound (that is what keeps the pools distinct), so
+        # asking only for lanes means a reader with no profile is served from the
+        # last few hours alone and the page comes back short with hundreds of
+        # candidates unread. Python assigns the lanes; this just makes sure the
+        # recipe has a corpus to work from.
+        for row in self._store.retained_candidates_v2(
+                category_id=category_id, query=query, lane=None,
+                profile_categories=(), profile_sources=(),
+                trend_window_hours=composition.trend_window_hours,
+                trend_min_sources=composition.trend_min_independent_sources,
+                max_age_hours=None, min_age_hours=None,
+                limit=min(100, composition.candidate_window_size),
+                before_published_at=before_published, before_story_id=before_story,
+                before_source_count=None):
+            story_id = row.get("story_id")
+            if isinstance(story_id, str):
+                merged.setdefault(story_id, row)
         for lane in composition.lane_priority:
             if lane in ("interested", "surprise") and not (categories or sources):
                 # No profile: the aligned pool degrades to fresh and nothing is
@@ -665,6 +748,17 @@ class RankingService:
             # Over-fetch so caps and spacing have something to choose from, and
             # so a lane whose head is all one source is not silently short.
             limit = min(100, max(quotas[lane] * 3, 10))
+            # The hot lane orders by independent source count first, so it pages
+            # on the WHOLE sort key or on none of it. Half a keyset is refused by
+            # the SQL, and sending one is how the first "load more" past a frozen
+            # order used to error instead of continuing.
+            # The hot lane keeps its OWN cursor, because it does not order by
+            # publication time and the general cursor therefore does not describe
+            # its boundary at all.
+            if lane == "hot":
+                lane_cursor = tuple(hot_cursor) if hot_cursor else (None, None, None)
+            else:
+                lane_cursor = (before_published, before_story, None)
             rows = self._store.retained_candidates_v2(
                 category_id=category_id, query=query, lane=lane,
                 profile_categories=categories, profile_sources=sources,
@@ -678,7 +772,8 @@ class RankingService:
                 # freshness window, instead of spending their fetch budget on
                 # rows the updates lane will claim.
                 min_age_hours=None if lane == "updates" else composition.updates_max_age_hours,
-                limit=limit, before_published_at=before_published, before_story_id=before_story)
+                limit=limit, before_published_at=lane_cursor[0], before_story_id=lane_cursor[1],
+                before_source_count=lane_cursor[2])
             for row in rows:
                 story_id = row.get("story_id")
                 if isinstance(story_id, str) and story_id not in merged:

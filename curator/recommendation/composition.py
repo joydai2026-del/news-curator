@@ -149,7 +149,7 @@ def _text(document: Mapping[str, object], dotted: str, *, maximum: int) -> str:
     return value
 
 
-def parse_composition_policy(document: object) -> CompositionPolicy:
+def parse_composition_policy(document: object, *, retention_days: int | None = None) -> CompositionPolicy:
     if not isinstance(document, Mapping) or document.get("schema_version") != 1:
         raise CompositionPolicyError("invalid composition policy")
 
@@ -227,6 +227,23 @@ def parse_composition_policy(document: object) -> CompositionPolicy:
     # Check 5: a page count the window cannot supply is a promise, not a config.
     if pages != window // page_size:
         raise CompositionPolicyError("run.max_pages_per_run must equal candidate_window_size // page_size")
+    # Check 8: the corpus must still hold the window the feed reads.
+    #
+    # The prune deletes by published_at, and trend.window_hours may be set as
+    # high as 72. A retention of two days with a three-day trend window would
+    # delete rows the hot lane is still counting, and hot would quietly read as
+    # zero. Today's shipped values are safe; the allowed config SPACE was not,
+    # and that is what a validator is for.
+    trend_hours = int(numbers["trend.window_hours"])
+    exploration_hours = int(numbers["exploration.max_age_hours"])
+    if retention_days is not None:
+        needed = max(trend_hours, exploration_hours)
+        if retention_days * 24 < needed:
+            raise CompositionPolicyError(
+                f"coverage.observations_retention_days ({retention_days}) keeps "
+                f"{retention_days * 24} hours, but the feed reads back {needed} hours "
+                "(the larger of trend.window_hours and exploration.max_age_hours). "
+                "Raise the retention, or lower the window.")
 
     return CompositionPolicy(
         lane_ratios=ratios, lane_priority=tuple(priority), page_size=page_size,
@@ -259,8 +276,25 @@ def parse_composition_policy(document: object) -> CompositionPolicy:
     )
 
 
-def load_composition_policy(path: str | Path) -> CompositionPolicy:
-    return parse_composition_policy(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
+def load_composition_policy(path: str | Path, *, retention_days: int | None = None) -> CompositionPolicy:
+    return parse_composition_policy(yaml.safe_load(Path(path).read_text(encoding="utf-8")),
+                                    retention_days=retention_days)
+
+
+def configured_retention_days(sources_path: str | Path = "sources.yaml") -> int | None:
+    """The corpus retention window, read from the file that owns it.
+
+    Returns None when the file or the key is absent, so a deployment that has
+    not adopted the key yet boots exactly as before rather than failing on a
+    cross-file check it cannot satisfy.
+    """
+    path = Path(sources_path)
+    if not path.is_file():
+        return None
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    coverage = document.get("coverage") if isinstance(document, Mapping) else None
+    value = coverage.get("observations_retention_days") if isinstance(coverage, Mapping) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def half_life_weight(age_hours: float, half_life_hours: float) -> float:

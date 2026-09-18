@@ -127,3 +127,36 @@ def test_lane_priority_must_order_every_lane_once(document):
     document["lane_priority"] = ["updates", "updates", "hot", "interested"]
     with pytest.raises(CompositionPolicyError, match="lane_priority"):
         parse_composition_policy(document)
+
+
+def test_check_8_retention_must_cover_the_window_the_feed_reads_back(document):
+    """The prune deletes by published_at. A retention shorter than the window the
+    feed reads back would delete rows the hot lane is still counting, and hot
+    would quietly read as zero."""
+    document["trend"]["window_hours"] = 72
+    document["exploration"]["max_age_hours"] = 48
+    with pytest.raises(CompositionPolicyError, match="retention"):
+        parse_composition_policy(document, retention_days=2)
+    # Exactly enough is enough: 3 days is 72 hours.
+    assert parse_composition_policy(document, retention_days=3).trend_window_hours == 72
+
+
+def test_check_8_also_covers_the_exploration_window(document):
+    document["trend"]["window_hours"] = 24
+    document["exploration"]["max_age_hours"] = 168
+    with pytest.raises(CompositionPolicyError, match="exploration.max_age_hours"):
+        parse_composition_policy(document, retention_days=3)
+    assert parse_composition_policy(document, retention_days=7).exploration_max_age_hours == 168
+
+
+def test_the_shipped_pair_of_files_agrees():
+    from curator.recommendation.composition import configured_retention_days
+    retention = configured_retention_days(POLICY_PATH.parents[1] / "sources.yaml")
+    assert retention == 14
+    load_composition_policy(POLICY_PATH, retention_days=retention)
+
+
+def test_a_deployment_without_the_key_still_boots(document):
+    """None means "not configured", not "zero". A deployment that has not adopted
+    the key yet must boot exactly as before."""
+    assert parse_composition_policy(document, retention_days=None).trend_window_hours == 24

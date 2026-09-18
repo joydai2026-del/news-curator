@@ -25,6 +25,12 @@ from .composition import CompositionPolicy
 from .profile import BehaviorProfile
 
 
+# The order a starving lane's slots are given away in. Aligned first because it
+# is the largest block and its over-representation is the least harmful; surprise
+# last because draining exploration deletes the variety the recipe exists to add.
+BACKFILL_ORDER = ("interested", "updates", "hot", "surprise")
+
+
 @dataclass(frozen=True)
 class LanedCandidate:
     story_id: str
@@ -125,22 +131,50 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
     per_source: dict[str, int] = {}
     chosen: list[LanedCandidate] = []
     seen: set[str] = set()
+
+    def admit(candidate: LanedCandidate) -> bool:
+        if candidate.story_id in seen or len(chosen) >= window_size:
+            return False
+        source_id = str(candidate.row.get("source_id", ""))
+        cap = (policy.per_aggregator_cap_per_window if candidate.row.get("source_is_aggregator")
+               else policy.per_source_cap_per_window)
+        if per_source.get(source_id, 0) >= cap:
+            return False
+        per_source[source_id] = per_source.get(source_id, 0) + 1
+        seen.add(candidate.story_id)
+        chosen.append(candidate)
+        return True
+
     for lane in policy.lane_priority:
         taken = 0
         for candidate in pools[lane]:
             if taken >= quotas[lane] or len(chosen) >= window_size:
                 break
-            if candidate.story_id in seen:
-                continue
-            source_id = str(candidate.row.get("source_id", ""))
-            cap = (policy.per_aggregator_cap_per_window if candidate.row.get("source_is_aggregator")
-                   else policy.per_source_cap_per_window)
-            if per_source.get(source_id, 0) >= cap:
-                continue
-            per_source[source_id] = per_source.get(source_id, 0) + 1
-            seen.add(candidate.story_id)
-            chosen.append(candidate)
-            taken += 1
+            if admit(candidate):
+                taken += 1
+    # A lane that cannot fill its quota leaves window slots empty, and an empty
+    # window slot is a card the reader never sees no matter what the finalizer
+    # does afterwards: it can only redistribute what the window admitted. Without
+    # this, a corpus with no profile (learning off, or a first visit) admitted
+    # only the fresh and hot quotas and the page came back short while hundreds
+    # of candidates sat unused.
+    #
+    # The target is ONE PAGE, not the whole window. Filling the window would let
+    # fresh swallow every leftover slot and undo the mix the quotas exist to
+    # create; filling to a page guarantees the reader a full page and leaves the
+    # rest of the window shaped by the quotas.
+    # One page plus headroom, not the whole window. Filling the window would let
+    # fresh swallow every leftover slot and undo the mix; filling only to exactly
+    # one page leaves the finalizer nothing to work with, and a single duplicate
+    # or already-read story then returns 24 cards. The headroom is that margin.
+    target = min(window_size, policy.page_size + max(5, policy.page_size // 5))
+    for lane in BACKFILL_ORDER:
+        if len(chosen) >= target:
+            break
+        for candidate in pools.get(lane, ()):
+            if len(chosen) >= target:
+                break
+            admit(candidate)
     priority = {lane: index for index, lane in enumerate(policy.lane_priority)}
     chosen.sort(key=lambda item: (priority[item.lane], -item.lane_score, item.story_id))
     return tuple(chosen)
