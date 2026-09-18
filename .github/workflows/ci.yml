@@ -230,3 +230,17 @@ jobs:
           assert not root.findall(".//skipped"), "Candidate dedupe tests must execute, not skip."
           assert root.findall(".//testcase"), "Candidate dedupe evidence is missing."
           PYTHON
+
+      # Phase 2 adds the coverage table, the lane RPC and the reading run. The
+      # partial unique index and the advisory lock are only proven by running
+      # concurrent callers against a real server; a string-matched migration test
+      # proves the file contains some text and nothing else.
+      - name: Verify the M2.1 Phase 2 migrations apply
+        run: |
+          python -m pytest -p no:cacheprovider -q tests/test_m2_phase2_postgres_runtime.py --junitxml=/tmp/phase2-db.xml
+          python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("/tmp/phase2-db.xml").getroot()
+          assert not root.findall(".//skipped"), "Phase 2 migration tests must execute, not skip."
+          assert root.findall(".//testcase"), "Phase 2 migration evidence is missing."
+          PYTHON

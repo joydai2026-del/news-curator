@@ -260,5 +260,6 @@ def test_bounds_reject_large_or_inconsistent_request_values(tmp_path):
 
 
 def test_fixed_command_allowlist_and_no_redirect_transport():
-    assert set(m2_cli._RPC_BUILDERS) == {"history", "consent", "clear-history", "export", "event", "state-event", "interest-event"}
+    assert set(m2_cli._RPC_BUILDERS) == {"history", "consent", "clear-history", "export", "event",
+                                         "state-event", "interest-event", "reading-pages"}
     assert any(type(handler).__name__ == "_NoRedirect" for handler in m2_cli.JsonRestTransport()._opener.handlers)

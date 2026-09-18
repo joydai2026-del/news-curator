@@ -701,6 +701,10 @@
     "source_id", "language", "category_ids", "read_at", "saved_at", "state_revision", "interests"];
   const M2_TRANSLATION_FIELDS = ["title_en", "title_zh", "summary_en", "summary_zh", "translation_status"];
   const M2_CARD_FIELDS = [...M2_CARD_FIELDS_V1, ...M2_TRANSLATION_FIELDS];
+  // Version 3 adds the element labels: why this story is in front of her.
+  const M2_LABEL_FIELDS = ["lane", "lane_label", "surprise_label", "exclusive_label", "also_covered_by"];
+  const M2_CARD_FIELDS_V3 = [...M2_CARD_FIELDS, ...M2_LABEL_FIELDS];
+  const M2_LANES = ["updates", "hot", "interested", "surprise"];
   // Same bound the database column carries, so an oversized translated summary
   // is rejected here rather than rendered.
   const MAX_TRANSLATED_SUMMARY = 32000;
@@ -761,9 +765,16 @@
     value.cards.forEach((card) => {
       // One release accepts both card schemas, so the reader and the ranker can
       // deploy in either order without every card failing validation.
-      const translated = card.card_schema_version === 2;
-      if (![1, 2].includes(card.card_schema_version) ||
-          !exactFields(card, translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) || !STORY_ID.test(card.story_id) ||
+      const labelled = card.card_schema_version === 3;
+      const translated = card.card_schema_version >= 2;
+      if (![1, 2, 3].includes(card.card_schema_version) ||
+          !exactFields(card, labelled ? M2_CARD_FIELDS_V3 : translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) ||
+          !STORY_ID.test(card.story_id) ||
+          (labelled && (!M2_LANES.includes(card.lane) || !boundedString(card.lane_label, 40) ||
+            !(card.surprise_label === null || boundedString(card.surprise_label, 80)) ||
+            !(card.exclusive_label === null || boundedString(card.exclusive_label, 80)) ||
+            !Array.isArray(card.also_covered_by) ||
+            !card.also_covered_by.every((name) => boundedString(name, 200)))) ||
           (translated && (
             !DISPLAY_LANGUAGES.every((code) => typeof card[`title_${code}`] === "string" &&
               card[`title_${code}`].length <= 2000 && typeof card[`summary_${code}`] === "string" &&
@@ -780,6 +791,12 @@
             TOPIC_ID.test(interest.topic_id) && ["more_like", "less_like"].includes(interest.signal) &&
             Number.isSafeInteger(interest.revision) && interest.revision >= 0) ||
           seen.has(card.story_id)) fail("The M2 feed response was invalid.");
+      if (!labelled) {
+        // A ranker that has not shipped the recipe yet sends no labels. The
+        // reader still renders the card; it just has nothing to say about why.
+        card.lane = null; card.lane_label = null; card.surprise_label = null;
+        card.exclusive_label = null; card.also_covered_by = [];
+      }
       if (!translated) {
         const other = card.language === "en" ? "zh" : "en";
         card[`title_${card.language}`] = card.title;
@@ -787,8 +804,8 @@
         card[`title_${other}`] = "";
         card[`summary_${other}`] = "";
         card.translation_status = { [card.language]: "original", [other]: "untranslated" };
-        card.card_schema_version = 2;
       }
+      card.card_schema_version = 3;
       seen.add(card.story_id);
     });
     return value;
@@ -1212,7 +1229,19 @@
         canonical_url: entry.url, topic_ids: topicIds, source_kind: "outlet",
         coverage_mentions: [], topic_ranks: {}, ranking_explanation: reason,
         translation_mark: status === "untranslated"
-          ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "" };
+          ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "",
+        element_labels: [entry.lane_label, entry.surprise_label, entry.exclusive_label]
+          .filter((label) => typeof label === "string" && label !== "") };
+    }
+    // Every card says why it is on the page. The wording comes from the server,
+    // which reads it from config, so renaming a pool never means editing the
+    // reader.
+    function markElementLabels(card, row) {
+      if (!row.element_labels || !row.element_labels.length) return;
+      const strip = element("p", "element-labels");
+      row.element_labels.forEach((text) => strip.append(element("span", "element-label", text)));
+      strip.dataset.lane = row.lane || "";
+      card.querySelector(".story-heading")?.after(strip);
     }
     function markUntranslated(card, row) {
       if (!row.translation_mark) return;
@@ -1272,6 +1301,7 @@
         // live search box. Omitting it here blanked the page on every toggle.
         card.dataset.m2Query = (searchBox?.value.trim() || "").toLowerCase();
         markUntranslated(card, row);
+        markElementLabels(card, row);
         const interest = card.querySelector(".interest-action");
         if (interest) {
           const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
@@ -1339,6 +1369,7 @@
           interest.after(less);
         }
         markUntranslated(card, row);
+        markElementLabels(card, row);
         cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });

@@ -57,20 +57,34 @@ function response(value, url) { return { ok: true, redirected: false, url,
   await assert.rejects(() => stale.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
   assert.throws(() => reader.validateM2Config({ ...config, provider_retention_url: "javascript:bad" }), /configuration/);
 
-  // Deploy-order safety: one release accepts a version-1 card (an older ranker)
-  // and a version-2 card (this one), in either direction.
+  // Deploy-order safety: one release accepts a version-1 card (an older ranker),
+  // a version-2 card, and a version-3 card (this one), in either direction. Every
+  // one normalizes to the rendered shape, which is version 3.
   const expectation = { ...history, policy_version: config.policy_version, model_version: config.model_version,
     history_revision: history.included_history_revision, server_commit_revision: history.history_revision,
     page_size: config.page_size };
   const legacyCard = { ...payload().cards[0], card_schema_version: 1 };
   ["title_en", "title_zh", "summary_en", "summary_zh", "translation_status"].forEach((field) => { delete legacyCard[field]; });
   const legacy = reader.validateM2Response(payload({ cards: [legacyCard] }), expectation);
-  assert.equal(legacy.cards[0].card_schema_version, 2, "a version-1 card normalizes to the rendered shape");
+  assert.equal(legacy.cards[0].card_schema_version, 3, "a version-1 card normalizes to the rendered shape");
+  assert.equal(legacy.cards[0].lane, null, "an unlabelled card renders without inventing a label");
+  assert.deepEqual(legacy.cards[0].also_covered_by, []);
   assert.equal(legacy.cards[0].title_en, legacyCard.title);
   assert.equal(legacy.cards[0].title_zh, "");
   assert.deepEqual(legacy.cards[0].translation_status, { en: "original", zh: "untranslated" });
   const current = reader.validateM2Response(payload(), expectation);
-  assert.equal(current.cards[0].card_schema_version, 2);
+  assert.equal(current.cards[0].card_schema_version, 3);
+  // A version-3 card carries the element labels through untouched.
+  const labelled = { ...payload().cards[0], card_schema_version: 3, lane: "surprise",
+    lane_label: "surprise", surprise_label: "you might not have looked for this",
+    exclusive_label: null, also_covered_by: ["Reuters"] };
+  const withLabels = reader.validateM2Response(payload({ cards: [labelled] }), expectation);
+  assert.equal(withLabels.cards[0].lane_label, "surprise");
+  assert.equal(withLabels.cards[0].surprise_label, "you might not have looked for this");
+  assert.deepEqual(withLabels.cards[0].also_covered_by, ["Reuters"]);
+  // An unknown pool name is refused, so a renamed lane cannot render unchecked.
+  assert.throws(() => reader.validateM2Response(
+    payload({ cards: [{ ...labelled, lane: "trending" }] }), expectation), /feed response/);
   // A version-1 card carrying translation fields is still rejected, and so is
   // an oversized translated summary.
   assert.throws(() => reader.validateM2Response(payload({ cards: [{ ...payload().cards[0], card_schema_version: 1 }] }), expectation), /feed response/);

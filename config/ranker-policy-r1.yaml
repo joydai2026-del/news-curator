@@ -2,9 +2,12 @@ schema_version: 1
 provider: openai
 model: gpt-5-mini
 endpoint: https://api.openai.com/v1
-prompt_revision: m2-rankllm-json-r3
-prompt_template: config/rankllm-news-curator-json.yaml
-maximum_output_tokens: 2048
+prompt_revision: m2-rankllm-predictions-r1
+prompt_template: config/rankllm-news-curator-predictions.yaml
+# Raised for the five-field prediction payload. The engine sizes its own
+# guard from the answer it actually asks for, so this and the schema move
+# together instead of the old permutation arithmetic silently rejecting.
+maximum_output_tokens: 8192
 reasoning_token_allowance: 1024
 prompt_framing_token_allowance: 1024
 prompt_framing_tokens_per_message: 8

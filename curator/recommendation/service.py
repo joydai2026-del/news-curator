@@ -551,8 +551,11 @@ class RankingService:
     @staticmethod
     def _public_bindings(bindings):
         fields = ("request_id", "policy_version", "model_version", "history_revision", "history_generation",
-                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason",
-                  "run_id", "short_lane_reasons", "lane_counts", "calibration_alarm")
+                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason")
+        # run_id, short_lane_reasons, lane_counts and calibration_alarm are
+        # PERSISTED on the frozen order and read back by m2_owner_reading_pages.
+        # They are deliberately not in the response: the reader validates its
+        # fields exactly, so widening the wire shape would break every card.
         return {key: bindings[key] for key in fields if key in bindings}
 
     @classmethod
