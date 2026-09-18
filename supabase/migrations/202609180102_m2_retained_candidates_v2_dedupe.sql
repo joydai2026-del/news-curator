@@ -28,6 +28,16 @@ begin;
 -- that reached the window through different lanes). This is the projection
 -- rule, which is stronger, because it keeps a duplicate from consuming a
 -- candidate slot in the first place.
+
+-- DROP THE OLD SIGNATURE FIRST. `create or replace` with a different parameter
+-- list creates a second OVERLOAD rather than replacing anything, and PostgreSQL
+-- then refuses every named-argument call as ambiguous ("could not choose a best
+-- candidate function"). The first draft of this file dropped it afterwards, and
+-- with the type list one short, so both survived and the lane RPC stopped
+-- answering at all.
+drop function if exists public.m2_retained_candidates_v2(
+  text, text, text, text[], text[], integer, integer, integer, integer, timestamptz, text, integer, integer);
+
 create or replace function public.m2_retained_candidates_v2(
   p_category_id text default null, p_query text default null,
   p_lane text default null,
@@ -137,10 +147,6 @@ begin
   limit p_limit;
 end;
 $$;
-
--- The old signature carried one fewer parameter; drop it so a caller cannot
--- reach a version without the dedupe rule.
-drop function if exists public.m2_retained_candidates_v2(text, text, text, text[], text[], integer, integer, integer, integer, timestamptz, text, integer);
 
 revoke all on function public.m2_retained_candidates_v2(text, text, text, text[], text[], integer, integer, integer, integer, timestamptz, text, integer, integer, integer)
   from public, anon, authenticated;

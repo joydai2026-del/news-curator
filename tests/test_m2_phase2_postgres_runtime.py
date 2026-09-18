@@ -368,6 +368,15 @@ def test_the_writer_is_idempotent_across_runs(db):
 
 # --- the lane RPC ----------------------------------------------------------
 
+def test_exactly_one_lane_rpc_overload_exists(db):
+    """`create or replace` with a different parameter list creates a SECOND
+    overload, and PostgreSQL then refuses every named-argument call as
+    ambiguous. Caught in CI, not by reading the file."""
+    result = _sql(db, "select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
+                      "where n.nspname = 'public' and p.proname = 'm2_retained_candidates_v2';")
+    assert _last(result) == '1', 'more than one v2 overload exists; named calls will be ambiguous'
+
+
 def test_the_lane_rpc_inherits_the_dedupe_rule(db):
     """The Phase 2 feed reads exclusively through v2, so a dedupe rule that lives
     only in m2_retained_candidates would be a fix on a path nothing calls."""
