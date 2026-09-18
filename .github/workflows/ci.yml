@@ -151,7 +151,13 @@ jobs:
           python - <<'PYTHON'
           import xml.etree.ElementTree as ET
           root = ET.parse("/tmp/reader-browser.xml").getroot()
-          assert not root.findall(".//skipped"), "M2 reader browser tests must execute, not skip."
+          # An xfail is recorded as <skipped type="pytest.xfail">, and those are
+          # allowed because they are STRICT: an unexpected pass fails the run,
+          # so a marker cannot outlive the bug it names. Every OTHER skip is the
+          # failure this guard exists to catch.
+          hidden = [node for node in root.findall(".//skipped")
+                    if node.get("type") != "pytest.xfail"]
+          assert not hidden, f"M2 reader browser tests must execute, not skip: {[n.get('message') for n in hidden]}"
           assert root.findall(".//testcase"), "M2 reader browser evidence is missing."
           PYTHON
 

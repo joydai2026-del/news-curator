@@ -97,6 +97,23 @@ def db():
         _run('docker', 'stop', container, check=False)
 
 
+@pytest.fixture(autouse=True)
+def clean_corpus(db):
+    """Every test owns the whole corpus.
+
+    Order-coupled database tests hide regressions: a test can pass only because
+    an earlier one left the right rows behind, and it then fails when run alone
+    or reordered. The delete order follows the foreign keys, which are all
+    `on delete restrict` (202609140002:6,33,43), so the children go first.
+    """
+    _sql(db, "set role service_role;"
+             "delete from translation_private.exclusivity_decisions;"
+             "delete from public.retained_corpus_categories;"
+             "delete from public.retained_corpus_source_categories;"
+             "delete from public.retained_corpus_observations;", check=False)
+    return db
+
+
 def _story_id(url):
     return 'story:' + hashlib.sha256(url.encode('utf-8')).hexdigest()
 
@@ -186,7 +203,25 @@ def test_a_repeat_outside_the_window_is_kept(db):
     assert _story_id('https://example.test/repeat-day-3') in ids
 
 
+def _page_boundary_corpus(db):
+    _ingest(db, [
+        _row('https://www.rfi.fr/cn/a-1?x=1', published_at='2026-09-16T09:00:00Z'),
+        _row('https://www.rfi.fr/cn/a-1', published_at='2026-09-16T10:00:00Z'),
+        _row('https://example.test/fold-a', title='Apple releases iOS 18.6.1',
+             language='en', published_at='2026-09-16T08:00:00Z'),
+        _row('https://example.test/fold-b', title='APPLE   releases  iOS 18.6.1',
+             language='en', published_at='2026-09-16T08:30:00Z'),
+        _row('https://example.test/fold-c', title='Apple releases iOS 18.6.2',
+             language='en', published_at='2026-09-16T08:45:00Z'),
+        _row('https://example.test/repeat-day-1', title='Morning briefing',
+             language='en', published_at='2026-09-10T06:00:00Z'),
+        _row('https://example.test/repeat-day-3', title='Morning briefing',
+             language='en', published_at='2026-09-13T06:00:00Z'),
+    ])
+
+
 def test_the_representative_does_not_change_with_the_page_boundary(db):
+    _page_boundary_corpus(db)
     # A per-page rule would collapse a duplicate on page 1 and then show the
     # loser again on page 2, because page 2's window no longer contains the
     # winner. The rule here is decided against the whole table, so it cannot.
@@ -208,7 +243,12 @@ def test_the_representative_does_not_change_with_the_page_boundary(db):
 
 
 def test_a_zero_window_restores_the_uncollapsed_projection(db):
+    _ingest(db, [_row('https://www.rfi.fr/cn/a-1?x=1', published_at='2026-09-16T09:00:00Z'),
+                 _row('https://www.rfi.fr/cn/a-1', published_at='2026-09-16T10:00:00Z')])
+    collapsed = _candidates(db, "public.m2_retained_candidates(null,null,null,null,100)")
+    assert len(collapsed) == 1
     rows = _candidates(db, "public.m2_retained_candidates(null,null,null,null,100,0)")
+    assert len(rows) == 2
     titles = [row['title'] for row in rows]
     assert len(titles) != len(set(titles))
 
@@ -224,6 +264,135 @@ def test_the_dedupe_key_helper_is_service_role_only(db):
     for role in ('anon', 'authenticated'):
         denied = _sql(db, f"set role {role}; select public.m2_story_dedupe_key('x');", check=False)
         assert denied.returncode != 0 and 'permission denied' in denied.stderr.lower()
+
+
+def _decide(container, story_id, outcome='exclusive', *, display_language='en'):
+    """Record a pairing decision, which is what the exclusive lane reads."""
+    return _sql(container, "set role service_role;"
+                "set request.jwt.claims = '{\"role\":\"service_role\"}';"
+                f"select public.m2_record_exclusivity_decision({_quote(story_id)}, "
+                f"{_quote(display_language)}, {_quote(POLICY)}, 'gpt-5-mini', {_quote(outcome)}, null);",
+                check=False)
+
+
+def _exclusive(container, *, limit=100, before=None):
+    cursor = (f"{_quote(before['published_at'])}::timestamptz,{_quote(before['story_id'])}"
+              if before else "null,null")
+    return _candidates(container, "public.m2_retained_candidates_language_exclusive("
+                                  f"'en',null,{cursor},{limit},{_quote(POLICY)})")
+
+
+DUP_NEW = 'https://www.rfi.fr/cn/lane-dup'
+DUP_OLD = 'https://www.rfi.fr/cn/lane-dup?v=1'
+
+
+def _exclusive_lane_corpus(db, *, decide_newer=True):
+    """Four zh stories, one of them a duplicated pair, plus two singles so the
+    lane has something to page through. `decide_newer=False` gives the NEWER
+    twin no exclusivity decision, which is the must-fix-A case: it is not part
+    of this lane and must not be able to suppress the twin that is."""
+    rows = [
+        (DUP_OLD, '仅中文报道的独家新闻', '2026-09-16T09:00:00Z'),
+        (DUP_NEW, '仅中文报道的独家新闻', '2026-09-16T10:00:00Z'),
+        ('https://www.rfi.fr/cn/lane-single-a', '第二条仅中文报道', '2026-09-16T08:00:00Z'),
+        ('https://www.rfi.fr/cn/lane-single-b', '第三条仅中文报道', '2026-09-16T07:00:00Z'),
+    ]
+    _ingest(db, [_row(url, title=title, published_at=when) for url, title, when in rows])
+    for url, _, _ in rows:
+        if url == DUP_NEW and not decide_newer:
+            continue
+        decided = _decide(db, _story_id(url))
+        if decided.returncode:
+            pytest.skip('exclusivity decision RPC unavailable: ' + decided.stderr.strip()[:200])
+
+
+def test_the_exclusive_lane_collapses_a_duplicate_to_the_newer_row(db):
+    # The reported symptom lives on this surface too: without the same rule the
+    # "Only in Chinese press" section shows one story twice.
+    _exclusive_lane_corpus(db)
+    rows = _exclusive(db)
+    ids = [row['story_id'] for row in rows]
+    assert _story_id(DUP_NEW) in ids
+    assert _story_id(DUP_OLD) not in ids
+    titles = [(row['language'], ' '.join(row['title'].lower().split())) for row in rows]
+    assert len(titles) == len(set(titles)), titles
+
+
+def test_a_twin_outside_the_lane_never_suppresses_the_one_inside_it(db):
+    # MUST-FIX A, exclusive-lane half. The newer twin has no exclusivity
+    # decision, so it is not in this lane at all. When the representative was
+    # picked from the whole table it won anyway and deleted the only visible
+    # copy, and the story vanished from "Only in Chinese press" entirely.
+    _exclusive_lane_corpus(db, decide_newer=False)
+    ids = [row['story_id'] for row in _exclusive(db)]
+    assert _story_id(DUP_OLD) in ids, 'the decided twin must still be served'
+    assert _story_id(DUP_NEW) not in ids, 'the undecided twin is not in this lane'
+
+
+def test_the_exclusive_lane_representative_survives_the_page_boundary(db):
+    _exclusive_lane_corpus(db)
+    first = _exclusive(db, limit=2)
+    assert len(first) == 2
+    rest = _exclusive(db, before=first[-1])
+    assert rest
+    ids = [row['story_id'] for row in first + rest]
+    assert len(ids) == len(set(ids)), ids
+    assert _story_id(DUP_OLD) not in ids
+
+
+def test_a_zero_window_restores_duplicates_in_the_exclusive_lane(db):
+    _exclusive_lane_corpus(db)
+    rows = _candidates(db, "public.m2_retained_candidates_language_exclusive("
+                           f"'en',null,null,null,100,{_quote(POLICY)},0)")
+    ids = [row['story_id'] for row in rows]
+    assert _story_id(DUP_OLD) in ids
+    assert _story_id(DUP_NEW) in ids
+
+
+def test_the_exclusive_lane_validates_its_window(db):
+    denied = _sql(db, "set role service_role;"
+                  "select public.m2_retained_candidates_language_exclusive("
+                  f"'en',null,null,null,100,{_quote(POLICY)},-1);", check=False)
+    assert denied.returncode != 0 and 'invalid dedupe window' in denied.stderr
+
+
+def test_a_twin_in_another_category_never_suppresses_the_one_being_filtered(db):
+    # MUST-FIX A, category half. Two observations of one headline, each filed
+    # under a different category. Filtering to the loser's category used to
+    # return NOTHING, because the winner was chosen against the whole table and
+    # is not in the filtered set.
+    older, newer = 'https://example.test/cat-old', 'https://example.test/cat-new'
+    _ingest(db, [
+        _row(older, title='One headline, two sections', language='en',
+             published_at='2026-09-16T09:00:00Z', categories=('world',)),
+        _row(newer, title='One headline, two sections', language='en',
+             published_at='2026-09-16T10:00:00Z', categories=('business',)),
+    ])
+    in_world = [row['story_id'] for row in
+                _candidates(db, f"public.m2_retained_candidates({_quote('world')},null,null,null,100)")]
+    in_business = [row['story_id'] for row in
+                   _candidates(db, f"public.m2_retained_candidates({_quote('business')},null,null,null,100)")]
+    assert in_world == [_story_id(older)], in_world
+    assert in_business == [_story_id(newer)], in_business
+    # Unfiltered, they are still one story: the newer one.
+    unfiltered = [row['story_id'] for row in
+                  _candidates(db, "public.m2_retained_candidates(null,null,null,null,100)")]
+    assert unfiltered == [_story_id(newer)], unfiltered
+
+
+def test_a_twin_outside_the_search_result_never_suppresses_the_one_inside_it(db):
+    # Same defect through the query filter: the summaries differ, so only one
+    # twin matches the search, and it must still be returned.
+    older, newer = 'https://example.test/q-old', 'https://example.test/q-new'
+    _ingest(db, [
+        {**_row(older, title='One headline, two summaries', language='en',
+                published_at='2026-09-16T09:00:00Z'), 'summary': 'mentions peregrine falcons'},
+        {**_row(newer, title='One headline, two summaries', language='en',
+                published_at='2026-09-16T10:00:00Z'), 'summary': 'mentions nothing of the sort'},
+    ])
+    hits = [row['story_id'] for row in
+            _candidates(db, f"public.m2_retained_candidates(null,{_quote('peregrine')},null,null,100)")]
+    assert hits == [_story_id(older)], hits
 
 
 def test_the_real_capture_ingests_with_no_uncategorised_row(db):

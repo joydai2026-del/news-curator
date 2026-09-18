@@ -26,10 +26,26 @@ begin;
 -- and whitespace collapsing, in the SAME language, inside the same window the
 -- in-batch deduper already uses (`sources.yaml` `dedup.time_bucket_hours: 36`).
 --
--- One representative is chosen GLOBALLY, never per page: the row that sorts
--- first in this function's own order (published_at desc, story_id desc). The
--- choice therefore does not depend on the cursor, so a duplicate cannot
--- reappear on page 2 after being collapsed on page 1.
+-- One representative is chosen per VISIBLE SET, never per page.
+--
+-- "Visible set" is load-bearing and was got wrong in the first draft of this
+-- migration: the peer subquery read the whole observations table, so the
+-- winner could be a row the caller cannot see, and the story then showed ZERO
+-- times instead of once. Two ways that happened:
+--
+--   * twins in different categories. Filtering to one category left the loser,
+--     and its winner was not in the filtered set, so the category lost the
+--     story entirely.
+--   * the exclusive lane. A newer twin with no `exclusivity_decisions` row
+--     suppressed the older twin that HAD one, so a genuinely
+--     Chinese-exclusive story fell out of "Only in Chinese press".
+--
+-- The representative is therefore chosen inside a CTE that has already applied
+-- the caller's own filters (category, query, and for the lane the decision
+-- join and the group check), and the CURSOR is applied afterwards. Filters
+-- first means the winner is always a row the caller can see; cursor last means
+-- the choice does not depend on which page was asked for, so a duplicate
+-- cannot reappear on page 2 after being collapsed on page 1.
 
 create or replace function public.m2_story_dedupe_key(p_title text)
 returns text language sql immutable parallel safe
@@ -60,25 +76,32 @@ begin
     raise exception 'invalid dedupe window';
   end if;
   return query
+  with visible as (
+    -- The caller's own filters, and ONLY those. The cursor is deliberately not
+    -- here: the representative must not depend on the page being asked for.
+    select o.* from public.retained_corpus_observations o
+    where (p_category_id is null or exists (select 1 from public.retained_corpus_categories where story_id=o.story_id and category_id=p_category_id))
+      and (p_query is null or btrim(p_query) = '' or
+        (p_query !~ '[一-龥]' and o.search_document @@ websearch_to_tsquery('simple', p_query)) or
+        (p_query ~ '[一-龥]' and position(lower(btrim(p_query)) in lower(o.title || E'\n' || o.summary)) > 0))
+  ), chosen as (
+    select v.* from visible v
+    where p_dedupe_window_hours = 0 or public.m2_story_dedupe_key(v.title) = '' or not exists (
+      select 1 from visible peer
+      where peer.language = v.language
+        and public.m2_story_dedupe_key(peer.title) = public.m2_story_dedupe_key(v.title)
+        and abs(extract(epoch from (peer.published_at - v.published_at))) <= p_dedupe_window_hours * 3600
+        and (peer.published_at, peer.story_id) > (v.published_at, v.story_id))
+  )
   select jsonb_build_object('schema_version', 1, 'story_id', o.story_id, 'title', o.title, 'summary', o.summary,
     'language', o.language, 'canonical_url', o.canonical_url, 'source_id', o.source_id, 'source_name', o.source_name,
     'published_at', o.published_at, 'source_observed_at', o.source_observed_at, 'first_ingested_at', o.first_ingested_at, 'last_ingested_at', o.last_ingested_at, 'first_ready_at', o.first_ready_at, 'last_ready_at', o.last_ready_at,
     'category_ids', coalesce(c.category_ids, '[]'::jsonb),
     'title_translations', o.title_translations, 'summary_translations', o.summary_translations,
     'event_group_id', o.event_group_id)
-  from public.retained_corpus_observations o
+  from chosen o
   left join lateral (select jsonb_agg(category_id order by category_id) category_ids from public.retained_corpus_categories where story_id = o.story_id) c on true
-  where (p_category_id is null or exists (select 1 from public.retained_corpus_categories where story_id=o.story_id and category_id=p_category_id))
-    and (p_query is null or btrim(p_query) = '' or
-      (p_query !~ '[一-龥]' and o.search_document @@ websearch_to_tsquery('simple', p_query)) or
-      (p_query ~ '[一-龥]' and position(lower(btrim(p_query)) in lower(o.title || E'\n' || o.summary)) > 0))
-    and (p_dedupe_window_hours = 0 or public.m2_story_dedupe_key(o.title) = '' or not exists (
-      select 1 from public.retained_corpus_observations peer
-      where peer.language = o.language
-        and public.m2_story_dedupe_key(peer.title) = public.m2_story_dedupe_key(o.title)
-        and abs(extract(epoch from (peer.published_at - o.published_at))) <= p_dedupe_window_hours * 3600
-        and (peer.published_at, peer.story_id) > (o.published_at, o.story_id)))
-    and (p_before_published_at is null or o.published_at < p_before_published_at or (o.published_at = p_before_published_at and o.story_id < p_before_story_id))
+  where (p_before_published_at is null or o.published_at < p_before_published_at or (o.published_at = p_before_published_at and o.story_id < p_before_story_id))
   order by o.published_at desc, o.story_id desc limit p_limit;
 end;
 $$;
@@ -102,6 +125,33 @@ begin
     raise exception 'invalid dedupe window';
   end if;
   return query
+  with visible as (
+    -- Everything that makes a row part of THIS lane: the model's exclusivity
+    -- decision under the current policy, the language, and the group check.
+    -- A row outside this set must never be able to suppress a row inside it.
+    select o.* from public.retained_corpus_observations o
+    join translation_private.exclusivity_decisions d
+      on d.story_id = o.story_id
+     and d.display_language = p_display_language
+     and d.outcome = 'exclusive'
+     and d.policy_id = p_policy_id
+    where o.language <> p_display_language
+      and not exists (
+        select 1 from public.retained_corpus_observations peer
+        where o.event_group_id is not null and peer.event_group_id = o.event_group_id
+          and peer.language = p_display_language)
+      and (p_query is null or btrim(p_query) = '' or
+        (p_query !~ '[一-龥]' and o.search_document @@ websearch_to_tsquery('simple', p_query)) or
+        (p_query ~ '[一-龥]' and position(lower(btrim(p_query)) in lower(o.title || E'\n' || o.summary)) > 0))
+  ), chosen as (
+    select v.* from visible v
+    where p_dedupe_window_hours = 0 or public.m2_story_dedupe_key(v.title) = '' or not exists (
+      select 1 from visible peer
+      where peer.language = v.language
+        and public.m2_story_dedupe_key(peer.title) = public.m2_story_dedupe_key(v.title)
+        and abs(extract(epoch from (peer.published_at - v.published_at))) <= p_dedupe_window_hours * 3600
+        and (peer.published_at, peer.story_id) > (v.published_at, v.story_id))
+  )
   select jsonb_build_object('schema_version', 1, 'story_id', o.story_id, 'title', o.title, 'summary', o.summary,
     'language', o.language, 'canonical_url', o.canonical_url, 'source_id', o.source_id, 'source_name', o.source_name,
     'published_at', o.published_at, 'source_observed_at', o.source_observed_at, 'first_ingested_at', o.first_ingested_at,
@@ -109,29 +159,10 @@ begin
     'category_ids', coalesce(c.category_ids, '[]'::jsonb),
     'title_translations', o.title_translations, 'summary_translations', o.summary_translations,
     'event_group_id', o.event_group_id)
-  from public.retained_corpus_observations o
-  join translation_private.exclusivity_decisions d
-    on d.story_id = o.story_id
-   and d.display_language = p_display_language
-   and d.outcome = 'exclusive'
-   and d.policy_id = p_policy_id
+  from chosen o
   left join lateral (select jsonb_agg(category_id order by category_id) category_ids
                      from public.retained_corpus_categories where story_id = o.story_id) c on true
-  where o.language <> p_display_language
-    and not exists (
-      select 1 from public.retained_corpus_observations peer
-      where o.event_group_id is not null and peer.event_group_id = o.event_group_id
-        and peer.language = p_display_language)
-    and (p_query is null or btrim(p_query) = '' or
-      (p_query !~ '[一-龥]' and o.search_document @@ websearch_to_tsquery('simple', p_query)) or
-      (p_query ~ '[一-龥]' and position(lower(btrim(p_query)) in lower(o.title || E'\n' || o.summary)) > 0))
-    and (p_dedupe_window_hours = 0 or public.m2_story_dedupe_key(o.title) = '' or not exists (
-      select 1 from public.retained_corpus_observations peer
-      where peer.language = o.language
-        and public.m2_story_dedupe_key(peer.title) = public.m2_story_dedupe_key(o.title)
-        and abs(extract(epoch from (peer.published_at - o.published_at))) <= p_dedupe_window_hours * 3600
-        and (peer.published_at, peer.story_id) > (o.published_at, o.story_id)))
-    and (p_before_published_at is null or o.published_at < p_before_published_at or (o.published_at = p_before_published_at and o.story_id < p_before_story_id))
+  where (p_before_published_at is null or o.published_at < p_before_published_at or (o.published_at = p_before_published_at and o.story_id < p_before_story_id))
   order by o.published_at desc, o.story_id desc limit p_limit;
 end;
 $$;

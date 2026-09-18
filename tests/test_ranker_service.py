@@ -33,7 +33,8 @@ class Store:
 
 def service(enabled=True, clock=lambda: 1000):
     return RankingService(auth=Auth(), store=Store(), adapter=object(),
-        policy=ServicePolicy("policy", "model", "provider", "tenant", enabled=enabled), cursor_key=b"x" * 32, clock=clock)
+        policy=ServicePolicy("policy", "model", "provider", "tenant", enabled=enabled,
+                             preview_owner_ids=("user",)), cursor_key=b"x" * 32, clock=clock)
 
 
 def test_disabled_service_fails_before_authentication():
@@ -134,7 +135,8 @@ def test_equal_time_corpus_cursor_has_no_gap_or_duplicate_across_fifty_candidate
         "policy", input_cost_per_million_tokens_usd=.25, output_cost_per_million_tokens_usd=2), engine=object())
     subject = RankingService(auth=Auth(), store=store, adapter=adapter,
         policy=ServicePolicy("policy", "gpt-5-mini", "policy", "tenant", candidate_limit=50,
-            maximum_page_size=25, enabled=True), cursor_key=b"x" * 32, clock=lambda: 1000)
+            maximum_page_size=25, enabled=True, preview_owner_ids=("user",)),
+        cursor_key=b"x" * 32, clock=lambda: 1000)
     body = {"history_revision": 0, "server_commit_revision": 0, "history_generation": 1,
         "consent_revision": 1, "page_size": 25}
     response = subject.rank(authorization="Bearer valid", body=body)

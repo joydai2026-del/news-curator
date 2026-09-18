@@ -112,7 +112,7 @@ def test_successful_usage_reconciles_cost_and_keeps_private_execution_out_of_res
         max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=engine)
     store=LocalStore()
     service=RankingService(auth=Auth(),store=store,adapter=adapter,
-        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),cursor_key=b'x'*32)
+        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True,preview_owner_ids=('local-owner',)),cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
         history_generation=1,consent_revision=1,policy_version='test-policy',model_version='test-model'))
     assert response['result_mode']=='model'
@@ -148,7 +148,7 @@ def test_invalid_permutation_still_settles_reported_usage():
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
         max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=engine)
     store=Store(); service=RankingService(auth=Auth(),store=store,adapter=adapter,
-        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),cursor_key=b'x'*32)
+        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True,preview_owner_ids=('local-owner',)),cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
         history_generation=1,consent_revision=1))
     assert response['result_mode']=='fallback' and response['fallback_reason']=='invalid_provider_permutation'
@@ -185,7 +185,7 @@ def test_ambiguous_provider_failure_keeps_reservation_unsettled(provider_error, 
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
         max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=Engine())
     store=Store(); service=RankingService(auth=Auth(),store=store,adapter=adapter,
-        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),cursor_key=b'x'*32)
+        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True,preview_owner_ids=('local-owner',)),cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
         history_generation=1,consent_revision=1))
     assert response['fallback_reason']==expected_reason
@@ -226,7 +226,7 @@ def test_real_engine_preserves_safe_provider_category_and_unknown_charge(failure
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
         max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=engine)
     store=Store(); service=RankingService(auth=Auth(),store=store,adapter=adapter,
-        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),cursor_key=b'x'*32)
+        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True,preview_owner_ids=('local-owner',)),cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,
         server_commit_revision=0,history_generation=1,consent_revision=1))
     assert response['fallback_reason']==expected_reason
@@ -261,7 +261,7 @@ def test_definite_pre_call_fallback_releases_zero_charge_reservation(
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider',adapter_model,'https://provider.example','test-policy',
         max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=Engine(),**kwargs)
     store=Store(); service=RankingService(auth=Auth(),store=store,adapter=adapter,
-        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),cursor_key=b'x'*32)
+        policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True,preview_owner_ids=('local-owner',)),cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
         history_generation=1,consent_revision=1))
     assert response['fallback_reason']==expected_reason
@@ -310,7 +310,7 @@ def test_service_reports_truthful_pre_call_fallback_reason(case, expected_reason
         max_retries=0,request_cost_limit_usd=request_limit,input_cost_per_million_tokens_usd=input_price,
         output_cost_per_million_tokens_usd=2),engine=engine)
     store=Store(); service=RankingService(auth=type('Auth',(),{'get_user':lambda self,token:{'id':'local-owner'}})(),
-        store=store,adapter=adapter,policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True),
+        store=store,adapter=adapter,policy=ServicePolicy('test-policy','test-model','test-policy','local-tenant',enabled=True,preview_owner_ids=('local-owner',)),
         cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(history_revision=0,server_commit_revision=0,
         history_generation=1,consent_revision=1))
@@ -342,7 +342,7 @@ def test_service_accepts_no_consent_snapshot_zero_without_provider_or_budget_cal
         output_cost_per_million_tokens_usd=2),engine=Engine())
     store=Store(); service=RankingService(auth=type('Auth',(),{'get_user':lambda self,token:{'id':'local-owner'}})(),
         store=store,adapter=adapter,policy=ServicePolicy('test-policy','test-model','test-policy',
-        'local-tenant',enabled=True),cursor_key=b'x'*32)
+        'local-tenant',enabled=True,preview_owner_ids=('local-owner',)),cursor_key=b'x'*32)
     response=service.rank(authorization='Bearer local-test',body=dict(schema_version=1,
         policy_version='test-policy',model_version='test-model',history_revision=0,
         server_commit_revision=0,history_generation=1,consent_revision=0,page_size=25,
