@@ -35,6 +35,18 @@ returns trigger language plpgsql security definer set search_path=pg_catalog,pub
 declare current_generation bigint; current_revision bigint; settings public.user_behavior_settings%rowtype;
         run_is_open boolean := false;
 begin
+  -- An UPDATE that changes neither the cards nor the bindings is not a ranking
+  -- write and must not be re-validated. The FK on run_id is `on delete set
+  -- null`, so closing or deleting a reading run issues exactly such an update,
+  -- and re-running the epoch check there made deleting a run fail with "stale
+  -- frozen ranking bindings" (caught live by the CI database job, not by
+  -- reading). The guarantee is about what an order CONTAINS, so it is checked
+  -- when that changes.
+  if tg_op = 'UPDATE'
+     and new.bindings is not distinct from old.bindings
+     and new.cards is not distinct from old.cards then
+    return new;
+  end if;
   -- Close the check-then-insert race with reset/revocation. A late provider
   -- result waits behind the same lock and cannot recreate erased private cards.
   perform pg_advisory_xact_lock(hashtextextended(new.user_id::text || ':behavior',0));

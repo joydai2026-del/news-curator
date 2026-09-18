@@ -645,6 +645,24 @@ def test_a_continuation_appends_to_the_same_order(db):
     assert _last(stored) == 'First|Older', 'the first page must not move'
 
 
+def test_closing_a_reading_run_does_not_fail_on_its_own_frozen_orders(db):
+    """The FK is `on delete set null`, so deleting a run UPDATES every ranking
+    that names it. That update changes no cards and no bindings, so it is not a
+    ranking write and must not be re-validated."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _behavior_revision(db, OWNER, 11)
+    cards = [{"story_id": _story_id(MULTI_OUTLET), "title": "Headline", "source_name": "Reuters",
+              "lane": "hot", "lane_label": "hot", "surprise_label": None, "exclusive_label": None}]
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=11,
+                        run_id=run['run_id']) is not None
+    # The behavior revision then moves, as it does all day.
+    _behavior_revision(db, OWNER, 12)
+    deleted = _service(db, "delete from public.m2_reading_runs where run_id = "
+                       f"{_quote(run['run_id'])}::uuid;", check=False)
+    assert deleted.returncode == 0, 'deleting a run must not fail on its own rankings'
+
+
 def test_an_owner_cannot_extend_another_owners_order(db):
     denied = _as_owner(db, OTHER, "select public.m2_extend_frozen_ranking("
                        f"{_quote(OTHER)}::uuid, gen_random_uuid(), '[]'::jsonb, '{{}}'::jsonb);",
