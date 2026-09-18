@@ -118,6 +118,12 @@ run:
   # the ranking binds or fails. Too short and two requests pay twice; too long
   # and a died-mid-flight request locks its own reader out for that long.
   ranking_claim_seconds: 60
+  # The margin in the rule above. Boot fails unless
+  # ranking_claim_seconds > provider deadline + settle window + this, so a claim
+  # can never expire while its holder is still allowed to be calling the
+  # provider. Without that rule a takeover by age hands a second caller the right
+  # to pay while the first call is still in flight.
+  ranking_claim_margin_seconds: 10
 
 lane:
   # Ceiling, never a floor. Promotion happens only on merit. JJ-confirmed.

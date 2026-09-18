@@ -15,6 +15,9 @@ tokenizer_encoding: o200k_base
 reasoning_effort: minimal
 verbosity: low
 deadline_seconds: 6
+# How long settling an observed cost may take after the provider answers. Named
+# here because the reading-run claim window is validated against it at boot.
+settle_window_seconds: 5
 max_retries: 0
 request_cost_limit_usd: 0.02
 daily_cost_limit_usd: 2.00

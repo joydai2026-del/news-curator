@@ -63,6 +63,7 @@ class CompositionPolicy:
     max_run_minutes: int
     negative_suppression_days: int
     ranking_claim_seconds: int
+    ranking_claim_margin_seconds: int
     max_pages_per_run: int
     immediate_negative_filter: bool
     exclusive_promote_to_all_max: int
@@ -107,6 +108,7 @@ _NUMERIC_RANGES = {
     "run.max_minutes": (int, 15, 240),
     "run.negative_suppression_days": (int, 1, 90),
     "run.ranking_claim_seconds": (int, 5, 600),
+    "run.ranking_claim_margin_seconds": (int, 1, 120),
     "run.max_pages_per_run": (int, 1, 20),
     "lane.exclusive_promote_to_all_max": (int, 0, 5),
 }
@@ -160,7 +162,9 @@ def _text(document: Mapping[str, object], dotted: str, *, maximum: int) -> str:
     return value
 
 
-def parse_composition_policy(document: object, *, retention_days: int | None = None) -> CompositionPolicy:
+def parse_composition_policy(document: object, *, retention_days: int | None = None,
+                             provider_deadline_seconds: float | None = None,
+                             settle_window_seconds: float | None = None) -> CompositionPolicy:
     if not isinstance(document, Mapping) or document.get("schema_version") != 1:
         raise CompositionPolicyError("invalid composition policy")
 
@@ -271,6 +275,20 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
                 "(the larger of trend.window_hours and exploration.max_age_hours). "
                 "Raise the retention, or lower the window.")
 
+    # Check 10: a claim may not expire while its holder is still allowed to be
+    # calling the provider. If it can, a takeover by age hands a second caller
+    # the right to pay while the first one's call is still in flight, and the
+    # reader is charged twice for one view.
+    if provider_deadline_seconds is not None and settle_window_seconds is not None:
+        claim = int(numbers["run.ranking_claim_seconds"])
+        margin = int(numbers["run.ranking_claim_margin_seconds"])
+        needed = float(provider_deadline_seconds) + float(settle_window_seconds) + margin
+        if claim <= needed:
+            raise CompositionPolicyError(
+                f"run.ranking_claim_seconds ({claim}) must exceed the provider deadline "
+                f"({provider_deadline_seconds}) plus the settle window ({settle_window_seconds}) "
+                f"plus run.ranking_claim_margin_seconds ({margin}), which is {needed}")
+
     return CompositionPolicy(
         lane_ratios=ratios, lane_priority=tuple(priority), page_size=page_size,
         candidate_window_size=window,
@@ -295,6 +313,7 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
         max_run_minutes=int(numbers["run.max_minutes"]),
         negative_suppression_days=int(numbers["run.negative_suppression_days"]),
         ranking_claim_seconds=int(numbers["run.ranking_claim_seconds"]),
+        ranking_claim_margin_seconds=int(numbers["run.ranking_claim_margin_seconds"]),
         max_pages_per_run=pages,
         immediate_negative_filter=booleans["run.immediate_negative_filter"],
         exclusive_promote_to_all_max=int(numbers["lane.exclusive_promote_to_all_max"]),
@@ -305,9 +324,13 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
     )
 
 
-def load_composition_policy(path: str | Path, *, retention_days: int | None = None) -> CompositionPolicy:
+def load_composition_policy(path: str | Path, *, retention_days: int | None = None,
+                            provider_deadline_seconds: float | None = None,
+                            settle_window_seconds: float | None = None) -> CompositionPolicy:
     return parse_composition_policy(yaml.safe_load(Path(path).read_text(encoding="utf-8")),
-                                    retention_days=retention_days)
+                                    retention_days=retention_days,
+                                    provider_deadline_seconds=provider_deadline_seconds,
+                                    settle_window_seconds=settle_window_seconds)
 
 
 def configured_retention_days(sources_path: str | Path = "sources.yaml") -> int | None:

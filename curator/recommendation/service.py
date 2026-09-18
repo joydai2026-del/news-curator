@@ -99,6 +99,9 @@ class RankingStore(Protocol):
                         pages: int) -> int: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
+    def reserve_budget_claimed(self, *, user_id: str, request_id: str, amount_usd: float,
+                               daily_limit_usd: float, run_id: str, eligibility_key: str,
+                               claim_token: str) -> bool: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
     def save_frozen_order(self, *, user_id: str, request_id: str, bindings: Mapping[str, object], cards: Sequence[Mapping[str, object]], page_size: int, expires_at: int, run_id: str | None = None) -> str: ...
     def load_frozen_order(self, *, user_id: str, frozen_order_id: str) -> Mapping[str, object] | None: ...
@@ -223,6 +226,24 @@ class RankingService:
                 return served
             raise RankingInProgressError()
         claim_token = (claim or {}).get("token")
+        try:
+            return self._ranked(token, owner, run, view, eligibility_key, claim_token, snapshot,
+                                composition, exclusive, category_id, query, page_size, body,
+                                excluded_set, before_published, before_story, corpus_cursor)
+        except Exception:
+            # R7-1. Every raising path after the claim used to hold it for the
+            # full TTL, so one provider failure made the next request wait a
+            # minute for a claim nobody was using. The release is conditional on
+            # still holding the token, so a request that already lost it releases
+            # nothing.
+            if claim_token and run and run.get("run_id"):
+                self._release_claim(owner, run, eligibility_key, claim_token)
+            raise
+
+    def _ranked(self, token, owner, run, view, eligibility_key, claim_token, snapshot,
+                composition, exclusive, category_id, query, page_size, body, excluded_set,
+                before_published, before_story, corpus_cursor):
+        promotion: list[Mapping[str, object]] = []
         profile = BehaviorProfile.from_snapshot(run.get("profile_snapshot")) if run else BehaviorProfile()
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
@@ -294,9 +315,12 @@ class RankingService:
             prepared = None
         estimate = None if prepared is None else self._adapter.reservation_estimate(
             estimated_input_tokens=prepared.input_tokens_bound, estimated_output_tokens=prepared.output_tokens_budget)
-        reservation_created = estimate is not None and self._store.reserve_budget(
-            user_id=owner.user_id, request_id=request_id, amount_usd=estimate,
-            daily_limit_usd=self._policy.daily_cost_limit_usd)
+        # The reservation re-checks the claim in its OWN transaction. A config
+        # rule keeps a claim from expiring while its holder may still be calling
+        # the provider; this is the backstop for everything that rule cannot see,
+        # and a caller whose claim has moved on spends nothing at all.
+        reservation_created = estimate is not None and self._reserve(
+            owner, request_id, estimate, run, eligibility_key, claim_token)
         if not reservation_created:
             receipt = self._adapter.fallback(request, "no_candidates" if not request.candidates else
                 "provider_processing_consent_required" if not processing_allowed else preparation_reason or
@@ -404,9 +428,20 @@ class RankingService:
             # it rather than paying again. Conditional on still holding the
             # claim, and it releases the claim: a slow loser must not be able to
             # overwrite the winner's order after the fact.
-            self._store.bind_run_frozen_order(user_id=owner.user_id, run_id=str(run["run_id"]),
-                                              eligibility_key=eligibility_key,
-                                              frozen_order_id=frozen_id, token=claim_token)
+            bound = self._store.bind_run_frozen_order(user_id=owner.user_id,
+                run_id=str(run["run_id"]), eligibility_key=eligibility_key,
+                frozen_order_id=frozen_id, token=claim_token)
+            if claim_token and not bound:
+                # The claim moved on while this request was working. Serving the
+                # order it just wrote would be serving an order nothing is bound
+                # to, and the reader would hold a cursor into a ranking the next
+                # refresh will not find. The winner's order is the real one.
+                self._abandon_unbound_order(owner, request_id, reservation_created, observed_usage)
+                served = self._existing_run_page(token, owner,
+                    self._open_view(owner, run, eligibility_key), latest, page_size)
+                if served is not None:
+                    return served
+                raise RankingInProgressError()
         next_cursor = self._cursor(frozen_id, min(page_size, len(cards)), expires_at) if page_size < len(cards) or has_more else None
         return self._page_response(bindings, cards[:page_size], next_cursor, receipt)
 
@@ -808,6 +843,41 @@ class RankingService:
                 promoted += 1
             kept.append(item)
         return kept
+
+    def _release_claim(self, owner, run, eligibility_key, claim_token):
+        """Hand the claim back. Conditional on still holding it, and never fatal."""
+        try:
+            self._store.release_run_ranking_claim(user_id=owner.user_id,
+                run_id=str(run["run_id"]), eligibility_key=eligibility_key, token=str(claim_token))
+        except Exception:
+            print(json.dumps({"event": "m2_claim_release_failed", "run_id": str(run["run_id"])},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+
+    def _reserve(self, owner, request_id, estimate, run, eligibility_key, claim_token):
+        """Reserve, re-validating the claim in the same transaction when held."""
+        if claim_token and run and run.get("run_id"):
+            return self._store.reserve_budget_claimed(user_id=owner.user_id, request_id=request_id,
+                amount_usd=estimate, daily_limit_usd=self._policy.daily_cost_limit_usd,
+                run_id=str(run["run_id"]), eligibility_key=eligibility_key,
+                claim_token=str(claim_token))
+        return self._store.reserve_budget(user_id=owner.user_id, request_id=request_id,
+            amount_usd=estimate, daily_limit_usd=self._policy.daily_cost_limit_usd)
+
+    def _abandon_unbound_order(self, owner, request_id, reservation_created, observed_usage):
+        """Give back what was reserved and never spent.
+
+        A cost the provider really charged is NEVER erased: that truthfulness is
+        the whole point of the settlement path. Only a reservation that bought
+        nothing is released.
+        """
+        if not reservation_created or observed_usage:
+            return
+        try:
+            self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
+                                      actual_usd=0.0, status="released")
+        except Exception:
+            print(json.dumps({"event": "m2_release_failed", "request_id": request_id},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
 
     @staticmethod
     def _eligibility_key(category_id, query, exclusive) -> str:

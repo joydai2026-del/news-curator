@@ -720,6 +720,7 @@
       emptyExclusive: (other) => `No stories that only the ${other} press carried today`,
       untranslated: (other) => `Not translated. Shown in ${other}.`,
       endOfRun: "You have read everything in this run. Come back later for more.",
+      stillPreparing: "Still preparing your page, try again.",
       alsoCovered: (count) => `Also in ${count} other ${count === 1 ? "source" : "sources"}`,
       search: "Search all retained stories",
     },
@@ -728,6 +729,7 @@
       emptyExclusive: (other) => `今天没有只有${other === "English" ? "英文" : "中文"}媒体报道的新闻`,
       untranslated: (other) => `未翻译，按原文显示。`,
       endOfRun: "这一轮的报道你都读完了，稍后再来看看。",
+      stillPreparing: "页面还在准备，请稍后再试。",
       alsoCovered: (count) => `另有 ${count} 家媒体报道`,
       search: "搜索全部保留的报道",
     },
@@ -738,15 +740,21 @@
   function validateM2Config(value) {
     if (!isObject(value) || typeof value.enabled !== "boolean") fail("M2 reader configuration is invalid.");
     if (!value.enabled) return Object.freeze({ enabled: false });
+    // How long to wait before asking again when another request is already
+    // buying this view's ranking, and how many times. Config, not a constant.
+    value = { in_progress_retry_ms: 2000, in_progress_max_attempts: 3, ...value };
     value = { request_timeout_ms: 8000, ...value };
     value = { transport_timeout_ms: value.request_timeout_ms, ...value };
     if (!exactFields(value, ["enabled", "model_version", "page_size", "policy_version",
-      "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms", "transport_timeout_ms"]) || !boundedString(value.policy_version, 256) ||
+      "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms",
+      "transport_timeout_ms", "in_progress_retry_ms", "in_progress_max_attempts"]) || !boundedString(value.policy_version, 256) ||
       !boundedString(value.provider_policy_id, 256) ||
       !boundedString(value.model_version, 256) || !safeDestination(value.provider_retention_url) ||
       !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
       !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000 ||
-      !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < value.request_timeout_ms || value.transport_timeout_ms > 20000) {
+      !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < value.request_timeout_ms || value.transport_timeout_ms > 20000 ||
+      !Number.isInteger(value.in_progress_retry_ms) || value.in_progress_retry_ms < 100 || value.in_progress_retry_ms > 10000 ||
+      !Number.isInteger(value.in_progress_max_attempts) || value.in_progress_max_attempts < 1 || value.in_progress_max_attempts > 10) {
       fail("M2 reader configuration is invalid.");
     }
     const endpoint = safeDestination(value.url);
@@ -845,6 +853,14 @@
         // agreed to a different provider policy than the one now running, and
         // one tap on the existing consent control fixes it. Collapsing this
         // into the generic failure is how a deploy looks like a dead feed.
+        // The ranking for this view is being bought right now by another
+        // request. Retryable, and NOT a reason to fall back to the captured
+        // edition: the answer exists in a moment.
+        if (isObject(payload) && payload.error === "ranking_in_progress") {
+          const error = new Error("Still preparing your page.");
+          error.rankingInProgress = true;
+          throw error;
+        }
         if (isObject(payload) && payload.error === "provider_consent_required") {
           const error = new Error("Personalized ranking needs your permission again.");
           error.consentRequired = true;
@@ -1424,7 +1440,7 @@
       if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
       view.apply(); refreshStateControls(); refreshInterestControls();
     }
-    async function loadM2(append = false, searchEvent = false) {
+    async function loadM2(append = false, searchEvent = false, attempt = 1) {
       if (!usesM2()) return;
       unknownM2Consent(); showM2Policy();
       const epoch = authEpoch, request = ++m2Sequence, interactionEpoch = m2InteractionEpoch, eligibility = m2Eligibility();
@@ -1443,6 +1459,15 @@
       };
       // A re-consent prompt is its own state. It says what happened, in one
       // line, and leaves the consent control on screen so the fix is one tap.
+      // Keep the loading state and ask again. Bounded: after the configured
+      // attempts she gets a plain sentence, never the captured-edition fallback,
+      // because nothing is wrong with her feed.
+      const stillPreparing = () => {
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        const mode = document.getElementById("m2-mode");
+        if (mode) mode.textContent = strings().stillPreparing;
+        announce(strings().stillPreparing);
+      };
       const consentRequired = () => {
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         showBaseline();
@@ -1526,7 +1551,15 @@
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
         }
       } catch (error) {
-        if (error && error.consentRequired) consentRequired(); else terminalFallback();
+        if (error && error.rankingInProgress) {
+          if (attempt < m2Config.in_progress_max_attempts) {
+            clearTimeout(deadline); clearTimeout(transportDeadline);
+            pageRequests.delete(pageRequest); refreshLoadButton();
+            await new Promise((resolve) => setTimeout(resolve, m2Config.in_progress_retry_ms));
+            return loadM2(append, searchEvent, attempt + 1);
+          }
+          stillPreparing();
+        } else if (error && error.consentRequired) consentRequired(); else terminalFallback();
       } finally {
         clearTimeout(deadline); clearTimeout(transportDeadline); pageRequests.delete(pageRequest); refreshLoadButton();
       }

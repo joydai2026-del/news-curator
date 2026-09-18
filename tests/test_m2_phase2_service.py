@@ -228,6 +228,15 @@ class Store:
         self.reservations.append(kwargs)
         return False
 
+    def reserve_budget_claimed(self, *, run_id, eligibility_key, claim_token, **kwargs):
+        # The SQL refuses a caller whose claim has moved on, BEFORE any capacity
+        # moves. Reproduced here, because a fake that reserves regardless cannot
+        # catch a takeover that double-pays.
+        view = self._view(run_id, eligibility_key)
+        if view["claim_token"] != claim_token:
+            return False
+        return self.reserve_budget(**kwargs)
+
     def settle_budget(self, **kwargs):
         self.settlements.append(kwargs)
 
@@ -1153,3 +1162,114 @@ def test_the_page_budget_is_spent_per_view():
     other = rank(subject, store, eligibility={"category": "d1", "query": None})
     assert other["cards"], "one view's spent budget ended another view's first page"
     assert other["next_cursor"], "a fresh view must still be able to load more"
+
+
+# --- a TTL takeover must not double-pay a merely slow winner ---------------
+
+def test_a_takeover_before_the_reserve_costs_the_loser_nothing():
+    """The claim expiring does not mean its holder is dead, only that it is slow.
+    The reservation re-checks the claim in its own transaction, so a caller whose
+    claim has moved on spends nothing at all."""
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    key = subject._eligibility_key(None, None, False)
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
+                                   "claim_token": None, "claim_expired": False}
+
+    original = subject._store.reserve_budget_claimed
+
+    def someone_takes_over_first(**kwargs):
+        # Between this request taking its claim and reserving, a second caller
+        # took the claim over by age.
+        store.views[("run-1", key)]["claim_token"] = "a-later-request"
+        return original(**kwargs)
+
+    subject._store.reserve_budget_claimed = someone_takes_over_first
+    # Nothing is bound yet, so the honest answer is "wait", not a second ranking.
+    with pytest.raises(StaleRankingError, match="ranking_in_progress"):
+        rank(subject, store)
+    assert store.reservations == [], "a caller with a stale claim reserved budget"
+    assert subject._adapter.calls == 0, "a caller with a stale claim called the provider"
+
+
+def test_a_takeover_after_the_reserve_serves_the_other_order_and_releases():
+    """Taken over between the reserve and the bind: the bind returns False, and
+    that False is now looked at. Serving its own order would hand the reader a
+    cursor into a ranking the next refresh cannot find."""
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)               # the winner's order exists
+    key = subject._eligibility_key(None, None, False)
+    store.reservations.clear()
+    store.settlements.clear()
+    # A second request that holds a claim which is about to be taken from it.
+    store.views[("run-1", key)]["claim_token"] = None
+    store.views[("run-1", key)]["frozen_order_id"] = None
+    second = paid(store)
+    original_bind = store.bind_run_frozen_order
+
+    def taken_over_before_the_bind(**kwargs):
+        store.views[("run-1", key)]["claim_token"] = "a-later-request"
+        store.views[("run-1", key)]["frozen_order_id"] = "frozen-1"
+        return original_bind(**kwargs)
+
+    store.bind_run_frozen_order = taken_over_before_the_bind
+    served = rank(second, store)
+    assert served["request_id"] == first["request_id"], "it served its own unbound order"
+    # The provider really answered this one, so its cost STAYS settled. Erasing a
+    # real charge is the one thing the settlement path must never do.
+    assert [entry["status"] for entry in store.settlements] == ["settled"]
+
+
+def test_a_reservation_that_bought_nothing_is_released():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    subject._abandon_unbound_order(
+        type("Owner", (), {"user_id": "11111111-1111-1111-1111-111111111111"})(),
+        "request-1", reservation_created=True, observed_usage={})
+    assert [entry["status"] for entry in store.settlements] == ["released"]
+    # And a reservation that DID buy something keeps its real settled cost.
+    store.settlements.clear()
+    subject._abandon_unbound_order(
+        type("Owner", (), {"user_id": "11111111-1111-1111-1111-111111111111"})(),
+        "request-2", reservation_created=True, observed_usage={"input_tokens": 1})
+    assert store.settlements == []
+
+
+def test_a_provider_failure_releases_the_claim_immediately():
+    """Every raising path after the claim used to hold it for the full TTL, so
+    one failure made the next request wait a minute for a claim nobody held."""
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    key = subject._eligibility_key(None, None, False)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("the provider died")
+
+    subject._adapter.rank = explode
+    with pytest.raises(RuntimeError, match="the provider died"):
+        rank(subject, store)
+    assert store.views[("run-1", key)]["claim_token"] is None, \
+        "a failed ranking kept its claim and locked the next request out"
+    # And the next request can proceed immediately.
+    subject._adapter.rank = CountingAdapter().rank.__get__(subject._adapter)
+    assert rank(paid(store), store)["cards"]
+
+
+def test_ranking_in_progress_when_the_winner_has_not_bound_yet():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    key = subject._eligibility_key(None, None, False)
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
+                                   "claim_token": None, "claim_expired": False}
+    original_bind = store.bind_run_frozen_order
+
+    def taken_over_with_nothing_bound(**kwargs):
+        store.views[("run-1", key)]["claim_token"] = "a-later-request"
+        return original_bind(**kwargs)
+
+    store.bind_run_frozen_order = taken_over_with_nothing_bound
+    with pytest.raises(StaleRankingError, match="ranking_in_progress"):
+        rank(subject, store)

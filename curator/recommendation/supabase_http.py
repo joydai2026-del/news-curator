@@ -127,6 +127,16 @@ class SupabaseHTTP:
                 "p_amount_usd": amount_usd, "p_daily_limit_usd": daily_limit_usd})
         return result is True
 
+    def reserve_budget_claimed(self, *, user_id: str, request_id: str, amount_usd: float,
+                               daily_limit_usd: float, run_id: str, eligibility_key: str,
+                               claim_token: str) -> bool:
+        result = self._request("POST", "/rest/v1/rpc/m2_reserve_ranker_budget_claimed",
+            token=self._service_token(), key=self._service,
+            body={"p_user_id": user_id, "p_request_id": request_id, "p_amount_usd": amount_usd,
+                  "p_daily_limit_usd": daily_limit_usd, "p_run_id": run_id,
+                  "p_eligibility_key": eligibility_key, "p_claim_token": claim_token})
+        return result is True
+
     def owner_states(self, access_token: str, story_ids):
         result = self._request("POST", "/rest/v1/rpc/m2_owner_story_states", token=access_token,
             key=self._publishable, body={"p_story_ids": list(story_ids)})

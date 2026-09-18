@@ -81,6 +81,20 @@ function response(value, url) { return { ok: true, redirected: false, url,
   assert.throws(() => reader.validateM2Response({ ...payload(), end_of_run: "yes" }, frozenBinding),
     /feed response/);
 
+  // Another request is already buying this view's ranking. Retryable, and NOT a
+  // reason to show the captured edition: the answer exists in a moment.
+  const busyService = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => ({ ok: false, redirected: false, url, text: async () => JSON.stringify(
+      { error: "ranking_in_progress" }) }));
+  await assert.rejects(() => busyService.rank(history, { as_of: "2026-09-14T16:00:00Z" }),
+    (error) => error.rankingInProgress === true &&
+      !/The M2 reader request failed/.test(error.message));
+  // The retry budget is config, with safe defaults.
+  assert.equal(reader.validateM2Config(config).in_progress_retry_ms, 2000);
+  assert.equal(reader.validateM2Config(config).in_progress_max_attempts, 3);
+  assert.throws(() => reader.validateM2Config({ ...config, in_progress_retry_ms: 99 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, in_progress_max_attempts: 0 }), /configuration/);
+
   // A prompt revision bump is a QUESTION the reader can answer in one tap, so
   // it must not collapse into the generic failure that shows a dead feed.
   const consentService = reader.createM2Service(config, async () => ({ access_token: token }),

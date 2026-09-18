@@ -78,6 +78,9 @@ def build_application(*, environ=None, policy_path: str | None = None):
     composition = load_composition_policy(
         composition_path,
         retention_days=configured_retention_days(env.get("NEWS_CURATOR_SOURCES", "sources.yaml")),
+        # The claim window is validated against the call it protects.
+        provider_deadline_seconds=policy["deadline_seconds"],
+        settle_window_seconds=policy.get("settle_window_seconds", 5),
     ) if composition_path else None
     scoring = ScoringPolicy.from_composition(composition) if composition else None
     prompt = ReviewedRankLLMPromptBuilder(env.get("NEWS_CURATOR_RANKLLM_TEMPLATE") or

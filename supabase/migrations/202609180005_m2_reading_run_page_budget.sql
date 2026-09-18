@@ -1,5 +1,14 @@
 begin;
 
+-- RESHAPED IN PLACE ON 2026-09-18, BEFORE FIRST APPLICATION. This file briefly
+-- added `frozen_order_id` and `pages_served` as columns on m2_reading_runs.
+-- Verified the same day through PostgREST that neither m2_reading_runs nor
+-- retained_corpus_coverage exists in production (404 with the publishable key,
+-- calibrated against a table known not to exist), so the earlier shape has been
+-- applied nowhere but CI containers, which are created and destroyed per run.
+-- There is therefore NO upgrade path from that shape, by design: writing one
+-- would be migrating a state that has never existed anywhere.
+--
 -- M2.1 Phase 2, fix round 5 and 6: the page budget and the run's ranking live
 -- per VIEW, not per run.
 --
