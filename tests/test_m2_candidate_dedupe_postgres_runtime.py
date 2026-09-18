@@ -187,15 +187,20 @@ def test_a_repeat_outside_the_window_is_kept(db):
 
 
 def test_the_representative_does_not_change_with_the_page_boundary(db):
-    # The duplicate pair straddles the page-1 boundary. A per-page rule would
-    # collapse it on page 1 and show the loser again on page 2.
+    # A per-page rule would collapse a duplicate on page 1 and then show the
+    # loser again on page 2, because page 2's window no longer contains the
+    # winner. The rule here is decided against the whole table, so it cannot.
+    # Distinctness is asserted per (language, title): the same headline in two
+    # languages is two stories and is SUPPOSED to appear twice.
     rows = _candidates(db, "public.m2_retained_candidates(null,null,null,null,3)")
     assert len(rows) == 3
     last = rows[-1]
     more = _candidates(db, "public.m2_retained_candidates(null,null,"
                            f"{_quote(last['published_at'])}::timestamptz,{_quote(last['story_id'])},100)")
-    seen = [row['title'] for row in rows + more]
+    seen = [(row['language'], ' '.join(row['title'].lower().split())) for row in rows + more]
     assert len(seen) == len(set(seen)), seen
+    ids = [row['story_id'] for row in rows + more]
+    assert len(ids) == len(set(ids)), ids
 
 
 def test_a_zero_window_restores_the_uncollapsed_projection(db):
@@ -233,9 +238,14 @@ def test_the_real_capture_ingests_with_no_uncategorised_row(db):
                       fallback_category_for=config.fallback_category_for)
     payload = public_ingest_rows(retained, allowed_source_ids=allowed)
     assert payload
-    _sql(db, 'delete from public.retained_corpus_observations;')
     assert _ingest(db, payload).returncode == 0
+    ingested = ','.join(_quote(row['story_id']) for row in payload)
     orphans = _sql(db, "select count(*) from public.retained_corpus_observations o "
-                       "where not exists (select 1 from public.retained_corpus_categories c "
+                       f"where o.story_id in ({ingested}) "
+                       "and not exists (select 1 from public.retained_corpus_categories c "
                        "where c.story_id = o.story_id);")
     assert orphans.stdout.strip() == '0', orphans.stdout
+    # The measurement this fixes: the SAME rows without the floor leave orphans.
+    unfloored = public_ingest_rows(
+        retain(items, categories=config.categories, observed_at=NOW), allowed_source_ids=allowed)
+    assert [row for row in unfloored if not row['category_ids']]
