@@ -672,7 +672,10 @@ def test_a_stale_claim_holder_cannot_reserve(db):
     assert second['granted'] is True and second['token'] != first['token']
 
     stale = _reserve_claimed(db, run['run_id'], ALL_VIEW, first['token'])
-    assert stale == {'reserved': False, 'refusal': 'claim_lost'}, stale
+    assert stale['reserved'] is False and stale['refusal'] == 'claim_lost', stale
+    # A lost claim reports no remaining budget: nothing was looked up, because
+    # nothing was going to be spent either way.
+    assert stale['remaining_usd'] is None, stale
     live = _reserve_claimed(db, run['run_id'], ALL_VIEW, second['token'])
     assert live['reserved'] is True
     # Exactly one reservation exists for this run's view.
