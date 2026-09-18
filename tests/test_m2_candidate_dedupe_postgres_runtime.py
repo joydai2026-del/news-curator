@@ -106,11 +106,18 @@ def clean_corpus(db):
     or reordered. The delete order follows the foreign keys, which are all
     `on delete restrict` (202609140002:6,33,43), so the children go first.
     """
-    _sql(db, "set role service_role;"
-             "delete from translation_private.exclusivity_decisions;"
-             "delete from public.retained_corpus_categories;"
-             "delete from public.retained_corpus_source_categories;"
-             "delete from public.retained_corpus_observations;", check=False)
+    # One statement per call: ON_ERROR_STOP aborts the whole batch on the first
+    # failure, and a cleanup that silently no-ops is precisely the bug that
+    # order-coupling hides. The assertion below makes a failed clean LOUD.
+    for statement in ('delete from translation_private.exclusivity_decisions;',
+                      'delete from public.retained_corpus_categories;',
+                      'delete from public.retained_corpus_source_categories;',
+                      'delete from public.retained_corpus_observations;'):
+        result = _sql(db, statement, check=False)
+        if result.returncode:
+            pytest.fail(f'corpus reset failed on {statement!r}: {result.stderr.strip()[:300]}')
+    remaining = _sql(db, 'select count(*) from public.retained_corpus_observations;')
+    assert remaining.stdout.strip() == '0', remaining.stdout
     return db
 
 
