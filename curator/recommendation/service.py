@@ -38,6 +38,19 @@ class StaleRankingError(RuntimeError):
     pass
 
 
+class RankingInProgressError(StaleRankingError):
+    """Another request is already buying this run's ranking.
+
+    Not an error and not staleness: the answer exists in a moment, and the right
+    behavior is to wait for it rather than to buy a second one. Raised only when
+    the winner has not bound its order yet; once it has, the loser is served that
+    order instead of this.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("ranking_in_progress")
+
+
 class ProviderConsentRequiredError(StaleRankingError):
     """The owner consented to a DIFFERENT provider policy than the one running.
 
@@ -74,8 +87,16 @@ class RankingStore(Protocol):
                          profile: Mapping[str, object]) -> Mapping[str, object]: ...
     def record_reading_run_filter(self, *, user_id: str, run_id: str,
                                   story_ids: Sequence[str]) -> int: ...
-    def bind_run_frozen_order(self, *, user_id: str, run_id: str, frozen_order_id: str) -> bool: ...
-    def record_run_page(self, *, user_id: str, run_id: str, pages: int) -> int: ...
+    def open_run_view(self, *, user_id: str, run_id: str,
+                      eligibility_key: str) -> Mapping[str, object]: ...
+    def bind_run_frozen_order(self, *, user_id: str, run_id: str, eligibility_key: str,
+                              frozen_order_id: str, token: str | None = None) -> bool: ...
+    def claim_run_ranking(self, *, user_id: str, run_id: str, eligibility_key: str, token: str,
+                          ttl_seconds: int) -> Mapping[str, object]: ...
+    def release_run_ranking_claim(self, *, user_id: str, run_id: str, eligibility_key: str,
+                                  token: str) -> bool: ...
+    def record_run_page(self, *, user_id: str, run_id: str, eligibility_key: str,
+                        pages: int) -> int: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
@@ -180,12 +201,28 @@ class RankingService:
         # is computed once at run open and FROZEN on the run row, so every page
         # inside the run is explainable afterwards from one stored version.
         run = self._open_run(owner, snapshot, composition)
-        # ONE PAID RANKING PER RUN, refreshes included. rank() used to mint a new
-        # frozen order every call while joining the same run, so a refresh bought
-        # a second ranking and reset the per-run page budget with it.
-        existing = self._existing_run_page(token, owner, run, snapshot, page_size)
+        # ONE PAID RANKING PER VIEW, refreshes included. Keyed by (run,
+        # eligibility): All, a category, a search and the language-exclusive
+        # section are four different things to look at, and keying this by the
+        # run alone made a category tap return the All page for up to an hour.
+        eligibility_key = self._eligibility_key(category_id, query, exclusive)
+        view = self._open_view(owner, run, eligibility_key)
+        existing = self._existing_run_page(token, owner, view, snapshot, page_size)
         if existing is not None:
             return existing
+        # CLAIM BEFORE PAYING. Reusing an order the run has already bound closes
+        # the refresh hole; it does not close the race, because a second request
+        # arriving while the first is still in flight sees no bound order yet.
+        # Exactly one caller wins this compare-and-set, and only the winner may
+        # reserve, call the provider and bind.
+        claim = self._claim_ranking(owner, run, eligibility_key, composition)
+        if claim is not None and not claim.get("granted"):
+            served = self._existing_run_page(token, owner,
+                {"frozen_order_id": claim.get("frozen_order_id")}, snapshot, page_size)
+            if served is not None:
+                return served
+            raise RankingInProgressError()
+        claim_token = (claim or {}).get("token")
         profile = BehaviorProfile.from_snapshot(run.get("profile_snapshot")) if run else BehaviorProfile()
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
@@ -364,9 +401,12 @@ class RankingService:
             run_id=(run or {}).get("run_id"))
         if run and run.get("run_id"):
             # The run now owns this ranking, so the next refresh is answered from
-            # it rather than paying again.
+            # it rather than paying again. Conditional on still holding the
+            # claim, and it releases the claim: a slow loser must not be able to
+            # overwrite the winner's order after the fact.
             self._store.bind_run_frozen_order(user_id=owner.user_id, run_id=str(run["run_id"]),
-                                              frozen_order_id=frozen_id)
+                                              eligibility_key=eligibility_key,
+                                              frozen_order_id=frozen_id, token=claim_token)
         next_cursor = self._cursor(frozen_id, min(page_size, len(cards)), expires_at) if page_size < len(cards) or has_more else None
         return self._page_response(bindings, cards[:page_size], next_cursor, receipt)
 
@@ -403,7 +443,14 @@ class RankingService:
             # cursor) hand the whole budget back.
             served_before = page_index
             if run_id:
-                served_before = max(page_index, self._record_run_page(owner, str(run_id), page_index + 1))
+                # Per VIEW: the pages she has read of All say nothing about how
+                # many of a category she has read.
+                bindings = frozen.get("bindings") or {}
+                eligibility = bindings.get("eligibility") or {}
+                key = self._eligibility_key(eligibility.get("category"), eligibility.get("query"),
+                                            self._is_exclusive_category(eligibility.get("category")))
+                served_before = max(page_index,
+                                    self._record_run_page(owner, str(run_id), key, page_index + 1))
             if page_index >= composition.max_pages_per_run or served_before >= composition.max_pages_per_run:
                 # The run has served every page it promises. Reaching further
                 # would keep returning older and older stories that met no pool's
@@ -504,10 +551,11 @@ class RankingService:
             return ()
         return tuple(added)
 
-    def _record_run_page(self, owner, run_id, pages):
-        """The run's page high-water mark before this page. Never fails a page."""
+    def _record_run_page(self, owner, run_id, eligibility_key, pages):
+        """This view's page high-water mark before this page. Never fails a page."""
         try:
-            previous = self._store.record_run_page(user_id=owner.user_id, run_id=run_id, pages=pages)
+            previous = self._store.record_run_page(user_id=owner.user_id, run_id=run_id,
+                                                   eligibility_key=eligibility_key, pages=pages)
         except Exception:
             print(json.dumps({"event": "m2_page_budget_unavailable", "run_id": run_id},
                              separators=(",", ":")), file=sys.stderr, flush=True)
@@ -761,8 +809,48 @@ class RankingService:
             kept.append(item)
         return kept
 
-    def _existing_run_page(self, token, owner, run, snapshot, page_size):
-        """Page one of the ranking this run already paid for, or None.
+    @staticmethod
+    def _eligibility_key(category_id, query, exclusive) -> str:
+        """One view: All, a category, a search, or the exclusive section.
+
+        A DIGEST, not the values: a search query is text the owner typed, and
+        this key is an index, not a place to keep what she searched for.
+        """
+        raw = json.dumps([category_id, query, bool(exclusive)], separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _open_view(self, owner, run, eligibility_key):
+        """What this run has already done with THIS view, if anything."""
+        if not run or not run.get("run_id"):
+            return None
+        try:
+            view = self._store.open_run_view(user_id=owner.user_id, run_id=str(run["run_id"]),
+                                             eligibility_key=eligibility_key)
+        except Exception:
+            print(json.dumps({"event": "m2_view_unavailable", "run_id": str(run["run_id"])},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+            return None
+        return view if isinstance(view, Mapping) else None
+
+    def _claim_ranking(self, owner, run, eligibility_key, composition):
+        """Take this view's ranking claim, or report who holds it. Never fatal."""
+        if composition is None or not run or not run.get("run_id"):
+            return None
+        try:
+            claim = self._store.claim_run_ranking(user_id=owner.user_id, run_id=str(run["run_id"]),
+                eligibility_key=eligibility_key, token=str(uuid.uuid4()),
+                ttl_seconds=composition.ranking_claim_seconds)
+        except Exception:
+            # A claim store that is down must not take the feed down with it. The
+            # worst case without it is the pre-existing behavior: two concurrent
+            # first ranks, which is what this fixes, not what it depends on.
+            print(json.dumps({"event": "m2_claim_unavailable", "run_id": str(run["run_id"])},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+            return None
+        return claim if isinstance(claim, Mapping) else None
+
+    def _existing_run_page(self, token, owner, view, snapshot, page_size):
+        """Page one of the ranking this VIEW already paid for, or None.
 
         Returns None when there is no run, no bound order, the order has expired,
         or the scoped staleness values have moved, which are exactly the cases
@@ -770,10 +858,10 @@ class RankingService:
         free: same request id, no new frozen order, no reservation, no provider
         call.
         """
-        if not run or not run.get("frozen_order_id") or run.get("created"):
+        if not view or not view.get("frozen_order_id"):
             return None
         frozen = self._store.load_frozen_order(user_id=owner.user_id,
-                                               frozen_order_id=str(run["frozen_order_id"]))
+                                               frozen_order_id=str(view["frozen_order_id"]))
         if not frozen or int(frozen["expires_at"]) < int(self._clock()):
             return None
         bindings = frozen.get("bindings") or {}
@@ -786,7 +874,7 @@ class RankingService:
         cards = list(frozen["cards"])
         visible, next_offset, removed = self._slice(cards, 0, size, snapshot)
         self._record_filtered(owner, frozen, removed)
-        next_cursor = (self._cursor(str(run["frozen_order_id"]), next_offset, int(frozen["expires_at"]))
+        next_cursor = (self._cursor(str(view["frozen_order_id"]), next_offset, int(frozen["expires_at"]))
                        if next_offset < len(cards) or bindings.get("corpus_has_more") else None)
         return {"schema_version": 1, **self._public_bindings(bindings), "cards": visible,
                 "next_cursor": next_cursor, "end_of_run": False}

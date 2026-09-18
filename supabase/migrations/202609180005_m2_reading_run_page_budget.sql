@@ -1,33 +1,60 @@
 begin;
 
--- M2.1 Phase 2, fix round 5: the per-run page budget lives on the RUN.
+-- M2.1 Phase 2, fix round 5 and 6: the page budget and the run's ranking live
+-- per VIEW, not per run.
 --
--- The cap was enforced against the cursor of the current frozen order, and
--- rank() minted a new frozen order (and a new cursor) on every call while
--- joining the SAME open run. So a refresh reset the cap: load to the last page,
--- refresh, and the whole budget was available again. The budget has to be
--- counted where the run is, not where the cursor is.
+-- Round 5 fixed the refresh hole by making rank() reuse the run's ranking, and
+-- put the budget on the run. Round 6 measured what that cost: a `tech` request
+-- inside an open run made zero corpus calls and returned the All page
+-- byte-for-byte, so for up to sixty minutes every topic tap, every search and
+-- the Chinese-press section returned All.
 --
--- Two columns. `frozen_order_id` is the run's one ranking, so a refresh inside a
--- run can return the order it already paid for instead of buying another.
--- `pages_served` is the high-water mark of pages that run has handed over.
-alter table public.m2_reading_runs
-  add column if not exists frozen_order_id uuid;
-alter table public.m2_reading_runs
-  add column if not exists pages_served integer not null default 0 check (pages_served >= 0);
+-- Idempotence is keyed by (run, eligibility). A view is one of All, a category,
+-- a search, or the language-exclusive section; each gets at most one paid
+-- ranking, its own frozen order, its own page budget and its own claim. The run
+-- still owns the profile and the idle window, which are genuinely per visit.
+create table if not exists public.m2_reading_run_views (
+  run_id uuid not null references public.m2_reading_runs(run_id) on delete cascade,
+  -- A digest of (category, query, exclusive lane), computed by the caller. A
+  -- digest rather than the values themselves because a search query is owner
+  -- text and this table is an index, not a place to keep what she typed.
+  eligibility_key text not null check (eligibility_key ~ '^[0-9a-f]{64}$'),
+  frozen_order_id uuid,
+  pages_served integer not null default 0 check (pages_served >= 0),
+  ranking_claim_token uuid,
+  ranking_claimed_at timestamptz,
+  created_at timestamptz not null default now(),
+  primary key (run_id, eligibility_key)
+);
 
-create or replace function public.m2_bind_run_frozen_order(
-  p_user_id uuid, p_run_id uuid, p_frozen_order_id uuid
-) returns boolean language plpgsql security definer set search_path = pg_catalog, public as $$
-declare bound uuid;
+alter table public.m2_reading_run_views enable row level security;
+alter table public.m2_reading_run_views force row level security;
+revoke all on public.m2_reading_run_views from public, anon, authenticated;
+grant select, insert, update, delete on public.m2_reading_run_views to service_role;
+
+-- Get-or-create, so the caller learns in one round trip whether this view has
+-- already been ranked in this run.
+create or replace function public.m2_open_run_view(
+  p_user_id uuid, p_run_id uuid, p_eligibility_key text
+) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
+declare view_row public.m2_reading_run_views%rowtype;
 begin
   if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' then
     raise exception 'service role required' using errcode = '42501';
   end if;
-  update public.m2_reading_runs r set frozen_order_id = p_frozen_order_id
-    where r.run_id = p_run_id and r.user_id = p_user_id
-    returning r.frozen_order_id into bound;
-  return bound is not null;
+  if p_eligibility_key is null or p_eligibility_key !~ '^[0-9a-f]{64}$' then
+    raise exception 'invalid eligibility key';
+  end if;
+  if not exists (select 1 from public.m2_reading_runs r
+                 where r.run_id = p_run_id and r.user_id = p_user_id) then
+    raise exception 'unknown reading run';
+  end if;
+  insert into public.m2_reading_run_views(run_id, eligibility_key)
+    values (p_run_id, p_eligibility_key) on conflict (run_id, eligibility_key) do nothing;
+  select * into view_row from public.m2_reading_run_views v
+    where v.run_id = p_run_id and v.eligibility_key = p_eligibility_key;
+  return jsonb_build_object('run_id', view_row.run_id, 'eligibility_key', view_row.eligibility_key,
+    'frozen_order_id', view_row.frozen_order_id, 'pages_served', view_row.pages_served);
 end;
 $$;
 
@@ -35,7 +62,7 @@ $$;
 -- it. Recording first and then checking would let the very request that trips
 -- the cap also be the one that inflates it.
 create or replace function public.m2_record_run_page(
-  p_user_id uuid, p_run_id uuid, p_pages integer
+  p_user_id uuid, p_run_id uuid, p_eligibility_key text, p_pages integer
 ) returns integer language plpgsql security definer set search_path = pg_catalog, public as $$
 declare previous integer;
 begin
@@ -45,15 +72,17 @@ begin
   if p_pages is null or p_pages < 0 or p_pages > 1000 then
     raise exception 'invalid page count';
   end if;
-  select r.pages_served into previous from public.m2_reading_runs r
-    where r.run_id = p_run_id and r.user_id = p_user_id for update;
+  select v.pages_served into previous from public.m2_reading_run_views v
+    join public.m2_reading_runs r on r.run_id = v.run_id and r.user_id = p_user_id
+    where v.run_id = p_run_id and v.eligibility_key = p_eligibility_key for update of v;
   if not found then
     return 0;
   end if;
   -- A high-water mark, not a counter: re-reading page one must not spend the
   -- budget, and paging out of order must not either.
-  update public.m2_reading_runs r set pages_served = greatest(r.pages_served, p_pages),
-    last_activity_at = now()
+  update public.m2_reading_run_views v set pages_served = greatest(v.pages_served, p_pages)
+    where v.run_id = p_run_id and v.eligibility_key = p_eligibility_key;
+  update public.m2_reading_runs r set last_activity_at = now()
     where r.run_id = p_run_id and r.user_id = p_user_id;
   return previous;
 end;
@@ -93,19 +122,17 @@ begin
       values (p_user_id, coalesce(p_profile, '{}'::jsonb)) returning * into existing;
     created := true;
   end if;
-  -- The run's own ranking and its page budget travel with it, so a refresh can
-  -- be answered from what this run already has.
+  -- The run owns the profile and the idle window. What was ranked, and how many
+  -- pages of it have been served, belong to a VIEW and are read separately.
   return jsonb_build_object('run_id', existing.run_id, 'opened_at', existing.opened_at,
     'profile_snapshot', existing.profile_snapshot,
-    'filtered_story_ids', existing.filtered_story_ids,
-    'frozen_order_id', existing.frozen_order_id,
-    'pages_served', existing.pages_served, 'created', created);
+    'filtered_story_ids', existing.filtered_story_ids, 'created', created);
 end;
 $$;
 
-revoke all on function public.m2_bind_run_frozen_order(uuid, uuid, uuid),
-  public.m2_record_run_page(uuid, uuid, integer) from public, anon, authenticated;
-grant execute on function public.m2_bind_run_frozen_order(uuid, uuid, uuid),
-  public.m2_record_run_page(uuid, uuid, integer) to service_role;
+revoke all on function public.m2_open_run_view(uuid, uuid, text),
+  public.m2_record_run_page(uuid, uuid, text, integer) from public, anon, authenticated;
+grant execute on function public.m2_open_run_view(uuid, uuid, text),
+  public.m2_record_run_page(uuid, uuid, text, integer) to service_role;
 
 commit;

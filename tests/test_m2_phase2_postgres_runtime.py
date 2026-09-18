@@ -32,6 +32,7 @@ MIGRATIONS = (
     'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
     'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
     'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
+    'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -214,7 +215,8 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
                       'supabase/migrations/202609180002_m2_reading_runs.sql',
                       'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
                       'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
-                      'supabase/migrations/202609180005_m2_reading_run_page_budget.sql'):
+                      'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
+                      'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)
         assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
 
@@ -558,32 +560,106 @@ def test_an_out_of_range_run_age_cap_is_refused(db):
                     check=False).returncode != 0
 
 
-def test_the_page_budget_is_a_high_water_mark_on_the_run(db):
-    """Counted per RUN, and a high-water mark rather than a counter: re-reading
-    page one must not spend the budget, and the count returned is the one BEFORE
-    this page so the request that trips the cap cannot also inflate it."""
+ALL_VIEW = 'a' * 64
+TECH_VIEW = 'b' * 64
+
+
+def _open_view(container, run_id, key, user_id=OWNER):
+    result = _service(container, "select public.m2_open_run_view("
+                      f"{_quote(user_id)}::uuid, {_quote(run_id)}::uuid, {_quote(key)});")
+    return json.loads(_last(result))
+
+
+def _record(container, run_id, key, pages, user_id=OWNER):
+    return int(_last(_service(container, "select public.m2_record_run_page("
+                              f"{_quote(user_id)}::uuid, {_quote(run_id)}::uuid, "
+                              f"{_quote(key)}, {pages});")))
+
+
+def _claim(container, run_id, key, ttl=60, user_id=OWNER):
+    return json.loads(_last(_service(container, "select public.m2_claim_run_ranking("
+        f"{_quote(user_id)}::uuid, {_quote(run_id)}::uuid, {_quote(key)}, "
+        f"gen_random_uuid(), {ttl});")))
+
+
+def test_the_page_budget_is_a_high_water_mark_per_view(db):
+    """Counted per VIEW, and a high-water mark rather than a counter: re-reading
+    page one must not spend the budget, the count returned is the one BEFORE this
+    page so the request that trips the cap cannot also inflate it, and the pages
+    she has read of All say nothing about a category."""
     _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
     run = _open_run(db, OWNER)
-    assert run['pages_served'] == 0 and run['frozen_order_id'] is None
+    everything = _open_view(db, run['run_id'], ALL_VIEW)
+    assert everything['pages_served'] == 0 and everything['frozen_order_id'] is None
+    assert _record(db, run['run_id'], ALL_VIEW, 1) == 0, 'the count before the first page is zero'
+    assert _record(db, run['run_id'], ALL_VIEW, 2) == 1
+    assert _record(db, run['run_id'], ALL_VIEW, 1) == 2, 're-reading page one must not lower the mark'
+    _open_view(db, run['run_id'], TECH_VIEW)
+    assert _record(db, run['run_id'], TECH_VIEW, 1) == 0, "one view's budget leaked into another"
+    assert _open_view(db, run['run_id'], ALL_VIEW)['pages_served'] == 2
 
-    def record(pages):
-        return int(_last(_service(db, "select public.m2_record_run_page("
-                                  f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {pages});")))
 
-    assert record(1) == 0, 'the count before the first page is zero'
-    assert record(2) == 1
-    assert record(1) == 2, 're-reading page one must not lower the mark'
-    stored = _sql(db, "select pages_served from public.m2_reading_runs "
+def test_an_unknown_view_spends_nothing(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    assert _record(db, run['run_id'], 'c' * 64, 3) == 0
+
+
+def test_a_view_needs_a_run_that_belongs_to_the_caller(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    denied = _service(db, "select public.m2_open_run_view("
+                      f"{_quote(OTHER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)});",
+                      check=False)
+    assert denied.returncode != 0, "a view was opened on someone else's run"
+
+
+def test_the_ranking_claim_is_atomic_under_two_sessions(db):
+    """Exactly one of eight concurrent callers may pay. The losers learn that
+    from an empty update, not from a duplicate charge."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    statement = ("set role service_role;"
+                 "set request.jwt.claims = '{\"role\":\"service_role\"}';"
+                 "select public.m2_claim_run_ranking("
+                 f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
+                 "gen_random_uuid(), 60);")
+    processes = [subprocess.Popen(
+        ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(8)]
+    outputs = [process.communicate(statement)[0] for process in processes]
+    granted = [json.loads(output.strip().splitlines()[-1])['granted'] for output in outputs]
+    assert granted.count(True) == 1, f'{granted.count(True)} callers were allowed to pay'
+
+
+def test_an_expired_claim_is_taken_over_and_a_live_one_is_not(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    assert _claim(db, run['run_id'], ALL_VIEW)['granted'] is True
+    assert _claim(db, run['run_id'], ALL_VIEW)['granted'] is False, 'a live claim was handed over'
+    _service(db, "update public.m2_reading_run_views set ranking_claimed_at = now() - interval '10 minutes' "
+                 f"where run_id = {_quote(run['run_id'])}::uuid;")
+    assert _claim(db, run['run_id'], ALL_VIEW)['granted'] is True, 'an expired claim locked her out'
+
+
+def test_a_losing_bind_cannot_overwrite_the_winners_order_in_sql(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    winner = _claim(db, run['run_id'], ALL_VIEW)
+    frozen = str(uuid.uuid4())
+    assert _last(_service(db, "select public.m2_bind_run_frozen_order("
+        f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
+        f"{_quote(frozen)}::uuid, {_quote(winner['token'])}::uuid);")) == 't'
+    assert _last(_service(db, "select public.m2_bind_run_frozen_order("
+        f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
+        f"{_quote(str(uuid.uuid4()))}::uuid, {_quote(str(uuid.uuid4()))}::uuid);")) == 'f'
+    stored = _sql(db, "select frozen_order_id from public.m2_reading_run_views "
                       f"where run_id = {_quote(run['run_id'])}::uuid;")
-    assert _last(stored) == '2'
-    # Joining the run reports the budget, so a refresh is answered from it.
-    assert _open_run(db, OWNER)['pages_served'] == 2
-
-
-def test_an_unknown_run_spends_nothing(db):
-    result = _service(db, "select public.m2_record_run_page("
-                      f"{_quote(OWNER)}::uuid, gen_random_uuid(), 3);")
-    assert _last(result) == '0'
+    assert _last(stored) == frozen
 
 
 def test_an_out_of_range_idle_window_is_refused(db):

@@ -84,6 +84,8 @@ class Store:
         self.revision_after_provider = None
         self.extensions = []
         self.filtered = {}
+        self.claims = []
+        self.views = {}
 
     # --- history -----------------------------------------------------------
     @property
@@ -172,25 +174,51 @@ class Store:
     def open_reading_run(self, *, user_id, idle_minutes, max_minutes, profile):
         if self.runs:
             return {**self.runs[-1], "created": False}
-        run = {"run_id": f"run-{len(self.runs) + 1}", "profile_snapshot": profile, "created": True,
-               "frozen_order_id": None, "pages_served": 0}
+        run = {"run_id": f"run-{len(self.runs) + 1}", "profile_snapshot": profile, "created": True}
         self.runs.append(run)
         return run
 
-    def bind_run_frozen_order(self, *, user_id, run_id, frozen_order_id):
-        for run in self.runs:
-            if run["run_id"] == run_id:
-                run["frozen_order_id"] = frozen_order_id
-                return True
+    # Everything below is keyed by (run, eligibility): All, a category, a search
+    # and the exclusive section are four different views of one visit.
+    def _view(self, run_id, eligibility_key):
+        return self.views.setdefault((run_id, eligibility_key),
+            {"frozen_order_id": None, "pages_served": 0, "claim_token": None,
+             "claim_expired": False})
+
+    def open_run_view(self, *, user_id, run_id, eligibility_key):
+        view = self._view(run_id, eligibility_key)
+        return {"run_id": run_id, "eligibility_key": eligibility_key,
+                "frozen_order_id": view["frozen_order_id"], "pages_served": view["pages_served"]}
+
+    def bind_run_frozen_order(self, *, user_id, run_id, eligibility_key, frozen_order_id, token=None):
+        view = self._view(run_id, eligibility_key)
+        # Conditional on still holding the claim, exactly as the SQL is.
+        if token is not None and view["claim_token"] not in (None, token):
+            return False
+        view["frozen_order_id"] = frozen_order_id
+        view["claim_token"] = None
+        return True
+
+    def claim_run_ranking(self, *, user_id, run_id, eligibility_key, token, ttl_seconds):
+        self.claims.append((run_id, eligibility_key))
+        view = self._view(run_id, eligibility_key)
+        if view["claim_token"] is None or view["claim_expired"]:
+            view["claim_token"], view["claim_expired"] = token, False
+            return {"granted": True, "token": token, "frozen_order_id": view["frozen_order_id"]}
+        return {"granted": False, "token": None, "frozen_order_id": view["frozen_order_id"]}
+
+    def release_run_ranking_claim(self, *, user_id, run_id, eligibility_key, token):
+        view = self._view(run_id, eligibility_key)
+        if view["claim_token"] == token:
+            view["claim_token"] = None
+            return True
         return False
 
-    def record_run_page(self, *, user_id, run_id, pages):
-        for run in self.runs:
-            if run["run_id"] == run_id:
-                previous = run.get("pages_served", 0)
-                run["pages_served"] = max(previous, pages)
-                return previous
-        return 0
+    def record_run_page(self, *, user_id, run_id, eligibility_key, pages):
+        view = self._view(run_id, eligibility_key)
+        previous = view["pages_served"]
+        view["pages_served"] = max(previous, pages)
+        return previous
 
     # --- owner state and budget -------------------------------------------
     def owner_states(self, token, story_ids):
@@ -984,8 +1012,144 @@ def test_a_scoped_staleness_change_still_buys_exactly_one_new_ranking():
     # A history reset is the kind of change that makes a stored order wrong.
     original = store.history_snapshot
     store.history_snapshot = lambda token: {**original(token), "history_generation": 2}
-    store.runs[0]["frozen_order_id"] = "frozen-1"
     second = rank(subject, store, history_generation=2)
     assert second["request_id"] != first["request_id"], "a real staleness change must re-rank"
     assert subject._adapter.calls == 2 and len(store.reservations) == 2
     assert len(store.frozen) == 2
+
+
+# --- claim before paying ---------------------------------------------------
+
+def test_two_concurrent_first_ranks_buy_exactly_one_ranking():
+    """The race the idempotent-refresh fix did not close: request B joins the run
+    while A is still in flight, sees no bound order yet, and pays again. B now
+    loses a compare-and-set taken BEFORE any money moves."""
+    store = PaidStore(events=liked_events())
+    first, second = paid(store), paid(store)
+    inflight = {}
+
+    original = first._adapter.rank
+
+    def rank_while_a_second_request_arrives(*args, **kwargs):
+        # B arrives here: mid-provider-call, before A has bound anything.
+        with pytest.raises(StaleRankingError, match="ranking_in_progress"):
+            rank(second, store)
+        inflight["reached"] = True
+        return original(*args, **kwargs)
+
+    first._adapter.rank = rank_while_a_second_request_arrives
+    served = rank(first, store)
+    assert inflight.get("reached"), "the concurrent request never ran"
+    assert first._adapter.calls == 1 and second._adapter.calls == 0
+    assert len(store.reservations) == 1, "two rankings were reserved for one run"
+    assert len(store.frozen) == 1, "two frozen orders were written for one run"
+    assert store.views[("run-1", first._eligibility_key(None, None, False))]["frozen_order_id"] == "frozen-1"
+    # And once the winner has bound, the loser is SERVED that order, not refused.
+    late = rank(second, store)
+    assert late["request_id"] == served["request_id"]
+    assert len(store.reservations) == 1
+
+
+def test_an_expired_claim_is_taken_over_rather_than_waited_out():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    # A request that died mid-flight: the claim is held and the run has no order.
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    key = subject._eligibility_key(None, None, False)
+    store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
+                                   "claim_token": "dead-request", "claim_expired": True}
+    response = rank(subject, store)
+    assert response["cards"], "an expired claim locked the reader out of her own feed"
+    assert subject._adapter.calls == 1
+
+
+def test_a_held_claim_with_no_order_yet_is_reported_as_in_progress():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    key = subject._eligibility_key(None, None, False)
+    store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
+                                   "claim_token": "someone-else", "claim_expired": False}
+    with pytest.raises(StaleRankingError, match="ranking_in_progress"):
+        rank(subject, store)
+    assert subject._adapter.calls == 0, "a losing request must not call the provider"
+    assert store.reservations == []
+
+
+def test_a_losing_bind_cannot_overwrite_the_winners_order():
+    store = PaidStore(events=liked_events())
+    store.views[("run-1", "k" * 64)] = {"frozen_order_id": "frozen-winner", "pages_served": 0,
+                                        "claim_token": "the-winner", "claim_expired": False}
+    assert store.bind_run_frozen_order(user_id="u", run_id="run-1", eligibility_key="k" * 64,
+                                       frozen_order_id="frozen-loser", token="the-loser") is False
+    assert store.views[("run-1", "k" * 64)]["frozen_order_id"] == "frozen-winner"
+
+
+# --- idempotence is per VIEW, not per run ---------------------------------
+
+def test_a_category_inside_an_open_run_is_not_served_the_all_page():
+    """Measured before the fix: a `tech` request inside an open run made zero
+    corpus calls and returned the All page byte for byte, for up to an hour."""
+    rows = ([corpus_row(index, hours=2, source=f"all{index}", categories=["world"])
+             for index in range(30)]
+            + [corpus_row(100 + index, hours=2, source=f"tech{index}", categories=["tech"])
+               for index in range(30)])
+
+    class ByCategory(PaidStore):
+        def retained_candidates_v2(self, *, category_id, **kwargs):
+            rows = super().retained_candidates_v2(category_id=category_id, **kwargs)
+            if category_id is None:
+                return rows
+            return [row for row in rows if category_id in row["category_ids"]]
+
+    store = ByCategory(rows, events=liked_events())
+    subject = paid(store)
+    everything = rank(subject, store)
+    tech = rank(subject, store, eligibility={"category": "tech", "query": None})
+    assert tech["request_id"] != everything["request_id"], "the category was served the All ranking"
+    assert all("tech" in card["category_ids"] for card in tech["cards"])
+    assert {card["story_id"] for card in tech["cards"]} != {card["story_id"] for card in everything["cards"]}
+    assert len(store.reservations) == 2, "each view pays once, and only once"
+    assert len(store.frozen) == 2
+
+
+def test_refreshing_a_category_inside_the_run_is_free():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store, eligibility={"category": "world", "query": None})
+    before = len(store.reservations)
+    again = rank(subject, store, eligibility={"category": "world", "query": None})
+    assert again["request_id"] == first["request_id"]
+    assert len(store.reservations) == before, "a refresh of the same view paid again"
+
+
+def test_a_search_and_the_exclusive_section_are_their_own_views():
+    store = PaidStore(events=liked_events(), exclusive=exclusive_corpus(6))
+    subject = paid(store, exclusive_category="only-other-language-press")
+    everything = rank(subject, store)
+    searched = rank(subject, store, eligibility={"category": None, "query": "rates"})
+    section = rank(subject, store, eligibility={"category": "only-other-language-press", "query": None})
+    ids = {everything["request_id"], searched["request_id"], section["request_id"]}
+    assert len(ids) == 3, "two different views shared one ranking"
+    assert len(store.reservations) == 3
+
+
+def test_the_page_budget_is_spent_per_view():
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}", categories=[f"d{index % 9}"])
+            for index in range(300)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    policy = load_composition_policy(POLICY_PATH)
+    response = rank(subject, store)
+    cursor, served = response["next_cursor"], 1
+    while cursor and served < policy.max_pages_per_run:
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        if not response["cards"]:
+            break
+        served += 1
+        cursor = response["next_cursor"]
+    assert served == policy.max_pages_per_run
+    # All is spent. A different view starts with its own full budget.
+    other = rank(subject, store, eligibility={"category": "d1", "query": None})
+    assert other["cards"], "one view's spent budget ended another view's first page"
+    assert other["next_cursor"], "a fresh view must still be able to load more"

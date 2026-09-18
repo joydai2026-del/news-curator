@@ -62,6 +62,7 @@ class CompositionPolicy:
     idle_minutes: int
     max_run_minutes: int
     negative_suppression_days: int
+    ranking_claim_seconds: int
     max_pages_per_run: int
     immediate_negative_filter: bool
     exclusive_promote_to_all_max: int
@@ -105,6 +106,7 @@ _NUMERIC_RANGES = {
     "run.idle_minutes": (int, 5, 1440),
     "run.max_minutes": (int, 15, 240),
     "run.negative_suppression_days": (int, 1, 90),
+    "run.ranking_claim_seconds": (int, 5, 600),
     "run.max_pages_per_run": (int, 1, 20),
     "lane.exclusive_promote_to_all_max": (int, 0, 5),
 }
@@ -292,6 +294,7 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
         idle_minutes=int(numbers["run.idle_minutes"]),
         max_run_minutes=int(numbers["run.max_minutes"]),
         negative_suppression_days=int(numbers["run.negative_suppression_days"]),
+        ranking_claim_seconds=int(numbers["run.ranking_claim_seconds"]),
         max_pages_per_run=pages,
         immediate_negative_filter=booleans["run.immediate_negative_filter"],
         exclusive_promote_to_all_max=int(numbers["lane.exclusive_promote_to_all_max"]),

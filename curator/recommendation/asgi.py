@@ -8,7 +8,8 @@ import os
 import sys
 import traceback
 
-from .service import AuthenticationError, ProviderConsentRequiredError, StaleRankingError
+from .service import (AuthenticationError, ProviderConsentRequiredError,
+                      RankingInProgressError, StaleRankingError)
 
 
 class RankingASGI:
@@ -43,6 +44,10 @@ class RankingASGI:
             await self._reply(send, 200, result)
         except AuthenticationError:
             await self._reply(send, 401, {"error": "authentication_required"})
+        except RankingInProgressError:
+            # Retryable, and distinct from staleness: the answer is being bought
+            # right now and buying a second one is the bug this reports.
+            await self._reply(send, 409, {"error": "ranking_in_progress"})
         except ProviderConsentRequiredError as exc:
             # Distinct from staleness on purpose. A reader that only sees "409"
             # shows a dead feed; this one can show a re-consent line and the

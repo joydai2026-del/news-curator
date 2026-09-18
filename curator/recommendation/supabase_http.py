@@ -170,15 +170,43 @@ class SupabaseHTTP:
             body={"p_user_id": user_id, "p_run_id": run_id, "p_story_ids": list(story_ids)})
         return result if isinstance(result, int) else 0
 
-    def bind_run_frozen_order(self, *, user_id: str, run_id: str, frozen_order_id: str) -> bool:
+    def open_run_view(self, *, user_id: str, run_id: str, eligibility_key: str):
+        result = self._request("POST", "/rest/v1/rpc/m2_open_run_view", token=self._service_token(),
+            key=self._service, body={"p_user_id": user_id, "p_run_id": run_id,
+                "p_eligibility_key": eligibility_key})
+        if not isinstance(result, Mapping):
+            raise SupabaseHTTPError("run view RPC returned a non-object")
+        return result
+
+    def bind_run_frozen_order(self, *, user_id: str, run_id: str, eligibility_key: str,
+                              frozen_order_id: str, token: str | None = None) -> bool:
         result = self._request("POST", "/rest/v1/rpc/m2_bind_run_frozen_order", token=self._service_token(),
             key=self._service, body={"p_user_id": user_id, "p_run_id": run_id,
-                "p_frozen_order_id": frozen_order_id})
+                "p_eligibility_key": eligibility_key, "p_frozen_order_id": frozen_order_id,
+                "p_token": token})
         return result is True
 
-    def record_run_page(self, *, user_id: str, run_id: str, pages: int) -> int:
+    def claim_run_ranking(self, *, user_id: str, run_id: str, eligibility_key: str, token: str,
+                          ttl_seconds: int):
+        result = self._request("POST", "/rest/v1/rpc/m2_claim_run_ranking", token=self._service_token(),
+            key=self._service, body={"p_user_id": user_id, "p_run_id": run_id,
+                "p_eligibility_key": eligibility_key, "p_token": token, "p_ttl_seconds": ttl_seconds})
+        if not isinstance(result, Mapping):
+            raise SupabaseHTTPError("ranking claim RPC returned a non-object")
+        return result
+
+    def release_run_ranking_claim(self, *, user_id: str, run_id: str, eligibility_key: str,
+                                  token: str) -> bool:
+        result = self._request("POST", "/rest/v1/rpc/m2_release_run_ranking_claim",
+            token=self._service_token(), key=self._service,
+            body={"p_user_id": user_id, "p_run_id": run_id, "p_eligibility_key": eligibility_key,
+                  "p_token": token})
+        return result is True
+
+    def record_run_page(self, *, user_id: str, run_id: str, eligibility_key: str, pages: int) -> int:
         result = self._request("POST", "/rest/v1/rpc/m2_record_run_page", token=self._service_token(),
-            key=self._service, body={"p_user_id": user_id, "p_run_id": run_id, "p_pages": pages})
+            key=self._service, body={"p_user_id": user_id, "p_run_id": run_id,
+                "p_eligibility_key": eligibility_key, "p_pages": pages})
         return result if isinstance(result, int) else 0
 
     def extend_frozen_order(self, *, user_id: str, frozen_order_id: str, cards, bindings) -> int:
