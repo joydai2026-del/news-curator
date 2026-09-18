@@ -34,6 +34,10 @@ MIGRATIONS = (
     'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
     'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
     'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
+    # PR #47's dedupe lands after the Phase 2 files by filename, and the lane
+    # RPC inherits its rule in 0102. Applied in the same order CI applies them.
+    'supabase/migrations/202609180101_m2_retained_candidates_dedupe.sql',
+    'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -218,7 +222,8 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
                       'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
                       'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
                       'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
-                      'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql'):
+                      'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
+                      'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)
         assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
 
@@ -362,6 +367,29 @@ def test_the_writer_is_idempotent_across_runs(db):
 
 
 # --- the lane RPC ----------------------------------------------------------
+
+def test_the_lane_rpc_inherits_the_dedupe_rule(db):
+    """The Phase 2 feed reads exclusively through v2, so a dedupe rule that lives
+    only in m2_retained_candidates would be a fix on a path nothing calls."""
+    first = 'https://example.test/lane-dedupe-older'
+    second = 'https://example.test/lane-dedupe-newer'
+    title = 'One headline, two addresses'
+    rows = [_row(first, title=title, source_id='wire-a', source_name='Wire A',
+                 published_at='2026-09-18T09:00:00Z', source_observed_at='2026-09-18T09:00:00Z'),
+            _row(second, title=title, source_id='wire-b', source_name='Wire B',
+                 published_at='2026-09-18T09:30:00Z', source_observed_at='2026-09-18T09:30:00Z')]
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+    served = [row for row in _lane(db) if row['title'] == title]
+    assert len(served) == 1, f'the lane RPC served {len(served)} copies of one story'
+    # The newest wins, the same representative the other projections choose.
+    assert served[0]['story_id'] == _story_id(second)
+    # And the rule is operable: a window of zero restores one row per observation.
+    result = _service(db, "select coalesce(jsonb_agg(value), '[]'::jsonb) from "
+                      "public.m2_retained_candidates_v2(p_limit => 100, p_dedupe_window_hours => 0) "
+                      "as rows(value);")
+    both = [row for row in json.loads(_last(result)) if row['title'] == title]
+    assert len(both) == 2, 'the dedupe window is not operable'
+
 
 def test_the_lane_rpc_returns_the_phase_one_overlay_fields(db):
     row = _by_story(_lane(db))[_story_id(MIXED)]

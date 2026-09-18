@@ -28,10 +28,13 @@ CLOCK = 1_789_000_000
 NOW = datetime.fromtimestamp(CLOCK, timezone.utc)
 
 
+OWNER_ID = "11111111-1111-1111-1111-111111111111"
+
+
 class Auth:
     def get_user(self, token):
         assert token == "valid"
-        return {"id": "11111111-1111-1111-1111-111111111111"}
+        return {"id": OWNER_ID}
 
 
 def corpus_row(index, *, hours, source, categories, independent=1, aggregator=False, title=None):
@@ -291,6 +294,9 @@ def build(store, *, composition=True, page_size=25, promote=None, exclusive_cate
         loaded = replace(loaded, exclusive_promote_to_all_max=promote)
     policy = ServicePolicy("policy", "gpt-5-mini", "policy", "tenant", candidate_limit=50,
         maximum_page_size=page_size, enabled=True, composition=loaded,
+        # F5, from PR #47: an enabled service fails closed on an empty allowlist.
+        # The harness names the owner the Auth stub authenticates.
+        preview_owner_ids=(OWNER_ID,),
         exclusive_category_id=exclusive_category or "")
     return RankingService(auth=Auth(), store=store, adapter=adapter, policy=policy,
                           cursor_key=b"x" * 32, clock=lambda: CLOCK)
@@ -1229,13 +1235,13 @@ def test_a_reservation_that_bought_nothing_is_released():
     store = PaidStore(events=liked_events())
     subject = paid(store)
     subject._abandon_unbound_order(
-        type("Owner", (), {"user_id": "11111111-1111-1111-1111-111111111111"})(),
+        type("Owner", (), {"user_id": OWNER_ID})(),
         "request-1", reservation_created=True, observed_usage={})
     assert [entry["status"] for entry in store.settlements] == ["released"]
     # And a reservation that DID buy something keeps its real settled cost.
     store.settlements.clear()
     subject._abandon_unbound_order(
-        type("Owner", (), {"user_id": "11111111-1111-1111-1111-111111111111"})(),
+        type("Owner", (), {"user_id": OWNER_ID})(),
         "request-2", reservation_created=True, observed_usage={"input_tokens": 1})
     assert store.settlements == []
 
