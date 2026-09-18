@@ -81,6 +81,10 @@ create or replace function public.m2_retained_candidates_v2(
   p_trend_window_hours integer default 24, p_trend_min_sources integer default 2,
   p_max_age_hours integer default null, p_min_age_hours integer default null,
   p_before_published_at timestamptz default null, p_before_story_id text default null,
+  -- The hot lane orders by independent source count FIRST, so a published_at
+  -- keyset cannot describe its page boundary: the next page would skip or repeat
+  -- rows whose count differs. Hot therefore pages on the full sort key.
+  p_before_source_count integer default null,
   p_limit integer default 50
 ) returns setof jsonb language plpgsql stable security definer set search_path = pg_catalog, public as $$
 declare cutoff timestamptz; floor_at timestamptz; trend_cutoff timestamptz;
@@ -101,6 +105,15 @@ begin
   end if;
   if p_min_age_hours is not null and (p_min_age_hours < 1 or p_min_age_hours > 168) then
     raise exception 'invalid age floor';
+  end if;
+  -- A hot cursor is the whole sort key or it is not a cursor. Half of one
+  -- silently drops rows at the page boundary, which is worse than refusing it.
+  if p_before_source_count is not null and (p_lane is distinct from 'hot'
+       or p_before_published_at is null or p_before_story_id is null) then
+    raise exception 'invalid cursor';
+  end if;
+  if p_lane = 'hot' and p_before_published_at is not null and p_before_source_count is null then
+    raise exception 'invalid cursor';
   end if;
   cutoff := case when p_max_age_hours is null then null
                  else now() - make_interval(hours => p_max_age_hours) end;
@@ -136,7 +149,10 @@ begin
       and (p_query is null or btrim(p_query) = '' or
         (p_query !~ '[一-龥]' and o.search_document @@ websearch_to_tsquery('simple', p_query)) or
         (p_query ~ '[一-龥]' and position(lower(btrim(p_query)) in lower(o.title || E'\n' || o.summary)) > 0))
-      and (p_before_published_at is null or o.published_at < p_before_published_at
+      -- The hot lane's keyset is applied OUTSIDE this CTE, over its own sort
+      -- key, because independent_source_count is computed here and cannot be
+      -- compared before it exists.
+      and (p_lane = 'hot' or p_before_published_at is null or o.published_at < p_before_published_at
            or (o.published_at = p_before_published_at and o.story_id < p_before_story_id))
       and (cutoff is null or o.published_at >= cutoff)
       and (floor_at is null or o.published_at < floor_at)
@@ -156,6 +172,9 @@ begin
                                            and s.published_at >= trend_cutoff))
     and (p_lane is distinct from 'interested' or s.matches_profile)
     and (p_lane is distinct from 'surprise' or (not s.matches_profile and not s.source_is_aggregator))
+    and (p_before_source_count is null or
+         (s.independent_source_count, s.published_at, s.story_id)
+           < (p_before_source_count, p_before_published_at, p_before_story_id))
   order by
     case when p_lane = 'hot' then s.independent_source_count else 0 end desc,
     s.published_at desc, s.story_id desc
@@ -164,10 +183,10 @@ end;
 $$;
 
 revoke all on function public.m2_ingest_retained_coverage(jsonb),
-  public.m2_retained_candidates_v2(text, text, text, text[], text[], integer, integer, integer, integer, timestamptz, text, integer)
+  public.m2_retained_candidates_v2(text, text, text, text[], text[], integer, integer, integer, integer, timestamptz, text, integer, integer)
   from public, anon, authenticated;
 grant execute on function public.m2_ingest_retained_coverage(jsonb),
-  public.m2_retained_candidates_v2(text, text, text, text[], text[], integer, integer, integer, integer, timestamptz, text, integer)
+  public.m2_retained_candidates_v2(text, text, text, text[], text[], integer, integer, integer, integer, timestamptz, text, integer, integer)
   to service_role;
 
 commit;

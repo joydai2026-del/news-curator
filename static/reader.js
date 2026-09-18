@@ -826,7 +826,20 @@
       if (response.redirected !== false || response.url !== url) fail("The M2 endpoint redirected unexpectedly.");
       const after = await sessionProvider();
       if (!after || after.access_token !== before.access_token) fail("The signed-in account changed.");
-      if (!response.ok) fail("The M2 reader request failed.");
+      if (!response.ok) {
+        // A ranking prompt revision is a QUESTION, not an outage: the owner
+        // agreed to a different provider policy than the one now running, and
+        // one tap on the existing consent control fixes it. Collapsing this
+        // into the generic failure is how a deploy looks like a dead feed.
+        if (isObject(payload) && payload.error === "provider_consent_required") {
+          const error = new Error("Personalized ranking needs your permission again.");
+          error.consentRequired = true;
+          error.providerPolicyId = boundedString(payload.provider_policy_id, 256)
+            ? payload.provider_policy_id : "";
+          throw error;
+        }
+        fail("The M2 reader request failed.");
+      }
       return validateM2Response(payload, expected);
     }
     return Object.freeze({
@@ -1402,6 +1415,22 @@
         if (mode) mode.textContent = "Personalized feed is still loading.";
         announce("Personalized feed is still loading.");
       };
+      // A re-consent prompt is its own state. It says what happened, in one
+      // line, and leaves the consent control on screen so the fix is one tap.
+      const consentRequired = () => {
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        showBaseline();
+        if (request !== m2Sequence) return;
+        m2Sequence += 1;
+        if (m2Controls) m2Controls.hidden = false;
+        const mode = document.getElementById("m2-mode");
+        const message = "Personalized ranking needs your permission again. Turn it back on to resume.";
+        if (mode) {
+          mode.textContent = message;
+          mode.dataset.consentRequired = "true";
+        }
+        announce(message);
+      };
       const terminalFallback = () => {
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         const retainedPage = append && m2Active;
@@ -1455,8 +1484,8 @@
         if (!append && eligibility.query && !response.cards.length) {
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
         }
-      } catch (_) {
-        terminalFallback();
+      } catch (error) {
+        if (error && error.consentRequired) consentRequired(); else terminalFallback();
       } finally {
         clearTimeout(deadline); clearTimeout(transportDeadline); pageRequests.delete(pageRequest); refreshLoadButton();
       }

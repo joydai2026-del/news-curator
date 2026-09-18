@@ -75,7 +75,7 @@ def _primary_topic(candidate: LanedCandidate) -> str:
 
 
 def _spacing_legal(emitted: Sequence[LanedCandidate], candidate: LanedCandidate,
-                   policy: CompositionPolicy) -> bool:
+                   policy: CompositionPolicy, *, topics: bool = True) -> bool:
     source_id = str(candidate.row.get("source_id", ""))
     group = candidate.row.get("event_group_id")
     for previous in emitted[-policy.same_source_window:]:
@@ -83,6 +83,8 @@ def _spacing_legal(emitted: Sequence[LanedCandidate], candidate: LanedCandidate,
             return False
         if isinstance(group, str) and group and previous.row.get("event_group_id") == group:
             return False
+    if not topics:
+        return True
     topic = _primary_topic(candidate)
     if topic and any(_primary_topic(previous) == topic for previous in emitted[-policy.topic_window_k:]):
         return False
@@ -131,9 +133,22 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
     emitted: list[LanedCandidate] = []
     remaining = list(kept)
     donor_used = 0
+    relaxed: list[str] = []
     while len(emitted) < page_size:
         choice = next((item for item in remaining
                        if counts[item.lane] < quotas[item.lane] and _spacing_legal(emitted, item, policy)), None)
+        if choice is None:
+            # PRECEDENCE, stated once. A lane's own quota is filled from its own
+            # pool before its slots are handed to another lane, even if that
+            # costs topic spacing. Otherwise a corpus that is mostly one topic
+            # (which is what today's corpus is) starves the aligned lane and the
+            # page comes back 14 fresh / 1 for-you, which is not the feed anyone
+            # configured. Source and event-group adjacency are still hard.
+            choice = next((item for item in remaining
+                           if counts[item.lane] < quotas[item.lane]
+                           and _spacing_legal(emitted, item, policy, topics=False)), None)
+            if choice is not None and "topic_spacing" not in relaxed:
+                relaxed.append("topic_spacing")
         if choice is None:
             # 5. Short-pool rule. Aligned is the only donor: borrowing from hot
             # or surprise would quietly delete the variety this exists to add.
@@ -147,12 +162,48 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
         emitted.append(choice)
         counts[choice.lane] += 1
 
+    # A page that ships short while candidates are still waiting is a worse
+    # product than a page that bends its own spacing rule. The ladder is
+    # deliberate and ordered, and every rung is recorded so a short or relaxed
+    # page can be explained afterwards rather than guessed at.
+    if len(emitted) < page_size and remaining:
+        # Rung 1: ignore QUOTAS, keep spacing. Donor order is fixed: the pool
+        # whose over-representation is least harmful goes first, and surprise is
+        # last because draining exploration is what deletes the variety.
+        for lane in ("interested", "updates", "hot", "surprise"):
+            while len(emitted) < page_size:
+                choice = next((item for item in remaining
+                               if item.lane == lane and _spacing_legal(emitted, item, policy)), None)
+                if choice is None:
+                    break
+                remaining.remove(choice)
+                emitted.append(choice)
+                counts[choice.lane] += 1
+                if "quota" not in relaxed:
+                    relaxed.append("quota")
+    if len(emitted) < page_size and remaining:
+        # Rung 2: relax TOPIC spacing only. Source and event-group adjacency stay
+        # hard, because "no two cards in a row from the same outlet" is an
+        # acceptance invariant and a reader can see it being broken.
+        for lane in ("interested", "updates", "hot", "surprise"):
+            while len(emitted) < page_size:
+                choice = next((item for item in remaining if item.lane == lane
+                               and _spacing_legal(emitted, item, policy, topics=False)), None)
+                if choice is None:
+                    break
+                remaining.remove(choice)
+                emitted.append(choice)
+                counts[choice.lane] += 1
+                if "topic_spacing" not in relaxed:
+                    relaxed.append("topic_spacing")
+
     short: list[Mapping[str, object]] = []
     for lane in policy.lane_priority:
         served = sum(1 for item in emitted if item.lane == lane)
         if served < quotas[lane]:
             short.append({"lane": lane, "quota": quotas[lane], "served": served,
                           "shortfall": quotas[lane] - served,
+                          "relaxed": list(relaxed),
                           "reason": "lane_pool_exhausted" if donor_used or len(emitted) < page_size
                                     else "spacing_constraint"})
 

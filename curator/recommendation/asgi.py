@@ -8,7 +8,7 @@ import os
 import sys
 import traceback
 
-from .service import AuthenticationError, StaleRankingError
+from .service import AuthenticationError, ProviderConsentRequiredError, StaleRankingError
 
 
 class RankingASGI:
@@ -43,6 +43,12 @@ class RankingASGI:
             await self._reply(send, 200, result)
         except AuthenticationError:
             await self._reply(send, 401, {"error": "authentication_required"})
+        except ProviderConsentRequiredError as exc:
+            # Distinct from staleness on purpose. A reader that only sees "409"
+            # shows a dead feed; this one can show a re-consent line and the
+            # control that fixes it.
+            await self._reply(send, 409, {"error": "provider_consent_required",
+                                          "provider_policy_id": exc.provider_policy_id})
         except StaleRankingError as exc:
             await self._reply(send, 409, {"error": str(exc)})
         except (ValueError, json.JSONDecodeError) as exc:

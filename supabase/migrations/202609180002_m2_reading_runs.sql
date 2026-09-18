@@ -39,7 +39,8 @@ create policy m2_reading_runs_service_all on public.m2_reading_runs
   for all to service_role using (true) with check (true);
 
 create or replace function public.m2_open_or_join_reading_run(
-  p_user_id uuid, p_idle_minutes integer, p_profile jsonb default '{}'::jsonb
+  p_user_id uuid, p_idle_minutes integer, p_profile jsonb default '{}'::jsonb,
+  p_max_minutes integer default 60
 ) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare existing public.m2_reading_runs%rowtype; created boolean := false;
 begin
@@ -49,6 +50,9 @@ begin
   if p_idle_minutes is null or p_idle_minutes < 5 or p_idle_minutes > 1440 then
     raise exception 'invalid idle window';
   end if;
+  if p_max_minutes is null or p_max_minutes < 15 or p_max_minutes > 240 then
+    raise exception 'invalid run age cap';
+  end if;
   if p_profile is not null and jsonb_typeof(p_profile) <> 'object' then
     raise exception 'invalid profile snapshot';
   end if;
@@ -57,7 +61,18 @@ begin
   perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':reading-run', 0));
   select * into existing from public.m2_reading_runs
     where user_id = p_user_id and closed_at is null for update;
-  if found and existing.last_activity_at >= now() - make_interval(mins => p_idle_minutes) then
+  -- THE BOUNDARY, decided once so it cannot drift: the run ends when the idle
+  -- gap is GREATER THAN p_idle_minutes. At exactly 60 minutes the run is over
+  -- and a new one opens. "Relearn about once an hour" reads as an hour being
+  -- enough to have learned, not as an hour still counting as the same sitting,
+  -- and a strict comparison is the one that can be tested at the exact instant.
+  -- A run ends at whichever comes FIRST: an idle gap past p_idle_minutes, or an
+  -- age past p_max_minutes. Idle alone never fires for a reader who keeps
+  -- reading, because last_activity_at slides forward on every page, so an hourly
+  -- reader would sit in one run for ever and would never be learned from.
+  if found
+     and existing.last_activity_at > now() - make_interval(mins => p_idle_minutes)
+     and existing.opened_at > now() - make_interval(mins => p_max_minutes) then
     update public.m2_reading_runs set last_activity_at = now()
       where run_id = existing.run_id returning * into existing;
   else
@@ -112,6 +127,9 @@ begin
     'result_mode', f.bindings->>'result_mode', 'fallback_reason', f.bindings->>'fallback_reason',
     'eligibility', coalesce(f.bindings->'eligibility', '{}'::jsonb),
     'short_lane_reasons', coalesce(f.bindings->'short_lane_reasons', '[]'::jsonb),
+    'filtered_story_ids', coalesce((select r.filtered_story_ids from public.m2_reading_runs r
+                                    where r.run_id = (f.bindings->>'run_id')::uuid
+                                      and r.user_id = caller), '[]'::jsonb),
     'cards', (select coalesce(jsonb_agg(jsonb_build_object(
         'story_id', card->>'story_id', 'title', card->>'title',
         'source_name', card->>'source_name', 'lane', card->>'lane',
@@ -127,9 +145,9 @@ begin
 end;
 $$;
 
-revoke all on function public.m2_open_or_join_reading_run(uuid, integer, jsonb),
+revoke all on function public.m2_open_or_join_reading_run(uuid, integer, jsonb, integer),
   public.m2_record_reading_run_filter(uuid, uuid, text[]) from public, anon, authenticated;
-grant execute on function public.m2_open_or_join_reading_run(uuid, integer, jsonb),
+grant execute on function public.m2_open_or_join_reading_run(uuid, integer, jsonb, integer),
   public.m2_record_reading_run_filter(uuid, uuid, text[]) to service_role;
 revoke all on function public.m2_owner_reading_pages(timestamptz, integer) from public, anon;
 grant execute on function public.m2_owner_reading_pages(timestamptz, integer) to authenticated;

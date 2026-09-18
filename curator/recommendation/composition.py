@@ -53,6 +53,7 @@ class CompositionPolicy:
     hide_already_opened: bool
     calibration_alarm_kl: float
     idle_minutes: int
+    max_run_minutes: int
     max_pages_per_run: int
     immediate_negative_filter: bool
     exclusive_promote_to_all_max: int
@@ -94,6 +95,7 @@ _NUMERIC_RANGES = {
     "diversity.topic_window_k": (int, 1, 100),
     "diversity.calibration_alarm_kl": (float, 0.0, 2.0),
     "run.idle_minutes": (int, 5, 1440),
+    "run.max_minutes": (int, 15, 240),
     "run.max_pages_per_run": (int, 1, 20),
     "lane.exclusive_promote_to_all_max": (int, 0, 5),
 }
@@ -171,6 +173,13 @@ def parse_composition_policy(document: object) -> CompositionPolicy:
     weights_raw = _at(document, "engagement_weights")
     if not isinstance(weights_raw, Mapping) or not weights_raw:
         raise CompositionPolicyError("engagement_weights must be configured")
+    # ALL FIVE or none. A policy missing "save" does not weight saves at zero,
+    # it silently drops the strongest positive signal the product captures, and
+    # nothing downstream can tell that apart from a deliberate zero.
+    missing = [action for action in CAPTURED_ACTIONS if action not in weights_raw]
+    if missing:
+        raise CompositionPolicyError(
+            "engagement_weights must name every captured action; missing " + ", ".join(missing))
     weights = {}
     for action, value in weights_raw.items():
         # Check 7: a weight for an action nothing captures is a design error.
@@ -239,7 +248,8 @@ def parse_composition_policy(document: object) -> CompositionPolicy:
         topic_window_k=int(numbers["diversity.topic_window_k"]),
         hide_already_opened=booleans["diversity.hide_already_opened"],
         calibration_alarm_kl=float(numbers["diversity.calibration_alarm_kl"]),
-        idle_minutes=int(numbers["run.idle_minutes"]), max_pages_per_run=pages,
+        idle_minutes=int(numbers["run.idle_minutes"]),
+        max_run_minutes=int(numbers["run.max_minutes"]), max_pages_per_run=pages,
         immediate_negative_filter=booleans["run.immediate_negative_filter"],
         exclusive_promote_to_all_max=int(numbers["lane.exclusive_promote_to_all_max"]),
         default_display_language=str(display),

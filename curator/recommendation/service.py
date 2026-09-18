@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import re
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -37,6 +38,21 @@ class StaleRankingError(RuntimeError):
     pass
 
 
+class ProviderConsentRequiredError(StaleRankingError):
+    """The owner consented to a DIFFERENT provider policy than the one running.
+
+    This is not staleness and it is not an outage: it is a question with an
+    answer the reader can offer in one tap. It carries the policy id the owner
+    has to agree to, because a reader that cannot name it can only show a dead
+    feed. Raised whenever the prompt revision moves, which is exactly what
+    happens on the deploy that ships a new ranking prompt.
+    """
+
+    def __init__(self, provider_policy_id: str) -> None:
+        super().__init__("provider_consent_required")
+        self.provider_policy_id = provider_policy_id
+
+
 class SupabaseAuth(Protocol):
     def get_user(self, access_token: str) -> Mapping[str, object]: ...
 
@@ -52,14 +68,20 @@ class RankingStore(Protocol):
                             profile_categories: Sequence[str], profile_sources: Sequence[str],
                             trend_window_hours: int, trend_min_sources: int, max_age_hours: int | None,
                             min_age_hours: int | None, limit: int, before_published_at: str | None = None,
-                            before_story_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
-    def open_reading_run(self, *, user_id: str, idle_minutes: int,
+                            before_story_id: str | None = None,
+                            before_source_count: int | None = None) -> Sequence[Mapping[str, object]]: ...
+    def open_reading_run(self, *, user_id: str, idle_minutes: int, max_minutes: int,
                          profile: Mapping[str, object]) -> Mapping[str, object]: ...
+    def record_reading_run_filter(self, *, user_id: str, run_id: str,
+                                  story_ids: Sequence[str]) -> int: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
-    def save_frozen_order(self, *, user_id: str, request_id: str, bindings: Mapping[str, object], cards: Sequence[Mapping[str, object]], page_size: int, expires_at: int) -> str: ...
+    def save_frozen_order(self, *, user_id: str, request_id: str, bindings: Mapping[str, object], cards: Sequence[Mapping[str, object]], page_size: int, expires_at: int, run_id: str | None = None) -> str: ...
     def load_frozen_order(self, *, user_id: str, frozen_order_id: str) -> Mapping[str, object] | None: ...
+    def extend_frozen_order(self, *, user_id: str, frozen_order_id: str,
+                            cards: Sequence[Mapping[str, object]],
+                            bindings: Mapping[str, object]) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -130,7 +152,7 @@ class RankingService:
         snapshot = self._store.history_snapshot(token)
         self._validate_client_bindings(body, snapshot)
         if snapshot.get("provider_processing_enabled") and snapshot.get("provider_policy_id") != self._policy.provider_policy_id:
-            raise StaleRankingError("provider_policy_mismatch")
+            raise ProviderConsentRequiredError(self._policy.provider_policy_id)
         page_size = self._page_size(body.get("page_size", 20))
         eligibility = body.get("eligibility", {})
         if not isinstance(eligibility, Mapping):
@@ -270,9 +292,20 @@ class RankingService:
                                                composition.exclusive_promote_to_all_max)
             # The hard diversity pass. Deterministic, replayable, and applied to
             # the model's order rather than asked of the model.
+            # The VISIBLE page and the finalization page are the same page.
+            # When they differed, a short internal page shifted the boundary and
+            # the first 25 cards the reader saw were a slice ACROSS two
+            # quota-checked pages, which is how a 7/4/11/3 mix rendered as
+            # 14/7/1/3. One number, used everywhere.
+            page_size = min(page_size, composition.page_size)
             finalization = finalize_order(ordered, policy=composition, owner_states=owner_states,
-                page_size=min(page_size, composition.page_size), pages=composition.max_pages_per_run,
-                profile=profile)
+                page_size=page_size, pages=composition.max_pages_per_run, profile=profile)
+            if finalization.short_lane_reasons:
+                # The operator signal for JJ's hourly review: which lane came up
+                # short on which page, and which rung of the ladder was used.
+                print(json.dumps({"event": "m2_page_shortfall", "request_id": request_id,
+                    "short_lane_reasons": [dict(entry) for entry in finalization.short_lane_reasons]},
+                    separators=(",", ":")), file=sys.stderr, flush=True)
             cards = [self._card(item.row, owner_states.get(item.story_id, {}), lane=item.lane,
                                 composition=composition,
                                 exclusive=item.story_id in exclusive_ids,
@@ -291,6 +324,11 @@ class RankingService:
             bindings["server_commit_revision"] = latest.get("history_revision")
         if finalization is not None:
             bindings.update({"run_id": (run or {}).get("run_id"),
+                # The run's FROZEN profile, carried on the order itself. A
+                # continuation past the end of this order has to compose the
+                # next cards from the same profile, and reading it from here
+                # costs no round trip and cannot drift from what was ranked.
+                "profile_snapshot": profile.as_snapshot(),
                 "short_lane_reasons": [dict(entry) for entry in finalization.short_lane_reasons],
                 "calibration_kl": finalization.calibration_kl,
                 "calibration_alarm": finalization.calibration_alarm,
@@ -308,7 +346,8 @@ class RankingService:
                     "released_no_provider_call" if reservation_created else "no_provider_call",
                 "newest_event_id": receipt.newest_event_id}})
         frozen_id = self._store.save_frozen_order(user_id=owner.user_id, request_id=request_id,
-            bindings=bindings, cards=cards, page_size=page_size, expires_at=expires_at)
+            bindings=bindings, cards=cards, page_size=page_size, expires_at=expires_at,
+            run_id=(run or {}).get("run_id"))
         next_cursor = self._cursor(frozen_id, min(page_size, len(cards)), expires_at) if page_size < len(cards) or has_more else None
         return self._page_response(bindings, cards[:page_size], next_cursor, receipt)
 
@@ -336,16 +375,100 @@ class RankingService:
         offset = int(payload["offset"])
         cards = list(frozen["cards"])
         size = int(frozen.get("page_size", self._policy.maximum_page_size))
-        visible, next_offset = self._slice(cards, offset, size, current)
-        next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
         if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
-            return self.rank(authorization=authorization, body={**current_bindings,
-                "history_revision": current.get("included_history_revision", 0),
-                "eligibility": frozen["bindings"].get("eligibility", {}), "exclude_story_ids": [],
-                "corpus_cursor": frozen["bindings"].get("corpus_cursor"), "page_size": size})
+            # F7, the branch that used to re-rank. Inside a reading run there is
+            # never a second provider call: load more browses OLDER news, in the
+            # same deterministic recipe order, with the same pools and labels and
+            # no model. The new cards are APPENDED to this frozen order, so every
+            # already-signed cursor keeps pointing at the same card.
+            if self._policy.composition is not None:
+                added = self._continue_frozen_order(token, owner, frozen, str(payload["frozen_order_id"]), size)
+                if added:
+                    cards = cards + list(added)
+                    frozen["cards"] = cards
+            else:
+                # The documented rollback: with no recipe configured there is no
+                # deterministic continuation to fall back on, so the pre-Phase-2
+                # behavior stands unchanged rather than silently ending the feed.
+                return self.rank(authorization=authorization, body={**current_bindings,
+                    "history_revision": current.get("included_history_revision", 0),
+                    "eligibility": frozen["bindings"].get("eligibility", {}), "exclude_story_ids": [],
+                    "corpus_cursor": frozen["bindings"].get("corpus_cursor"), "page_size": size})
+        visible, next_offset, removed = self._slice(cards, offset, size, current)
+        self._record_filtered(owner, frozen, removed)
+        next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
+        if offset >= len(cards):
+            return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
+                    "cards": [], "next_cursor": None}
         if next_cursor is None and frozen["bindings"].get("corpus_has_more"):
             next_cursor = self._cursor(str(payload["frozen_order_id"]), len(cards), int(frozen["expires_at"]))
         return {"schema_version": 1, **self._public_bindings(frozen["bindings"]), "cards": visible, "next_cursor": next_cursor}
+
+    def _continue_frozen_order(self, token, owner, frozen, frozen_order_id, size):
+        """Older news, composed by the recipe alone. No provider call, ever.
+
+        Returns the cards appended, or an empty tuple when there is nothing more
+        to add. Any failure here degrades to "no more cards" rather than to a
+        paid ranking: a page turn that quietly bills is the bug being fixed.
+        """
+        composition = self._policy.composition
+        bindings = frozen.get("bindings", {})
+        cursor = bindings.get("corpus_cursor") or {}
+        if composition is None or not isinstance(cursor, Mapping) or not cursor:
+            return ()
+        eligibility = bindings.get("eligibility") or {}
+        category_id = eligibility.get("category") if isinstance(eligibility, Mapping) else None
+        query = eligibility.get("query") if isinstance(eligibility, Mapping) else None
+        profile = BehaviorProfile.from_snapshot(bindings.get("profile_snapshot"))
+        seen = {str(card.get("story_id")) for card in frozen.get("cards", ())}
+        rows = [row for row in self._pool_rows(category_id, query, profile, composition,
+                                               cursor.get("before_published_at"),
+                                               cursor.get("before_story_id"))
+                if str(row.get("story_id")) not in seen]
+        if not rows:
+            return ()
+        laned = build_window(rows, profile=profile, policy=composition, now=self._now(),
+                             size=composition.candidate_window_size)
+        if not laned:
+            return ()
+        exclusive = self._is_exclusive_category(category_id)
+        owner_states = self._store.owner_states(token, [item.story_id for item in laned])
+        finalization = finalize_order(laned, policy=composition, owner_states=owner_states,
+            page_size=min(size, composition.page_size), pages=composition.max_pages_per_run,
+            profile=profile)
+        added = [self._card(item.row, owner_states.get(item.story_id, {}), lane=item.lane,
+                            composition=composition, exclusive=exclusive,
+                            also_covered_by=finalization.also_covered_by.get(item.story_id, ()))
+                 for item in finalization.cards]
+        if not added:
+            return ()
+        boundary = min(rows, key=lambda item: (str(item["published_at"]), str(item["story_id"])))
+        self._store.extend_frozen_order(user_id=owner.user_id, frozen_order_id=frozen_order_id,
+            cards=added, bindings={"corpus_cursor": {"before_published_at": boundary["published_at"],
+                                                     "before_story_id": boundary["story_id"]},
+                                   "corpus_has_more": len(rows) > len(added),
+                                   "continuation_mode": "recipe_only"})
+        return tuple(added)
+
+    def _record_filtered(self, owner, frozen, removed):
+        """Persist what "less like this" removed, so the page replays.
+
+        Without this the filter is recomputed from whatever the profile happens
+        to be at read time, and a page reviewed an hour later cannot be told
+        apart from a page that never had those cards. It is also what makes
+        `reading-pages --hour` honest about what she actually saw.
+        """
+        run_id = (frozen.get("bindings") or {}).get("run_id")
+        if not run_id or not removed:
+            return
+        try:
+            self._store.record_reading_run_filter(user_id=owner.user_id, run_id=str(run_id),
+                                                  story_ids=sorted(removed))
+        except Exception:
+            # A page must render even when the audit write fails. The filter
+            # itself already happened; this only records it.
+            print(json.dumps({"event": "m2_filter_record_failed", "run_id": str(run_id)},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
 
     def _slice(self, cards, offset, size, snapshot):
         """One page of the frozen order, with "less like this" applied at RENDER.
@@ -358,20 +481,22 @@ class RankingService:
         """
         composition = self._policy.composition
         if composition is None or not composition.immediate_negative_filter:
-            return cards[offset:offset + size], offset + size
+            return cards[offset:offset + size], offset + size, []
         profile = build_profile(snapshot, policy=composition, now=self._now())
         if not profile.suppressed_sources and not profile.suppressed_topics:
-            return cards[offset:offset + size], offset + size
-        visible, position, limit = [], offset, min(len(cards), offset + size * 2)
+            return cards[offset:offset + size], offset + size, []
+        visible, removed, position = [], [], offset
+        limit = min(len(cards), offset + size * 2)
         while position < limit and len(visible) < size:
             card = cards[position]
             position += 1
             categories = card.get("category_ids") or []
             if (card.get("source_id") in profile.suppressed_sources
                     or any(category in profile.suppressed_topics for category in categories)):
+                removed.append(str(card.get("story_id")))
                 continue
             visible.append(card)
-        return visible, position
+        return visible, position, removed
 
     def _authenticate(self, authorization: str) -> tuple[str, AuthenticatedOwner]:
         if not authorization.startswith("Bearer ") or not authorization[7:].strip():
@@ -419,11 +544,26 @@ class RankingService:
             self._policy.model_version, query)
 
     def _validate_client_bindings(self, body, snapshot):
-        expected = {"history_revision": snapshot.get("included_history_revision"),
-            "server_commit_revision": snapshot.get("history_revision"),
-            "history_generation": snapshot.get("history_generation"), "consent_revision": snapshot.get("consent_revision")}
+        """Scoped the same way _assert_fresh is, and for the same reason.
+
+        history_revision and server_commit_revision move on EVERY behavior event.
+        Demanding that a client echo them exactly turns a save in another tab
+        into a refused request before any work is done, which is the same bug as
+        F1 seen one step earlier. Generation and consent still have to match:
+        those are the values that make an order wrong rather than out of date.
+        """
+        expected = {"history_generation": snapshot.get("history_generation"),
+                    "consent_revision": snapshot.get("consent_revision")}
         for key, value in expected.items():
             if body.get(key) != value:
+                raise StaleRankingError(f"stale_{key}")
+        for key, current in (("history_revision", snapshot.get("included_history_revision")),
+                             ("server_commit_revision", snapshot.get("history_revision"))):
+            seen = body.get(key)
+            # A revision from the FUTURE is still refused: that is a binding
+            # nobody computed, not a client that is merely a moment behind.
+            if not isinstance(seen, int) or isinstance(seen, bool) or (
+                    isinstance(current, int) and seen > current):
                 raise StaleRankingError(f"stale_{key}")
 
     @staticmethod
@@ -475,6 +615,7 @@ class RankingService:
             return None
         fresh = build_profile(snapshot, policy=composition, now=self._now())
         run = self._store.open_reading_run(user_id=owner.user_id, idle_minutes=composition.idle_minutes,
+                                           max_minutes=composition.max_run_minutes,
                                            profile=fresh.as_snapshot())
         return run if isinstance(run, Mapping) else {}
 

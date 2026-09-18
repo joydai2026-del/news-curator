@@ -15,7 +15,12 @@ from dataclasses import replace
 
 from curator.recommendation.composition import load_composition_policy
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
-from curator.recommendation.service import RankingService, ServicePolicy, StaleRankingError
+from curator.recommendation.service import (
+    ProviderConsentRequiredError,
+    RankingService,
+    ServicePolicy,
+    StaleRankingError,
+)
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "ranking-policy-r2.yaml"
 CLOCK = 1_789_000_000
@@ -48,11 +53,12 @@ def default_corpus():
         rows.append(corpus_row(index, hours=12, source=f"hot{offset}", categories=[f"hot{offset}"],
                                independent=4))
         index += 1
-    for offset in range(16):  # on profile
+    for offset in range(18):  # on profile
         # Distinct sources on purpose: a single source is capped at three per
         # window, so an aligned pool built from one outlet starves by design.
-        rows.append(corpus_row(index, hours=20, source=f"aligned{offset}",
-                               categories=["world"] if offset % 2 else [f"liked{offset}"]))
+        # All on the profile's topic, so the aligned quota of 11 is reachable
+        # and the test measures the RECIPE rather than a thin fixture.
+        rows.append(corpus_row(index, hours=20, source=f"aligned{offset}", categories=["world"]))
         index += 1
     for offset in range(12):  # off profile, quality-gated
         rows.append(corpus_row(index, hours=30, source=f"odd{offset}", categories=[f"odd{offset}"]))
@@ -76,6 +82,8 @@ class Store:
         self.runs = []
         self.revision = 0
         self.revision_after_provider = None
+        self.extensions = []
+        self.filtered = {}
 
     # --- history -----------------------------------------------------------
     @property
@@ -105,7 +113,8 @@ class Store:
 
     def retained_candidates_v2(self, *, category_id, query, lane, profile_categories, profile_sources,
                                trend_window_hours, trend_min_sources, max_age_hours, min_age_hours,
-                               limit, before_published_at=None, before_story_id=None):
+                               limit, before_published_at=None, before_story_id=None,
+                               before_source_count=None):
         selected = []
         for row in self.rows:
             age = (NOW - datetime.fromisoformat(row["published_at"])).total_seconds() / 3600
@@ -131,7 +140,14 @@ class Store:
         return self.exclusive[:limit]
 
     # --- runs --------------------------------------------------------------
-    def open_reading_run(self, *, user_id, idle_minutes, profile):
+    def record_reading_run_filter(self, *, user_id, run_id, story_ids):
+        self.filtered.setdefault(run_id, [])
+        for story in story_ids:
+            if story not in self.filtered[run_id]:
+                self.filtered[run_id].append(story)
+        return len(self.filtered[run_id])
+
+    def open_reading_run(self, *, user_id, idle_minutes, max_minutes, profile):
         if self.runs:
             return self.runs[-1]
         run = {"run_id": f"run-{len(self.runs) + 1}", "profile_snapshot": profile, "created": True}
@@ -149,12 +165,24 @@ class Store:
     def settle_budget(self, **kwargs):
         self.settlements.append(kwargs)
 
+    def extend_frozen_order(self, *, user_id, frozen_order_id, cards, bindings):
+        stored = self.frozen[frozen_order_id]
+        stored["cards"] = list(stored["cards"]) + list(cards)
+        stored["bindings"] = {**stored["bindings"], **bindings}
+        self.extensions.append(len(cards))
+        return len(stored["cards"])
+
     def save_frozen_order(self, **kwargs):
-        # The epoch trigger refuses bindings whose server_commit_revision is not
-        # the CURRENT one. Reproduced here, because that trigger is what turns a
-        # mis-scoped staleness check into a discarded paid call.
+        # The epoch trigger, reproduced. Inside an OPEN run it tolerates a
+        # server_commit_revision that is older than current (a behavior write
+        # landed while the provider was answering) and still refuses one from
+        # the future. Outside a run it demands exact equality, as before.
         current = self.commit_revision if self.revision_after_provider is None else self.revision_after_provider
-        if kwargs["bindings"].get("server_commit_revision") != current:
+        seen = kwargs["bindings"].get("server_commit_revision")
+        if kwargs.get("run_id") and self.runs:
+            if seen is None or seen > current:
+                raise RuntimeError("stale frozen ranking bindings")
+        elif seen != current:
             raise RuntimeError("stale frozen ranking bindings")
         self.sequence += 1
         key = f"frozen-{self.sequence}"
@@ -415,3 +443,217 @@ def test_the_section_itself_does_not_promote_into_itself():
     assert len(ids) == len(set(ids))
     assert all(card["exclusive_label"] == "only in Chinese press" for card in response["cards"])
     assert store.exclusive_calls == 1, "the section must not also run the promotion fetch"
+
+
+# --- F7, the branch that used to re-rank ----------------------------------
+
+def test_paging_past_the_frozen_order_continues_without_a_provider_call():
+    """The exact branch Codex named: offset >= len(cards) and corpus_has_more.
+
+    It used to call rank() again, which reserves budget and calls the provider.
+    Inside a reading run there is never a second provider call.
+    """
+    store = Store(events=liked_events())
+    subject = build(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    assert frozen["bindings"]["corpus_has_more"] is True, "the branch needs more corpus to exist"
+    exhausted = len(frozen["cards"])
+    store.reservations.clear()
+    before_orders = len(store.frozen)
+    response = subject.page(authorization="Bearer valid",
+                            cursor=subject._cursor("frozen-1", exhausted,
+                                                   int(frozen["expires_at"])))
+    assert store.reservations == [], "a page turn reserved provider budget"
+    assert len(store.frozen) == before_orders, "a page turn minted a second ranking"
+    assert response["request_id"] == first["request_id"], "a page turn minted a new request id"
+    assert store.extensions, "the continuation must be appended to the frozen order"
+    assert response["cards"], "load more returned nothing when older news existed"
+    assert all(card["lane_label"] for card in response["cards"]), "continuation cards lost their labels"
+
+
+def test_the_continuation_keeps_already_signed_cursors_pointing_at_the_same_card():
+    store = Store(events=liked_events())
+    subject = build(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    early = subject._cursor("frozen-1", 0, int(frozen["expires_at"]))
+    exhausted = len(frozen["cards"])
+    subject.page(authorization="Bearer valid",
+                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"])))
+    replayed = subject.page(authorization="Bearer valid", cursor=early)
+    assert [card["story_id"] for card in replayed["cards"]] == [card["story_id"] for card in first["cards"]]
+
+
+def test_a_continuation_never_repeats_a_story_already_in_the_order():
+    store = Store(events=liked_events())
+    subject = build(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    exhausted = len(frozen["cards"])
+    subject.page(authorization="Bearer valid",
+                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"])))
+    ids = [card["story_id"] for card in store.frozen["frozen-1"]["cards"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_a_paid_order_survives_a_behavior_write_that_lands_before_the_insert():
+    """F1's remaining race: the history re-check passes, then a behavior event
+    lands, then the insert runs. The trigger used to reject the order after the
+    money was already settled."""
+    store = Store(events=liked_events())
+    subject = build(store)
+    store.revision_after_provider = store.commit_revision + 3
+    response = rank(subject, store)
+    assert response["cards"], "the paid order was discarded"
+    assert len(store.frozen) == 1, "the order did not persist"
+    assert store.frozen["frozen-1"]["run_id"], "the order must name its run for the trigger to accept it"
+
+
+# --- a prompt revision is a question, not an outage -----------------------
+
+def test_a_consent_row_for_an_older_prompt_asks_rather_than_failing_generically():
+    store = Store(events=liked_events())
+    original = store.history_snapshot
+    store.history_snapshot = lambda token: {**original(token), "provider_processing_enabled": True,
+                                            "provider_policy_id": "m2-rankllm-json-r3"}
+    with pytest.raises(ProviderConsentRequiredError) as caught:
+        rank(build(store), store)
+    # The reader can only offer the fix if it is told which policy to agree to.
+    assert caught.value.provider_policy_id == "policy"
+    assert str(caught.value) == "provider_consent_required"
+    assert isinstance(caught.value, StaleRankingError), "existing callers must keep working"
+
+
+# --- the PAID path, with a counting provider and a real ledger ------------
+
+class CountingAdapter:
+    """A provider that keeps score. The old harness pinned provider consent to
+    False, so no service test ever reached the paid path and the F7 proof was
+    vacuous: it asserted zero calls on a path that could not make one."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def prepare_with_reason(self, request):
+        from curator.recommendation.engine import PreparedProviderRequest
+        return PreparedProviderRequest(prompt=[], candidate_ids=tuple(request.selected_candidate_registry_ids),
+                                       input_tokens_bound=100, output_tokens_budget=200), ""
+
+    def reservation_estimate(self, *, estimated_input_tokens, estimated_output_tokens):
+        return 0.004
+
+    def rank(self, request, *, provider_processing_consent, budget, estimated_input_tokens,
+             estimated_output_tokens, prepared, usage_observer, attempt_observer):
+        self.calls += 1
+        attempt_observer(1, 0.1)
+        usage_observer(type("Outcome", (), {"input_tokens": 100, "output_tokens": 200})(), 0, 0.1)
+        return Receipt(tuple(prepared.candidate_ids), request)
+
+    def settle_observed_cost(self, *, input_tokens, output_tokens, unknown_attempts, reserved_usd):
+        return 0.003
+
+    def fallback(self, request, reason):
+        return Receipt(tuple(request.selected_candidate_registry_ids), request, mode="fallback", reason=reason)
+
+
+class Receipt:
+    schema_version = 1
+
+    def __init__(self, ids, request, *, mode="model", reason=""):
+        self.ranked_candidate_ids = ids
+        self.request_id = request.request_id
+        self.policy_version = request.policy_version
+        self.model_version = request.model_version
+        self.history_revision = request.history_revision
+        self.history_generation = request.history_generation
+        self.consent_revision = request.consent_revision
+        self.server_commit_revision = request.server_commit_revision
+        self.result_mode = type("Mode", (), {"value": mode})()
+        self.fallback_reason = reason
+        self.newest_event_id = None
+
+
+class PaidStore(Store):
+    def history_snapshot(self, token):
+        return {**super().history_snapshot(token), "provider_processing_enabled": True}
+
+    def reserve_budget(self, **kwargs):
+        self.reservations.append(kwargs)
+        return True
+
+
+def paid(store, **kwargs):
+    subject = build(store, **kwargs)
+    subject._adapter = CountingAdapter()
+    return subject
+
+
+def test_one_reading_run_buys_exactly_one_provider_call_across_every_page_turn():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    assert first["result_mode"] == "model", "the paid path must actually be reached"
+    assert subject._adapter.calls == 1 and len(store.reservations) == 1
+
+    cursor, turns = first["next_cursor"], 0
+    while cursor and turns < 6:
+        store.revision += 1          # she reads, saves, opens the original
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        cursor, turns = response["next_cursor"], turns + 1
+        assert response["request_id"] == first["request_id"]
+    assert turns >= 2, "the test must actually turn pages, including past the frozen order"
+    assert subject._adapter.calls == 1, "a page turn bought a second provider call"
+    assert len(store.reservations) == 1, "a page turn reserved budget again"
+    assert len(store.settlements) == 1, "provider usage must settle exactly once"
+
+
+def test_the_visible_page_honours_the_configured_lane_mix():
+    store = PaidStore(events=liked_events())
+    response = rank(paid(store), store)
+    counts = {lane: sum(1 for card in response["cards"] if card["lane"] == lane)
+              for lane in ("updates", "hot", "interested", "surprise")}
+    assert len(response["cards"]) == 25
+    # 7 / 4 / 11 / 3 of 25, the configured mix, on the page she actually sees.
+    # 7 / 4 / 11 / 3 of 25 exactly, on the page she actually sees.
+    assert counts == {"updates": 7, "hot": 4, "interested": 11, "surprise": 3}, counts
+
+
+def test_a_one_topic_corpus_still_fills_the_page():
+    """Today's corpus shape: nearly everything in one topic. The page must not
+    collapse to 14 cards because topic spacing starved the aligned lane."""
+    rows = [corpus_row(index, hours=1 + index % 30, source=f"s{index}", categories=["world"])
+            for index in range(60)]
+    store = PaidStore(rows, events=liked_events())
+    response = rank(paid(store), store)
+    assert len(response["cards"]) == 25, f"page collapsed to {len(response['cards'])} cards"
+    sources = [card["source_id"] for card in response["cards"]]
+    assert all(left != right for left, right in zip(sources, sources[1:])), \
+        "source adjacency stays hard even when topic spacing is relaxed"
+
+
+def test_less_like_this_is_recorded_so_the_page_replays():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    removed = first["cards"][0]["source_id"]
+    store.events.append({"event_id": "dislike", "event_type": "less_like_this", "event_revision": 9,
+                         "occurred_at": NOW.isoformat(),
+                         "payload": {"story_id": first["cards"][0]["story_id"], "surface": "reader"},
+                         "story_title": "", "story_summary": "", "source_id": removed})
+    store.revision += 1
+    # Re-read the page the disliked card is actually ON. An offset further down
+    # the order would prove nothing about this filter.
+    subject.page(authorization="Bearer valid",
+                 cursor=subject._cursor("frozen-1", 0, int(store.frozen["frozen-1"]["expires_at"])))
+    recorded = store.filtered.get("run-1", [])
+    assert recorded, "the filter must be recorded, or the page cannot be reviewed afterwards"
+
+
+def test_a_client_a_revision_behind_is_served_not_refused():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    behind = rank(subject, store, server_commit_revision=store.commit_revision - 1)
+    assert behind["cards"], "a client one behind is not stale, it is a moment behind"
+    with pytest.raises(StaleRankingError, match="stale_server_commit_revision"):
+        rank(subject, store, server_commit_revision=store.commit_revision + 5)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 import shutil
 import subprocess
 import time
@@ -28,6 +29,8 @@ MIGRATIONS = (
     'supabase/migrations/202609170001_m2_retained_overlay.sql',
     'supabase/migrations/202609180001_m2_retained_coverage_and_lanes.sql',
     'supabase/migrations/202609180002_m2_reading_runs.sql',
+    'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
+    'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -174,7 +177,8 @@ def _seed_corpus(container):
     _service(container, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
 
 
-def _lane(container, lane=None, *, categories=None, sources=None, limit=50, min_sources=2):
+def _lane(container, lane=None, *, categories=None, sources=None, limit=50, min_sources=2,
+          before=None, check=True):
     arguments = [
         'p_lane => ' + (_quote(lane) if lane else 'null'),
         'p_profile_categories => ' + (f"array[{','.join(_quote(c) for c in categories)}]::text[]"
@@ -183,9 +187,17 @@ def _lane(container, lane=None, *, categories=None, sources=None, limit=50, min_
                                    if sources else 'null'),
         f'p_trend_min_sources => {min_sources}', f'p_limit => {limit}',
     ]
+    if before is not None:
+        count, published, story = before
+        arguments += [f'p_before_source_count => {count}',
+                      f'p_before_published_at => {_quote(published)}::timestamptz',
+                      f'p_before_story_id => {_quote(story)}']
     result = _service(container, "select coalesce(jsonb_agg(value), '[]'::jsonb) from "
-                      f"public.m2_retained_candidates_v2({', '.join(arguments)}) as rows(value);")
-    return json.loads(result.stdout.splitlines()[-1])
+                      f"public.m2_retained_candidates_v2({', '.join(arguments)}) as rows(value);",
+                      check=check)
+    if not check and result.returncode != 0:
+        return None
+    return json.loads(_last(result))
 
 
 def _by_story(rows):
@@ -347,12 +359,95 @@ def test_the_original_candidate_rpc_is_still_present_for_rollback(db):
     assert int(result.stdout.strip().splitlines()[-1]) > 0
 
 
+def test_the_hot_lane_pages_on_its_own_sort_key_without_skipping_or_repeating(db):
+    """The hot lane orders by independent source count first. A published_at
+    cursor cannot describe that boundary, so the cursor is the whole sort key."""
+    rows = []
+    for index in range(6):
+        url = f'https://example.test/hot-keyset-{index}'
+        rows.append(_row(url, source_id=f'wire{index}', source_name=f'Wire {index}',
+                         published_at='2026-09-18T09:00:00Z', source_observed_at='2026-09-18T09:00:00Z'))
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+    coverage = []
+    for index in range(6):
+        story = _story_id(f'https://example.test/hot-keyset-{index}')
+        # Deliberately DIFFERENT counts with the SAME published_at, which is
+        # exactly the shape a published_at-only cursor gets wrong.
+        for publisher in range(2 + index % 3):
+            coverage.append({'story_id': story, 'publisher_id': f'pub{publisher}',
+                             'is_independent': True, 'first_seen_at': '2026-09-18T09:00:00Z'})
+    _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
+
+    first = _lane(db, 'hot', limit=3)
+    assert len(first) == 3
+    counts = [row['independent_source_count'] for row in first]
+    assert counts == sorted(counts, reverse=True), 'hot leads with the count'
+    tail = first[-1]
+    second = _lane(db, 'hot', limit=10,
+                   before=(tail['independent_source_count'], tail['published_at'], tail['story_id']))
+    assert not ({row['story_id'] for row in first} & {row['story_id'] for row in second}), 'repeated a row'
+    whole = [row['story_id'] for row in _lane(db, 'hot', limit=50)]
+    paged = [row['story_id'] for row in first] + [row['story_id'] for row in second]
+    assert paged == whole, 'the two pages must be the unpaged order, with nothing skipped'
+
+
+def test_half_a_hot_cursor_is_refused(db):
+    """Half a keyset silently drops rows at the boundary, so it is refused."""
+    assert _service(db, "select public.m2_retained_candidates_v2(p_lane => 'hot', "
+                    "p_before_published_at => '2026-09-18T09:00:00Z'::timestamptz, "
+                    "p_before_story_id => 'story:" + 'a' * 64 + "');", check=False).returncode != 0
+    assert _service(db, "select public.m2_retained_candidates_v2(p_lane => 'updates', "
+                    "p_before_source_count => 2);", check=False).returncode != 0
+
+
+def test_the_prune_removes_old_rows_and_leaves_recent_coverage_intact(db):
+    """Both the dedupe CTE and the coverage count scan this table, so it needs a
+    window. The window must not take yesterday with it: hot counts a 24-hour
+    window and would read as zero if it did."""
+    old_url = 'https://example.test/prune-old'
+    recent_url = 'https://example.test/prune-recent'
+    rows = [_row(old_url, source_id='oldwire', source_name='Old Wire',
+                 published_at='2026-08-01T10:00:00Z', source_observed_at='2026-08-01T10:00:00Z'),
+            _row(recent_url, source_id='newwire', source_name='New Wire',
+                 published_at=datetime.now(timezone.utc).isoformat(),
+                 source_observed_at=datetime.now(timezone.utc).isoformat())]
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+    coverage = [{'story_id': _story_id(url), 'publisher_id': publisher, 'is_independent': True,
+                 'first_seen_at': datetime.now(timezone.utc).isoformat()}
+                for url in (old_url, recent_url) for publisher in ('a', 'b')]
+    _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
+
+    removed = _service(db, "select public.m2_prune_retained_corpus(14);")
+    assert int(_last(removed)) >= 1
+
+    survivors = _sql(db, "select count(*) from public.retained_corpus_observations "
+                         f"where story_id = {_quote(_story_id(recent_url))};")
+    assert _last(survivors) == '1', 'a recent story was pruned'
+    gone = _sql(db, "select count(*) from public.retained_corpus_observations "
+                    f"where story_id = {_quote(_story_id(old_url))};")
+    assert _last(gone) == '0', 'the old story survived the prune'
+    # The child rows went with it, and the survivor kept its own coverage.
+    orphans = _sql(db, "select count(*) from public.retained_corpus_coverage "
+                       f"where story_id = {_quote(_story_id(old_url))};")
+    assert _last(orphans) == '0'
+    kept = _sql(db, "select count(*) from public.retained_corpus_coverage "
+                    f"where story_id = {_quote(_story_id(recent_url))};")
+    assert _last(kept) == '2', 'the surviving story lost its coverage count'
+
+
+def test_an_out_of_range_retention_window_is_refused(db):
+    """Two days is the floor because the trend window is 24 hours."""
+    for value in (1, 91):
+        assert _service(db, f"select public.m2_prune_retained_corpus({value});",
+                        check=False).returncode != 0
+
+
 # --- reading runs ----------------------------------------------------------
 
-def _open_run(container, user_id=OWNER, idle=60, profile='{}'):
+def _open_run(container, user_id=OWNER, idle=60, profile='{}', max_minutes=60):
     result = _service(container, "select public.m2_open_or_join_reading_run("
-                      f"{_quote(user_id)}::uuid, {idle}, {_quote(profile)}::jsonb);")
-    return json.loads(result.stdout.strip().splitlines()[-1])
+                      f"{_quote(user_id)}::uuid, {idle}, {_quote(profile)}::jsonb, {max_minutes});")
+    return json.loads(_last(result))
 
 
 def test_concurrent_first_ranks_join_one_run_with_one_profile(db):
@@ -395,6 +490,45 @@ def test_the_frozen_profile_is_returned_to_every_page_in_the_run(db):
     assert joined['profile_snapshot']['event_count'] == 7, 'a joined run must not re-freeze the profile'
 
 
+def test_the_idle_boundary_is_strict_at_exactly_sixty_minutes(db):
+    """Decided once: the run ends when the gap is GREATER THAN idle_minutes, so
+    at exactly 60 minutes a new run opens. Asserted at the exact instant."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OTHER)}::uuid;")
+    first = _open_run(db, OTHER)
+    _service(db, "update public.m2_reading_runs set last_activity_at = now() - interval '60 minutes' "
+                 f"where run_id = {_quote(first['run_id'])}::uuid;")
+    at_the_boundary = _open_run(db, OTHER)
+    assert at_the_boundary['created'] is True, 'exactly 60 idle minutes must end the run'
+    assert at_the_boundary['run_id'] != first['run_id']
+    _service(db, "update public.m2_reading_runs set last_activity_at = now() - interval '59 minutes' "
+                 f"where run_id = {_quote(at_the_boundary['run_id'])}::uuid;")
+    inside = _open_run(db, OTHER)
+    assert inside['created'] is False and inside['run_id'] == at_the_boundary['run_id']
+
+
+def test_a_run_also_ends_on_age_so_an_hourly_reader_is_ever_learned_from(db):
+    """last_activity_at slides forward on every page, so idle alone never fires
+    for someone who keeps reading. Without the age cap one run would last all
+    day and the profile would never be recomputed."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OTHER)}::uuid;")
+    first = _open_run(db, OTHER)
+    # Busy the whole time: activity is current, but the run itself is an hour old.
+    _service(db, "update public.m2_reading_runs set opened_at = now() - interval '60 minutes', "
+                 f"last_activity_at = now() where run_id = {_quote(first['run_id'])}::uuid;")
+    rolled = _open_run(db, OTHER)
+    assert rolled['created'] is True, 'exactly 60 minutes of age must end the run'
+    _service(db, "update public.m2_reading_runs set opened_at = now() - interval '59 minutes', "
+                 f"last_activity_at = now() where run_id = {_quote(rolled['run_id'])}::uuid;")
+    assert _open_run(db, OTHER)['run_id'] == rolled['run_id'], 'one minute short must not roll'
+
+
+def test_an_out_of_range_run_age_cap_is_refused(db):
+    assert _service(db, f"select public.m2_open_or_join_reading_run({_quote(OWNER)}::uuid, 60, '{{}}'::jsonb, 5);",
+                    check=False).returncode != 0
+    assert _service(db, f"select public.m2_open_or_join_reading_run({_quote(OWNER)}::uuid, 60, '{{}}'::jsonb, 999);",
+                    check=False).returncode != 0
+
+
 def test_an_out_of_range_idle_window_is_refused(db):
     assert _service(db, f"select public.m2_open_or_join_reading_run({_quote(OWNER)}::uuid, 4000, '{{}}'::jsonb);",
                     check=False).returncode != 0
@@ -435,17 +569,81 @@ def test_anonymous_callers_reach_neither_new_table(db):
 
 # --- reviewable pages ------------------------------------------------------
 
-def _freeze_page(container, user_id, created_at, cards):
+def _freeze_page(container, user_id, created_at, cards, *, revision=0, run_id=None, check=True):
     request_id = str(uuid.uuid4())
-    bindings = {"history_generation": 1, "server_commit_revision": 0, "consent_revision": 0,
+    bindings = {"history_generation": 1, "server_commit_revision": revision, "consent_revision": 0,
                 "result_mode": "heuristic", "fallback_reason": "test",
                 "eligibility": {"category": None, "query": None}, "short_lane_reasons": []}
-    _service(container, "insert into public.m2_frozen_rankings"
-             "(request_id,user_id,bindings,cards,page_size,expires_at,created_at) values ("
+    result = _service(container, "insert into public.m2_frozen_rankings"
+             "(request_id,user_id,bindings,cards,page_size,expires_at,created_at,run_id) values ("
              f"{_quote(request_id)}::uuid, {_quote(user_id)}::uuid, {_quote(json.dumps(bindings))}::jsonb, "
              f"{_quote(json.dumps(cards))}::jsonb, 25, now() + interval '15 minutes', "
-             f"{_quote(created_at)}::timestamptz);")
-    return request_id
+             f"{_quote(created_at)}::timestamptz, "
+             + (f"{_quote(run_id)}::uuid" if run_id else "null") + ");", check=check)
+    return request_id if result.returncode == 0 else None
+
+
+def _behavior_revision(container, user_id, revision):
+    _service(container, "insert into public.user_behavior_revisions(user_id, latest_revision, history_generation) "
+             f"values ({_quote(user_id)}::uuid, {revision}, 1) on conflict (user_id) do update "
+             f"set latest_revision = {revision};")
+
+
+def test_a_paid_order_inside_an_open_run_survives_a_behavior_write(db):
+    """The race Codex named: the history re-check passes, a behavior event lands,
+    then the insert runs. Outside a run the trigger still demands exactness; the
+    relaxation is scoped to an OPEN run, where the order is frozen on purpose."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _behavior_revision(db, OWNER, 7)
+    cards = [{"story_id": _story_id(MULTI_OUTLET), "title": "Headline", "source_name": "Reuters",
+              "lane": "hot", "lane_label": "hot", "surprise_label": None, "exclusive_label": None}]
+    # Computed against revision 5, inserted after a write moved it to 7.
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5,
+                        run_id=run['run_id']) is not None, 'a paid order was discarded'
+    # Without a run, the same lag is still refused.
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5, check=False) is None
+    # A revision from the FUTURE is refused even inside a run: that is not lag.
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=99,
+                        run_id=run['run_id'], check=False) is None
+
+
+def test_a_closed_run_gets_the_strict_check_back(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _service(db, f"update public.m2_reading_runs set closed_at = now() where run_id = {_quote(run['run_id'])}::uuid;")
+    _behavior_revision(db, OWNER, 7)
+    cards = [{"story_id": _story_id(MULTI_OUTLET), "title": "Headline", "source_name": "Reuters",
+              "lane": "hot", "lane_label": "hot", "surprise_label": None, "exclusive_label": None}]
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5,
+                        run_id=run['run_id'], check=False) is None
+
+
+def test_a_continuation_appends_to_the_same_order(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _behavior_revision(db, OWNER, 7)
+    cards = [{"story_id": _story_id(MULTI_OUTLET), "title": "First", "source_name": "Reuters",
+              "lane": "hot", "lane_label": "hot", "surprise_label": None, "exclusive_label": None}]
+    request_id = _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=7, run_id=run['run_id'])
+    assert request_id is not None
+    more = [{"story_id": _story_id(MIXED), "title": "Older", "source_name": "cnBeta",
+             "lane": "updates", "lane_label": "fresh", "surprise_label": None, "exclusive_label": None}]
+    result = _service(db, "select public.m2_extend_frozen_ranking("
+                      f"{_quote(OWNER)}::uuid, (select frozen_order_id from public.m2_frozen_rankings "
+                      f"where request_id = {_quote(request_id)}::uuid), "
+                      f"{_quote(json.dumps(more))}::jsonb, '{{\"corpus_has_more\": false}}'::jsonb);")
+    assert _last(result) == '2', 'the continuation must append, not replace'
+    stored = _sql(db, "select cards->0->>'title', cards->1->>'title' from public.m2_frozen_rankings "
+                      f"where request_id = {_quote(request_id)}::uuid;")
+    assert _last(stored) == 'First|Older', 'the first page must not move'
+
+
+def test_an_owner_cannot_extend_another_owners_order(db):
+    denied = _as_owner(db, OTHER, "select public.m2_extend_frozen_ranking("
+                       f"{_quote(OTHER)}::uuid, gen_random_uuid(), '[]'::jsonb, '{{}}'::jsonb);",
+                       check=False)
+    assert denied.returncode != 0
 
 
 def test_an_owner_can_review_the_labels_of_a_past_hour(db):
@@ -459,6 +657,33 @@ def test_an_owner_can_review_the_labels_of_a_past_hour(db):
     assert len(pages) == 1, 'the hour is a bound, not a suggestion'
     assert pages[0]['cards'][0]['lane'] == 'hot'
     assert pages[0]['cards'][0]['lane_label'] == 'hot'
+
+
+def test_the_review_shows_what_less_like_this_removed(db):
+    """The round trip: the service records the filter, and the hour review shows
+    it. Without both halves a reviewed page cannot be told apart from a page
+    that never carried those cards."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _behavior_revision(db, OWNER, 3)
+    story = _story_id(MIXED)
+    _service(db, "select public.m2_record_reading_run_filter("
+                 f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, array[{_quote(story)}]::text[]);")
+    cards = [{"story_id": _story_id(MULTI_OUTLET), "title": "Headline", "source_name": "Reuters",
+              "lane": "hot", "lane_label": "hot", "surprise_label": None, "exclusive_label": None}]
+    request_id = str(uuid.uuid4())
+    bindings = {"history_generation": 1, "server_commit_revision": 3, "consent_revision": 0,
+                "result_mode": "heuristic", "fallback_reason": "test", "run_id": run['run_id'],
+                "eligibility": {"category": None, "query": None}, "short_lane_reasons": []}
+    _service(db, "insert into public.m2_frozen_rankings"
+             "(request_id,user_id,bindings,cards,page_size,expires_at,created_at,run_id) values ("
+             f"{_quote(request_id)}::uuid, {_quote(OWNER)}::uuid, {_quote(json.dumps(bindings))}::jsonb, "
+             f"{_quote(json.dumps(cards))}::jsonb, 25, now() + interval '15 minutes', "
+             f"'2026-09-18T10:30:00Z'::timestamptz, {_quote(run['run_id'])}::uuid);")
+    result = _as_owner(db, OWNER, "select coalesce(jsonb_agg(value),'[]'::jsonb) from "
+                       "public.m2_owner_reading_pages('2026-09-18T10:00:00Z'::timestamptz) as rows(value);")
+    pages = json.loads(_last(result))
+    assert pages and pages[0]['filtered_story_ids'] == [story]
 
 
 def test_one_owner_cannot_review_another_owners_pages(db):

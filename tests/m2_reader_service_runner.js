@@ -57,6 +57,16 @@ function response(value, url) { return { ok: true, redirected: false, url,
   await assert.rejects(() => stale.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
   assert.throws(() => reader.validateM2Config({ ...config, provider_retention_url: "javascript:bad" }), /configuration/);
 
+  // A prompt revision bump is a QUESTION the reader can answer in one tap, so
+  // it must not collapse into the generic failure that shows a dead feed.
+  const consentService = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => ({ ok: false, redirected: false, url, text: async () => JSON.stringify(
+      { error: "provider_consent_required", provider_policy_id: "m2-rankllm-predictions-r1" }) }));
+  await assert.rejects(() => consentService.rank(history, { as_of: "2026-09-14T16:00:00Z" }),
+    (error) => error.consentRequired === true &&
+      error.providerPolicyId === "m2-rankllm-predictions-r1" &&
+      !/The M2 reader request failed/.test(error.message));
+
   // Deploy-order safety: one release accepts a version-1 card (an older ranker),
   // a version-2 card, and a version-3 card (this one), in either direction. Every
   // one normalizes to the rendered shape, which is version 3.

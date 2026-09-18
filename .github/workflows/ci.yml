@@ -235,6 +235,8 @@ jobs:
       # partial unique index and the advisory lock are only proven by running
       # concurrent callers against a real server; a string-matched migration test
       # proves the file contains some text and nothing else.
+      # 202609180003 relaxes the frozen-ranking epoch INSIDE an open reading run
+      # and adds the append RPC. Both are only provable by running them.
       - name: Verify the M2.1 Phase 2 migrations apply
         run: |
           python -m pytest -p no:cacheprovider -q tests/test_m2_phase2_postgres_runtime.py --junitxml=/tmp/phase2-db.xml

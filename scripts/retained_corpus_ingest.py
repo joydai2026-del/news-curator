@@ -274,6 +274,17 @@ def ingest_coverage_rows(url, key, rows):
     return _rpc(url, key, 'm2_ingest_retained_coverage', {'p_rows': rows})
 
 
+def prune_retained_corpus(url, key, retention_days):
+    """STEP ONE-C: drop observations older than the retention window.
+
+    Both the dedupe CTE and the coverage count scan the corpus, so without this
+    they scan a table that only ever grows. It runs after the corpus and the
+    coverage writes because a prune that raced them could delete a story the
+    same run had just written.
+    """
+    return _rpc(url, key, 'm2_prune_retained_corpus', {'p_retention_days': int(retention_days)})
+
+
 def _coverage_failure_reason(error):
     """Name the deploy order when that is what the failure actually is."""
     if getattr(error, 'code', None) == 404:
@@ -590,6 +601,15 @@ def main() -> int:
         except TRANSLATION_TRANSPORT_ERRORS as error:
             print(f'::warning::coverage not written: {_coverage_failure_reason(error)}',
                   file=sys.stderr)
+        # Housekeeping, and housekeeping never fails a run: a corpus that is one
+        # hour too large costs a slower query, while a failed ingest costs the
+        # hour's stories.
+        try:
+            pruned = prune_retained_corpus(
+                url, key, (cfg.coverage or {}).get('observations_retention_days', 14))
+            print(f'corpus pruned rows={pruned}', file=sys.stderr)
+        except TRANSLATION_TRANSPORT_ERRORS as error:
+            print(f'::warning::corpus not pruned: {_coverage_failure_reason(error)}', file=sys.stderr)
     if a.command == 'ingest' and url and key:
         try:
             corpus, truncated = read_corpus_window(

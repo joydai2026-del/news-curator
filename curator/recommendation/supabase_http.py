@@ -94,26 +94,29 @@ class SupabaseHTTP:
     def retained_candidates_v2(self, *, category_id: str | None, query: str | None, lane: str | None,
                             profile_categories, profile_sources, trend_window_hours: int,
                             trend_min_sources: int, max_age_hours: int | None, min_age_hours: int | None,
-                            limit: int,
-                            before_published_at: str | None = None, before_story_id: str | None = None):
-        # One request per lane, deliberately not paged: the hot lane orders by
-        # independent source count first, so a published_at keyset cursor does not
-        # describe its ordering. The caller asks for what it needs in one call.
+                            limit: int, before_published_at: str | None = None,
+                            before_story_id: str | None = None, before_source_count: int | None = None):
+        # One request per lane. The hot lane pages on its FULL sort key
+        # (independent_source_count, published_at, story_id), because its
+        # ordering leads with the count and a published_at-only keyset would skip
+        # or repeat rows at the page boundary.
         page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_v2", token=self._service_token(),
             key=self._service, body={"p_category_id": category_id, "p_query": query, "p_lane": lane,
                 "p_profile_categories": list(profile_categories), "p_profile_sources": list(profile_sources),
                 "p_trend_window_hours": trend_window_hours, "p_trend_min_sources": trend_min_sources,
                 "p_max_age_hours": max_age_hours, "p_min_age_hours": min_age_hours,
                 "p_before_published_at": before_published_at,
-                "p_before_story_id": before_story_id, "p_limit": min(100, max(1, limit))})
+                "p_before_story_id": before_story_id,
+                "p_before_source_count": before_source_count,
+                "p_limit": min(100, max(1, limit))})
         if not isinstance(page, list):
             raise SupabaseHTTPError("candidate RPC returned a non-list")
         return page
 
-    def open_reading_run(self, *, user_id: str, idle_minutes: int, profile):
+    def open_reading_run(self, *, user_id: str, idle_minutes: int, max_minutes: int, profile):
         result = self._request("POST", "/rest/v1/rpc/m2_open_or_join_reading_run", token=self._service_token(),
             key=self._service, body={"p_user_id": user_id, "p_idle_minutes": idle_minutes,
-                "p_profile": dict(profile)})
+                "p_max_minutes": max_minutes, "p_profile": dict(profile)})
         if not isinstance(result, Mapping):
             raise SupabaseHTTPError("reading run RPC returned a non-object")
         return result
@@ -136,10 +139,15 @@ class SupabaseHTTP:
             key=self._service, body={"p_user_id": user_id, "p_request_id": request_id,
                 "p_actual_usd": actual_usd, "p_status": status})
 
-    def save_frozen_order(self, *, user_id: str, request_id: str, bindings, cards, page_size: int, expires_at: int) -> str:
+    def save_frozen_order(self, *, user_id: str, request_id: str, bindings, cards, page_size: int,
+                          expires_at: int, run_id: str | None = None) -> str:
         result = self._request("POST", "/rest/v1/m2_frozen_rankings", token=self._service_token(), key=self._service,
             body={"user_id": user_id, "request_id": request_id, "bindings": bindings, "cards": cards,
-                "page_size": page_size, "expires_at": self._iso_timestamp(expires_at)}, prefer="return=representation")
+                "page_size": page_size, "expires_at": self._iso_timestamp(expires_at),
+                # The run this order belongs to. Inside an open run the epoch
+                # trigger tolerates a behavior write that landed while the
+                # provider was answering, so a paid order is never discarded.
+                "run_id": run_id}, prefer="return=representation")
         if not isinstance(result, list) or len(result) != 1:
             raise SupabaseHTTPError("frozen order insert did not return one row")
         return str(result[0]["frozen_order_id"])
@@ -155,6 +163,18 @@ class SupabaseHTTP:
         row = result[0]
         row["expires_at"] = int(__import__("datetime").datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00")).timestamp())
         return row
+
+    def record_reading_run_filter(self, *, user_id: str, run_id: str, story_ids) -> int:
+        result = self._request("POST", "/rest/v1/rpc/m2_record_reading_run_filter",
+            token=self._service_token(), key=self._service,
+            body={"p_user_id": user_id, "p_run_id": run_id, "p_story_ids": list(story_ids)})
+        return result if isinstance(result, int) else 0
+
+    def extend_frozen_order(self, *, user_id: str, frozen_order_id: str, cards, bindings) -> int:
+        result = self._request("POST", "/rest/v1/rpc/m2_extend_frozen_ranking", token=self._service_token(),
+            key=self._service, body={"p_user_id": user_id, "p_frozen_order_id": frozen_order_id,
+                "p_cards": list(cards), "p_bindings": dict(bindings)})
+        return result if isinstance(result, int) else 0
 
     def _request(self, method, path, *, token, key, body=None, prefer=None):
         headers = {"apikey": key, "Accept": "application/json"}

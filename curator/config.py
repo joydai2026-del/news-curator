@@ -76,6 +76,7 @@ _SOURCE_FILE_KEYS = frozenset(
         "language",
         "reader",
         "grouping",
+        "coverage",
     }
 )
 _BUILTIN_SOURCE_TYPES = frozenset(
@@ -198,6 +199,9 @@ class Config:
     reader: dict[str, Any] = field(default_factory=dict)
     # Cross-language same-event grouping policy (`grouping:` in sources.yaml).
     grouping: dict[str, Any] = field(default_factory=dict)
+    # Independent-coverage policy, including how long the retained corpus keeps
+    # observations (`coverage:` in sources.yaml).
+    coverage: dict[str, Any] = field(default_factory=dict)
 
     @property
     def topics(self) -> list[Category]:
@@ -650,7 +654,7 @@ def load_sources(path: Path) -> dict[str, Any]:
 
     for key in (
         "settings", "ranking", "dedup", "hackernews", "reddit", "images",
-        "summaries", "newsletter", "translation", "language", "reader", "grouping",
+        "summaries", "newsletter", "translation", "language", "reader", "grouping", "coverage",
     ):
         if raw.get(key) is not None and not isinstance(raw[key], dict):
             raise ConfigError(f"{path.name}: '{key}' must be a mapping.")
@@ -863,6 +867,13 @@ def load_sources(path: Path) -> dict[str, Any]:
                 f"{path.name}: 'grouping.{key}' was removed with the token heuristic; "
                 "the pairing window is 'translation.pairing_window_hours'.")
 
+    coverage = raw.get("coverage") or {}
+    retention = coverage.get("observations_retention_days")
+    if retention is not None and (isinstance(retention, bool) or not isinstance(retention, int)
+                                  or not 2 <= retention <= 90):
+        raise ConfigError(
+            f"{path.name}: 'coverage.observations_retention_days' must be an integer from 2 to 90.")
+
     reader = raw.get("reader") or {}
     chinese_site = reader.get("chinese_site_mode_enabled")
     if chinese_site is not None and not isinstance(chinese_site, bool):
@@ -890,6 +901,7 @@ def load_config(root: Path) -> Config:
         language=src.get("language") or {},
         reader=src.get("reader") or {},
         grouping=src.get("grouping") or {},
+        coverage=src.get("coverage") or {},
     )
 
     # Feed ids must be unique across BOTH files. A duplicate id is not cosmetic:

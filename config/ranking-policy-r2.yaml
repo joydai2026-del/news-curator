@@ -93,6 +93,11 @@ diversity:
 run:
   # JJ-confirmed 2026-09-16: relearn about once an hour, not per click.
   idle_minutes: 60
+  # The other half of "about once an hour". idle_minutes alone never fires for a
+  # reader who keeps reading: last_activity_at slides forward on every page, so
+  # an hourly reader would stay in one run for ever and would never be learned
+  # from. A run therefore ends at whichever comes first, idle OR age.
+  max_minutes: 60
   # MUST equal floor(candidate_window_size / page_size). 50 / 25 = 2.
   max_pages_per_run: 2
   immediate_negative_filter: true
