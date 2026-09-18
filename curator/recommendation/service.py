@@ -74,6 +74,8 @@ class RankingStore(Protocol):
                          profile: Mapping[str, object]) -> Mapping[str, object]: ...
     def record_reading_run_filter(self, *, user_id: str, run_id: str,
                                   story_ids: Sequence[str]) -> int: ...
+    def bind_run_frozen_order(self, *, user_id: str, run_id: str, frozen_order_id: str) -> bool: ...
+    def record_run_page(self, *, user_id: str, run_id: str, pages: int) -> int: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
@@ -178,6 +180,12 @@ class RankingService:
         # is computed once at run open and FROZEN on the run row, so every page
         # inside the run is explainable afterwards from one stored version.
         run = self._open_run(owner, snapshot, composition)
+        # ONE PAID RANKING PER RUN, refreshes included. rank() used to mint a new
+        # frozen order every call while joining the same run, so a refresh bought
+        # a second ranking and reset the per-run page budget with it.
+        existing = self._existing_run_page(token, owner, run, snapshot, page_size)
+        if existing is not None:
+            return existing
         profile = BehaviorProfile.from_snapshot(run.get("profile_snapshot")) if run else BehaviorProfile()
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
@@ -354,6 +362,11 @@ class RankingService:
         frozen_id = self._store.save_frozen_order(user_id=owner.user_id, request_id=request_id,
             bindings=bindings, cards=cards, page_size=page_size, expires_at=expires_at,
             run_id=(run or {}).get("run_id"))
+        if run and run.get("run_id"):
+            # The run now owns this ranking, so the next refresh is answered from
+            # it rather than paying again.
+            self._store.bind_run_frozen_order(user_id=owner.user_id, run_id=str(run["run_id"]),
+                                              frozen_order_id=frozen_id)
         next_cursor = self._cursor(frozen_id, min(page_size, len(cards)), expires_at) if page_size < len(cards) or has_more else None
         return self._page_response(bindings, cards[:page_size], next_cursor, receipt)
 
@@ -382,13 +395,21 @@ class RankingService:
         cards = list(frozen["cards"])
         size = int(frozen.get("page_size", self._policy.maximum_page_size))
         composition = self._policy.composition
-        if (composition is not None and size > 0
-                and offset // size >= composition.max_pages_per_run):
-            # The run has served every page it promises. Reaching further would
-            # keep returning older and older stories that met no pool's rule, so
-            # the honest answer is that this run is over.
-            return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
-                    "cards": [], "next_cursor": None, "end_of_run": True}
+        run_id = (frozen.get("bindings") or {}).get("run_id")
+        if composition is not None and size > 0:
+            page_index = offset // size
+            # The budget is counted per RUN, not per frozen order. Counting it on
+            # the cursor let a refresh (which used to mint a new order and a new
+            # cursor) hand the whole budget back.
+            served_before = page_index
+            if run_id:
+                served_before = max(page_index, self._record_run_page(owner, str(run_id), page_index + 1))
+            if page_index >= composition.max_pages_per_run or served_before >= composition.max_pages_per_run:
+                # The run has served every page it promises. Reaching further
+                # would keep returning older and older stories that met no pool's
+                # rule, so the honest answer is that this run is over.
+                return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
+                        "cards": [], "next_cursor": None, "end_of_run": True}
         if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
             # F7, the branch that used to re-rank. Inside a reading run there is
             # never a second provider call: load more browses OLDER news, in the
@@ -482,6 +503,16 @@ class RankingService:
                              separators=(",", ":")), file=sys.stderr, flush=True)
             return ()
         return tuple(added)
+
+    def _record_run_page(self, owner, run_id, pages):
+        """The run's page high-water mark before this page. Never fails a page."""
+        try:
+            previous = self._store.record_run_page(user_id=owner.user_id, run_id=run_id, pages=pages)
+        except Exception:
+            print(json.dumps({"event": "m2_page_budget_unavailable", "run_id": run_id},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+            return 0
+        return previous if isinstance(previous, int) and not isinstance(previous, bool) else 0
 
     def _record_filtered(self, owner, frozen, removed):
         """Persist what "less like this" removed, so the page replays.
@@ -729,6 +760,36 @@ class RankingService:
                 promoted += 1
             kept.append(item)
         return kept
+
+    def _existing_run_page(self, token, owner, run, snapshot, page_size):
+        """Page one of the ranking this run already paid for, or None.
+
+        Returns None when there is no run, no bound order, the order has expired,
+        or the scoped staleness values have moved, which are exactly the cases
+        where a new ranking is the right answer. A refresh in every other case is
+        free: same request id, no new frozen order, no reservation, no provider
+        call.
+        """
+        if not run or not run.get("frozen_order_id") or run.get("created"):
+            return None
+        frozen = self._store.load_frozen_order(user_id=owner.user_id,
+                                               frozen_order_id=str(run["frozen_order_id"]))
+        if not frozen or int(frozen["expires_at"]) < int(self._clock()):
+            return None
+        bindings = frozen.get("bindings") or {}
+        for key in ("history_generation", "consent_revision"):
+            if bindings.get(key) != snapshot.get(key):
+                return None
+        if bindings.get("result_mode") == "model" and not snapshot.get("provider_processing_enabled"):
+            return None
+        size = int(frozen.get("page_size", page_size))
+        cards = list(frozen["cards"])
+        visible, next_offset, removed = self._slice(cards, 0, size, snapshot)
+        self._record_filtered(owner, frozen, removed)
+        next_cursor = (self._cursor(str(run["frozen_order_id"]), next_offset, int(frozen["expires_at"]))
+                       if next_offset < len(cards) or bindings.get("corpus_has_more") else None)
+        return {"schema_version": 1, **self._public_bindings(bindings), "cards": visible,
+                "next_cursor": next_cursor, "end_of_run": False}
 
     def _pool_rows(self, category_id, query, profile, composition, before_published, before_story,
                    hot_cursor=None):

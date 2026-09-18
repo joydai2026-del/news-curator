@@ -170,6 +170,17 @@ class SupabaseHTTP:
             body={"p_user_id": user_id, "p_run_id": run_id, "p_story_ids": list(story_ids)})
         return result if isinstance(result, int) else 0
 
+    def bind_run_frozen_order(self, *, user_id: str, run_id: str, frozen_order_id: str) -> bool:
+        result = self._request("POST", "/rest/v1/rpc/m2_bind_run_frozen_order", token=self._service_token(),
+            key=self._service, body={"p_user_id": user_id, "p_run_id": run_id,
+                "p_frozen_order_id": frozen_order_id})
+        return result is True
+
+    def record_run_page(self, *, user_id: str, run_id: str, pages: int) -> int:
+        result = self._request("POST", "/rest/v1/rpc/m2_record_run_page", token=self._service_token(),
+            key=self._service, body={"p_user_id": user_id, "p_run_id": run_id, "p_pages": pages})
+        return result if isinstance(result, int) else 0
+
     def extend_frozen_order(self, *, user_id: str, frozen_order_id: str, cards, bindings) -> int:
         result = self._request("POST", "/rest/v1/rpc/m2_extend_frozen_ranking", token=self._service_token(),
             key=self._service, body={"p_user_id": user_id, "p_frozen_order_id": frozen_order_id,

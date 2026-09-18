@@ -31,6 +31,7 @@ MIGRATIONS = (
     'supabase/migrations/202609180002_m2_reading_runs.sql',
     'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
     'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
+    'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -212,7 +213,8 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
     for migration in ('supabase/migrations/202609180001_m2_retained_coverage_and_lanes.sql',
                       'supabase/migrations/202609180002_m2_reading_runs.sql',
                       'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
-                      'supabase/migrations/202609180004_m2_retained_corpus_prune.sql'):
+                      'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
+                      'supabase/migrations/202609180005_m2_reading_run_page_budget.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)
         assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
 
@@ -554,6 +556,34 @@ def test_an_out_of_range_run_age_cap_is_refused(db):
                     check=False).returncode != 0
     assert _service(db, f"select public.m2_open_or_join_reading_run({_quote(OWNER)}::uuid, 60, '{{}}'::jsonb, 999);",
                     check=False).returncode != 0
+
+
+def test_the_page_budget_is_a_high_water_mark_on_the_run(db):
+    """Counted per RUN, and a high-water mark rather than a counter: re-reading
+    page one must not spend the budget, and the count returned is the one BEFORE
+    this page so the request that trips the cap cannot also inflate it."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    assert run['pages_served'] == 0 and run['frozen_order_id'] is None
+
+    def record(pages):
+        return int(_last(_service(db, "select public.m2_record_run_page("
+                                  f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {pages});")))
+
+    assert record(1) == 0, 'the count before the first page is zero'
+    assert record(2) == 1
+    assert record(1) == 2, 're-reading page one must not lower the mark'
+    stored = _sql(db, "select pages_served from public.m2_reading_runs "
+                      f"where run_id = {_quote(run['run_id'])}::uuid;")
+    assert _last(stored) == '2'
+    # Joining the run reports the budget, so a refresh is answered from it.
+    assert _open_run(db, OWNER)['pages_served'] == 2
+
+
+def test_an_unknown_run_spends_nothing(db):
+    result = _service(db, "select public.m2_record_run_page("
+                      f"{_quote(OWNER)}::uuid, gen_random_uuid(), 3);")
+    assert _last(result) == '0'
 
 
 def test_an_out_of_range_idle_window_is_refused(db):

@@ -171,10 +171,26 @@ class Store:
 
     def open_reading_run(self, *, user_id, idle_minutes, max_minutes, profile):
         if self.runs:
-            return self.runs[-1]
-        run = {"run_id": f"run-{len(self.runs) + 1}", "profile_snapshot": profile, "created": True}
+            return {**self.runs[-1], "created": False}
+        run = {"run_id": f"run-{len(self.runs) + 1}", "profile_snapshot": profile, "created": True,
+               "frozen_order_id": None, "pages_served": 0}
         self.runs.append(run)
         return run
+
+    def bind_run_frozen_order(self, *, user_id, run_id, frozen_order_id):
+        for run in self.runs:
+            if run["run_id"] == run_id:
+                run["frozen_order_id"] = frozen_order_id
+                return True
+        return False
+
+    def record_run_page(self, *, user_id, run_id, pages):
+        for run in self.runs:
+            if run["run_id"] == run_id:
+                previous = run.get("pages_served", 0)
+                run["pages_served"] = max(previous, pages)
+                return previous
+        return 0
 
     # --- owner state and budget -------------------------------------------
     def owner_states(self, token, story_ids):
@@ -914,3 +930,62 @@ def test_the_lane_counts_account_for_every_card_on_the_page():
     assert "more" in counts, "a page that counts 25 while reporting four lanes is hiding cards"
     served = [card for card in store.frozen["frozen-1"]["cards"]]
     assert sum(counts.values()) == min(len(served), 25) or sum(counts.values()) > 0
+
+
+# --- a refresh inside a run is free, and cannot reset the budget -----------
+
+def test_a_refresh_inside_a_run_returns_the_ranking_it_already_paid_for():
+    """rank() used to mint a NEW frozen order on every call while joining the
+    same run, so a refresh bought a second ranking and handed the per-run page
+    budget back with it."""
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    assert len(store.reservations) == 1 and subject._adapter.calls == 1
+    for _ in range(2):
+        again = rank(subject, store)
+        assert again["request_id"] == first["request_id"], "a refresh minted a new ranking"
+        assert [card["story_id"] for card in again["cards"]] == \
+            [card["story_id"] for card in first["cards"]], "a refresh reshuffled the page"
+    assert len(store.frozen) == 1, "a refresh wrote a second frozen order"
+    assert len(store.reservations) == 1, "a refresh reserved provider budget again"
+    assert subject._adapter.calls == 1, "a refresh bought a second provider call"
+
+
+def test_a_refresh_cannot_reset_the_per_run_page_budget():
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}", categories=[f"d{index % 9}"])
+            for index in range(300)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    policy = load_composition_policy(POLICY_PATH)
+    response = rank(subject, store)
+    cursor, served = response["next_cursor"], 1
+    while cursor and served < policy.max_pages_per_run:
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        if not response["cards"]:
+            break
+        served += 1
+        cursor = response["next_cursor"]
+    assert served == policy.max_pages_per_run
+    # The refresh: allowed, free, and page one as always.
+    refreshed = rank(subject, store)
+    assert refreshed["cards"], "a refresh should still show her page one"
+    assert len(store.reservations) == 1, "the refresh bought a ranking"
+    # And the budget is still spent, because it belongs to the RUN.
+    after = subject.page(authorization="Bearer valid", cursor=refreshed["next_cursor"])
+    assert after.get("end_of_run") is True, "a refresh handed the page budget back"
+    assert after["cards"] == []
+
+
+def test_a_scoped_staleness_change_still_buys_exactly_one_new_ranking():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    # A history reset is the kind of change that makes a stored order wrong.
+    original = store.history_snapshot
+    store.history_snapshot = lambda token: {**original(token), "history_generation": 2}
+    store.runs[0]["frozen_order_id"] = "frozen-1"
+    second = rank(subject, store, history_generation=2)
+    assert second["request_id"] != first["request_id"], "a real staleness change must re-rank"
+    assert subject._adapter.calls == 2 and len(store.reservations) == 2
+    assert len(store.frozen) == 2
