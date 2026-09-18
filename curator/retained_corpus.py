@@ -31,12 +31,22 @@ class RetainedCandidate:
 
 
 def retain(items: Iterable[Item], *, categories: Iterable[Category], observed_at: datetime,
-           grouping: GroupingPolicy | None = None) -> tuple[RetainedCandidate, ...]:
+           grouping: GroupingPolicy | None = None,
+           fallback_category_for=None) -> tuple[RetainedCandidate, ...]:
     """Normalize through the existing deduper, then keep every canonical item.
 
     This deliberately runs before publication selection. A category assignment is
     recomputed from configured terms so retained search and feed candidates use
     the same inclusion rule as collection.
+
+    ``fallback_category_for`` is the CATEGORY FLOOR: a callable taking a route's
+    source id and returning the configured category a story from that route
+    keeps when nothing else matched. A shared-pool route declares no category by
+    design (keywords decide), so a headline carrying none of the configured
+    terms used to enter the corpus with an EMPTY category set: it could then
+    never appear under any section, and it rendered with no label. Measured on
+    the committed capture, that was 50 of 262 rows. The floor never overrides a
+    real match and never adds a second category to a story that already has one.
     """
     if observed_at.tzinfo is None:
         raise ValueError("observed_at must be timezone-aware")
@@ -66,6 +76,13 @@ def retain(items: Iterable[Item], *, categories: Iterable[Category], observed_at
     )
     for story_id, group_id in groups.items():
         retained[story_id] = replace(retained[story_id], event_group_id=group_id)
+    if fallback_category_for is not None:
+        for story_id, row in retained.items():
+            if row.category_ids:
+                continue
+            floor = str(fallback_category_for(row.item.source_id) or "")
+            if floor:
+                retained[story_id] = replace(row, category_ids=frozenset({floor}))
     return tuple(sorted(retained.values(), key=lambda row: (row.item.published_at, row.story_id), reverse=True))
 
 

@@ -35,7 +35,9 @@ jobs:
         run: python -m compileall -q curator tests scripts
 
       - name: Run deterministic tests
-        run: python -m pytest -p no:cacheprovider -q -m "not allow_socket"
+        # The M2 reader browser tests are excluded HERE and run in their own
+        # job below, which installs the browser. They must never silently skip.
+        run: python -m pytest -p no:cacheprovider -q -m "not allow_socket" --ignore=tests/test_m2_reader_playwright.py
 
       - name: Validate the shipped config
         run: |
@@ -116,6 +118,69 @@ jobs:
         # evidence. Either way the run must not exit 0.
         run: git diff --exit-code -- edge/fixtures
 
+  reader-browser:
+    # F3. These tests drive the BUILT static reader in a real browser: the
+    # renderer's own output, the real reader.js, the real ASGI ranking service.
+    # They used to open with `pytest.importorskip('playwright.sync_api')` while
+    # playwright was pinned in no requirements file and installed by no
+    # workflow, so every one of them reported SKIPPED on every run. Same
+    # must-execute guard as discovery-database: a skip here fails the job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: pip install -r requirements-browser.txt
+      - name: Install the browser the suite launches
+        # Both browsers the M2 suite actually launches: the chrome CHANNEL
+        # (test_m2_reader_playwright) and bundled chromium
+        # (test_m2_reader_language_playwright). A failure here fails the job,
+        # which is the point: no browser must never mean no evidence.
+        run: python -m playwright install --with-deps chrome chromium
+      - name: M2 reader browser tests against the built static reader
+        env:
+          NEWS_CURATOR_QA_OUTPUT_DIR: ${{ runner.temp }}/reader-qa
+        run: |
+          python -m pytest -p no:cacheprovider -q tests/test_m2_reader_playwright.py \
+            tests/test_m2_reader_language_playwright.py --junitxml=/tmp/reader-browser.xml
+          python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+
+          # The ONE expected failure this job tolerates, named exactly. Anything
+          # else that does not execute is the failure this guard exists to catch.
+          # Issue #48: the reader empties the tab you switch to after leaving the
+          # personalized feed. Delete this pair together with the xfail marker
+          # when that is fixed.
+          ALLOWED_XFAIL = ("tests.test_m2_reader_playwright",
+                           "test_reader_surfaces_after_leaving_the_personalized_feed")
+
+          root = ET.parse("/tmp/reader-browser.xml").getroot()
+          cases = root.findall(".//testcase")
+          assert cases, "M2 reader browser evidence is missing."
+
+          allowed = 0
+          hidden = []
+          for case in cases:
+              identity = (case.get("classname"), case.get("name"))
+              for node in case.findall("skipped"):
+                  if node.get("type") == "pytest.xfail" and identity == ALLOWED_XFAIL:
+                      allowed += 1
+                  else:
+                      hidden.append(f"{identity[0]}::{identity[1]} "
+                                    f"[{node.get('type')}] {node.get('message')}")
+          assert not hidden, ("M2 reader browser tests must execute, not skip: " + "; ".join(hidden))
+          # Exactly one, so removing the marker after the reader fix breaks this
+          # step (delete ALLOWED_XFAIL with it), and so does adding a second one.
+          assert allowed == 1, (
+              f"expected exactly 1 approved xfail ({ALLOWED_XFAIL[0]}::{ALLOWED_XFAIL[1]}), found {allowed}. "
+              "If the reader bug (issue #48) is fixed, remove the marker AND this allowance.")
+          PYTHON
+
   discovery-database:
     # Exercise the existing 17.11 contract on a clean disposable database.
     # A missing runtime must fail this job, never silently skip its tests.
@@ -152,4 +217,16 @@ jobs:
           root = ET.parse("/tmp/translation-db.xml").getroot()
           assert not root.findall(".//skipped"), "Translation migration tests must execute, not skip."
           assert root.findall(".//testcase"), "Translation migration evidence is missing."
+          PYTHON
+      # B8: duplicate stories in one result, and the category floor. Both are
+      # projection and ingest contracts that only a real database can prove.
+      # Same must-execute guard: a skip here is a failure, never silent.
+      - name: Verify the candidate dedupe and the category floor
+        run: |
+          python -m pytest -p no:cacheprovider -q tests/test_m2_candidate_dedupe_postgres_runtime.py --junitxml=/tmp/dedupe-db.xml
+          python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("/tmp/dedupe-db.xml").getroot()
+          assert not root.findall(".//skipped"), "Candidate dedupe tests must execute, not skip."
+          assert root.findall(".//testcase"), "Candidate dedupe evidence is missing."
           PYTHON

@@ -1,0 +1,8 @@
+-r requirements-dev.txt
+
+# F3. Browser evidence only, kept out of requirements-dev.txt on purpose: the
+# deterministic test job must not acquire a playwright that has no browser
+# behind it, which would turn every importorskip in tests/*_playwright.py from
+# a skip into a hard failure. The reader-browser CI job installs this file and
+# then `python -m playwright install --with-deps chrome`.
+playwright==1.63.0

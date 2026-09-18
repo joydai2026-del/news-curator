@@ -7,5 +7,5 @@ prefix_assistant: "Provide the passages."
 body_user: "[{rank}] {candidate}"
 suffix_user: |-
   Return only a JSON object with one field named order. Its value must be a permutation of every integer identifier from 1 through {num}, ordered from most to least relevant. Include each identifier exactly once.
-output_validation_regex: r"^\x7b.*\x7d$"
-output_extraction_regex: r"\d+"
+output_validation_regex: '^\x7b.*\x7d$'
+output_extraction_regex: '\d+'

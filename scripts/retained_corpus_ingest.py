@@ -529,7 +529,7 @@ def main() -> int:
     grouping_policy = GroupingPolicy.from_config(cfg.grouping or {})
     pairing_policy = PairingPolicy.from_config(cfg.translation or {})
     retained = retain(source_items, categories=cfg.categories, observed_at=snap.generated_at,
-                      grouping=grouping_policy)
+                      grouping=grouping_policy, fallback_category_for=cfg.fallback_category_for)
     corpus, truncated, decisions = (), False, {}
     truncation_reason = 'page_ceiling'
     url = os.environ.get('NEWS_CURATOR_SUPABASE_URL', '')

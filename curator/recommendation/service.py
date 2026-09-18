@@ -62,6 +62,8 @@ class ServicePolicy:
     maximum_excluded_story_ids: int = 1000
     cursor_ttl_seconds: int = 900
     daily_cost_limit_usd: float = 2.0
+    # The owners allowed to reach the paid path. EMPTY IS NOBODY, never
+    # everybody: see `_authenticate`.
     preview_owner_ids: tuple[str, ...] = ()
     enabled: bool = False
     # The reader's display language. Exclusivity is always stated against this
@@ -76,6 +78,17 @@ class ServicePolicy:
     exclusivity_policy_id: str = "pairing-json-v1"
 
     def __post_init__(self) -> None:
+        # Two layers, both required, because the gap between them is where F5
+        # lived: runtime.py refuses an empty env value on the normal boot path,
+        # `_authenticate` refuses an unlisted owner at every request, and this
+        # refuses the invalid POLICY OBJECT so an enabled service with no
+        # allowlist cannot be constructed at all, by a fixture or by a second
+        # composition root. Turning the gate off is a deliberate future change
+        # to this line, never the accident of leaving a variable unset.
+        if self.enabled and not self.preview_owner_ids:
+            raise ValueError("an enabled ranking service requires a non-empty preview owner allowlist")
+        if any(not isinstance(value, str) or not value.strip() for value in self.preview_owner_ids):
+            raise ValueError("preview_owner_ids entries must be non-empty owner ids")
         if self.display_language not in ("en", "zh"):
             raise ValueError("display_language must be a supported language")
         if self.exclusive_category_id and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", self.exclusive_category_id):
@@ -265,7 +278,13 @@ class RankingService:
         user_id = user.get("id")
         if not isinstance(user_id, str):
             raise AuthenticationError("invalid authenticated user")
-        if self._policy.preview_owner_ids and user_id not in self._policy.preview_owner_ids:
+        # EMPTY MEANS NOBODY. The truthiness guard that used to stand here made
+        # an empty allowlist mean "admit everyone", so every enabled service
+        # built outside build_application() (a fixture, a script, a second
+        # composition root) served the paid provider path to any authenticated
+        # owner. runtime.py refuses an empty env value on the normal boot path;
+        # this is the same decision made where it is actually enforced.
+        if user_id not in self._policy.preview_owner_ids:
             raise AuthenticationError("owner is not enabled for preview")
         return token, AuthenticatedOwner(self._policy.tenant_id, user_id, user_id, ActorKind.HUMAN)
 

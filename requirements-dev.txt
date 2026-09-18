@@ -1,3 +1,10 @@
 -r requirements.txt
 -r requirements-model.txt
 pytest==8.3.4
+
+# F4: the reviewed RankLLM subset vendored at deploy/ranker/vendor is imported
+# by tests/test_rankllm_prompt_builder.py so the REAL prompt builder is
+# executed. Both are runtime dependencies of that subset and are pinned to the
+# same versions as deploy/ranker/requirements-linux-cp312-x86_64.lock.
+dacite==1.9.2
+ftfy==6.3.1

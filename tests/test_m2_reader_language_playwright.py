@@ -135,6 +135,7 @@ def test_language_toggle_section_and_untranslated_mark(tmp_path):
         policy=RankerPolicy('test-provider', 'test-model', 'https://provider.example', 'test-prompt'),
         engine=NoProvider()),
         policy=ServicePolicy('test-policy', 'test-model', 'test-policy', 'test-tenant', enabled=True,
+                             preview_owner_ids=(OWNER,),
                              display_language='en', exclusive_category_id=EXCLUSIVE, other_lane_enabled=True),
         cursor_key=b'k' * 32)
     app = RankingASGI(service=service, reader_origin=READER)
@@ -290,6 +291,7 @@ def test_the_empty_exclusive_section_shows_exactly_one_message(tmp_path):
         policy=RankerPolicy('test-provider', 'test-model', 'https://provider.example', 'test-prompt'),
         engine=NoProvider()),
         policy=ServicePolicy('test-policy', 'test-model', 'test-policy', 'test-tenant', enabled=True,
+                             preview_owner_ids=(OWNER,),
                              display_language='en', exclusive_category_id=EXCLUSIVE, other_lane_enabled=True),
         cursor_key=b'k' * 32)
     app = RankingASGI(service=service, reader_origin=READER)
@@ -369,6 +371,7 @@ def test_the_lane_call_carries_the_pairing_policy_id():
         policy=RankerPolicy('test-provider', 'test-model', 'https://provider.example', 'test-prompt'),
         engine=NoProvider()),
         policy=ServicePolicy('test-policy', 'test-model', 'test-policy', 'test-tenant', enabled=True,
+                             preview_owner_ids=(OWNER,),
                              display_language='en', exclusive_category_id=EXCLUSIVE,
                              other_lane_enabled=True, exclusivity_policy_id='pairing-json-v7'),
         cursor_key=b'k' * 32)
