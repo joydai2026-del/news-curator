@@ -189,7 +189,8 @@ class RankingService:
                 policy_id=self._policy.exclusivity_policy_id,
             )
         elif composition is not None:
-            rows = self._pool_rows(category_id, query, profile, composition, before_published, before_story)
+            rows, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
+                                                  before_published, before_story)
             # Capped promotion: a few stories only the other language's press
             # carried get to compete for a place in All, on merit. They do NOT
             # get extra slots; they enter the same pool and take their own
@@ -218,14 +219,17 @@ class RankingService:
                                  now=self._now(), size=composition.candidate_window_size)
             rows = [item.row for item in laned]
             has_more = len(filtered) > len(rows)
-            # The recipe's window is no longer ordered by publication time, so
-            # the corpus cursor is the OLDEST row of the pool that was read, not
-            # the last row of the window.
-            boundary = min(filtered, key=lambda item: (str(item["published_at"]), str(item["story_id"]))) if filtered else None
-        else:
-            boundary = rows[-1] if rows else None
-        next_corpus = ({"before_published_at": boundary["published_at"], "before_story_id": boundary["story_id"]}
-            if boundary is not None and has_more else None)
+        next_corpus = None
+        if composition is not None:
+            # The SAME cursor shape the continuation writes, hot key included, so
+            # the first "load more" resumes from a cursor of the shape it expects
+            # rather than from a narrower one written by a different code path.
+            if has_more and filtered:
+                next_corpus = self._next_corpus_cursor(filtered, hot_story_ids)
+        elif has_more and rows:
+            boundary = rows[-1]
+            next_corpus = {"before_published_at": boundary["published_at"],
+                           "before_story_id": boundary["story_id"]}
         request_id = str(uuid.uuid4())
         request = self._request(request_id, owner, snapshot, rows, query)
         processing_allowed = bool(snapshot.get("learning_enabled") and snapshot.get("provider_processing_enabled"))
@@ -424,11 +428,11 @@ class RankingService:
         query = eligibility.get("query") if isinstance(eligibility, Mapping) else None
         profile = BehaviorProfile.from_snapshot(bindings.get("profile_snapshot"))
         seen = {str(card.get("story_id")) for card in frozen.get("cards", ())}
-        rows = [row for row in self._pool_rows(category_id, query, profile, composition,
-                                               cursor.get("before_published_at"),
-                                               cursor.get("before_story_id"),
-                                               self._hot_cursor(cursor))
-                if str(row.get("story_id")) not in seen]
+        pooled, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
+                                                cursor.get("before_published_at"),
+                                                cursor.get("before_story_id"),
+                                                self._hot_cursor(cursor))
+        rows = [row for row in pooled if str(row.get("story_id")) not in seen]
         if not rows:
             return ()
         laned = build_window(rows, profile=profile, policy=composition, now=self._now(),
@@ -453,7 +457,7 @@ class RankingService:
         try:
             total = self._store.extend_frozen_order(user_id=owner.user_id,
                 frozen_order_id=frozen_order_id, cards=added,
-                bindings={"corpus_cursor": self._next_corpus_cursor(rows),
+                bindings={"corpus_cursor": self._next_corpus_cursor(rows, hot_story_ids),
                           "corpus_has_more": len(rows) > len(added),
                           "continuation_mode": "recipe_only"})
         except Exception:
@@ -514,17 +518,23 @@ class RankingService:
         return (published, story, count)
 
     @staticmethod
-    def _next_corpus_cursor(rows):
+    def _next_corpus_cursor(rows, hot_story_ids=()):
         """Where the next continuation resumes, carrying BOTH orderings.
 
         The general lanes resume from the oldest row read. The hot lane resumes
-        from its OWN sort key, carried alongside rather than approximated from a
-        publication time it does not order by.
+        from its OWN sort key, built ONLY from rows the hot lane itself returned.
+        Every row in the general pool carries an independent_source_count, most
+        of them 1, and letting one of those become the boundary told the SQL to
+        return only hot rows below it, so the hot lane emptied after the first
+        continuation while count-3 stories were still waiting.
         """
+        if not rows:
+            return {}
         oldest = min(rows, key=lambda item: (str(item["published_at"]), str(item["story_id"])))
         cursor = {"before_published_at": oldest["published_at"], "before_story_id": oldest["story_id"]}
         hot = [row for row in rows
-               if isinstance(row.get("independent_source_count"), int)
+               if str(row.get("story_id")) in set(hot_story_ids)
+               and isinstance(row.get("independent_source_count"), int)
                and not isinstance(row.get("independent_source_count"), bool)]
         if hot:
             last = min(hot, key=lambda item: (item["independent_source_count"],
@@ -714,6 +724,12 @@ class RankingService:
                    hot_cursor=None):
         """Ask the corpus for each lane, then merge.
 
+        Returns ``(rows, hot_story_ids)``. The provenance matters: the hot lane
+        pages on its own sort key, so its cursor may only ever be built from rows
+        THE HOT LANE RETURNED. The general pool carries every story, count-1 ones
+        included, and letting one of those become the hot boundary makes the SQL
+        return only hot rows below it, skipping still-available count-3 stories.
+
         One "newest N" window can only ever express one ordering, which is why
         today's feed is the newest 50 rows. Each lane orders by its own criterion,
         so each is asked for separately and the recipe merges what comes back.
@@ -734,12 +750,17 @@ class RankingService:
                 trend_window_hours=composition.trend_window_hours,
                 trend_min_sources=composition.trend_min_independent_sources,
                 max_age_hours=None, min_age_hours=None,
-                limit=min(100, composition.candidate_window_size),
+                # Deliberately WIDER than the window. The window now fills every
+                # page the run promises, so a pool the same size as the window
+                # would always be consumed whole and "load more" would never have
+                # older news to reach for.
+                limit=min(100, composition.candidate_window_size + composition.page_size),
                 before_published_at=before_published, before_story_id=before_story,
                 before_source_count=None):
             story_id = row.get("story_id")
             if isinstance(story_id, str):
                 merged.setdefault(story_id, row)
+        hot_story_ids: set[str] = set()
         for lane in composition.lane_priority:
             if lane in ("interested", "surprise") and not (categories or sources):
                 # No profile: the aligned pool degrades to fresh and nothing is
@@ -776,9 +797,12 @@ class RankingService:
                 before_source_count=lane_cursor[2])
             for row in rows:
                 story_id = row.get("story_id")
-                if isinstance(story_id, str) and story_id not in merged:
-                    merged[story_id] = row
-        return list(merged.values())
+                if not isinstance(story_id, str):
+                    continue
+                if lane == "hot":
+                    hot_story_ids.add(story_id)
+                merged.setdefault(story_id, row)
+        return list(merged.values()), hot_story_ids
 
     def _card(self, row, owner_state, *, lane=None, composition=None, exclusive=False, also_covered_by=()):
         language = str(row["language"])

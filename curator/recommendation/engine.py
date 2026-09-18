@@ -51,9 +51,18 @@ class ScoringPolicy:
                    decay_half_life_hours=policy.decay_half_life_hours)
 
     def score(self, prediction: Mapping[str, float]) -> float:
-        total = sum(self.weights.get(action, 0.0) * prediction.get(action, 0.0)
-                    for action in PREDICTED_ACTIONS)
-        return float(prediction.get(self.gate_action, 0.0)) * total
+        """The gate multiplies the POSITIVE contributions; negatives subtract.
+
+        A single product would invert whenever the weighted total went negative:
+        a story she is more likely to open would then score LOWER than one she is
+        not, because a bigger gate made a negative total more negative. The gate
+        exists to collapse a story nobody will open, never to reward one.
+        """
+        contributions = [self.weights.get(action, 0.0) * prediction.get(action, 0.0)
+                         for action in PREDICTED_ACTIONS]
+        positive = sum(value for value in contributions if value > 0)
+        negative = sum(value for value in contributions if value < 0)
+        return float(prediction.get(self.gate_action, 0.0)) * positive + negative
 
 
 class ReviewedRankLLMPromptBuilder:
@@ -182,12 +191,10 @@ class OpenAIRankLLMEngine:
                 "title": event.story_title, "summary": event.story_summary, "source": event.source_id,
                 "query": event.query_text}
             if self._scoring:
-                # Each event carries its configured value and its age, so the
-                # model can tell a save from a read and last week from an hour
-                # ago instead of treating every event as one undated signal.
-                action = _EVENT_ACTIONS.get(event.event_type.value)
-                if action is not None:
-                    entry["weight"] = self._scoring.engagement_weights.get(action, 0.0)
+                # The event's AGE, and nothing else. The configured weight used to
+                # ride along here, which made "the model never sees the weights"
+                # false: the ranking policy was being handed to the thing it is
+                # supposed to govern. The event type already says what happened.
                 if newest is not None:
                     age = max(0.0, (newest - event.occurred_at).total_seconds() / 3600.0)
                     entry["age_hours"] = round(age, 2)

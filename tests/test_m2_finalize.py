@@ -45,7 +45,7 @@ def full_order(policy, page_size=25):
     return order
 
 
-def assert_invariants(page, policy, page_size, *, ordered_lanes=None):
+def assert_invariants(page, policy, page_size, *, owner_states=None):
     quotas = page_quotas(policy, page_size)
     # 1. Never more than a page; fewer only with a recorded reason.
     assert len(page.cards) <= page_size
@@ -63,8 +63,10 @@ def assert_invariants(page, policy, page_size, *, ordered_lanes=None):
         if key == "title":
             values = [normalize_title(value) for value in values]
         assert len(values) == len(set(values))
-    # 4. Nothing already opened.
-    assert all(card.story_id for card in page.cards)
+    # 4. Nothing already opened. This used to assert that every card had a
+    # story_id, which is true of every card ever built and proved nothing.
+    opened = {story for story, state in (owner_states or {}).items() if state.get("read_at")}
+    assert not (opened & {card.story_id for card in page.cards})
     # 5. No two adjacent cards share a source or an event group.
     for left, right in zip(page.cards, page.cards[1:]):
         assert left.row["source_id"] != right.row["source_id"]
@@ -82,10 +84,11 @@ def test_a_full_page_meets_every_invariant(policy):
 
 def test_already_opened_stories_are_removed_not_demoted(policy):
     order = full_order(policy)
-    opened = {order[0].story_id: {"read_at": "2026-09-18T10:00:00+00:00"}}
+    opened = {order[0].story_id: {"read_at": "2026-09-18T10:00:00+00:00"},
+              order[5].story_id: {"read_at": "2026-09-18T10:05:00+00:00"}}
     page = finalize_page(order, policy=policy, owner_states=opened, page_size=25)
     assert order[0].story_id not in {card.story_id for card in page.cards}
-    assert_invariants(page, policy, 25)
+    assert_invariants(page, policy, 25, owner_states=opened)
 
 
 def test_duplicates_collapse_and_the_publisher_survives(policy):

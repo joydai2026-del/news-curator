@@ -295,7 +295,10 @@ def test_the_labels_and_pools_persist_with_the_frozen_order():
 def test_learning_off_degrades_the_aligned_pool_to_fresh_without_a_provider_call():
     store = Store(events=liked_events(), learning=False)
     response = rank(build(store), store)
-    assert {card["lane"] for card in response["cards"]} <= {"updates", "hot"}
+    # No profile means nothing can be "for you" and nothing can be off-profile.
+    # What is left is fresh, hot, and the honest "more" chip.
+    assert {card["lane"] for card in response["cards"]} <= {"updates", "hot", "more"}
+    assert not any(card["lane"] in ("interested", "surprise") for card in response["cards"])
     assert store.reservations == []
 
 
@@ -475,7 +478,12 @@ def test_paging_past_the_frozen_order_continues_without_a_provider_call():
     It used to call rank() again, which reserves budget and calls the provider.
     Inside a reading run there is never a second provider call.
     """
-    store = Store(events=liked_events())
+    # A corpus with real OLDER news behind the window, which is what "load more"
+    # is for. The default fixture is barely larger than the window itself.
+    store = Store(default_corpus() + [corpus_row(300 + index, hours=40 + index,
+                                                 source=f"older{index}", categories=[f"o{index % 7}"])
+                                      for index in range(60)],
+                  events=liked_events())
     subject = build(store)
     first = rank(subject, store)
     frozen = store.frozen["frozen-1"]
@@ -789,3 +797,86 @@ def test_the_filter_is_recorded_even_after_the_run_has_closed():
     subject.page(authorization="Bearer valid",
                  cursor=subject._cursor("frozen-1", 0, int(store.frozen["frozen-1"]["expires_at"])))
     assert store.filtered.get("run-1"), "a closed run still owns the page it served"
+
+
+def test_the_hot_cursor_is_never_built_from_a_general_pool_row():
+    """The general pool carries every story, including count-1 ones. If one of
+    those becomes before_source_count, the SQL then returns only hot rows BELOW
+    it and skips still-available count-3 stories: the hot lane quietly empties
+    after the first continuation."""
+    subject = paid(PaidStore(events=liked_events()))
+    general = {"story_id": "story:" + "a" * 64, "published_at": "2026-09-18T01:00:00+00:00",
+               "independent_source_count": 1}
+    hot = {"story_id": "story:" + "b" * 64, "published_at": "2026-09-18T02:00:00+00:00",
+           "independent_source_count": 3}
+    cursor = subject._next_corpus_cursor([general, hot], {hot["story_id"]})
+    assert cursor["hot"]["before_source_count"] == 3, cursor
+    assert cursor["hot"]["before_story_id"] == hot["story_id"]
+    # The general cursor still resumes from the oldest row of the whole pool.
+    assert cursor["before_story_id"] == general["story_id"]
+
+
+def test_no_hot_rows_means_no_hot_cursor_at_all():
+    subject = paid(PaidStore(events=liked_events()))
+    general = {"story_id": "story:" + "a" * 64, "published_at": "2026-09-18T01:00:00+00:00",
+               "independent_source_count": 1}
+    assert "hot" not in subject._next_corpus_cursor([general], set())
+
+
+def test_a_continuation_still_returns_hot_stories_the_lane_had_left():
+    """End to end: the general pool contributes a count-1 row, the hot lane still
+    has count-3 rows, and the continuation must reach them."""
+    rows = ([corpus_row(index, hours=1 + index, source=f"fresh{index}", categories=[f"t{index % 9}"])
+             for index in range(70)]
+            + [corpus_row(100 + index, hours=8 + index, source=f"hot{index}",
+                          categories=[f"h{index}"], independent=3) for index in range(8)])
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    assert frozen["bindings"]["corpus_has_more"] is True, "the fixture must leave a continuation to make"
+    subject.page(authorization="Bearer valid",
+                 cursor=subject._cursor("frozen-1", len(frozen["cards"]), int(frozen["expires_at"])))
+    stored = store.frozen["frozen-1"]["bindings"]["corpus_cursor"]
+    assert store.extensions, "the continuation did not run, so this proves nothing"
+    if "hot" in stored:
+        assert stored["hot"]["before_source_count"] >= 2, \
+            "a count-1 general row became the hot boundary and will skip real hot stories"
+
+
+# --- the chip has to be true, not just present ----------------------------
+
+def test_a_quiet_hour_fills_the_page_without_calling_old_news_fresh():
+    """The probe that found this: at a quiet hour, 21 of 25 cards were chipped
+    "fresh" at 10 to 15 hours old against an updates window of 6. A page may be
+    filled with cards that met no rule; it may not LIE about them."""
+    rows = [corpus_row(index, hours=10 + (index % 6), source=f"quiet{index}",
+                       categories=[f"q{index % 8}"]) for index in range(60)]
+    store = PaidStore(rows, events=[])
+    subject = paid(store)
+    response = rank(subject, store)
+    assert len(response["cards"]) == 25, f"page collapsed to {len(response['cards'])} cards"
+    window = load_composition_policy(POLICY_PATH).updates_max_age_hours
+    for card in response["cards"]:
+        age = (NOW - datetime.fromisoformat(card["published_at"])).total_seconds() / 3600
+        if card["lane"] == "updates":
+            assert age <= window, f"a {age:.0f} hour old story was chipped fresh"
+    assert any(card["lane"] == "more" for card in response["cards"]), \
+        "the backfilled cards must carry the honest chip"
+    assert all(card["lane_label"] == "More" for card in response["cards"] if card["lane"] == "more")
+
+
+def test_page_two_is_a_full_page_when_candidates_exist():
+    """run.max_pages_per_run promises two pages of 25. The window used to fill to
+    one page plus a margin, so page 2 was structurally five cards."""
+    rows = [corpus_row(index, hours=1 + (index % 40), source=f"src{index}",
+                       categories=[f"t{index % 9}"]) for index in range(120)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    assert len(first["cards"]) == 25
+    store.reservations.clear()          # page one's single reservation, already made
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    assert len(second["cards"]) == 25, f"page two came back with {len(second['cards'])} cards"
+    assert second["request_id"] == first["request_id"]
+    assert store.reservations == [], "page two bought a provider call"

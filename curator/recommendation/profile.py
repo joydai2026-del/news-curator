@@ -125,16 +125,20 @@ def build_profile(snapshot: Mapping[str, object], *, policy: CompositionPolicy, 
             continue
         age_hours = max(0.0, (now - occurred).total_seconds() / 3600.0)
         value = weight * half_life_weight(age_hours, policy.decay_half_life_hours)
+        # Suppression is a recent act, not a permanent verdict. Outside the
+        # window the event still lowers affinity through the decay above; it just
+        # stops removing the source from the page outright.
+        suppressing = age_hours <= policy.negative_suppression_days * 24
         counted += 1
         source_id = event.get("source_id")
         if isinstance(source_id, str) and source_id:
             sources[source_id] = sources.get(source_id, 0.0) + value
-            if action == "less_like_this":
+            if action == "less_like_this" and suppressing:
                 suppressed_sources.add(source_id)
         topic_id = payload.get("topic_id")
         if isinstance(topic_id, str) and topic_id:
             topics[topic_id] = topics.get(topic_id, 0.0) + value
-            if action == "less_like_this":
+            if action == "less_like_this" and suppressing:
                 suppressed_topics.add(topic_id)
             elif value > 0:
                 positive_topics[topic_id] = positive_topics.get(topic_id, 0.0) + value

@@ -116,6 +116,13 @@ function response(value, url) { return { ok: true, redirected: false, url,
   assert.equal(withLabels.cards[0].lane_label, "surprise");
   assert.equal(withLabels.cards[0].surprise_label, "you might not have looked for this");
   assert.deepEqual(withLabels.cards[0].also_covered_by, ["Reuters"]);
+  // The honest fifth chip is a real lane the reader accepts.
+  const backfilled = reader.validateM2Response(
+    payload({ cards: [{ ...labelled, lane: "more", lane_label: "More", surprise_label: null }] }),
+    expectation);
+  assert.equal(backfilled.cards[0].lane, "more");
+  assert.equal(backfilled.cards[0].lane_label, "More");
+
   // An unknown pool name is refused, so a renamed lane cannot render unchecked.
   assert.throws(() => reader.validateM2Response(
     payload({ cards: [{ ...labelled, lane: "trending" }] }), expectation), /feed response/);

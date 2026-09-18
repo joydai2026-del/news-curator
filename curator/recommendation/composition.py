@@ -18,6 +18,13 @@ import yaml
 # curator/contracts/enums.py rather than a second name for the same thing.
 LANES = ("updates", "hot", "interested", "surprise")
 
+# The fifth chip. It is NOT a pool and it carries no quota: it is what a card
+# says when it met no lane's rule and is on the page because the page would
+# otherwise be short. Calling such a card "fresh" was a lie the reader could see:
+# a quiet-hour probe found 21 of 25 cards chipped fresh at 10 to 15 hours old
+# against an updates window of 6.
+BACKFILL_LANE = "more"
+
 # The actions the product actually captures today. An engagement weight for
 # anything else (ask_question, dwell, dismiss) fails validation instead of being
 # silently ignored: those arrive with their capture surface, not before.
@@ -54,6 +61,7 @@ class CompositionPolicy:
     calibration_alarm_kl: float
     idle_minutes: int
     max_run_minutes: int
+    negative_suppression_days: int
     max_pages_per_run: int
     immediate_negative_filter: bool
     exclusive_promote_to_all_max: int
@@ -69,6 +77,10 @@ class CompositionPolicy:
 
     def label_for(self, lane: str) -> str:
         return self.lane_labels[lane]
+
+    def quota_for(self, lane: str, size: int) -> int:
+        """Backfill has no quota: it fills what the four pools could not."""
+        return self.lane_quota(lane, size) if lane in self.lane_ratios else 0
 
     def exclusive_label(self, display_language: str) -> str:
         """"Only in Chinese press" is DERIVED, never stored as English text.
@@ -96,6 +108,7 @@ _NUMERIC_RANGES = {
     "diversity.calibration_alarm_kl": (float, 0.0, 2.0),
     "run.idle_minutes": (int, 5, 1440),
     "run.max_minutes": (int, 15, 240),
+    "run.negative_suppression_days": (int, 1, 90),
     "run.max_pages_per_run": (int, 1, 20),
     "lane.exclusive_promote_to_all_max": (int, 0, 5),
 }
@@ -198,7 +211,7 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
     if not isinstance(labels_raw, Mapping):
         raise CompositionPolicyError("labels must be configured")
     lane_labels = {}
-    for lane in LANES:
+    for lane in (*LANES, BACKFILL_LANE):
         value = labels_raw.get(lane)
         if not isinstance(value, str) or not value.strip() or len(value) > 40:
             raise CompositionPolicyError(f"labels.{lane} must be text of at most 40 characters")
@@ -266,7 +279,9 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
         hide_already_opened=booleans["diversity.hide_already_opened"],
         calibration_alarm_kl=float(numbers["diversity.calibration_alarm_kl"]),
         idle_minutes=int(numbers["run.idle_minutes"]),
-        max_run_minutes=int(numbers["run.max_minutes"]), max_pages_per_run=pages,
+        max_run_minutes=int(numbers["run.max_minutes"]),
+        negative_suppression_days=int(numbers["run.negative_suppression_days"]),
+        max_pages_per_run=pages,
         immediate_negative_filter=booleans["run.immediate_negative_filter"],
         exclusive_promote_to_all_max=int(numbers["lane.exclusive_promote_to_all_max"]),
         default_display_language=str(display),

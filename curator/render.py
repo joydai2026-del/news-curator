@@ -294,6 +294,7 @@ body{overflow-x:hidden;overflow-x:clip;background:
 .element-labels{display:flex;flex-wrap:wrap;gap:.35rem;margin:.1rem 0 .45rem}
 .element-label{font-size:.7rem;line-height:1;letter-spacing:.02em;text-transform:lowercase;color:var(--muted);border:1px solid var(--line);border-radius:100px;padding:.25rem .5rem}
 .element-labels[data-lane="surprise"] .element-label{color:var(--fg)}
+.also-covered{margin:.1rem 0 .4rem;font-size:.78rem;color:var(--muted)}
 .m2-empty{margin:1rem 0;color:var(--muted)}
 #m2-language-toggle{min-width:44px;min-height:44px;font:inherit;font-weight:650;color:var(--fg);border:1px solid var(--line);background:transparent;border-radius:100px;padding:.4rem .9rem;cursor:pointer}
 #m2-controls a{display:inline-flex;align-items:center;min-width:44px;min-height:44px;color:var(--fg)}#m2-mode{margin:.2rem 0 0;color:var(--muted)}

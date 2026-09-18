@@ -177,3 +177,27 @@ def test_the_window_is_replayable(policy):
     first = build_window(rows, profile=BehaviorProfile(), policy=policy, now=NOW)
     second = build_window(list(reversed(rows)), profile=BehaviorProfile(), policy=policy, now=NOW)
     assert [item.story_id for item in first] == [item.story_id for item in second]
+
+
+def test_less_like_this_stops_erasing_after_the_configured_window(policy):
+    """One tap must not hide an outlet for ever. Inside the window it removes the
+    source from the page; outside it, it only lowers affinity."""
+    inside = build_profile(snapshot([event("less_like_this", source="cnbeta", topic="gadgets",
+                                           hours=policy.negative_suppression_days * 24 - 1)]),
+                           policy=policy, now=NOW)
+    assert inside.suppressed_sources == frozenset({"cnbeta"})
+    outside = build_profile(snapshot([event("less_like_this", source="cnbeta", topic="gadgets",
+                                            hours=policy.negative_suppression_days * 24 + 1)]),
+                            policy=policy, now=NOW)
+    assert outside.suppressed_sources == frozenset()
+    assert outside.suppressed_topics == frozenset()
+    # It still counts against the source, which is the part that should persist.
+    assert outside.affinity(source_id="cnbeta", category_ids=("gadgets",)) < 0
+
+
+def test_the_exact_suppression_boundary(policy):
+    at_the_boundary = build_profile(
+        snapshot([event("less_like_this", source="cnbeta", hours=policy.negative_suppression_days * 24)]),
+        policy=policy, now=NOW)
+    assert at_the_boundary.suppressed_sources == frozenset({"cnbeta"}), \
+        "exactly at the window the suppression still applies"

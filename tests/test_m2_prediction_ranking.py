@@ -102,6 +102,16 @@ def test_the_gate_collapses_an_article_nobody_will_open(scoring):
     assert scoring.score(strong_save) < scoring.score(moderate)
 
 
+def test_a_more_likely_open_never_ranks_a_story_lower(scoring):
+    """The gate used to invert once the weighted total went negative: a bigger
+    p_open made a negative total MORE negative, so the story she was more likely
+    to open ranked below the one she was not."""
+    disliked = {"p_open": 0.2, "p_read_original": 0.0, "p_save": 0.0,
+                "p_more_like_this": 0.0, "p_less_like_this": 0.9}
+    same_but_likelier = dict(disliked, p_open=0.9)
+    assert scoring.score(same_but_likelier) >= scoring.score(disliked)
+
+
 def test_one_negative_lowers_a_score_without_zeroing_it(scoring):
     clean = {"p_open": 0.6, "p_read_original": 0.4, "p_save": 0.5,
              "p_more_like_this": 0.2, "p_less_like_this": 0.0}
@@ -110,11 +120,32 @@ def test_one_negative_lowers_a_score_without_zeroing_it(scoring):
 
 
 def test_the_model_never_sees_the_weights(scoring):
+    """The real claim, asserted on the real PROMPT. The old test checked the
+    answer shape, which never contained a weight under any implementation, so it
+    could not have failed even when the prompt was carrying every weight."""
+    from datetime import datetime, timedelta, timezone
+
+    from curator.contracts.enums import EventType
+    from curator.contracts.ranking_request import ModelRankingInput, OrderedHistoryEvent
+
     engine = OpenAIRankLLMEngine(prompt_builder=object(), endpoint="https://provider.invalid",
         api_key="k", model="gpt-5-mini", maximum_output_tokens=8192, reasoning_effort="minimal",
         verbosity="low", client_factory=lambda: None, scoring=scoring)
-    schema = json.dumps(engine._answer_shape(3))
-    assert "35.0" not in schema and "-40" not in schema
+    now = datetime(2026, 9, 18, 12, tzinfo=timezone.utc)
+    history = (OrderedHistoryEvent("event:" + "1" * 64, EventType.SAVE, now - timedelta(hours=3), 1,
+                                   "story:" + "1" * 64, None, "A saved story", None, "reuters", True),)
+    query = engine._query_with_history(ModelRankingInput(
+        candidates=(), ordered_history=history, history_revision=1, server_commit_revision=1,
+        history_generation=1, consent_revision=1, policy_version="policy", model_version="model",
+        query=None))
+    for weight in scoring.engagement_weights.values():
+        assert str(weight) not in query, f"the prompt is carrying the weight {weight}"
+    # The only "weight" left in the prompt is the sentence telling the model the
+    # ordering weights are not its business. No weight FIELD and no weight VALUE.
+    assert '"weight"' not in query, "the prompt is carrying a weight field"
+    assert "the ordering weights are not yours" in query
+    # What it DOES carry: what happened, and how long ago.
+    assert "save" in query and "age_hours" in query
 
 
 # --- the output budget guard ---------------------------------------------

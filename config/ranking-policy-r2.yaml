@@ -101,6 +101,11 @@ run:
   # MUST equal floor(candidate_window_size / page_size). 50 / 25 = 2.
   max_pages_per_run: 2
   immediate_negative_filter: true
+  # How long one "less like this" keeps hiding a source or a topic. It used to
+  # hide it for ever on every page: one tap in September would still be removing
+  # that outlet in December, which is not what "less like this" says. It still
+  # lowers the profile affinity after this window; it just stops erasing.
+  negative_suppression_days: 7
 
 lane:
   # Ceiling, never a floor. Promotion happens only on merit. JJ-confirmed.
@@ -118,6 +123,9 @@ labels:
   hot: hot
   interested: for you
   surprise: surprise
+  # The honest fifth chip: this card met no pool's rule and is here because the
+  # page would otherwise be short. Never call it fresh.
+  more: More
   exclusive_template: "only in {language} press"
   language_names:
     en: English

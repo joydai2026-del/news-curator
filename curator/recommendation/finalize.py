@@ -15,9 +15,9 @@ from typing import Mapping, Sequence
 
 from curator.dedup import normalize_title
 
-from .composition import CompositionPolicy
+from .composition import BACKFILL_LANE, CompositionPolicy
 from .profile import BehaviorProfile
-from .recipe import LanedCandidate
+from .recipe import BACKFILL_ORDER, LanedCandidate
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,7 @@ class FinalizedPage:
 
 
 def page_quotas(policy: CompositionPolicy, size: int) -> dict[str, int]:
+    """Quotas for the four POOLS. Backfill has none: it is what fills the rest."""
     quotas = {lane: int(size * policy.lane_ratios[lane]) for lane in policy.lane_priority}
     remainder = size - sum(quotas.values())
     order = sorted(policy.lane_priority,
@@ -129,7 +130,8 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
 
     # 3 and 4. Emit under hard spacing, filling each lane from its own pool.
     quotas = page_quotas(policy, page_size)
-    counts = {lane: 0 for lane in policy.lane_priority}
+    quotas.setdefault(BACKFILL_LANE, 0)
+    counts = {lane: 0 for lane in (*policy.lane_priority, BACKFILL_LANE)}
     emitted: list[LanedCandidate] = []
     remaining = list(kept)
     donor_used = 0
@@ -170,7 +172,7 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
         # Rung 1: ignore QUOTAS, keep spacing. Donor order is fixed: the pool
         # whose over-representation is least harmful goes first, and surprise is
         # last because draining exploration is what deletes the variety.
-        for lane in ("interested", "updates", "hot", "surprise"):
+        for lane in (*BACKFILL_ORDER,):
             while len(emitted) < page_size:
                 choice = next((item for item in remaining
                                if item.lane == lane and _spacing_legal(emitted, item, policy)), None)
@@ -185,7 +187,7 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
         # Rung 2: relax TOPIC spacing only. Source and event-group adjacency stay
         # hard, because "no two cards in a row from the same outlet" is an
         # acceptance invariant and a reader can see it being broken.
-        for lane in ("interested", "updates", "hot", "surprise"):
+        for lane in (*BACKFILL_ORDER,):
             while len(emitted) < page_size:
                 choice = next((item for item in remaining if item.lane == lane
                                and _spacing_legal(emitted, item, policy, topics=False)), None)
@@ -198,11 +200,15 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
                     relaxed.append("topic_spacing")
 
     short: list[Mapping[str, object]] = []
+    backfilled = sum(1 for item in emitted if item.lane == BACKFILL_LANE)
     for lane in policy.lane_priority:
         served = sum(1 for item in emitted if item.lane == lane)
         if served < quotas[lane]:
             short.append({"lane": lane, "quota": quotas[lane], "served": served,
                           "shortfall": quotas[lane] - served,
+                          # Reported separately: "the page was full" and "the page
+                          # was full of cards that met no rule" are different facts.
+                          "backfilled": backfilled,
                           "relaxed": list(relaxed),
                           "reason": "lane_pool_exhausted" if donor_used or len(emitted) < page_size
                                     else "spacing_constraint"})

@@ -21,14 +21,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
-from .composition import CompositionPolicy
+from .composition import BACKFILL_LANE, CompositionPolicy
 from .profile import BehaviorProfile
 
 
 # The order a starving lane's slots are given away in. Aligned first because it
 # is the largest block and its over-representation is the least harmful; surprise
 # last because draining exploration deletes the variety the recipe exists to add.
-BACKFILL_ORDER = ("interested", "updates", "hot", "surprise")
+BACKFILL_ORDER = ("interested", "updates", "hot", "surprise", BACKFILL_LANE)
 
 
 @dataclass(frozen=True)
@@ -90,10 +90,9 @@ def assign_lane(row: Mapping[str, object], *, profile: BehaviorProfile, policy: 
     for lane in policy.lane_priority:
         if lane in eligible:
             return lane, eligible[lane]
-    # Eligible for nothing: it is still a story, and the freshest of them is the
-    # honest fallback. It keeps its "fresh" label, so the reader is never shown
-    # an unlabeled card.
-    return "updates", -age
+    # Eligible for nothing. It is still a story and it can still fill a page, but
+    # it is NOT fresh, not hot, not for her and not a surprise, so it says so.
+    return BACKFILL_LANE, -age
 
 
 def lane_window_quotas(policy: CompositionPolicy, size: int) -> dict[str, int]:
@@ -121,7 +120,7 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
     window_size = policy.candidate_window_size if size is None else size
     laned = [LanedCandidate(str(row["story_id"]), *assign_lane(row, profile=profile, policy=policy, now=now), row)
              for row in rows if row.get("story_id")]
-    pools: dict[str, list[LanedCandidate]] = {lane: [] for lane in policy.lane_priority}
+    pools: dict[str, list[LanedCandidate]] = {lane: [] for lane in (*policy.lane_priority, BACKFILL_LANE)}
     for candidate in laned:
         pools[candidate.lane].append(candidate)
     for lane in pools:
@@ -167,7 +166,10 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
     # fresh swallow every leftover slot and undo the mix; filling only to exactly
     # one page leaves the finalizer nothing to work with, and a single duplicate
     # or already-read story then returns 24 cards. The headroom is that margin.
-    target = min(window_size, policy.page_size + max(5, policy.page_size // 5))
+    # Every page the run promises, not one page. run.max_pages_per_run says the
+    # frozen order is worth N pages; a window that backfills to one page plus a
+    # margin made page 2 structurally five cards whenever backfill fired.
+    target = min(window_size, policy.page_size * max(1, policy.max_pages_per_run))
     for lane in BACKFILL_ORDER:
         if len(chosen) >= target:
             break
@@ -175,6 +177,6 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
             if len(chosen) >= target:
                 break
             admit(candidate)
-    priority = {lane: index for index, lane in enumerate(policy.lane_priority)}
+    priority = {lane: index for index, lane in enumerate((*policy.lane_priority, BACKFILL_LANE))}
     chosen.sort(key=lambda item: (priority[item.lane], -item.lane_score, item.story_id))
     return tuple(chosen)

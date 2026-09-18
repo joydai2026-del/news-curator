@@ -704,7 +704,7 @@
   // Version 3 adds the element labels: why this story is in front of her.
   const M2_LABEL_FIELDS = ["lane", "lane_label", "surprise_label", "exclusive_label", "also_covered_by"];
   const M2_CARD_FIELDS_V3 = [...M2_CARD_FIELDS, ...M2_LABEL_FIELDS];
-  const M2_LANES = ["updates", "hot", "interested", "surprise"];
+  const M2_LANES = ["updates", "hot", "interested", "surprise", "more"];
   // Same bound the database column carries, so an oversized translated summary
   // is rejected here rather than rendered.
   const MAX_TRANSLATED_SUMMARY = 32000;
@@ -720,6 +720,7 @@
       emptyExclusive: (other) => `No stories that only the ${other} press carried today`,
       untranslated: (other) => `Not translated. Shown in ${other}.`,
       endOfRun: "You have read everything in this run. Come back later for more.",
+      alsoCovered: (count) => `Also in ${count} other ${count === 1 ? "source" : "sources"}`,
       search: "Search all retained stories",
     },
     zh: {
@@ -727,6 +728,7 @@
       emptyExclusive: (other) => `今天没有只有${other === "English" ? "英文" : "中文"}媒体报道的新闻`,
       untranslated: (other) => `未翻译，按原文显示。`,
       endOfRun: "这一轮的报道你都读完了，稍后再来看看。",
+      alsoCovered: (count) => `另有 ${count} 家媒体报道`,
       search: "搜索全部保留的报道",
     },
   };
@@ -1256,7 +1258,8 @@
         translation_mark: status === "untranslated"
           ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "",
         element_labels: [entry.lane_label, entry.surprise_label, entry.exclusive_label]
-          .filter((label) => typeof label === "string" && label !== "") };
+          .filter((label) => typeof label === "string" && label !== ""),
+        also_covered_by: Array.isArray(entry.also_covered_by) ? entry.also_covered_by : [] };
     }
     // Every card says why it is on the page. The wording comes from the server,
     // which reads it from config, so renaming a pool never means editing the
@@ -1267,6 +1270,15 @@
       row.element_labels.forEach((text) => strip.append(element("span", "element-label", text)));
       strip.dataset.lane = row.lane || "";
       card.querySelector(".story-heading")?.after(strip);
+    }
+    // The outlets whose duplicate rows collapsed into this one. It was computed,
+    // persisted and validated, and then never shown: the reader could not tell a
+    // story three outlets carried from one nobody else did.
+    function markAlsoCovered(card, row) {
+      if (!row.also_covered_by || !row.also_covered_by.length) return;
+      const line = element("p", "also-covered", strings().alsoCovered(row.also_covered_by.length));
+      line.title = row.also_covered_by.join(", ");
+      card.querySelector(".story-heading")?.after(line);
     }
     function markUntranslated(card, row) {
       if (!row.translation_mark) return;
@@ -1327,6 +1339,7 @@
         card.dataset.m2Query = (searchBox?.value.trim() || "").toLowerCase();
         markUntranslated(card, row);
         markElementLabels(card, row);
+        markAlsoCovered(card, row);
         const interest = card.querySelector(".interest-action");
         if (interest) {
           const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
@@ -1395,6 +1408,7 @@
         }
         markUntranslated(card, row);
         markElementLabels(card, row);
+        markAlsoCovered(card, row);
         cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });
