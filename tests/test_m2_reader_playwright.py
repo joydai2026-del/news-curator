@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
-import pytest
 from curator.models import Item
 from curator.render import render_site, configure_m2_reader
 from curator.recommendation.service import RankingService, ServicePolicy
@@ -20,7 +19,11 @@ from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.asgi import RankingASGI
 from scripts.build_auth_callback import activate_personalization_link
 
-playwright = pytest.importorskip('playwright.sync_api')
+# F3: this used to be `pytest.importorskip`, and playwright was pinned in no
+# requirements file and installed by no workflow, so every assertion below
+# reported SKIPPED and proved nothing. A hard import is the point: a missing
+# browser stack must fail the run, never quietly pass it.
+from playwright import sync_api as playwright
 ROOT=Path(__file__).resolve().parents[1]
 READER='https://reader.example'
 RANKER='https://ranker.example'
