@@ -584,9 +584,15 @@ def _freeze_page(container, user_id, created_at, cards, *, revision=0, run_id=No
 
 
 def _behavior_revision(container, user_id, revision):
-    _service(container, "insert into public.user_behavior_revisions(user_id, latest_revision, history_generation) "
-             f"values ({_quote(user_id)}::uuid, {revision}, 1) on conflict (user_id) do update "
-             f"set latest_revision = {revision};")
+    """Seed the owner's behavior revision AS THE SUPERUSER.
+
+    service_role deliberately has no grant on user_behavior_revisions (it is an
+    owner-scoped table reached only through the behavior RPCs), so seeding it is
+    test setup and not a claim about what the service can reach.
+    """
+    _sql(container, "insert into public.user_behavior_revisions(user_id, latest_revision, history_generation) "
+         f"values ({_quote(user_id)}::uuid, {revision}, 1) on conflict (user_id) do update "
+         f"set latest_revision = {revision};")
 
 
 def test_a_paid_order_inside_an_open_run_survives_a_behavior_write(db):
