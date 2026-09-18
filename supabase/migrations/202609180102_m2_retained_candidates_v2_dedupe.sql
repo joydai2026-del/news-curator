@@ -13,9 +13,10 @@ begin;
 -- The rule is copied exactly, not reinterpreted, including the part that was got
 -- wrong once and is easy to get wrong again: the representative is chosen inside
 -- a CTE that has already applied the caller's own filters (category, query, and
--- here the lane's age bounds), and the CURSOR is applied afterwards. Filters
--- first means the winner is always a row the caller can see; cursor last means
--- the choice does not depend on which page was asked for.
+-- here the lane's age bounds AND the lane predicate itself), and the CURSOR is
+-- applied afterwards. Filters first means the winner is always a row the caller
+-- can see; cursor last means the choice does not depend on which page was asked
+-- for.
 --
 -- The lane's age bounds count as the caller's filters and therefore belong in
 -- the visible set. A representative chosen outside the age window would be
@@ -85,25 +86,9 @@ begin
                    else now() - make_interval(hours => p_min_age_hours) end;
   trend_cutoff := now() - make_interval(hours => p_trend_window_hours);
   return query
-  with visible as (
-    -- The caller's own filters, and ONLY those. No cursor here.
-    select o.* from public.retained_corpus_observations o
-    where (p_category_id is null or exists (select 1 from public.retained_corpus_categories
-             where story_id = o.story_id and category_id = p_category_id))
-      and (p_query is null or btrim(p_query) = '' or
-        (p_query !~ '[一-龥]' and o.search_document @@ websearch_to_tsquery('simple', p_query)) or
-        (p_query ~ '[一-龥]' and position(lower(btrim(p_query)) in lower(o.title || E'\n' || o.summary)) > 0))
-      and (cutoff is null or o.published_at >= cutoff)
-      and (floor_at is null or o.published_at < floor_at)
-  ), chosen as (
-    select v.* from visible v
-    where p_dedupe_window_hours = 0 or public.m2_story_dedupe_key(v.title) = '' or not exists (
-      select 1 from visible peer
-      where peer.language = v.language
-        and public.m2_story_dedupe_key(peer.title) = public.m2_story_dedupe_key(v.title)
-        and abs(extract(epoch from (peer.published_at - v.published_at))) <= p_dedupe_window_hours * 3600
-        and (peer.published_at, peer.story_id) > (v.published_at, v.story_id))
-  ), scored as (
+  with eligible as (
+    -- The caller's own filters, plus the two values lane membership is decided
+    -- from. No lane predicate yet, no cursor, no dedupe.
     select o.*,
       coalesce(c.category_ids, '[]'::jsonb) as category_ids,
       greatest(
@@ -116,9 +101,37 @@ begin
               where rc.story_id = o.story_id
                 and rc.category_id = any(coalesce(p_profile_categories, '{}'::text[])))
         or o.source_id = any(coalesce(p_profile_sources, '{}'::text[])) as matches_profile
-    from chosen o
+    from public.retained_corpus_observations o
     left join lateral (select jsonb_agg(category_id order by category_id) category_ids
                        from public.retained_corpus_categories where story_id = o.story_id) c on true
+    where (p_category_id is null or exists (select 1 from public.retained_corpus_categories
+             where story_id = o.story_id and category_id = p_category_id))
+      and (p_query is null or btrim(p_query) = '' or
+        (p_query !~ '[一-龥]' and o.search_document @@ websearch_to_tsquery('simple', p_query)) or
+        (p_query ~ '[一-龥]' and position(lower(btrim(p_query)) in lower(o.title || E'\n' || o.summary)) > 0))
+      and (cutoff is null or o.published_at >= cutoff)
+      and (floor_at is null or o.published_at < floor_at)
+  ), visible as (
+    -- LANE MEMBERSHIP BELONGS HERE, BEFORE THE DEDUPE. This is the same shape
+    -- 202609180101 uses for the exclusive lane, and for the same reason. With
+    -- the lane applied afterwards, a newer twin could suppress an older one that
+    -- qualified for hot, for-you or surprise, and then be filtered out itself:
+    -- the lane returned ZERO copies of a story that had a perfectly good one.
+    -- Every filter the caller applied has to be in the set the representative is
+    -- chosen from, or the winner can be a row this call cannot see.
+    select e.* from eligible e
+    where (p_lane is distinct from 'hot' or (e.independent_source_count >= p_trend_min_sources
+                                             and e.published_at >= trend_cutoff))
+      and (p_lane is distinct from 'interested' or e.matches_profile)
+      and (p_lane is distinct from 'surprise' or (not e.matches_profile and not e.source_is_aggregator))
+  ), chosen as (
+    select v.* from visible v
+    where p_dedupe_window_hours = 0 or public.m2_story_dedupe_key(v.title) = '' or not exists (
+      select 1 from visible peer
+      where peer.language = v.language
+        and public.m2_story_dedupe_key(peer.title) = public.m2_story_dedupe_key(v.title)
+        and abs(extract(epoch from (peer.published_at - v.published_at))) <= p_dedupe_window_hours * 3600
+        and (peer.published_at, peer.story_id) > (v.published_at, v.story_id))
   )
   select jsonb_build_object('schema_version', 2, 'story_id', s.story_id, 'title', s.title,
     'summary', s.summary, 'language', s.language, 'canonical_url', s.canonical_url,
@@ -130,14 +143,10 @@ begin
     'category_ids', s.category_ids, 'event_group_id', s.event_group_id,
     'title_translations', s.title_translations, 'summary_translations', s.summary_translations,
     'independent_source_count', s.independent_source_count)
-  from scored s
-  -- The CURSOR, applied last, exactly as 202609180101 does it.
+  from chosen s
+  -- The CURSOR, and only the cursor, applied last.
   where (p_lane = 'hot' or p_before_published_at is null or s.published_at < p_before_published_at
          or (s.published_at = p_before_published_at and s.story_id < p_before_story_id))
-    and (p_lane is distinct from 'hot' or (s.independent_source_count >= p_trend_min_sources
-                                           and s.published_at >= trend_cutoff))
-    and (p_lane is distinct from 'interested' or s.matches_profile)
-    and (p_lane is distinct from 'surprise' or (not s.matches_profile and not s.source_is_aggregator))
     and (p_before_source_count is null or
          (s.independent_source_count, s.published_at, s.story_id)
            < (p_before_source_count, p_before_published_at, p_before_story_id))

@@ -400,6 +400,83 @@ def test_the_lane_rpc_inherits_the_dedupe_rule(db):
     assert len(both) == 2, 'the dedupe window is not operable'
 
 
+def _twins(container, slug, title, *, older_source, newer_source,
+           older_published='2026-09-18T09:00:00Z', newer_published='2026-09-18T09:30:00Z',
+           categories=None):
+    """Two rows, one headline, two addresses. The older one is the interesting
+    one: the dedupe rule keeps the NEWER, so a lane that only the older
+    qualifies for is where a pre-dedupe lane filter earns its place."""
+    older = f'https://example.test/{slug}-older'
+    newer = f'https://example.test/{slug}-newer'
+    rows = [_row(older, title=title, source_id=older_source, source_name=older_source,
+                 published_at=older_published, source_observed_at=older_published,
+                 category_ids=categories or ['world']),
+            _row(newer, title=title, source_id=newer_source, source_name=newer_source,
+                 published_at=newer_published, source_observed_at=newer_published,
+                 category_ids=categories or ['world'])]
+    _service(container, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+    return _story_id(older), _story_id(newer)
+
+
+def test_a_lane_keeps_the_twin_that_qualifies_for_it_hot(db):
+    """Only the OLDER twin is hot. With the lane applied after the dedupe, the
+    newer one suppressed it and was then filtered out itself, and the hot lane
+    returned zero copies of a story that had a perfectly good one."""
+    title = 'Twins where only the older is hot'
+    older, newer = _twins(db, 'lane-twin-hot', title,
+                          older_source='wire-hot', newer_source='wire-quiet')
+    coverage = [{'story_id': older, 'publisher_id': publisher, 'is_independent': True,
+                 'first_seen_at': '2026-09-18T09:00:00Z'} for publisher in ('a', 'b', 'c')]
+    _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
+    served = [row for row in _lane(db, 'hot') if row['title'] == title]
+    assert [row['story_id'] for row in served] == [older], served
+    # The unfiltered projection still prefers the newer one: the lane changed
+    # which rows were VISIBLE, not the dedupe rule itself.
+    everything = [row for row in _lane(db) if row['title'] == title]
+    assert [row['story_id'] for row in everything] == [newer], everything
+
+
+def test_a_lane_keeps_the_twin_that_qualifies_for_it_interested(db):
+    title = 'Twins where only the older is for you'
+    older, newer = _twins(db, 'lane-twin-interested', title,
+                          older_source='liked-wire', newer_source='unknown-wire')
+    served = [row for row in _lane(db, 'interested', sources=['liked-wire'])
+              if row['title'] == title]
+    assert [row['story_id'] for row in served] == [older], served
+
+
+def test_a_lane_keeps_the_twin_that_qualifies_for_it_surprise(db):
+    """Here the NEWER twin is the one on profile, so it is excluded from
+    surprise and the older must survive the collapse."""
+    title = 'Twins where only the older is a surprise'
+    older, newer = _twins(db, 'lane-twin-surprise', title,
+                          older_source='odd-wire', newer_source='liked-wire')
+    served = [row for row in _lane(db, 'surprise', sources=['liked-wire'])
+              if row['title'] == title]
+    assert [row['story_id'] for row in served] == [older], served
+
+
+def test_each_lane_still_pages_without_skipping_or_repeating(db):
+    """The page-boundary property, per lane, after moving the lane predicate into
+    the pre-dedupe set."""
+    for lane in ('updates', 'interested', 'surprise'):
+        arguments = {'sources': ['liked-wire']} if lane in ('interested', 'surprise') else {}
+        whole = _lane(db, lane, limit=50, **arguments)
+        if len(whole) < 3:
+            continue
+        head = whole[0]
+        rest = _lane(db, lane, limit=50, **arguments)
+        assert [row['story_id'] for row in rest] == [row['story_id'] for row in whole], lane
+        paged = _service(db, "select coalesce(jsonb_agg(value), '[]'::jsonb) from "
+            f"public.m2_retained_candidates_v2(p_lane => {_quote(lane)}, "
+            + ("p_profile_sources => array['liked-wire']::text[], " if arguments else "")
+            + f"p_before_published_at => {_quote(head['published_at'])}::timestamptz, "
+            f"p_before_story_id => {_quote(head['story_id'])}, p_limit => 50) as rows(value);")
+        after = json.loads(_last(paged))
+        assert head['story_id'] not in {row['story_id'] for row in after}, lane
+        assert [row['story_id'] for row in after] == [row['story_id'] for row in whole[1:]], lane
+
+
 def test_the_lane_rpc_returns_the_phase_one_overlay_fields(db):
     row = _by_story(_lane(db))[_story_id(MIXED)]
     assert set(row) >= {'event_group_id', 'title_translations', 'summary_translations',
