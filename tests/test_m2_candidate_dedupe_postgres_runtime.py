@@ -190,17 +190,21 @@ def test_the_representative_does_not_change_with_the_page_boundary(db):
     # A per-page rule would collapse a duplicate on page 1 and then show the
     # loser again on page 2, because page 2's window no longer contains the
     # winner. The rule here is decided against the whole table, so it cannot.
-    # Distinctness is asserted per (language, title): the same headline in two
-    # languages is two stories and is SUPPOSED to appear twice.
+    # The property is about the COLLAPSED rows: a row hidden on page 1 must stay
+    # hidden on page 2, where the winner is no longer inside the window. Titles
+    # that legitimately repeat (two languages, or a recurring headline outside
+    # the window) are two stories and must keep appearing.
     rows = _candidates(db, "public.m2_retained_candidates(null,null,null,null,3)")
     assert len(rows) == 3
     last = rows[-1]
     more = _candidates(db, "public.m2_retained_candidates(null,null,"
                            f"{_quote(last['published_at'])}::timestamptz,{_quote(last['story_id'])},100)")
-    seen = [(row['language'], ' '.join(row['title'].lower().split())) for row in rows + more]
-    assert len(seen) == len(set(seen)), seen
+    assert more
     ids = [row['story_id'] for row in rows + more]
     assert len(ids) == len(set(ids)), ids
+    collapsed = {_story_id('https://example.test/fold-a'),
+                 _story_id('https://www.rfi.fr/cn/a-1?x=1')}
+    assert not (collapsed & set(ids)), sorted(collapsed & set(ids))
 
 
 def test_a_zero_window_restores_the_uncollapsed_projection(db):
