@@ -33,6 +33,7 @@ MIGRATIONS = (
     'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
     'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
     'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
+    'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -216,7 +217,8 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
                       'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
                       'supabase/migrations/202609180004_m2_retained_corpus_prune.sql',
                       'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
-                      'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql'):
+                      'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
+                      'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)
         assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
 
@@ -643,6 +645,110 @@ def test_an_expired_claim_is_taken_over_and_a_live_one_is_not(db):
     _service(db, "update public.m2_reading_run_views set ranking_claimed_at = now() - interval '10 minutes' "
                  f"where run_id = {_quote(run['run_id'])}::uuid;")
     assert _claim(db, run['run_id'], ALL_VIEW)['granted'] is True, 'an expired claim locked her out'
+
+
+def _reserve_claimed(container, run_id, key, token, amount='0.004', user_id=OWNER,
+                     request_id=None):
+    request_id = request_id or str(uuid.uuid4())
+    result = _service(container, "select public.m2_reserve_ranker_budget_claimed("
+        f"{_quote(user_id)}::uuid, {_quote(request_id)}::uuid, {amount}, 2.00, "
+        f"{_quote(run_id)}::uuid, {_quote(key)}, {_quote(token)}::uuid);")
+    return json.loads(_last(result))
+
+
+def test_a_stale_claim_holder_cannot_reserve(db):
+    """The check and the budget move are now one locked transaction. A bare
+    exists() decided on a snapshot and moved money in later statements, so under
+    READ COMMITTED a takeover landing in between let a stale holder reserve."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    first = _claim(db, run['run_id'], ALL_VIEW)
+    assert first['granted'] is True
+    # The takeover, exactly as a second request would do it.
+    _service(db, "update public.m2_reading_run_views set ranking_claimed_at = now() - interval '10 minutes' "
+                 f"where run_id = {_quote(run['run_id'])}::uuid;")
+    second = _claim(db, run['run_id'], ALL_VIEW)
+    assert second['granted'] is True and second['token'] != first['token']
+
+    stale = _reserve_claimed(db, run['run_id'], ALL_VIEW, first['token'])
+    assert stale == {'reserved': False, 'refusal': 'claim_lost'}, stale
+    live = _reserve_claimed(db, run['run_id'], ALL_VIEW, second['token'])
+    assert live['reserved'] is True
+    # Exactly one reservation exists for this run's view.
+    rows = _sql(db, "select count(*) from public.m2_ranker_reservations "
+                    f"where user_id = {_quote(OWNER)}::uuid;")
+    assert _last(rows) == '1', 'a stale holder reserved anyway'
+
+
+def test_a_claim_and_a_claimed_reserve_cannot_interleave(db):
+    """Both take the same row lock, so under contention the reserve either wins
+    the lock and succeeds, or reads the settled takeover and refuses. What must
+    never happen is two reservations for one view."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.m2_ranker_reservations where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.m2_ranker_daily_budget where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    held = _claim(db, run['run_id'], ALL_VIEW)
+    _service(db, "update public.m2_reading_run_views set ranking_claimed_at = now() - interval '10 minutes' "
+                 f"where run_id = {_quote(run['run_id'])}::uuid;")
+
+    def session(statement):
+        process = subprocess.Popen(
+            ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return process, statement
+
+    prefix = ("set role service_role;"
+              "set request.jwt.claims = '{\"role\":\"service_role\"}';")
+    # A: the slow holder, reserving inside a transaction that pauses first.
+    slow = (prefix + "begin; select pg_sleep(0.4); select public.m2_reserve_ranker_budget_claimed("
+            f"{_quote(OWNER)}::uuid, gen_random_uuid(), 0.004, 2.00, {_quote(run['run_id'])}::uuid, "
+            f"{_quote(ALL_VIEW)}, {_quote(held['token'])}::uuid); commit;")
+    # B: the takeover, arriving while A is asleep.
+    takeover = (prefix + "select pg_sleep(0.1); select public.m2_claim_run_ranking("
+                f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
+                "gen_random_uuid(), 60);")
+    processes = [subprocess.Popen(
+        ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(2)]
+    outputs = [processes[0].communicate(slow)[0], processes[1].communicate(takeover)[0]]
+    assert all(process.returncode == 0 for process in processes), outputs
+    rows = _sql(db, "select count(*) from public.m2_ranker_reservations "
+                    f"where user_id = {_quote(OWNER)}::uuid;")
+    assert int(_last(rows)) <= 1, 'two reservations were created for one view'
+
+
+def test_eight_sessions_racing_the_claim_then_the_reserve(db):
+    """The eight-session claim test, carried through to the money: only the
+    granted caller may reserve."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.m2_ranker_reservations where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.m2_ranker_daily_budget where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    statement = ("set role service_role;"
+                 "set request.jwt.claims = '{\"role\":\"service_role\"}';"
+                 "select public.m2_claim_run_ranking("
+                 f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
+                 "gen_random_uuid(), 60);")
+    processes = [subprocess.Popen(
+        ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(8)]
+    answers = [json.loads(process.communicate(statement)[0].strip().splitlines()[-1])
+               for process in processes]
+    winners = [answer for answer in answers if answer['granted']]
+    assert len(winners) == 1
+    for answer in answers:
+        outcome = _reserve_claimed(db, run['run_id'], ALL_VIEW,
+                                   answer['token'] or str(uuid.uuid4()))
+        assert outcome['reserved'] is (answer['granted'] is True), outcome
+    rows = _sql(db, "select count(*) from public.m2_ranker_reservations "
+                    f"where user_id = {_quote(OWNER)}::uuid;")
+    assert _last(rows) == '1', 'more than one caller reserved'
 
 
 def test_a_losing_bind_cannot_overwrite_the_winners_order_in_sql(db):

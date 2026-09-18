@@ -14,36 +14,53 @@ begin;
 -- flight. This one is the backstop for everything that rule cannot see: the
 -- holder re-checks its claim IN THE SAME TRANSACTION as the reservation, so a
 -- caller whose claim has moved on spends nothing at all.
+-- RETURNS AN OBJECT, not a boolean, so "you lost the claim" and "you are out of
+-- budget" are different answers. It deliberately does NOT raise on a lost claim:
+-- losing a race is normal, the caller already knows how to serve the winner's
+-- order, and raising would turn a handled race into an error page.
 create or replace function public.m2_reserve_ranker_budget_claimed(
   p_user_id uuid, p_request_id uuid, p_amount_usd numeric, p_daily_limit_usd numeric,
   p_run_id uuid, p_eligibility_key text, p_claim_token uuid
-) returns boolean language plpgsql security definer set search_path = pg_catalog, public as $$
+) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare today date := (statement_timestamp() at time zone 'utc')::date; accepted boolean := false;
+        live_token uuid; locked boolean := false;
 begin
-  if p_amount_usd <= 0 or p_daily_limit_usd <= 0 or p_amount_usd > p_daily_limit_usd then return false; end if;
-  -- The whole point of this function. A caller holding a stale claim is refused
-  -- BEFORE any capacity moves, and the refusal is indistinguishable from a
-  -- budget refusal to everything downstream, which already knows how to fall
-  -- back safely.
+  if p_amount_usd <= 0 or p_daily_limit_usd <= 0 or p_amount_usd > p_daily_limit_usd then
+    return jsonb_build_object('reserved', false, 'refusal', 'invalid_amount');
+  end if;
   if p_claim_token is not null then
-    if not exists (
-      select 1 from public.m2_reading_run_views v
-        join public.m2_reading_runs r on r.run_id = v.run_id and r.user_id = p_user_id
+    -- LOCK THE VIEW ROW FIRST, and hold it for the rest of the transaction.
+    -- A bare `exists` check decided on a snapshot and then moved money in later
+    -- statements: under READ COMMITTED a takeover lands in between, and a stale
+    -- holder reserves and calls the provider anyway. The claim RPC takes the
+    -- same lock, so the two cannot interleave.
+    select v.ranking_claim_token into live_token
+      from public.m2_reading_run_views v
       where v.run_id = p_run_id and v.eligibility_key = p_eligibility_key
-        and v.ranking_claim_token = p_claim_token
-    ) then
-      return false;
+        and exists (select 1 from public.m2_reading_runs r
+                    where r.run_id = v.run_id and r.user_id = p_user_id)
+      for update;
+    locked := found;
+    if not locked or live_token is distinct from p_claim_token then
+      return jsonb_build_object('reserved', false, 'refusal', 'claim_lost');
     end if;
   end if;
   insert into public.m2_ranker_daily_budget(user_id,budget_date) values(p_user_id,today) on conflict do nothing;
   update public.m2_ranker_daily_budget set reserved_usd=reserved_usd+p_amount_usd
    where user_id=p_user_id and budget_date=today and spent_usd+reserved_usd+p_amount_usd <= p_daily_limit_usd
+     -- Predicated on the claim as well, so even a lock that was somehow not
+     -- held cannot move capacity for a holder whose token has moved on.
+     and (p_claim_token is null or exists (
+       select 1 from public.m2_reading_run_views v
+       where v.run_id = p_run_id and v.eligibility_key = p_eligibility_key
+         and v.ranking_claim_token = p_claim_token))
    returning true into accepted;
   if coalesce(accepted,false) then
     insert into public.m2_ranker_reservations(request_id,user_id,budget_date,reserved_usd,status)
       values(p_request_id,p_user_id,today,p_amount_usd,'reserved');
+    return jsonb_build_object('reserved', true, 'refusal', '');
   end if;
-  return coalesce(accepted,false);
+  return jsonb_build_object('reserved', false, 'refusal', 'budget');
 end;
 $$;
 

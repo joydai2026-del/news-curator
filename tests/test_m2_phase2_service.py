@@ -230,12 +230,13 @@ class Store:
 
     def reserve_budget_claimed(self, *, run_id, eligibility_key, claim_token, **kwargs):
         # The SQL refuses a caller whose claim has moved on, BEFORE any capacity
-        # moves. Reproduced here, because a fake that reserves regardless cannot
-        # catch a takeover that double-pays.
+        # moves, and says WHICH refusal it is. Reproduced here, because a fake
+        # that reserves regardless cannot catch a takeover that double-pays.
         view = self._view(run_id, eligibility_key)
         if view["claim_token"] != claim_token:
-            return False
-        return self.reserve_budget(**kwargs)
+            return {"reserved": False, "refusal": "claim_lost"}
+        reserved = self.reserve_budget(**kwargs)
+        return {"reserved": reserved, "refusal": "" if reserved else "budget"}
 
     def settle_budget(self, **kwargs):
         self.settlements.append(kwargs)

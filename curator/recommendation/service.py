@@ -101,7 +101,7 @@ class RankingStore(Protocol):
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def reserve_budget_claimed(self, *, user_id: str, request_id: str, amount_usd: float,
                                daily_limit_usd: float, run_id: str, eligibility_key: str,
-                               claim_token: str) -> bool: ...
+                               claim_token: str) -> Mapping[str, object]: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
     def save_frozen_order(self, *, user_id: str, request_id: str, bindings: Mapping[str, object], cards: Sequence[Mapping[str, object]], page_size: int, expires_at: int, run_id: str | None = None) -> str: ...
     def load_frozen_order(self, *, user_id: str, frozen_order_id: str) -> Mapping[str, object] | None: ...
@@ -856,10 +856,20 @@ class RankingService:
     def _reserve(self, owner, request_id, estimate, run, eligibility_key, claim_token):
         """Reserve, re-validating the claim in the same transaction when held."""
         if claim_token and run and run.get("run_id"):
-            return self._store.reserve_budget_claimed(user_id=owner.user_id, request_id=request_id,
+            answer = self._store.reserve_budget_claimed(user_id=owner.user_id, request_id=request_id,
                 amount_usd=estimate, daily_limit_usd=self._policy.daily_cost_limit_usd,
                 run_id=str(run["run_id"]), eligibility_key=eligibility_key,
                 claim_token=str(claim_token))
+            if not isinstance(answer, Mapping):
+                return False
+            if answer.get("refusal") == "claim_lost":
+                # Losing the claim and running out of budget both mean "do not
+                # call the provider", but they are different facts and an
+                # operator reading this later should not have to guess which.
+                print(json.dumps({"event": "m2_reserve_refused", "reason": "claim_lost",
+                                  "request_id": request_id}, separators=(",", ":")),
+                      file=sys.stderr, flush=True)
+            return answer.get("reserved") is True
         return self._store.reserve_budget(user_id=owner.user_id, request_id=request_id,
             amount_usd=estimate, daily_limit_usd=self._policy.daily_cost_limit_usd)
 

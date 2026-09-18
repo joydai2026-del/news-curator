@@ -32,6 +32,14 @@ begin
   if p_ttl_seconds is null or p_ttl_seconds < 5 or p_ttl_seconds > 600 then
     raise exception 'invalid claim window';
   end if;
+  -- Take the SAME row lock the claimed reservation takes, so a takeover and a
+  -- reservation cannot interleave: whichever gets the lock first, the other one
+  -- reads the settled answer rather than a snapshot from before it.
+  perform 1 from public.m2_reading_run_views v
+    where v.run_id = p_run_id and v.eligibility_key = p_eligibility_key
+      and exists (select 1 from public.m2_reading_runs r
+                  where r.run_id = v.run_id and r.user_id = p_user_id)
+    for update;
   update public.m2_reading_run_views v
     set ranking_claim_token = p_token, ranking_claimed_at = now()
     where v.run_id = p_run_id and v.eligibility_key = p_eligibility_key

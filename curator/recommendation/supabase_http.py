@@ -135,7 +135,11 @@ class SupabaseHTTP:
             body={"p_user_id": user_id, "p_request_id": request_id, "p_amount_usd": amount_usd,
                   "p_daily_limit_usd": daily_limit_usd, "p_run_id": run_id,
                   "p_eligibility_key": eligibility_key, "p_claim_token": claim_token})
-        return result is True
+        # An OBJECT, so "you lost the claim" and "you are out of budget" are
+        # different answers rather than one indistinguishable false.
+        if not isinstance(result, Mapping):
+            raise SupabaseHTTPError("claimed reservation RPC returned a non-object")
+        return result
 
     def owner_states(self, access_token: str, story_ids):
         result = self._request("POST", "/rest/v1/rpc/m2_owner_story_states", token=access_token,
