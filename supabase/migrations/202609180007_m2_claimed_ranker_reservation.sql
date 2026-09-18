@@ -23,7 +23,7 @@ create or replace function public.m2_reserve_ranker_budget_claimed(
   p_run_id uuid, p_eligibility_key text, p_claim_token uuid
 ) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
 declare today date := (statement_timestamp() at time zone 'utc')::date; accepted boolean := false;
-        live_token uuid; locked boolean := false;
+        live_token uuid; locked boolean := false; remaining numeric;
 begin
   if p_amount_usd <= 0 or p_daily_limit_usd <= 0 or p_amount_usd > p_daily_limit_usd then
     return jsonb_build_object('reserved', false, 'refusal', 'invalid_amount');
@@ -42,7 +42,8 @@ begin
       for update;
     locked := found;
     if not locked or live_token is distinct from p_claim_token then
-      return jsonb_build_object('reserved', false, 'refusal', 'claim_lost');
+      return jsonb_build_object('reserved', false, 'refusal', 'claim_lost',
+                                'remaining_usd', null);
     end if;
   end if;
   insert into public.m2_ranker_daily_budget(user_id,budget_date) values(p_user_id,today) on conflict do nothing;
@@ -58,9 +59,15 @@ begin
   if coalesce(accepted,false) then
     insert into public.m2_ranker_reservations(request_id,user_id,budget_date,reserved_usd,status)
       values(p_request_id,p_user_id,today,p_amount_usd,'reserved');
-    return jsonb_build_object('reserved', true, 'refusal', '');
+    return jsonb_build_object('reserved', true, 'refusal', '', 'remaining_usd', null);
   end if;
-  return jsonb_build_object('reserved', false, 'refusal', 'budget');
+  -- What was left when the refusal happened. A refusal that only says "no" makes
+  -- an operator go and query the ledger by hand to find out how close it was.
+  select greatest(p_daily_limit_usd - (b.spent_usd + b.reserved_usd), 0) into remaining
+    from public.m2_ranker_daily_budget b
+    where b.user_id = p_user_id and b.budget_date = today;
+  return jsonb_build_object('reserved', false, 'refusal', 'budget',
+                            'remaining_usd', coalesce(remaining, p_daily_limit_usd));
 end;
 $$;
 

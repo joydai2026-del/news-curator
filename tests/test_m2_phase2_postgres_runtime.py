@@ -681,6 +681,23 @@ def test_a_stale_claim_holder_cannot_reserve(db):
     assert _last(rows) == '1', 'a stale holder reserved anyway'
 
 
+def test_a_budget_refusal_names_what_was_left(db):
+    """A refusal that only says "no" makes an operator query the ledger by hand
+    to find out how close it was."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.m2_ranker_reservations where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.m2_ranker_daily_budget where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    held = _claim(db, run['run_id'], ALL_VIEW)
+    # Spend almost the whole day, then ask for more than what is left.
+    assert _reserve_claimed(db, run['run_id'], ALL_VIEW, held['token'],
+                            amount='1.99')['reserved'] is True
+    refused = _reserve_claimed(db, run['run_id'], ALL_VIEW, held['token'], amount='0.50')
+    assert refused['reserved'] is False and refused['refusal'] == 'budget'
+    assert abs(float(refused['remaining_usd']) - 0.01) < 1e-6, refused
+
+
 def test_a_claim_and_a_claimed_reserve_cannot_interleave(db):
     """Both take the same row lock, so under contention the reserve either wins
     the lock and succeeds, or reads the settled takeover and refuses. What must

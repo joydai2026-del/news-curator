@@ -862,13 +862,18 @@ class RankingService:
                 claim_token=str(claim_token))
             if not isinstance(answer, Mapping):
                 return False
-            if answer.get("refusal") == "claim_lost":
+            refusal = answer.get("refusal")
+            if refusal:
                 # Losing the claim and running out of budget both mean "do not
-                # call the provider", but they are different facts and an
-                # operator reading this later should not have to guess which.
-                print(json.dumps({"event": "m2_reserve_refused", "reason": "claim_lost",
-                                  "request_id": request_id}, separators=(",", ":")),
-                      file=sys.stderr, flush=True)
+                # call the provider", and both used to arrive downstream as one
+                # generic budget_reservation_failed. They are different facts:
+                # one is a race that resolved itself, the other is a day's money
+                # gone. Both are named here, in one shape, with the view they
+                # happened on and what was left.
+                print(json.dumps({"event": "m2_reserve_refused", "reason": str(refusal),
+                                  "request_id": request_id, "view": eligibility_key,
+                                  "remaining_usd": answer.get("remaining_usd")},
+                                 separators=(",", ":")), file=sys.stderr, flush=True)
             return answer.get("reserved") is True
         return self._store.reserve_budget(user_id=owner.user_id, request_id=request_id,
             amount_usd=estimate, daily_limit_usd=self._policy.daily_cost_limit_usd)

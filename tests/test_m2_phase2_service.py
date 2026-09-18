@@ -6,6 +6,7 @@ and a save in another tab no longer throws away a rank that was already paid for
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -236,7 +237,8 @@ class Store:
         if view["claim_token"] != claim_token:
             return {"reserved": False, "refusal": "claim_lost"}
         reserved = self.reserve_budget(**kwargs)
-        return {"reserved": reserved, "refusal": "" if reserved else "budget"}
+        return {"reserved": reserved, "refusal": "" if reserved else "budget",
+                "remaining_usd": None if reserved else 0.0}
 
     def settle_budget(self, **kwargs):
         self.settlements.append(kwargs)
@@ -1274,3 +1276,51 @@ def test_ranking_in_progress_when_the_winner_has_not_bound_yet():
     store.bind_run_frozen_order = taken_over_with_nothing_bound
     with pytest.raises(StaleRankingError, match="ranking_in_progress"):
         rank(subject, store)
+
+
+# --- a refusal says WHICH refusal it was ----------------------------------
+
+def _refusal_lines(captured):
+    return [json.loads(line) for line in captured.err.splitlines()
+            if line.startswith('{"event":"m2_reserve_refused"')]
+
+
+def test_a_lost_claim_and_an_exhausted_budget_are_logged_apart(capsys):
+    """Both mean "do not call the provider", and both used to arrive downstream
+    as one generic budget_reservation_failed. One is a race that resolved itself;
+    the other is a day's money gone."""
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    key = subject._eligibility_key(None, None, False)
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
+                                   "claim_token": None, "claim_expired": False}
+
+    original = store.reserve_budget_claimed
+
+    def taken_over_first(**kwargs):
+        store.views[("run-1", key)]["claim_token"] = "a-later-request"
+        return original(**kwargs)
+
+    store.reserve_budget_claimed = taken_over_first
+    with pytest.raises(StaleRankingError, match="ranking_in_progress"):
+        rank(subject, store)
+    lost = _refusal_lines(capsys.readouterr())
+    assert [entry["reason"] for entry in lost] == ["claim_lost"]
+    assert lost[0]["view"] == key and "remaining_usd" in lost[0]
+
+    # Now the budget branch, which used to be silent.
+    spent = PaidStore(events=liked_events())
+    spent.reserve_budget = lambda **kwargs: spent.reservations.append(kwargs) or False
+    budget_subject = paid(spent)
+    rank(budget_subject, spent)
+    refused = _refusal_lines(capsys.readouterr())
+    assert [entry["reason"] for entry in refused] == ["budget"]
+    assert refused[0]["remaining_usd"] == 0.0
+    assert refused[0]["view"] == budget_subject._eligibility_key(None, None, False)
+
+
+def test_a_successful_reservation_logs_no_refusal(capsys):
+    store = PaidStore(events=liked_events())
+    rank(paid(store), store)
+    assert _refusal_lines(capsys.readouterr()) == []
