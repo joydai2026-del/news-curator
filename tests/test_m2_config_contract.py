@@ -97,16 +97,33 @@ def test_check_4_window_must_be_at_least_one_page(document):
         parse_composition_policy(document)
 
 
-def test_check_5_max_pages_must_match_the_window_arithmetic(document):
-    document["run"]["max_pages_per_run"] = 4
+def test_check_5_the_cap_may_not_be_below_what_the_window_already_holds(document):
+    """The window holds 2 pages. A cap of 1 would mean the run promises fewer
+    pages than it has already ranked and paid for."""
+    document["run"]["max_pages_per_run"] = 1
     with pytest.raises(CompositionPolicyError, match="max_pages_per_run"):
         parse_composition_policy(document)
 
 
-def test_check_5_raising_the_window_raises_the_reachable_page_count(document):
+def test_check_5_a_cap_above_the_window_is_allowed_because_pages_continue(document):
+    """Pages past the frozen order are continuations composed by the recipe with
+    no model call, so the cap may exceed what the window itself holds."""
+    document["run"]["max_pages_per_run"] = 6
+    assert parse_composition_policy(document).max_pages_per_run == 6
+
+
+def test_check_9_the_general_pool_must_fit_one_call(document):
+    """The pool is fetched one page wider than the window, in one call that
+    returns at most 100 rows. A pair that cannot be served is refused rather
+    than clamped, which is how "wider" silently became "the same size"."""
+    document["composition"]["candidate_window_size"] = 100
+    document["composition"]["page_size"] = 25
+    document["run"]["max_pages_per_run"] = 4
+    with pytest.raises(CompositionPolicyError, match="must not exceed 100"):
+        parse_composition_policy(document)
+    # Exactly 100 is the boundary and is allowed.
     document["composition"]["candidate_window_size"] = 75
-    document["run"]["max_pages_per_run"] = 3
-    assert parse_composition_policy(document).max_pages_per_run == 3
+    assert parse_composition_policy(document).candidate_window_size == 75
 
 
 def test_check_7_a_weight_for_an_uncaptured_action_fails(document):

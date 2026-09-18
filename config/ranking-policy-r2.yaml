@@ -98,8 +98,15 @@ run:
   # an hourly reader would stay in one run for ever and would never be learned
   # from. A run therefore ends at whichever comes first, idle OR age.
   max_minutes: 60
-  # MUST equal floor(candidate_window_size / page_size). 50 / 25 = 2.
-  max_pages_per_run: 2
+  # How many pages one "load more" chain serves before the run is over. The
+  # first floor(candidate_window_size / page_size) of them are the model-ranked
+  # frozen order; the rest are continuations composed by the recipe alone. Must
+  # be at least that floor, because the window already holds that many pages.
+  #
+  # It is a STOP, and that is the point: without it every page past the frozen
+  # order reached further into older news and came back entirely "More", for
+  # ever. A run that has run out says so.
+  max_pages_per_run: 4
   immediate_negative_filter: true
   # How long one "less like this" keeps hiding a source or a topic. It used to
   # hide it for ever on every page: one tap in September would still be removing

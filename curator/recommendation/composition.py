@@ -78,10 +78,6 @@ class CompositionPolicy:
     def label_for(self, lane: str) -> str:
         return self.lane_labels[lane]
 
-    def quota_for(self, lane: str, size: int) -> int:
-        """Backfill has no quota: it fills what the four pools could not."""
-        return self.lane_quota(lane, size) if lane in self.lane_ratios else 0
-
     def exclusive_label(self, display_language: str) -> str:
         """"Only in Chinese press" is DERIVED, never stored as English text.
 
@@ -237,9 +233,24 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
     # Check 4: a window smaller than a page cannot fill one.
     if window < page_size:
         raise CompositionPolicyError("composition.candidate_window_size must be at least composition.page_size")
-    # Check 5: a page count the window cannot supply is a promise, not a config.
-    if pages != window // page_size:
-        raise CompositionPolicyError("run.max_pages_per_run must equal candidate_window_size // page_size")
+    # Check 5: the model-ranked window must supply at least its own share of the
+    # run's pages. It no longer has to supply ALL of them: pages past the frozen
+    # order are continuations, composed by the recipe with no model call, so the
+    # cap is how many pages a run serves in total and the window is the part of
+    # them the model ordered. A cap BELOW what the window already holds is still
+    # a contradiction, and still refused.
+    if pages < window // page_size:
+        raise CompositionPolicyError(
+            "run.max_pages_per_run must be at least candidate_window_size // page_size "
+            f"({window // page_size}); the window already holds that many pages")
+    # Check 9: the general pool is always one page wider than the window, and a
+    # single RPC call returns at most 100 rows. Refuse a pair that cannot be
+    # served rather than silently clamping it, which is how "wider" quietly
+    # became "the same size" for a window of 100.
+    if window + page_size > 100:
+        raise CompositionPolicyError(
+            "composition.candidate_window_size + composition.page_size must not exceed 100: "
+            "the general pool is fetched one page wider than the window in a single call")
     # Check 8: the corpus must still hold the window the feed reads.
     #
     # The prune deletes by published_at, and trend.window_hours may be set as

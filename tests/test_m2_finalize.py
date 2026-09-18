@@ -51,12 +51,19 @@ def assert_invariants(page, policy, page_size, *, owner_states=None):
     assert len(page.cards) <= page_size
     if len(page.cards) < page_size:
         assert page.short_lane_reasons
-    # 2. Per-lane counts within one of quota, or a recorded shortfall.
+    # 2. Per-lane counts within one of quota, or a shortfall recorded FOR THAT
+    # LANE. The old form ended in "or short_lanes", which passed whenever any
+    # lane anywhere had recorded anything, so it asserted nothing at all.
     short_lanes = {entry["lane"] for entry in page.short_lane_reasons}
+    donated = bool(short_lanes)
     for lane, quota in quotas.items():
         served = sum(1 for card in page.cards if card.lane == lane)
-        assert served <= quota or short_lanes, f"{lane} over quota with no shortfall recorded"
-        assert abs(served - quota) <= 1 or lane in short_lanes or short_lanes
+        if served > quota:
+            # Over quota is only legitimate as backfill for a lane that recorded
+            # its own shortfall.
+            assert donated, f"{lane} is over quota and no lane recorded a shortfall"
+        elif served < quota:
+            assert lane in short_lanes, f"{lane} is under quota with no shortfall recorded for it"
     # 3. No duplicate headline, URL or event group.
     for key in ("title", "canonical_url", "event_group_id"):
         values = [card.row[key] for card in page.cards if card.row.get(key)]

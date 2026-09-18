@@ -22,7 +22,7 @@ from curator.contracts.ranking_request import (
     RankingRequest,
 )
 
-from .composition import CompositionPolicy
+from .composition import BACKFILL_LANE, CompositionPolicy
 from .finalize import finalize_order
 from .profile import BehaviorProfile, build_profile
 from .rankllm_adapter import BudgetState, RankLLMAdapter
@@ -336,8 +336,10 @@ class RankingService:
                 "short_lane_reasons": [dict(entry) for entry in finalization.short_lane_reasons],
                 "calibration_kl": finalization.calibration_kl,
                 "calibration_alarm": finalization.calibration_alarm,
+                # Including the backfill lane: a page counted as 25 while
+                # reporting 7/4/11/3 was hiding where the other card came from.
                 "lane_counts": {lane: sum(1 for item in finalization.cards if item.lane == lane)
-                                for lane in composition.lane_priority}})
+                                for lane in (*composition.lane_priority, BACKFILL_LANE)}})
         bindings.update({"eligibility": {"category": category_id, "query": query},
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
             "corpus_start": dict(corpus_cursor), "excluded_story_ids": list(excluded_set),
@@ -379,6 +381,14 @@ class RankingService:
         offset = int(payload["offset"])
         cards = list(frozen["cards"])
         size = int(frozen.get("page_size", self._policy.maximum_page_size))
+        composition = self._policy.composition
+        if (composition is not None and size > 0
+                and offset // size >= composition.max_pages_per_run):
+            # The run has served every page it promises. Reaching further would
+            # keep returning older and older stories that met no pool's rule, so
+            # the honest answer is that this run is over.
+            return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
+                    "cards": [], "next_cursor": None, "end_of_run": True}
         if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
             # F7, the branch that used to re-rank. Inside a reading run there is
             # never a second provider call: load more browses OLDER news, in the
@@ -754,7 +764,10 @@ class RankingService:
                 # page the run promises, so a pool the same size as the window
                 # would always be consumed whole and "load more" would never have
                 # older news to reach for.
-                limit=min(100, composition.candidate_window_size + composition.page_size),
+                # Always one page wider than the window, never clamped: the
+                # config validator refuses a window that cannot be served this
+                # way, rather than letting "wider" silently become "the same".
+                limit=composition.candidate_window_size + composition.page_size,
                 before_published_at=before_published, before_story_id=before_story,
                 before_source_count=None):
             story_id = row.get("story_id")

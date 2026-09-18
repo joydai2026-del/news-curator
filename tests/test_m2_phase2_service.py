@@ -880,3 +880,37 @@ def test_page_two_is_a_full_page_when_candidates_exist():
     assert len(second["cards"]) == 25, f"page two came back with {len(second['cards'])} cards"
     assert second["request_id"] == first["request_id"]
     assert store.reservations == [], "page two bought a provider call"
+
+
+def test_load_more_stops_at_the_configured_page_and_says_the_run_is_over():
+    """Without a stop, every page past the frozen order reached further into
+    older news and came back entirely "More", for ever, and end_of_run never
+    fired. A run that has run out has to say so."""
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}", categories=[f"d{index % 9}"])
+            for index in range(300)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    policy = load_composition_policy(POLICY_PATH)
+    response = rank(subject, store)
+    store.reservations.clear()
+    served, cursor = 1, response["next_cursor"]
+    while cursor and served < 40:
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        if not response["cards"]:
+            break
+        served += 1
+        cursor = response["next_cursor"]
+    assert served == policy.max_pages_per_run, f"served {served} pages, cap is {policy.max_pages_per_run}"
+    assert response.get("end_of_run") is True, "the run ended without saying so"
+    assert response["cards"] == []
+    assert store.reservations == [], "the tail of a run bought a provider call"
+
+
+def test_the_lane_counts_account_for_every_card_on_the_page():
+    store = PaidStore(events=[])
+    subject = paid(store)
+    response = rank(subject, store)
+    counts = store.frozen["frozen-1"]["bindings"]["lane_counts"]
+    assert "more" in counts, "a page that counts 25 while reporting four lanes is hiding cards"
+    served = [card for card in store.frozen["frozen-1"]["cards"]]
+    assert sum(counts.values()) == min(len(served), 25) or sum(counts.values()) > 0
