@@ -569,7 +569,14 @@ def test_anonymous_callers_reach_neither_new_table(db):
 
 # --- reviewable pages ------------------------------------------------------
 
-def _freeze_page(container, user_id, created_at, cards, *, revision=0, run_id=None, check=True):
+def _freeze_page(container, user_id, created_at, cards, *, revision=0, run_id=None, check=True,
+                 seed=True):
+    """Freeze one page. By default the owner's behavior revision is seeded to
+    match, so each test stands alone instead of inheriting whatever revision a
+    previous test happened to leave behind. The tests that deliberately bind a
+    MISMATCHED revision pass seed=False and seed it themselves."""
+    if seed:
+        _behavior_revision(container, user_id, revision)
     request_id = str(uuid.uuid4())
     bindings = {"history_generation": 1, "server_commit_revision": revision, "consent_revision": 0,
                 "result_mode": "heuristic", "fallback_reason": "test",
@@ -605,12 +612,13 @@ def test_a_paid_order_inside_an_open_run_survives_a_behavior_write(db):
     cards = [{"story_id": _story_id(MULTI_OUTLET), "title": "Headline", "source_name": "Reuters",
               "lane": "hot", "lane_label": "hot", "surprise_label": None, "exclusive_label": None}]
     # Computed against revision 5, inserted after a write moved it to 7.
-    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5,
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5, seed=False,
                         run_id=run['run_id']) is not None, 'a paid order was discarded'
     # Without a run, the same lag is still refused.
-    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5, check=False) is None
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5, seed=False,
+                        check=False) is None
     # A revision from the FUTURE is refused even inside a run: that is not lag.
-    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=99,
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=99, seed=False,
                         run_id=run['run_id'], check=False) is None
 
 
@@ -621,7 +629,7 @@ def test_a_closed_run_gets_the_strict_check_back(db):
     _behavior_revision(db, OWNER, 7)
     cards = [{"story_id": _story_id(MULTI_OUTLET), "title": "Headline", "source_name": "Reuters",
               "lane": "hot", "lane_label": "hot", "surprise_label": None, "exclusive_label": None}]
-    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5,
+    assert _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards, revision=5, seed=False,
                         run_id=run['run_id'], check=False) is None
 
 
