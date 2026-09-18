@@ -11,6 +11,7 @@ import httpx
 import yaml
 
 from .asgi import RankingASGI
+from .composition import load_composition_policy
 from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import RankingService, ServicePolicy
@@ -91,7 +92,14 @@ def build_application(*, environ=None, policy_path: str | None = None):
         other_lane_enabled=policy.get("other_lane_enabled", True),
         # Required, not defaulted: an empty value used to become a silent
         # fallback, which made ServicePolicy's boot validation unreachable.
-        exclusivity_policy_id=_required(policy, "exclusivity_policy_id"))
+        exclusivity_policy_id=_required(policy, "exclusivity_policy_id"),
+        # The feed recipe. Loaded and VALIDATED at startup, so an out-of-range
+        # composition value fails the boot rather than silently changing the mix.
+        # Unsetting composition_policy is the documented rollback to the
+        # pre-Phase-2 window; it is a config change, not a revert.
+        composition=load_composition_policy(
+            env.get("NEWS_CURATOR_COMPOSITION_POLICY") or policy["composition_policy"])
+            if policy.get("composition_policy") or env.get("NEWS_CURATOR_COMPOSITION_POLICY") else None)
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,

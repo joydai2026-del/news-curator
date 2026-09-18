@@ -29,6 +29,9 @@ class FinalizedPage:
     short_lane_reasons: tuple[Mapping[str, object], ...] = ()
     calibration_kl: float | None = None
     calibration_alarm: bool = False
+    # Candidates neither emitted nor dropped. The next page of the same frozen
+    # order is built from these, so a duplicate can never cross a page boundary.
+    remaining: tuple[LanedCandidate, ...] = ()
 
 
 def page_quotas(policy: CompositionPolicy, size: int) -> dict[str, int]:
@@ -154,9 +157,44 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
                                     else "spacing_constraint"})
 
     kl, alarm = _calibration(emitted, profile, policy)
+    emitted_ids = {item.story_id for item in emitted}
     return FinalizedPage(cards=tuple(emitted),
-                         also_covered_by={story: tuple(names) for story, names in also.items() if names},
-                         short_lane_reasons=tuple(short), calibration_kl=kl, calibration_alarm=alarm)
+                         also_covered_by={story: tuple(names) for story, names in also.items()
+                                          if names and story in emitted_ids},
+                         short_lane_reasons=tuple(short), calibration_kl=kl, calibration_alarm=alarm,
+                         remaining=tuple(remaining))
+
+
+def finalize_order(ordered: Sequence[LanedCandidate], *, policy: CompositionPolicy,
+                   owner_states: Mapping[str, Mapping[str, object]], page_size: int, pages: int,
+                   profile: BehaviorProfile | None = None) -> FinalizedPage:
+    """Finalize the whole frozen order, one page at a time.
+
+    Every page inside the order satisfies the invariants on its own, which is
+    what makes "load more" a slice of an already-correct order rather than a new
+    ranking. The first page's calibration is the reported one: it is the page the
+    reader actually opens on.
+    """
+    cards: list[LanedCandidate] = []
+    also: dict[str, tuple[str, ...]] = {}
+    short: list[Mapping[str, object]] = []
+    remaining = list(ordered)
+    first: FinalizedPage | None = None
+    for index in range(max(1, pages)):
+        page = finalize_page(remaining, policy=policy, owner_states=owner_states,
+                             page_size=page_size, profile=profile)
+        if not page.cards:
+            break
+        first = first or page
+        cards.extend(page.cards)
+        also.update(page.also_covered_by)
+        short.extend({**entry, "page": index + 1} for entry in page.short_lane_reasons)
+        remaining = list(page.remaining)
+    if first is None:
+        return FinalizedPage(cards=(), short_lane_reasons=(), remaining=())
+    return FinalizedPage(cards=tuple(cards), also_covered_by=also, short_lane_reasons=tuple(short),
+                         calibration_kl=first.calibration_kl, calibration_alarm=first.calibration_alarm,
+                         remaining=tuple(remaining))
 
 
 def _calibration(emitted: Sequence[LanedCandidate], profile: BehaviorProfile | None,

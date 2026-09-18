@@ -91,6 +91,33 @@ class SupabaseHTTP:
             before_published, before_story = page[-1]["published_at"], page[-1]["story_id"]
         return rows
 
+    def retained_candidates_v2(self, *, category_id: str | None, query: str | None, lane: str | None,
+                            profile_categories, profile_sources, trend_window_hours: int,
+                            trend_min_sources: int, max_age_hours: int | None, min_age_hours: int | None,
+                            limit: int,
+                            before_published_at: str | None = None, before_story_id: str | None = None):
+        # One request per lane, deliberately not paged: the hot lane orders by
+        # independent source count first, so a published_at keyset cursor does not
+        # describe its ordering. The caller asks for what it needs in one call.
+        page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_v2", token=self._service_token(),
+            key=self._service, body={"p_category_id": category_id, "p_query": query, "p_lane": lane,
+                "p_profile_categories": list(profile_categories), "p_profile_sources": list(profile_sources),
+                "p_trend_window_hours": trend_window_hours, "p_trend_min_sources": trend_min_sources,
+                "p_max_age_hours": max_age_hours, "p_min_age_hours": min_age_hours,
+                "p_before_published_at": before_published_at,
+                "p_before_story_id": before_story_id, "p_limit": min(100, max(1, limit))})
+        if not isinstance(page, list):
+            raise SupabaseHTTPError("candidate RPC returned a non-list")
+        return page
+
+    def open_reading_run(self, *, user_id: str, idle_minutes: int, profile):
+        result = self._request("POST", "/rest/v1/rpc/m2_open_or_join_reading_run", token=self._service_token(),
+            key=self._service, body={"p_user_id": user_id, "p_idle_minutes": idle_minutes,
+                "p_profile": dict(profile)})
+        if not isinstance(result, Mapping):
+            raise SupabaseHTTPError("reading run RPC returned a non-object")
+        return result
+
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool:
         result = self._request("POST", "/rest/v1/rpc/m2_reserve_ranker_budget", token=self._service_token(),
             key=self._service, body={"p_user_id": user_id, "p_request_id": request_id,

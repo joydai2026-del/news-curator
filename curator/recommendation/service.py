@@ -21,7 +21,11 @@ from curator.contracts.ranking_request import (
     RankingRequest,
 )
 
+from .composition import CompositionPolicy
+from .finalize import finalize_order
+from .profile import BehaviorProfile, build_profile
 from .rankllm_adapter import BudgetState, RankLLMAdapter
+from .recipe import LanedCandidate, build_window, lane_window_quotas
 from .supabase_http import SupabaseAuthenticationError
 
 
@@ -44,6 +48,13 @@ class RankingStore(Protocol):
     def retained_candidates_language_exclusive(self, *, display_language: str, query: str | None, limit: int,
                             before_published_at: str | None = None, before_story_id: str | None = None,
                             policy_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
+    def retained_candidates_v2(self, *, category_id: str | None, query: str | None, lane: str | None,
+                            profile_categories: Sequence[str], profile_sources: Sequence[str],
+                            trend_window_hours: int, trend_min_sources: int, max_age_hours: int | None,
+                            min_age_hours: int | None, limit: int, before_published_at: str | None = None,
+                            before_story_id: str | None = None) -> Sequence[Mapping[str, object]]: ...
+    def open_reading_run(self, *, user_id: str, idle_minutes: int,
+                         profile: Mapping[str, object]) -> Mapping[str, object]: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def settle_budget(self, *, user_id: str, request_id: str, actual_usd: float, status: str) -> None: ...
@@ -76,6 +87,10 @@ class ServicePolicy:
     # The pairing policy whose decisions this lane is allowed to serve. A
     # superseded prompt's answers must not survive an upgrade.
     exclusivity_policy_id: str = "pairing-json-v1"
+    # The M2.1 Phase 2 feed recipe. None keeps the pre-Phase-2 window (the newest
+    # `candidate_limit` rows), which is the documented rollback: the recipe is
+    # turned off by unsetting one config path, not by reverting code.
+    composition: CompositionPolicy | None = None
 
     def __post_init__(self) -> None:
         # Two layers, both required, because the gap between them is where F5
@@ -134,15 +149,24 @@ class RankingService:
         before_story = self._optional_string(corpus_cursor.get("before_story_id"))
         if (before_published is None) != (before_story is None):
             raise ValueError("invalid_corpus_cursor")
+        composition = self._policy.composition
+        exclusive = self._is_exclusive_category(category_id)
+        # The reading run: one per visit, at most one open per owner. The profile
+        # is computed once at run open and FROZEN on the run row, so every page
+        # inside the run is explainable afterwards from one stored version.
+        run = self._open_run(owner, snapshot, composition)
+        profile = BehaviorProfile.from_snapshot(run.get("profile_snapshot")) if run else BehaviorProfile()
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
-        if self._is_exclusive_category(category_id):
+        if exclusive:
             rows = self._store.retained_candidates_language_exclusive(
                 display_language=self._policy.display_language, query=query,
                 limit=self._policy.candidate_limit + len(excluded_set) + 1,
                 before_published_at=before_published, before_story_id=before_story,
                 policy_id=self._policy.exclusivity_policy_id,
             )
+        elif composition is not None:
+            rows = self._pool_rows(category_id, query, profile, composition, before_published, before_story)
         else:
             rows = self._store.retained_candidates(
                 category_id=category_id, query=query, limit=self._policy.candidate_limit + len(excluded_set) + 1,
@@ -151,8 +175,22 @@ class RankingService:
         filtered = [row for row in rows if row.get("story_id") not in excluded_set]
         has_more = len(filtered) > self._policy.candidate_limit
         rows = filtered[:self._policy.candidate_limit]
-        next_corpus = ({"before_published_at": rows[-1]["published_at"], "before_story_id": rows[-1]["story_id"]}
-            if rows and has_more else None)
+        laned: tuple[LanedCandidate, ...] = ()
+        if composition is not None:
+            # THIS is the product: four labeled pools with quotas and caps. The
+            # model only reorders what the recipe hands it.
+            laned = build_window(filtered, profile=profile, policy=composition,
+                                 now=self._now(), size=composition.candidate_window_size)
+            rows = [item.row for item in laned]
+            has_more = len(filtered) > len(rows)
+            # The recipe's window is no longer ordered by publication time, so
+            # the corpus cursor is the OLDEST row of the pool that was read, not
+            # the last row of the window.
+            boundary = min(filtered, key=lambda item: (str(item["published_at"]), str(item["story_id"]))) if filtered else None
+        else:
+            boundary = rows[-1] if rows else None
+        next_corpus = ({"before_published_at": boundary["published_at"], "before_story_id": boundary["story_id"]}
+            if boundary is not None and has_more else None)
         request_id = str(uuid.uuid4())
         request = self._request(request_id, owner, snapshot, rows, query)
         processing_allowed = bool(snapshot.get("learning_enabled") and snapshot.get("provider_processing_enabled"))
@@ -207,10 +245,37 @@ class RankingService:
         latest = self._store.history_snapshot(token)
         self._assert_fresh(snapshot, latest)
         owner_states = self._store.owner_states(token, [str(row["story_id"]) for row in rows])
-        by_id = {str(row["story_id"]): self._card(row, owner_states.get(str(row["story_id"]), {})) for row in rows}
-        cards = [by_id[story_id] for story_id in receipt.ranked_candidate_ids]
+        finalization = None
+        if composition is not None:
+            lane_by_id = {item.story_id: item for item in laned}
+            ordered = [lane_by_id[story_id] for story_id in receipt.ranked_candidate_ids if story_id in lane_by_id]
+            # The hard diversity pass. Deterministic, replayable, and applied to
+            # the model's order rather than asked of the model.
+            finalization = finalize_order(ordered, policy=composition, owner_states=owner_states,
+                page_size=min(page_size, composition.page_size), pages=composition.max_pages_per_run,
+                profile=profile)
+            cards = [self._card(item.row, owner_states.get(item.story_id, {}), lane=item.lane,
+                                composition=composition, exclusive=exclusive,
+                                also_covered_by=finalization.also_covered_by.get(item.story_id, ()))
+                     for item in finalization.cards]
+        else:
+            by_id = {str(row["story_id"]): self._card(row, owner_states.get(str(row["story_id"]), {})) for row in rows}
+            cards = [by_id[story_id] for story_id in receipt.ranked_candidate_ids]
         expires_at = int(self._clock()) + self._policy.cursor_ttl_seconds
         bindings = self._bindings(receipt)
+        if latest.get("history_revision") != snapshot.get("history_revision"):
+            # F1. A behavior write landed during the provider call. The order was
+            # paid for and is still the right order; rebinding it to the CURRENT
+            # revision is what lets the epoch trigger accept it, so the money buys
+            # a page instead of a discarded 409.
+            bindings["server_commit_revision"] = latest.get("history_revision")
+        if finalization is not None:
+            bindings.update({"run_id": (run or {}).get("run_id"),
+                "short_lane_reasons": [dict(entry) for entry in finalization.short_lane_reasons],
+                "calibration_kl": finalization.calibration_kl,
+                "calibration_alarm": finalization.calibration_alarm,
+                "lane_counts": {lane: sum(1 for item in finalization.cards if item.lane == lane)
+                                for lane in composition.lane_priority}})
         bindings.update({"eligibility": {"category": category_id, "query": query},
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
             "corpus_start": dict(corpus_cursor), "excluded_story_ids": list(excluded_set),
@@ -242,21 +307,16 @@ class RankingService:
         for key in ("history_generation", "consent_revision"):
             if current_bindings[key] != frozen["bindings"].get(key):
                 raise StaleRankingError(f"changed_{key}")
-        changed = current_bindings["server_commit_revision"] != frozen["bindings"].get("server_commit_revision")
-        if changed:
-            visible = list(dict.fromkeys(frozen["bindings"].get("excluded_story_ids", []) +
-                [card["story_id"] for card in frozen["cards"][:int(payload["offset"])]]))
-            return self.rank(authorization=authorization, body={**current_bindings,
-                "history_revision": current.get("included_history_revision", 0),
-                "eligibility": frozen["bindings"].get("eligibility", {}), "exclude_story_ids": visible,
-                "corpus_cursor": frozen["bindings"].get("corpus_start", {}),
-                "page_size": frozen.get("page_size", self._policy.maximum_page_size)})
+        # F7. A behavior event inside a reading run no longer re-ranks. Reading a
+        # story and then pressing "load more" used to mint a new request id and a
+        # new PAID provider call, and the page the reader was on moved under her.
+        # A page turn is now a slice of the frozen order and costs nothing.
         if frozen["bindings"].get("result_mode") == "model" and not current.get("provider_processing_enabled"):
             raise StaleRankingError("consent_disabled")
         offset = int(payload["offset"])
         cards = list(frozen["cards"])
         size = int(frozen.get("page_size", self._policy.maximum_page_size))
-        next_offset = offset + size
+        visible, next_offset = self._slice(cards, offset, size, current)
         next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
         if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
             return self.rank(authorization=authorization, body={**current_bindings,
@@ -265,7 +325,33 @@ class RankingService:
                 "corpus_cursor": frozen["bindings"].get("corpus_cursor"), "page_size": size})
         if next_cursor is None and frozen["bindings"].get("corpus_has_more"):
             next_cursor = self._cursor(str(payload["frozen_order_id"]), len(cards), int(frozen["expires_at"]))
-        return {"schema_version": 1, **self._public_bindings(frozen["bindings"]), "cards": cards[offset:next_offset], "next_cursor": next_cursor}
+        return {"schema_version": 1, **self._public_bindings(frozen["bindings"]), "cards": visible, "next_cursor": next_cursor}
+
+    def _slice(self, cards, offset, size, snapshot):
+        """One page of the frozen order, with "less like this" applied at RENDER.
+
+        The frozen array itself is never mutated, so the HMAC-signed cursor stays
+        valid and an offset minted before the filter still resolves to the same
+        position. A filtered slice is topped up by walking further into the same
+        array, bounded by one extra page of look-ahead, and the reported next
+        offset is the position actually reached.
+        """
+        composition = self._policy.composition
+        if composition is None or not composition.immediate_negative_filter:
+            return cards[offset:offset + size], offset + size
+        profile = build_profile(snapshot, policy=composition, now=self._now())
+        if not profile.suppressed_sources and not profile.suppressed_topics:
+            return cards[offset:offset + size], offset + size
+        visible, position, limit = [], offset, min(len(cards), offset + size * 2)
+        while position < limit and len(visible) < size:
+            card = cards[position]
+            position += 1
+            categories = card.get("category_ids") or []
+            if (card.get("source_id") in profile.suppressed_sources
+                    or any(category in profile.suppressed_topics for category in categories)):
+                continue
+            visible.append(card)
+        return visible, position
 
     def _authenticate(self, authorization: str) -> tuple[str, AuthenticatedOwner]:
         if not authorization.startswith("Bearer ") or not authorization[7:].strip():
@@ -322,7 +408,11 @@ class RankingService:
 
     @staticmethod
     def _assert_fresh(before, after):
-        for key in ("history_revision", "included_history_revision", "history_generation", "consent_revision", "provider_processing_enabled"):
+        # F1. Scoped to the three values that make a paid order WRONG rather than
+        # merely out of date. history_revision and included_history_revision move
+        # on every behavior event, including a save in a second tab, and checking
+        # them here is exactly what threw a paid provider call away.
+        for key in ("history_generation", "consent_revision", "provider_processing_enabled"):
             if before.get(key) != after.get(key):
                 raise StaleRankingError(f"changed_{key}")
 
@@ -355,16 +445,68 @@ class RankingService:
         return bool(self._policy.other_lane_enabled and self._policy.exclusive_category_id
                     and category_id == self._policy.exclusive_category_id)
 
-    @staticmethod
-    def _card(row, owner_state):
+    def _now(self) -> datetime:
+        from datetime import timezone
+        return datetime.fromtimestamp(self._clock(), timezone.utc)
+
+    def _open_run(self, owner, snapshot, composition):
+        """Open or join the owner's reading run and freeze the profile on it."""
+        if composition is None:
+            return None
+        fresh = build_profile(snapshot, policy=composition, now=self._now())
+        run = self._store.open_reading_run(user_id=owner.user_id, idle_minutes=composition.idle_minutes,
+                                           profile=fresh.as_snapshot())
+        return run if isinstance(run, Mapping) else {}
+
+    def _pool_rows(self, category_id, query, profile, composition, before_published, before_story):
+        """Ask the corpus for each lane, then merge.
+
+        One "newest N" window can only ever express one ordering, which is why
+        today's feed is the newest 50 rows. Each lane orders by its own criterion,
+        so each is asked for separately and the recipe merges what comes back.
+        """
+        categories = sorted({topic for topic, weight in profile.topic_affinity.items() if weight > 0})
+        sources = sorted({source for source, weight in profile.source_affinity.items() if weight > 0})
+        quotas = lane_window_quotas(composition, composition.candidate_window_size)
+        merged: dict[str, Mapping[str, object]] = {}
+        for lane in composition.lane_priority:
+            if lane in ("interested", "surprise") and not (categories or sources):
+                # No profile: the aligned pool degrades to fresh and nothing is
+                # "off profile", so neither lane is worth a round trip.
+                continue
+            # Over-fetch so caps and spacing have something to choose from, and
+            # so a lane whose head is all one source is not silently short.
+            limit = min(100, max(quotas[lane] * 3, 10))
+            rows = self._store.retained_candidates_v2(
+                category_id=category_id, query=query, lane=lane,
+                profile_categories=categories, profile_sources=sources,
+                trend_window_hours=composition.trend_window_hours,
+                trend_min_sources=composition.trend_min_independent_sources,
+                max_age_hours=(composition.updates_max_age_hours if lane == "updates" else
+                               composition.trend_window_hours if lane == "hot" else
+                               composition.exploration_max_age_hours if lane == "surprise" else None),
+                # Lane priority means a story fresh enough to be "fresh" IS fresh.
+                # The other three lanes therefore ask for stories past the
+                # freshness window, instead of spending their fetch budget on
+                # rows the updates lane will claim.
+                min_age_hours=None if lane == "updates" else composition.updates_max_age_hours,
+                limit=limit, before_published_at=before_published, before_story_id=before_story)
+            for row in rows:
+                story_id = row.get("story_id")
+                if isinstance(story_id, str) and story_id not in merged:
+                    merged[story_id] = row
+        return list(merged.values())
+
+    def _card(self, row, owner_state, *, lane=None, composition=None, exclusive=False, also_covered_by=()):
         language = str(row["language"])
         titles = row.get("title_translations") or {}
         summaries = row.get("summary_translations") or {}
         if not isinstance(titles, Mapping) or not isinstance(summaries, Mapping):
             raise ValueError("invalid_translation_overlay")
-        # Version 2 is version 1 plus the five translation fields. The reader
-        # accepts both for one release, so reader and ranker deploy in any order.
-        card = {"card_schema_version": 2, "story_id": row["story_id"], "title": row["title"],
+        # Version 3 is version 2 plus the element labels. The reader accepts both
+        # for one release, so reader and ranker deploy in any order.
+        card = {"card_schema_version": 3 if composition is not None else 2,
+            "story_id": row["story_id"], "title": row["title"],
             "summary": row.get("summary", ""), "source_name": row["source_name"], "published_at": row["published_at"],
             "url": row["canonical_url"], "source_id": row["source_id"], "language": language,
             "category_ids": row.get("category_ids", []), "read_at": owner_state.get("read_at"),
@@ -384,6 +526,18 @@ class RankingService:
             # A story with no translation is still served. The reader marks it.
             status[target] = "translated" if card[f"title_{target}"] else "untranslated"
         card["translation_status"] = status
+        if composition is not None:
+            # Every card carries a visible element label. A reader looking at a
+            # page can name why each story is in front of her, and a page stays
+            # reviewable after the fact because the label is persisted with the
+            # frozen order, not recomputed from a profile that has since moved.
+            card["lane"] = lane
+            card["lane_label"] = composition.label_for(lane) if lane else None
+            card["surprise_label"] = (composition.surprise_label_text
+                                      if lane == "surprise" and composition.surprise_label_enabled else None)
+            card["exclusive_label"] = (composition.exclusive_label(self._policy.display_language)
+                                       if exclusive else None)
+            card["also_covered_by"] = list(also_covered_by)
         return card
 
     @staticmethod
@@ -397,7 +551,8 @@ class RankingService:
     @staticmethod
     def _public_bindings(bindings):
         fields = ("request_id", "policy_version", "model_version", "history_revision", "history_generation",
-                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason")
+                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason",
+                  "run_id", "short_lane_reasons", "lane_counts", "calibration_alarm")
         return {key: bindings[key] for key in fields if key in bindings}
 
     @classmethod

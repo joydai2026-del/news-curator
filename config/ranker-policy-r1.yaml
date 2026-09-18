@@ -36,3 +36,7 @@ other_lane_enabled: true
 exclusive_category_id: only-other-language-press
 # Only decisions made by THIS pairing policy are served in the lane.
 exclusivity_policy_id: pairing-json-v1
+# M2.1 Phase 2 feed recipe. Revision 1 stays on disk as the rollback: pointing
+# this at a revision-1-shaped file, or removing the key, returns the feed to the
+# newest-`candidate_limit` window without a code change.
+composition_policy: config/ranking-policy-r2.yaml
