@@ -53,6 +53,12 @@ def _service(container, statement, check=True):
                 + statement, check=check)
 
 
+def _last(result):
+    """psql -At still prints a status tag for each SET, so read the final line."""
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    return lines[-1] if lines else ''
+
+
 def _as_owner(container, user_id, statement, check=True):
     return _sql(container, "set role authenticated;"
                 f"set request.jwt.claim.sub = {_quote(user_id)};"
@@ -337,8 +343,8 @@ def test_an_owner_reads_only_her_own_runs(db):
     mine = _as_owner(db, OWNER, "select count(*) from public.m2_reading_runs;")
     theirs = _as_owner(db, OTHER, "select count(*) from public.m2_reading_runs "
                                   f"where user_id = {_quote(OWNER)}::uuid;")
-    assert int(mine.stdout.strip()) >= 1
-    assert theirs.stdout.strip() == '0'
+    assert int(_last(mine)) >= 1
+    assert _last(theirs) == '0'
 
 
 def test_an_owner_cannot_mint_her_own_run(db):
@@ -375,7 +381,7 @@ def test_an_owner_can_review_the_labels_of_a_past_hour(db):
     _freeze_page(db, OWNER, '2026-09-18T09:30:00Z', cards)
     result = _as_owner(db, OWNER, "select coalesce(jsonb_agg(value),'[]'::jsonb) from "
                        "public.m2_owner_reading_pages('2026-09-18T08:00:00Z'::timestamptz) as rows(value);")
-    pages = json.loads(result.stdout.strip().splitlines()[-1])
+    pages = json.loads(_last(result))
     assert len(pages) == 1, 'the hour is a bound, not a suggestion'
     assert pages[0]['cards'][0]['lane'] == 'hot'
     assert pages[0]['cards'][0]['lane_label'] == 'hot'
@@ -384,4 +390,4 @@ def test_an_owner_can_review_the_labels_of_a_past_hour(db):
 def test_one_owner_cannot_review_another_owners_pages(db):
     result = _as_owner(db, OTHER, "select count(*) from "
                        "public.m2_owner_reading_pages('2026-09-18T08:00:00Z'::timestamptz) as rows(value);")
-    assert result.stdout.strip() == '0'
+    assert _last(result) == '0'
