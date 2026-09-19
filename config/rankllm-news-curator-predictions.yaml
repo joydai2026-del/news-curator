@@ -1,0 +1,11 @@
+method: "multiturn_listwise"
+system_message: "Predict reader actions for the supplied news passages. You state likelihoods; you do not rank."
+prefix_user: |-
+  I will provide {num} passages, each identified by an integer in brackets.
+  Predict this reader's next actions for each one, given this query and context: {query}
+prefix_assistant: "Provide the passages."
+body_user: "[{rank}] {candidate}"
+suffix_user: |-
+  Return only a JSON object with one field named predictions. Its value must be an array with exactly one entry per identifier from 1 through {num}, each identifier appearing exactly once. Each entry has the identifier as id, plus p_open, p_read_original, p_save, p_more_like_this and p_less_like_this, each a probability between 0 and 1. Do not order the array by preference and do not combine the probabilities; the weights that turn them into an order are not yours.
+output_validation_regex: "^\\x7b.*\\x7d$"
+output_extraction_regex: "\\d+"

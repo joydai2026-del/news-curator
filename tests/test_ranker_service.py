@@ -98,12 +98,26 @@ def test_rank_rejects_stale_client_revision_bindings(field):
         service()._validate_client_bindings(body, snapshot)
 
 
-def test_post_provider_snapshot_change_is_rejected():
+@pytest.mark.parametrize("field", ["history_generation", "consent_revision", "provider_processing_enabled"])
+def test_post_provider_consent_or_generation_change_is_rejected(field):
     before = {"history_revision": 5, "included_history_revision": 3, "history_generation": 2,
         "consent_revision": 4, "provider_processing_enabled": True}
-    after = dict(before, history_revision=6)
-    with pytest.raises(StaleRankingError, match="changed_history_revision"):
+    after = dict(before)
+    after[field] = 99 if field != "provider_processing_enabled" else False
+    with pytest.raises(StaleRankingError, match=f"changed_{field}"):
         service()._assert_fresh(before, after)
+
+
+@pytest.mark.parametrize("field", ["history_revision", "included_history_revision"])
+def test_a_behavior_write_during_the_provider_call_no_longer_discards_the_paid_rank(field):
+    """F1. These two move on EVERY behavior event, including a save in another
+    tab. Treating them as fatal is what threw away a call that had already been
+    paid for; only consent and generation make a paid order actually wrong."""
+    before = {"history_revision": 5, "included_history_revision": 3, "history_generation": 2,
+        "consent_revision": 4, "provider_processing_enabled": True}
+    after = dict(before)
+    after[field] += 1
+    service()._assert_fresh(before, after)
 
 
 def test_equal_time_corpus_cursor_has_no_gap_or_duplicate_across_fifty_candidate_boundary():

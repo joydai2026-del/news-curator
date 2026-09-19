@@ -58,8 +58,13 @@ def test_a_translator_that_raises_still_leaves_the_corpus_ingested(tmp_path, mon
     written = []
     monkeypatch.setenv("NEWS_CURATOR_SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("NEWS_CURATOR_SUPABASE_SECRET_KEY", "sb_secret_test")
+    order = []
     monkeypatch.setattr(ingest, "ingest_corpus_rows",
-                        lambda url, key, rows: written.extend(rows))
+                        lambda url, key, rows: (order.append("corpus"), written.extend(rows)))
+    monkeypatch.setattr(ingest, "ingest_coverage_rows",
+                        lambda url, key, rows: order.append("coverage") or len(rows))
+    monkeypatch.setattr(ingest, "prune_retained_corpus",
+                        lambda url, key, days: order.append("prune") or 0)
     monkeypatch.setattr(ingest, "read_corpus_window", lambda *a, **k: ((), False))
     monkeypatch.setattr(ingest, "read_exclusivity_decisions", lambda *a, **k: {})
     monkeypatch.setattr(ingest, "apply_overlay_rows",
@@ -74,6 +79,10 @@ def test_a_translator_that_raises_still_leaves_the_corpus_ingested(tmp_path, mon
     with pytest.raises(RuntimeError):
         ingest.main()
     assert [row["canonical_url"] for row in written] == ["https://example.com/survivor"]
+    # Coverage is an enrichment of the corpus and has a foreign key to it, so it
+    # can only ever be written second.
+    assert order == ["corpus", "coverage", "prune"], \
+        "housekeeping runs last, so it can never race the writes it cleans up after"
     # The corpus write carries no overlay: that is step two's only job.
     assert "title_translations" not in written[0]
 
@@ -86,8 +95,12 @@ def test_the_overlay_is_a_narrow_second_write_not_a_second_corpus_ingest(tmp_pat
     overlay_calls, corpus_calls = [], []
     monkeypatch.setenv("NEWS_CURATOR_SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("NEWS_CURATOR_SUPABASE_SECRET_KEY", "sb_secret_test")
+    coverage_calls = []
     monkeypatch.setattr(ingest, "ingest_corpus_rows",
                         lambda url, key, rows: corpus_calls.append(rows))
+    monkeypatch.setattr(ingest, "ingest_coverage_rows",
+                        lambda url, key, rows: coverage_calls.append(rows) or len(rows))
+    monkeypatch.setattr(ingest, "prune_retained_corpus", lambda url, key, days: 0)
     monkeypatch.setattr(ingest, "read_corpus_window", lambda *a, **k: ((), False))
     monkeypatch.setattr(ingest, "read_exclusivity_decisions", lambda *a, **k: {})
     monkeypatch.setattr(ingest, "apply_overlay_rows",
@@ -102,6 +115,7 @@ def test_the_overlay_is_a_narrow_second_write_not_a_second_corpus_ingest(tmp_pat
                                      "--source-snapshot", str(snapshot)])
     assert ingest.main() == 0
     assert len(corpus_calls) == 1
+    assert len(coverage_calls) == 1, "the coverage write runs once per ingest"
     assert overlay_calls == [[{"story_id": corpus_calls[0][0]["story_id"],
                                "title_translations": {"en": "Translated"}}]]
 
@@ -424,6 +438,8 @@ def test_an_overlay_failure_warns_and_exits_zero_with_the_corpus_already_written
     monkeypatch.setenv("NEWS_CURATOR_SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("NEWS_CURATOR_SUPABASE_SECRET_KEY", "sb_secret_test")
     monkeypatch.setattr(ingest, "ingest_corpus_rows", lambda url, key, rows: written.extend(rows))
+    monkeypatch.setattr(ingest, "ingest_coverage_rows", lambda url, key, rows: len(rows))
+    monkeypatch.setattr(ingest, "prune_retained_corpus", lambda url, key, days: 0)
     monkeypatch.setattr(ingest, "read_corpus_window", lambda *a, **k: ((), False))
     monkeypatch.setattr(ingest, "read_exclusivity_decisions", lambda *a, **k: {})
 
@@ -442,4 +458,62 @@ def test_an_overlay_failure_warns_and_exits_zero_with_the_corpus_already_written
     assert ingest.main() == 0
     printed = capsys.readouterr().err
     assert "::warning::overlay not applied:" in printed and expected in printed
+    assert len(written) == 1
+
+
+@pytest.mark.parametrize("code,expected", [(503, "HTTPError"),
+                                           (404, "m2_ingest_retained_coverage is not deployed yet")])
+def test_a_coverage_failure_warns_and_never_costs_the_corpus_write(
+        tmp_path, monkeypatch, capsys, code, expected):
+    """Coverage is the hot signal, not the stories. Losing it costs one run of
+    "which stories are hot"; losing the corpus write loses the stories."""
+    import urllib.error
+
+    snapshot = _snapshot(tmp_path)
+    written = []
+    monkeypatch.setenv("NEWS_CURATOR_SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("NEWS_CURATOR_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr(ingest, "ingest_corpus_rows", lambda url, key, rows: written.extend(rows))
+    monkeypatch.setattr(ingest, "read_corpus_window", lambda *a, **k: ((), False))
+    monkeypatch.setattr(ingest, "read_exclusivity_decisions", lambda *a, **k: {})
+    monkeypatch.setattr(ingest, "apply_overlay_rows", lambda url, key, rows: len(rows))
+
+    def refuse(url, key, rows):
+        raise urllib.error.HTTPError(url, code, "boom", {}, None)
+
+    monkeypatch.setattr(ingest, "ingest_coverage_rows", refuse)
+    monkeypatch.setattr(ingest, "prune_retained_corpus", lambda url, key, days: 0)
+    monkeypatch.setattr(ingest, "translate_rows", lambda cfg, rows, **kwargs: (rows, "skipped"))
+    monkeypatch.setattr("sys.argv", ["retained_corpus_ingest.py", "ingest", "--root", str(ROOT),
+                                     "--source-snapshot", str(snapshot)])
+    assert ingest.main() == 0
+    printed = capsys.readouterr().err
+    assert "::warning::coverage not written:" in printed and expected in printed
+    assert len(written) == 1, "the corpus write must already be done"
+
+
+def test_a_prune_failure_warns_and_never_fails_the_run(tmp_path, monkeypatch, capsys):
+    """Housekeeping is not the product. A corpus one hour too large costs a
+    slower query; a failed ingest costs the hour's stories."""
+    import urllib.error
+
+    snapshot = _snapshot(tmp_path)
+    written = []
+    monkeypatch.setenv("NEWS_CURATOR_SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("NEWS_CURATOR_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr(ingest, "ingest_corpus_rows", lambda url, key, rows: written.extend(rows))
+    monkeypatch.setattr(ingest, "ingest_coverage_rows", lambda url, key, rows: len(rows))
+    monkeypatch.setattr(ingest, "read_corpus_window", lambda *a, **k: ((), False))
+    monkeypatch.setattr(ingest, "read_exclusivity_decisions", lambda *a, **k: {})
+    monkeypatch.setattr(ingest, "apply_overlay_rows", lambda url, key, rows: len(rows))
+
+    def refuse(url, key, days):
+        raise urllib.error.HTTPError(url, 503, "boom", {}, None)
+
+    monkeypatch.setattr(ingest, "prune_retained_corpus", refuse)
+    monkeypatch.setattr(ingest, "translate_rows", lambda cfg, rows, **kwargs: (rows, "skipped"))
+    monkeypatch.setattr("sys.argv", ["retained_corpus_ingest.py", "ingest", "--root", str(ROOT),
+                                     "--source-snapshot", str(snapshot)])
+    assert ingest.main() == 0
+    assert "::warning::corpus not pruned:" in capsys.readouterr().err
     assert len(written) == 1

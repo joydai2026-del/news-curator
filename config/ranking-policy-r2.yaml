@@ -1,0 +1,150 @@
+# M2.1 Phase 2 composition policy, revision 2.
+#
+# Revision 1 (config/ranking-policy-r1.yaml) declares itself immutable in its own
+# header, so the Phase 2 values mint this revision rather than editing that file.
+# Revision 1 stays on disk as the documented rollback: pointing
+# NEWS_CURATOR_COMPOSITION_POLICY back at a revision-1-shaped file is a config
+# change, never a rebuild.
+#
+# Every operational value the feed depends on is here. Nothing in this file has a
+# second home in code beyond a safe default, and boot FAILS on an out-of-range
+# value rather than clamping it (see curator/recommendation/composition.py).
+#
+# Grades, using the repository convention (A proven in production, B proven in
+# source, C not verified): every composition ratio and every engagement weight is
+# grade C. They are recommendations built on grade-A observations, taken from
+# docs/research/2026-09-16-feed-composition-ratios.md. The values JJ ratified on
+# 2026-09-16 are marked JJ-confirmed and are not an implementer's to retune.
+schema_version: 1
+policy_revision: 2
+
+composition:
+  # 11 / 7 / 4 / 3 of a 25-card page. Research section 4.1, grade C, except
+  # surprise which JJ ratified at 3 per page on 2026-09-16.
+  # Revision-1 frozen fallback, kept for rollback: 0.25 / 0.333 / 0.25 / 0.17.
+  lane_ratios:
+    interested: 0.44
+    updates: 0.28
+    hot: 0.16
+    surprise: 0.12
+  page_size: 25
+  candidate_window_size: 50
+  # How new a story has to be to count as the "fresh" pool rather than falling
+  # through to the pool that describes it more specifically.
+  #
+  # Why this key exists (grade C, and the reasoning is the point): lane_priority
+  # is frozen as [updates, hot, interested, surprise] and the FIRST eligible lane
+  # wins. If every story were eligible for updates, updates would swallow the
+  # whole window and the other three pools would never fill. Corroboration takes
+  # hours to accumulate, so a narrow freshness window keeps "brand new" and
+  # "everyone is covering it" as genuinely different pools instead of one.
+  # Raising this toward trend.window_hours deliberately makes the feed fresher
+  # and less corroborated; that is a config decision, not a code change.
+  updates_max_age_hours: 6
+  per_source_cap_per_window: 3
+  per_aggregator_cap_per_window: 2
+  # JJ-confirmed 2026-09-16. The gate stays and both states keep a test.
+  surprise_label_enabled: true
+  surprise_label_text: you might not have looked for this
+
+# The primary-lane tie-break, not a share. Frozen in revision 1 and unchanged.
+lane_priority: [updates, hot, interested, surprise]
+
+# One key, one name. Hot and the trend component both read this.
+trend:
+  window_hours: 24
+  min_independent_sources: 2
+
+# Surprise is NOT randomness: a candidate must clear real quality gates before it
+# can take a protected exploration slot. Mirrors exploration.gates in revision 1.
+exploration:
+  max_age_hours: 48
+  min_independent_sources: 1
+  # Aggregator-echo routes are discovery paths, not independent corroboration,
+  # so they never hold an exploration slot.
+  require_non_aggregator: true
+
+# The server turns model-predicted action likelihoods into an order. The model
+# never sees these numbers. Every key here MUST name an action the product
+# actually captures; a weight for an uncaptured action fails startup validation.
+engagement_weights:
+  save: 35.0
+  more_like_this: 25.0
+  read_original: 12.0
+  open: 3.0
+  less_like_this: -40.0
+
+scoring:
+  # score = p_gate * sum(weight_action * p_action). Conjunctive outer gate from
+  # YouTube's published combination function; negatives stay inside the sum.
+  gate_action: open
+  negatives_additive: true
+
+# Behavior ages out of the profile on this half life.
+decay:
+  half_life_hours: 72.0
+
+diversity:
+  same_source_window: 2
+  topic_window_k: 5
+  hide_already_opened: true
+  calibration_alarm_kl: 0.15
+
+run:
+  # JJ-confirmed 2026-09-16: relearn about once an hour, not per click.
+  idle_minutes: 60
+  # The other half of "about once an hour". idle_minutes alone never fires for a
+  # reader who keeps reading: last_activity_at slides forward on every page, so
+  # an hourly reader would stay in one run for ever and would never be learned
+  # from. A run therefore ends at whichever comes first, idle OR age.
+  max_minutes: 60
+  # How many pages one "load more" chain serves before the run is over. The
+  # first floor(candidate_window_size / page_size) of them are the model-ranked
+  # frozen order; the rest are continuations composed by the recipe alone. Must
+  # be at least that floor, because the window already holds that many pages.
+  #
+  # It is a STOP, and that is the point: without it every page past the frozen
+  # order reached further into older news and came back entirely "More", for
+  # ever. A run that has run out says so.
+  max_pages_per_run: 4
+  immediate_negative_filter: true
+  # How long one "less like this" keeps hiding a source or a topic. It used to
+  # hide it for ever on every page: one tap in September would still be removing
+  # that outlet in December, which is not what "less like this" says. It still
+  # lowers the profile affinity after this window; it just stops erasing.
+  negative_suppression_days: 7
+  # How long one request may hold the run's ranking claim before another may take
+  # it over. It is a crash guard, not a timeout: the claim is released as soon as
+  # the ranking binds or fails. Too short and two requests pay twice; too long
+  # and a died-mid-flight request locks its own reader out for that long.
+  ranking_claim_seconds: 60
+  # The margin in the rule above. Boot fails unless
+  # ranking_claim_seconds > provider deadline + settle window + this, so a claim
+  # can never expire while its holder is still allowed to be calling the
+  # provider. Without that rule a takeover by age hands a second caller the right
+  # to pay while the first call is still in flight.
+  ranking_claim_margin_seconds: 10
+
+lane:
+  # Ceiling, never a floor. Promotion happens only on merit. JJ-confirmed.
+  exclusive_promote_to_all_max: 2
+
+language:
+  default_display: en
+  other_lane_enabled: true
+
+# Every card carries a visible element label. The reader renders these strings;
+# they are never hardcoded in the page. The exclusive label is a TEMPLATE, so it
+# flips with the reader's language instead of naming Chinese in code.
+labels:
+  updates: fresh
+  hot: hot
+  interested: for you
+  surprise: surprise
+  # The honest fifth chip: this card met no pool's rule and is here because the
+  # page would otherwise be short. Never call it fresh.
+  more: More
+  exclusive_template: "only in {language} press"
+  language_names:
+    en: English
+    zh: Chinese

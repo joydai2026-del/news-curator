@@ -164,6 +164,46 @@ def candidate_response(rows: Iterable[RetainedCandidate]) -> dict[str, object]:
     }
 
 
+def coverage_ingest_rows(rows: Iterable[RetainedCandidate], *,
+                         independent_source_ids: set[str]) -> list[dict[str, object]]:
+    """One row per distinct publisher per story, for the coverage table.
+
+    The deduper already records every outlet that merged into a canonical story
+    as a coverage mention. Until now `public_ingest_rows` dropped that on the
+    floor, so the corpus kept one row with one source and "how many outlets are
+    carrying this" could not be answered at all. This is the writer for it.
+
+    Independence is decided from the route flags that already exist in config
+    (`is_aggregator`, `echo_eligible`), resolved by the CALLER and passed in, so
+    this stays a pure function. A route not in that set is NOT independent:
+    guessing the other way is how a firehose becomes "hot".
+
+    Same-publisher echoes collapse here as well as in the table's primary key,
+    and the earliest sighting wins, so a later re-observation cannot push a story
+    back into a trend window it had already left.
+    """
+    result: list[dict[str, object]] = []
+    for row in rows:
+        earliest: dict[str, datetime] = {}
+        for mention in row.item.coverage_mentions:
+            source_id = mention.source_id
+            if not source_id:
+                continue
+            moment = mention.mentioned_at
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=timezone.utc)
+            if source_id not in earliest or moment < earliest[source_id]:
+                earliest[source_id] = moment
+        for source_id in sorted(earliest):
+            result.append({
+                "story_id": row.story_id,
+                "publisher_id": source_id,
+                "is_independent": source_id in independent_source_ids,
+                "first_seen_at": earliest[source_id].astimezone(timezone.utc).isoformat(),
+            })
+    return result
+
+
 def public_ingest_rows(rows: Iterable[RetainedCandidate], *, allowed_source_ids: set[str]) -> list[dict[str, object]]:
     """The only artifact shape accepted by the public-only ingest RPC."""
     result = []
