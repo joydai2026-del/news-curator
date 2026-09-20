@@ -132,6 +132,10 @@ _RPC_BUILDERS = {
     "event": ("append_behavior_event", lambda args: _input_object(args.input)),
     "state-event": ("set_story_state_with_event", lambda args: _input_object(args.input)),
     "interest-event": ("set_story_interest_with_event", lambda args: _input_object(args.input)),
+    # Every hourly page stays reviewable after the fact: what she was shown, in
+    # order, with each card's pool and its visible label.
+    "reading-pages": ("m2_owner_reading_pages", lambda args: {"p_hour_start": args.hour,
+                                                              "p_limit": args.limit or 24}),
 }
 _RPC_NAMES = {item[0] for item in _RPC_BUILDERS.values()}
 
@@ -183,6 +187,16 @@ def _page(config: AuthConfig, session, args: argparse.Namespace) -> Any:
     return payload
 
 
+def _hour(value: str) -> str:
+    """An ISO-8601 instant naming the hour to review. The RPC truncates it."""
+    from datetime import datetime
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("hour must be an ISO-8601 timestamp") from exc
+    return value
+
+
 def _validate_args(args: argparse.Namespace) -> None:
     bounded = (args.provider_policy_id, args.category, args.query, args.expected_owner_email)
     if any(value is not None and (not isinstance(value, str) or len(value.encode("utf-8")) > 1024) for value in bounded):
@@ -191,6 +205,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("history limit is invalid")
     if len(args.exclude_story_id) > 50 or any(not isinstance(value, str) or not value or len(value) > 256 for value in args.exclude_story_id):
         raise ValueError("excluded story IDs are invalid")
+    if args.command == "reading-pages" and not args.hour:
+        raise ValueError("reading-pages requires --hour")
     if args.command == "consent" and (args.learning is None or args.provider_processing is None):
         raise ValueError("consent requires both Boolean flags")
     if args.command == "consent" and args.learning is False and args.provider_processing is True:
@@ -214,6 +230,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--category")
     parser.add_argument("--query")
     parser.add_argument("--exclude-story-id", action="append", default=[])
+    parser.add_argument("--hour", type=_hour, help="ISO-8601 instant naming the hour of pages to review.")
     parser.add_argument("--timeout", type=float, default=15.0)
     return parser
 

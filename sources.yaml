@@ -324,6 +324,13 @@ reddit:
 # the paid provider lane is dark until both this switch and the protected
 # workflow switch are enabled after explicit approval.
 # ---------------------------------------------------------------------------
+coverage:
+  # How long the retained corpus keeps an observation. The dedupe CTE and the
+  # coverage count both scan this table, so without a window they scan a table
+  # that only ever grows. Two days is the floor because the trend window is 24
+  # hours and hot needs yesterday to still be there.
+  observations_retention_days: 14
+
 translation:
   # Phase 1 acceptance: JJ calls the missing translation surface a bug, so this
   # ships ON. With no API key the hourly ingest logs a named skip and exits 0.

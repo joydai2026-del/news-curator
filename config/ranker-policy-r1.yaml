@@ -2,9 +2,12 @@ schema_version: 1
 provider: openai
 model: gpt-5-mini
 endpoint: https://api.openai.com/v1
-prompt_revision: m2-rankllm-json-r3
-prompt_template: config/rankllm-news-curator-json.yaml
-maximum_output_tokens: 2048
+prompt_revision: m2-rankllm-predictions-r1
+prompt_template: config/rankllm-news-curator-predictions.yaml
+# Raised for the five-field prediction payload. The engine sizes its own
+# guard from the answer it actually asks for, so this and the schema move
+# together instead of the old permutation arithmetic silently rejecting.
+maximum_output_tokens: 8192
 reasoning_token_allowance: 1024
 prompt_framing_token_allowance: 1024
 prompt_framing_tokens_per_message: 8
@@ -12,6 +15,9 @@ tokenizer_encoding: o200k_base
 reasoning_effort: minimal
 verbosity: low
 deadline_seconds: 6
+# How long settling an observed cost may take after the provider answers. Named
+# here because the reading-run claim window is validated against it at boot.
+settle_window_seconds: 5
 max_retries: 0
 request_cost_limit_usd: 0.02
 daily_cost_limit_usd: 2.00
@@ -36,3 +42,7 @@ other_lane_enabled: true
 exclusive_category_id: only-other-language-press
 # Only decisions made by THIS pairing policy are served in the lane.
 exclusivity_policy_id: pairing-json-v1
+# M2.1 Phase 2 feed recipe. Revision 1 stays on disk as the rollback: pointing
+# this at a revision-1-shaped file, or removing the key, returns the feed to the
+# newest-`candidate_limit` window without a code change.
+composition_policy: config/ranking-policy-r2.yaml

@@ -701,6 +701,10 @@
     "source_id", "language", "category_ids", "read_at", "saved_at", "state_revision", "interests"];
   const M2_TRANSLATION_FIELDS = ["title_en", "title_zh", "summary_en", "summary_zh", "translation_status"];
   const M2_CARD_FIELDS = [...M2_CARD_FIELDS_V1, ...M2_TRANSLATION_FIELDS];
+  // Version 3 adds the element labels: why this story is in front of her.
+  const M2_LABEL_FIELDS = ["lane", "lane_label", "surprise_label", "exclusive_label", "also_covered_by"];
+  const M2_CARD_FIELDS_V3 = [...M2_CARD_FIELDS, ...M2_LABEL_FIELDS];
+  const M2_LANES = ["updates", "hot", "interested", "surprise", "more"];
   // Same bound the database column carries, so an oversized translated summary
   // is rejected here rather than rendered.
   const MAX_TRANSLATED_SUMMARY = 32000;
@@ -715,12 +719,18 @@
       toggleLabel: "中文", exclusiveSection: (other) => `Only in ${other} press`,
       emptyExclusive: (other) => `No stories that only the ${other} press carried today`,
       untranslated: (other) => `Not translated. Shown in ${other}.`,
+      endOfRun: "You have read everything in this run. Come back later for more.",
+      stillPreparing: "Still preparing your page, try again.",
+      alsoCovered: (count) => `Also in ${count} other ${count === 1 ? "source" : "sources"}`,
       search: "Search all retained stories",
     },
     zh: {
       toggleLabel: "EN", exclusiveSection: (other) => `只有${other === "English" ? "英文" : "中文"}媒体报道`,
       emptyExclusive: (other) => `今天没有只有${other === "English" ? "英文" : "中文"}媒体报道的新闻`,
       untranslated: (other) => `未翻译，按原文显示。`,
+      endOfRun: "这一轮的报道你都读完了，稍后再来看看。",
+      stillPreparing: "页面还在准备，请稍后再试。",
+      alsoCovered: (count) => `另有 ${count} 家媒体报道`,
       search: "搜索全部保留的报道",
     },
   };
@@ -730,15 +740,21 @@
   function validateM2Config(value) {
     if (!isObject(value) || typeof value.enabled !== "boolean") fail("M2 reader configuration is invalid.");
     if (!value.enabled) return Object.freeze({ enabled: false });
+    // How long to wait before asking again when another request is already
+    // buying this view's ranking, and how many times. Config, not a constant.
+    value = { in_progress_retry_ms: 2000, in_progress_max_attempts: 3, ...value };
     value = { request_timeout_ms: 8000, ...value };
     value = { transport_timeout_ms: value.request_timeout_ms, ...value };
     if (!exactFields(value, ["enabled", "model_version", "page_size", "policy_version",
-      "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms", "transport_timeout_ms"]) || !boundedString(value.policy_version, 256) ||
+      "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms",
+      "transport_timeout_ms", "in_progress_retry_ms", "in_progress_max_attempts"]) || !boundedString(value.policy_version, 256) ||
       !boundedString(value.provider_policy_id, 256) ||
       !boundedString(value.model_version, 256) || !safeDestination(value.provider_retention_url) ||
       !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
       !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000 ||
-      !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < value.request_timeout_ms || value.transport_timeout_ms > 20000) {
+      !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < value.request_timeout_ms || value.transport_timeout_ms > 20000 ||
+      !Number.isInteger(value.in_progress_retry_ms) || value.in_progress_retry_ms < 100 || value.in_progress_retry_ms > 10000 ||
+      !Number.isInteger(value.in_progress_max_attempts) || value.in_progress_max_attempts < 1 || value.in_progress_max_attempts > 10) {
       fail("M2 reader configuration is invalid.");
     }
     const endpoint = safeDestination(value.url);
@@ -746,6 +762,15 @@
     return Object.freeze({ ...value, url: endpoint.replace(/\/$/, "") });
   }
   function validateM2Response(value, expected) {
+    // `end_of_run` is OPTIONAL on the wire, so a reader and a ranker can deploy
+    // in either order: an older ranker simply never sends it. It is lifted out
+    // before the exact-field check and put back after.
+    let endOfRun = false;
+    if (isObject(value) && "end_of_run" in value) {
+      if (typeof value.end_of_run !== "boolean") fail("The M2 feed response was invalid.");
+      endOfRun = value.end_of_run;
+      delete value.end_of_run;
+    }
     if (!exactFields(value, M2_RESPONSE_FIELDS) || value.schema_version !== 1 ||
         value.policy_version !== expected.policy_version || value.model_version !== expected.model_version ||
         value.history_revision !== expected.history_revision ||
@@ -761,9 +786,16 @@
     value.cards.forEach((card) => {
       // One release accepts both card schemas, so the reader and the ranker can
       // deploy in either order without every card failing validation.
-      const translated = card.card_schema_version === 2;
-      if (![1, 2].includes(card.card_schema_version) ||
-          !exactFields(card, translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) || !STORY_ID.test(card.story_id) ||
+      const labelled = card.card_schema_version === 3;
+      const translated = card.card_schema_version >= 2;
+      if (![1, 2, 3].includes(card.card_schema_version) ||
+          !exactFields(card, labelled ? M2_CARD_FIELDS_V3 : translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) ||
+          !STORY_ID.test(card.story_id) ||
+          (labelled && (!M2_LANES.includes(card.lane) || !boundedString(card.lane_label, 40) ||
+            !(card.surprise_label === null || boundedString(card.surprise_label, 80)) ||
+            !(card.exclusive_label === null || boundedString(card.exclusive_label, 80)) ||
+            !Array.isArray(card.also_covered_by) ||
+            !card.also_covered_by.every((name) => boundedString(name, 200)))) ||
           (translated && (
             !DISPLAY_LANGUAGES.every((code) => typeof card[`title_${code}`] === "string" &&
               card[`title_${code}`].length <= 2000 && typeof card[`summary_${code}`] === "string" &&
@@ -780,6 +812,12 @@
             TOPIC_ID.test(interest.topic_id) && ["more_like", "less_like"].includes(interest.signal) &&
             Number.isSafeInteger(interest.revision) && interest.revision >= 0) ||
           seen.has(card.story_id)) fail("The M2 feed response was invalid.");
+      if (!labelled) {
+        // A ranker that has not shipped the recipe yet sends no labels. The
+        // reader still renders the card; it just has nothing to say about why.
+        card.lane = null; card.lane_label = null; card.surprise_label = null;
+        card.exclusive_label = null; card.also_covered_by = [];
+      }
       if (!translated) {
         const other = card.language === "en" ? "zh" : "en";
         card[`title_${card.language}`] = card.title;
@@ -787,10 +825,11 @@
         card[`title_${other}`] = "";
         card[`summary_${other}`] = "";
         card.translation_status = { [card.language]: "original", [other]: "untranslated" };
-        card.card_schema_version = 2;
       }
+      card.card_schema_version = 3;
       seen.add(card.story_id);
     });
+    value.end_of_run = endOfRun;
     return value;
   }
   function createM2Service(rawConfig, sessionProvider, fetchImpl = fetch) {
@@ -809,7 +848,28 @@
       if (response.redirected !== false || response.url !== url) fail("The M2 endpoint redirected unexpectedly.");
       const after = await sessionProvider();
       if (!after || after.access_token !== before.access_token) fail("The signed-in account changed.");
-      if (!response.ok) fail("The M2 reader request failed.");
+      if (!response.ok) {
+        // A ranking prompt revision is a QUESTION, not an outage: the owner
+        // agreed to a different provider policy than the one now running, and
+        // one tap on the existing consent control fixes it. Collapsing this
+        // into the generic failure is how a deploy looks like a dead feed.
+        // The ranking for this view is being bought right now by another
+        // request. Retryable, and NOT a reason to fall back to the captured
+        // edition: the answer exists in a moment.
+        if (isObject(payload) && payload.error === "ranking_in_progress") {
+          const error = new Error("Still preparing your page.");
+          error.rankingInProgress = true;
+          throw error;
+        }
+        if (isObject(payload) && payload.error === "provider_consent_required") {
+          const error = new Error("Personalized ranking needs your permission again.");
+          error.consentRequired = true;
+          error.providerPolicyId = boundedString(payload.provider_policy_id, 256)
+            ? payload.provider_policy_id : "";
+          throw error;
+        }
+        fail("The M2 reader request failed.");
+      }
       return validateM2Response(payload, expected);
     }
     return Object.freeze({
@@ -1212,7 +1272,29 @@
         canonical_url: entry.url, topic_ids: topicIds, source_kind: "outlet",
         coverage_mentions: [], topic_ranks: {}, ranking_explanation: reason,
         translation_mark: status === "untranslated"
-          ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "" };
+          ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "",
+        element_labels: [entry.lane_label, entry.surprise_label, entry.exclusive_label]
+          .filter((label) => typeof label === "string" && label !== ""),
+        also_covered_by: Array.isArray(entry.also_covered_by) ? entry.also_covered_by : [] };
+    }
+    // Every card says why it is on the page. The wording comes from the server,
+    // which reads it from config, so renaming a pool never means editing the
+    // reader.
+    function markElementLabels(card, row) {
+      if (!row.element_labels || !row.element_labels.length) return;
+      const strip = element("p", "element-labels");
+      row.element_labels.forEach((text) => strip.append(element("span", "element-label", text)));
+      strip.dataset.lane = row.lane || "";
+      card.querySelector(".story-heading")?.after(strip);
+    }
+    // The outlets whose duplicate rows collapsed into this one. It was computed,
+    // persisted and validated, and then never shown: the reader could not tell a
+    // story three outlets carried from one nobody else did.
+    function markAlsoCovered(card, row) {
+      if (!row.also_covered_by || !row.also_covered_by.length) return;
+      const line = element("p", "also-covered", strings().alsoCovered(row.also_covered_by.length));
+      line.title = row.also_covered_by.join(", ");
+      card.querySelector(".story-heading")?.after(line);
     }
     function markUntranslated(card, row) {
       if (!row.translation_mark) return;
@@ -1272,6 +1354,8 @@
         // live search box. Omitting it here blanked the page on every toggle.
         card.dataset.m2Query = (searchBox?.value.trim() || "").toLowerCase();
         markUntranslated(card, row);
+        markElementLabels(card, row);
+        markAlsoCovered(card, row);
         const interest = card.querySelector(".interest-action");
         if (interest) {
           const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
@@ -1339,6 +1423,8 @@
           interest.after(less);
         }
         markUntranslated(card, row);
+        markElementLabels(card, row);
+        markAlsoCovered(card, row);
         cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });
@@ -1354,7 +1440,7 @@
       if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
       view.apply(); refreshStateControls(); refreshInterestControls();
     }
-    async function loadM2(append = false, searchEvent = false) {
+    async function loadM2(append = false, searchEvent = false, attempt = 1) {
       if (!usesM2()) return;
       unknownM2Consent(); showM2Policy();
       const epoch = authEpoch, request = ++m2Sequence, interactionEpoch = m2InteractionEpoch, eligibility = m2Eligibility();
@@ -1370,6 +1456,31 @@
         const mode = document.getElementById("m2-mode");
         if (mode) mode.textContent = "Personalized feed is still loading.";
         announce("Personalized feed is still loading.");
+      };
+      // A re-consent prompt is its own state. It says what happened, in one
+      // line, and leaves the consent control on screen so the fix is one tap.
+      // Keep the loading state and ask again. Bounded: after the configured
+      // attempts she gets a plain sentence, never the captured-edition fallback,
+      // because nothing is wrong with her feed.
+      const stillPreparing = () => {
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        const mode = document.getElementById("m2-mode");
+        if (mode) mode.textContent = strings().stillPreparing;
+        announce(strings().stillPreparing);
+      };
+      const consentRequired = () => {
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        showBaseline();
+        if (request !== m2Sequence) return;
+        m2Sequence += 1;
+        if (m2Controls) m2Controls.hidden = false;
+        const mode = document.getElementById("m2-mode");
+        const message = "Personalized ranking needs your permission again. Turn it back on to resume.";
+        if (mode) {
+          mode.textContent = message;
+          mode.dataset.consentRequired = "true";
+        }
+        announce(message);
       };
       const terminalFallback = () => {
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
@@ -1402,17 +1513,26 @@
         // A new eligible request always carries the committed history. The
         // server freezes existing pages and re-ranks continuation windows.
         const response = canContinue
-          ? await m2.page(m2Cursor, { ...m2Binding, history_revision: history.included_history_revision,
-              server_commit_revision: history.history_revision })
+          // THE CONTRACT, stated once: /page returns the FROZEN order's binding,
+          // so the reader compares against the frozen binding and not against
+          // the live revision. Comparing against the live one meant that reading
+          // or saving a story made a perfectly valid frozen page look invalid
+          // here, and the reader dropped to the captured-edition fallback right
+          // after the server had stopped re-ranking for exactly that reason.
+          ? await m2.page(m2Cursor, { ...m2Binding })
           : await m2.rank(history, eligibility);
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         if (baselineShown) {
           await behaviorWrites.catch(() => {});
           const latest = await api.historySnapshot();
+          // Scoped the same way the server scopes its own staleness check. The
+          // behavior revisions move on every read and every save, and treating
+          // that as a reason to throw away a slow-but-valid response is the
+          // client-side half of the bug the server just stopped having. What
+          // still invalidates a response: a different owner, a different
+          // eligibility, a history reset, a consent change.
           if (epoch !== authEpoch || request !== m2Sequence || !usesM2() || m2InteractionEpoch !== interactionEpoch ||
               JSON.stringify(m2Eligibility()) !== key || latest.history_generation !== history.history_generation ||
-              latest.history_revision !== history.history_revision ||
-              latest.included_history_revision !== history.included_history_revision ||
               latest.consent_revision !== history.consent_revision || latest.learning_enabled !== history.learning_enabled ||
               latest.provider_processing_enabled !== history.provider_processing_enabled ||
               latest.provider_policy_id !== history.provider_policy_id || response.result_mode !== "model") {
@@ -1420,12 +1540,26 @@
           }
         }
         applyM2Page(response, Boolean(canContinue), eligibility); m2Key = key;
+        if (response.end_of_run) {
+          // Not a failure and not an empty page: she has read the whole run.
+          const mode = document.getElementById("m2-mode");
+          if (mode) mode.textContent = strings().endOfRun;
+          announce(strings().endOfRun);
+        }
         announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
         if (!append && eligibility.query && !response.cards.length) {
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
         }
-      } catch (_) {
-        terminalFallback();
+      } catch (error) {
+        if (error && error.rankingInProgress) {
+          if (attempt < m2Config.in_progress_max_attempts) {
+            clearTimeout(deadline); clearTimeout(transportDeadline);
+            pageRequests.delete(pageRequest); refreshLoadButton();
+            await new Promise((resolve) => setTimeout(resolve, m2Config.in_progress_retry_ms));
+            return loadM2(append, searchEvent, attempt + 1);
+          }
+          stillPreparing();
+        } else if (error && error.consentRequired) consentRequired(); else terminalFallback();
       } finally {
         clearTimeout(deadline); clearTimeout(transportDeadline); pageRequests.delete(pageRequest); refreshLoadButton();
       }

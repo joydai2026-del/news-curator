@@ -11,7 +11,8 @@ import httpx
 import yaml
 
 from .asgi import RankingASGI
-from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder
+from .composition import configured_retention_days, load_composition_policy
+from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder, ScoringPolicy
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import RankingService, ServicePolicy
 from .supabase_http import SupabaseHTTP
@@ -68,6 +69,20 @@ def build_application(*, environ=None, policy_path: str | None = None):
         request_cost_limit_usd=policy["request_cost_limit_usd"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
         input_cost_per_million_tokens_usd=policy.get("input_cost_per_million_tokens_usd"),
         output_cost_per_million_tokens_usd=policy.get("output_cost_per_million_tokens_usd"))
+    # The composition policy is loaded FIRST: it decides whether the ranker asks
+    # for action predictions or for a bare permutation, which changes the schema,
+    # the prompt and the output budget together.
+    composition_path = env.get("NEWS_CURATOR_COMPOSITION_POLICY") or policy.get("composition_policy")
+    # Cross-file check at boot: the corpus retention window (sources.yaml) must
+    # still cover the window the feed reads back (this policy).
+    composition = load_composition_policy(
+        composition_path,
+        retention_days=configured_retention_days(env.get("NEWS_CURATOR_SOURCES", "sources.yaml")),
+        # The claim window is validated against the call it protects.
+        provider_deadline_seconds=policy["deadline_seconds"],
+        settle_window_seconds=policy.get("settle_window_seconds", 5),
+    ) if composition_path else None
+    scoring = ScoringPolicy.from_composition(composition) if composition else None
     prompt = ReviewedRankLLMPromptBuilder(env.get("NEWS_CURATOR_RANKLLM_TEMPLATE") or
         _required(policy, "prompt_template"))
     engine = OpenAIRankLLMEngine(prompt_builder=prompt, endpoint=ranker_policy.endpoint, api_key=provider_key or "disabled",
@@ -77,6 +92,7 @@ def build_application(*, environ=None, policy_path: str | None = None):
         prompt_framing_tokens_per_message=policy["prompt_framing_tokens_per_message"],
         token_counter=configured_token_counter(policy, env),
         reasoning_effort=policy["reasoning_effort"], verbosity=policy["verbosity"],
+        scoring=scoring,
         client_factory=lambda: httpx.AsyncClient(timeout=None, follow_redirects=False))
     adapter = RankLLMAdapter(policy=ranker_policy, engine=engine)
     transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key)
@@ -91,7 +107,12 @@ def build_application(*, environ=None, policy_path: str | None = None):
         other_lane_enabled=policy.get("other_lane_enabled", True),
         # Required, not defaulted: an empty value used to become a silent
         # fallback, which made ServicePolicy's boot validation unreachable.
-        exclusivity_policy_id=_required(policy, "exclusivity_policy_id"))
+        exclusivity_policy_id=_required(policy, "exclusivity_policy_id"),
+        # The feed recipe. Loaded and VALIDATED at startup, so an out-of-range
+        # composition value fails the boot rather than silently changing the mix.
+        # Unsetting composition_policy is the documented rollback to the
+        # pre-Phase-2 window; it is a config change, not a revert.
+        composition=composition)
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,

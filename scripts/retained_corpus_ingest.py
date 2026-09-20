@@ -8,7 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from curator.config import load_config
 from curator.pipeline import configured_source_specs
 from curator.grouping import GroupingCandidate, GroupingPolicy, exact_matches
-from curator.retained_corpus import apply_translations, public_ingest_rows, retain
+from curator.retained_corpus import (apply_translations, coverage_ingest_rows,
+                                     public_ingest_rows, retain)
 from curator.source_snapshot import load_source_snapshot, snapshot_config_digest
 from curator.recommendation.supabase_http import _NoRedirect, validate_https_origin
 from curator.sources import SafeHttpPolicy, SafeHttpTransport
@@ -246,6 +247,51 @@ def ingest_corpus_rows(url, key, rows):
     with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
         if response.status != 200:
             raise ValueError('retained corpus ingest failed')
+
+
+def independent_source_ids(cfg) -> set[str]:
+    """Routes that count as independent corroboration, from config alone.
+
+    `is_independent = not (route.aggregator or not route.echo_eligible)`, which
+    is the boundary curator/config.py already documents for M1. A route that is
+    not in the configured feed list is deliberately absent from this set, so an
+    unknown route is never counted as corroboration.
+    """
+    return {source.id for source in cfg.all_feeds
+            if not source.is_aggregator and source.echo_eligible}
+
+
+def ingest_coverage_rows(url, key, rows):
+    """STEP ONE-B: who else carried each story, written AFTER the corpus.
+
+    Order matters and is not incidental. The coverage table has a foreign key to
+    the corpus, so a story has to exist before its coverage can. Writing it
+    second also means a failure here costs the hot signal for one run and never
+    the run's stories.
+    """
+    if not rows:
+        return 0
+    return _rpc(url, key, 'm2_ingest_retained_coverage', {'p_rows': rows})
+
+
+def prune_retained_corpus(url, key, retention_days):
+    """STEP ONE-C: drop observations older than the retention window.
+
+    Both the dedupe CTE and the coverage count scan the corpus, so without this
+    they scan a table that only ever grows. It runs after the corpus and the
+    coverage writes because a prune that raced them could delete a story the
+    same run had just written.
+    """
+    return _rpc(url, key, 'm2_prune_retained_corpus', {'p_retention_days': int(retention_days)})
+
+
+def _coverage_failure_reason(error):
+    """Name the deploy order when that is what the failure actually is."""
+    if getattr(error, 'code', None) == 404:
+        return ('HTTP 404, m2_ingest_retained_coverage is not deployed yet: apply '
+                'supabase/migrations/202609180001_m2_retained_coverage_and_lanes.sql, then '
+                'reload the PostgREST schema cache. The corpus write for this run is already done.')
+    return f'{type(error).__name__}'
 
 
 def overlay_rows(rows):
@@ -544,6 +590,26 @@ def main() -> int:
             raise ValueError('retained corpus ingest unavailable')
         validate_https_origin(url)
         ingest_corpus_rows(url, key, public_ingest_rows(retained, allowed_source_ids=allowed))
+        # STEP ONE-B. The hot pool is a COUNT of distinct independent publishers,
+        # so without this write nothing is ever hot and one of JJ's four elements
+        # is permanently empty. It is still an enrichment: it runs after the
+        # corpus, and a remote failure is a named skip, never a lost run.
+        coverage = coverage_ingest_rows(retained, independent_source_ids=independent_source_ids(cfg))
+        try:
+            written = ingest_coverage_rows(url, key, coverage)
+            print(f'coverage rows={len(coverage)} written={written}', file=sys.stderr)
+        except TRANSLATION_TRANSPORT_ERRORS as error:
+            print(f'::warning::coverage not written: {_coverage_failure_reason(error)}',
+                  file=sys.stderr)
+        # Housekeeping, and housekeeping never fails a run: a corpus that is one
+        # hour too large costs a slower query, while a failed ingest costs the
+        # hour's stories.
+        try:
+            pruned = prune_retained_corpus(
+                url, key, (cfg.coverage or {}).get('observations_retention_days', 14))
+            print(f'corpus pruned rows={pruned}', file=sys.stderr)
+        except TRANSLATION_TRANSPORT_ERRORS as error:
+            print(f'::warning::corpus not pruned: {_coverage_failure_reason(error)}', file=sys.stderr)
     if a.command == 'ingest' and url and key:
         try:
             corpus, truncated = read_corpus_window(
