@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import shutil
 import subprocess
 import time
@@ -20,6 +20,22 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'postgres:17.11'
+# Every fixture timestamp in this file is anchored to the moment the module
+# loads, not to a calendar date. The hot lane and the corpus prune both filter
+# against PostgreSQL's own now() (trend.window_hours in
+# config/ranking-policy-r2.yaml, and the retention floor in
+# m2_prune_retained_corpus), so a fixture seeded at a fixed 2026-09-18 date
+# ages out of that window a couple of days later and the hot-lane assertions
+# start failing (seen on CI run 35543559627). BASE sits comfortably inside
+# every window this file exercises (24h trend, 36h dedupe, 14d retention).
+NOW = datetime.now(timezone.utc)
+BASE = NOW - timedelta(hours=2)
+
+
+def _iso(moment):
+    return moment.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
 MIGRATIONS = (
     'supabase/migrations/202609070001_reading_history.sql',
     'supabase/migrations/202609140001_m2_behavior_history.sql',
@@ -128,8 +144,8 @@ def _row(url, **extra):
         'story_id': _story_id(url), 'origin_class': 'public_outlet', 'source_kind': 'outlet',
         'canonical_url': url, 'title': f'Headline for {url}', 'summary': 'Summary.',
         'language': 'en', 'source_id': 'reuters', 'source_name': 'Reuters',
-        'source_is_aggregator': False, 'published_at': '2026-09-18T10:00:00Z',
-        'source_observed_at': '2026-09-18T10:00:00Z', 'category_ids': ['world'],
+        'source_is_aggregator': False, 'published_at': _iso(BASE),
+        'source_observed_at': _iso(BASE), 'category_ids': ['world'],
     }
     payload.update(extra)
     return payload
@@ -158,28 +174,28 @@ def _seed_corpus(container):
     coverage = [
         # Aggregator only: three observations, zero independent publishers.
         {'story_id': _story_id(AGGREGATOR_ONLY), 'publisher_id': 'buzzing', 'is_independent': False,
-         'first_seen_at': '2026-09-18T10:00:00Z'},
+         'first_seen_at': _iso(BASE)},
         {'story_id': _story_id(AGGREGATOR_ONLY), 'publisher_id': 'google-36kr', 'is_independent': False,
-         'first_seen_at': '2026-09-18T10:05:00Z'},
+         'first_seen_at': _iso(BASE + timedelta(minutes=5))},
         {'story_id': _story_id(AGGREGATOR_ONLY), 'publisher_id': 'hnfront', 'is_independent': False,
-         'first_seen_at': '2026-09-18T10:06:00Z'},
+         'first_seen_at': _iso(BASE + timedelta(minutes=6))},
         # Mixed: one publisher plus two aggregator echoes of it.
         {'story_id': _story_id(MIXED), 'publisher_id': 'cnbeta', 'is_independent': True,
-         'first_seen_at': '2026-09-18T10:00:00Z'},
+         'first_seen_at': _iso(BASE)},
         {'story_id': _story_id(MIXED), 'publisher_id': 'buzzing', 'is_independent': False,
-         'first_seen_at': '2026-09-18T10:02:00Z'},
+         'first_seen_at': _iso(BASE + timedelta(minutes=2))},
         {'story_id': _story_id(MIXED), 'publisher_id': 'google-36kr', 'is_independent': False,
-         'first_seen_at': '2026-09-18T10:03:00Z'},
+         'first_seen_at': _iso(BASE + timedelta(minutes=3))},
         # True multi-outlet: three publishers, and a duplicate Reuters sighting
         # that must COLLAPSE into the existing row rather than count twice.
         {'story_id': _story_id(MULTI_OUTLET), 'publisher_id': 'reuters', 'is_independent': True,
-         'first_seen_at': '2026-09-18T10:00:00Z'},
+         'first_seen_at': _iso(BASE)},
         {'story_id': _story_id(MULTI_OUTLET), 'publisher_id': 'cnn', 'is_independent': True,
-         'first_seen_at': '2026-09-18T10:01:00Z'},
+         'first_seen_at': _iso(BASE + timedelta(minutes=1))},
         {'story_id': _story_id(MULTI_OUTLET), 'publisher_id': 'cnbeta', 'is_independent': True,
-         'first_seen_at': '2026-09-18T10:02:00Z'},
+         'first_seen_at': _iso(BASE + timedelta(minutes=2))},
         {'story_id': _story_id(MULTI_OUTLET), 'publisher_id': 'reuters', 'is_independent': True,
-         'first_seen_at': '2026-09-18T10:30:00Z'},
+         'first_seen_at': _iso(BASE + timedelta(minutes=30))},
     ]
     _service(container, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
 
@@ -260,7 +276,9 @@ def test_one_coverage_row_per_distinct_publisher(db):
 def test_a_repeat_sighting_keeps_the_earliest_first_seen(db):
     result = _sql(db, "select first_seen_at from public.retained_corpus_coverage "
                       f"where story_id = {_quote(_story_id(MULTI_OUTLET))} and publisher_id = 'reuters';")
-    assert result.stdout.strip().startswith('2026-09-18 10:00')
+    # The earliest of the two reuters sightings (BASE), not the later duplicate
+    # (BASE + 30 minutes).
+    assert result.stdout.strip().startswith(BASE.strftime('%Y-%m-%d %H:%M:%S')), result.stdout
 
 
 def test_aggregator_echoes_alone_are_not_hot(db):
@@ -287,7 +305,7 @@ def test_a_story_nobody_else_carried_still_counts_its_own_publisher(db):
 
 def test_coverage_for_an_unknown_story_is_skipped_not_inserted(db):
     payload = [{'story_id': _story_id('https://example.test/never-ingested'), 'publisher_id': 'ghost',
-                'is_independent': True, 'first_seen_at': '2026-09-18T10:00:00Z'}]
+                'is_independent': True, 'first_seen_at': _iso(NOW)}]
     result = _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(payload))}::jsonb);")
     assert result.stdout.strip().splitlines()[-1] == '0'
 
@@ -308,7 +326,7 @@ def test_the_writer_path_produces_coverage_that_lands_in_the_hot_pool(db):
     from curator.retained_corpus import coverage_ingest_rows, retain
 
     url = 'https://example.test/writer-path'
-    observed = datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)
+    observed = datetime.now(timezone.utc)
 
     def route(source_id, *, aggregator=False, echo_eligible=True):
         return Item(title='Three outlets carried this', url=url, canonical_url=url,
@@ -350,7 +368,7 @@ def test_the_writer_is_idempotent_across_runs(db):
     from curator.retained_corpus import coverage_ingest_rows, retain
 
     url = 'https://example.test/writer-path'
-    observed = datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)
+    observed = datetime.now(timezone.utc)
     retained = retain([Item(title='Three outlets carried this', url=url, canonical_url=url,
                             source_id=source, source_name=source, published_at=observed,
                             language='en', description='Body.') for source in ('reuters', 'cnn')],
@@ -384,9 +402,10 @@ def test_the_lane_rpc_inherits_the_dedupe_rule(db):
     second = 'https://example.test/lane-dedupe-newer'
     title = 'One headline, two addresses'
     rows = [_row(first, title=title, source_id='wire-a', source_name='Wire A',
-                 published_at='2026-09-18T09:00:00Z', source_observed_at='2026-09-18T09:00:00Z'),
+                 published_at=_iso(BASE), source_observed_at=_iso(BASE)),
             _row(second, title=title, source_id='wire-b', source_name='Wire B',
-                 published_at='2026-09-18T09:30:00Z', source_observed_at='2026-09-18T09:30:00Z')]
+                 published_at=_iso(BASE + timedelta(minutes=30)),
+                 source_observed_at=_iso(BASE + timedelta(minutes=30)))]
     _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
     served = [row for row in _lane(db) if row['title'] == title]
     assert len(served) == 1, f'the lane RPC served {len(served)} copies of one story'
@@ -401,7 +420,7 @@ def test_the_lane_rpc_inherits_the_dedupe_rule(db):
 
 
 def _twins(container, slug, title, *, older_source, newer_source,
-           older_published='2026-09-18T09:00:00Z', newer_published='2026-09-18T09:30:00Z',
+           older_published=_iso(BASE), newer_published=_iso(BASE + timedelta(minutes=30)),
            categories=None):
     """Two rows, one headline, two addresses. The older one is the interesting
     one: the dedupe rule keeps the NEWER, so a lane that only the older
@@ -426,7 +445,7 @@ def test_a_lane_keeps_the_twin_that_qualifies_for_it_hot(db):
     older, newer = _twins(db, 'lane-twin-hot', title,
                           older_source='wire-hot', newer_source='wire-quiet')
     coverage = [{'story_id': older, 'publisher_id': publisher, 'is_independent': True,
-                 'first_seen_at': '2026-09-18T09:00:00Z'} for publisher in ('a', 'b', 'c')]
+                 'first_seen_at': _iso(BASE)} for publisher in ('a', 'b', 'c')]
     _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
     served = [row for row in _lane(db, 'hot') if row['title'] == title]
     assert [row['story_id'] for row in served] == [older], served
@@ -513,7 +532,7 @@ def test_the_hot_lane_pages_on_its_own_sort_key_without_skipping_or_repeating(db
     for index in range(6):
         url = f'https://example.test/hot-keyset-{index}'
         rows.append(_row(url, source_id=f'wire{index}', source_name=f'Wire {index}',
-                         published_at='2026-09-18T09:00:00Z', source_observed_at='2026-09-18T09:00:00Z'))
+                         published_at=_iso(BASE), source_observed_at=_iso(BASE)))
     _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
     coverage = []
     for index in range(6):
@@ -522,7 +541,7 @@ def test_the_hot_lane_pages_on_its_own_sort_key_without_skipping_or_repeating(db
         # exactly the shape a published_at-only cursor gets wrong.
         for publisher in range(2 + index % 3):
             coverage.append({'story_id': story, 'publisher_id': f'pub{publisher}',
-                             'is_independent': True, 'first_seen_at': '2026-09-18T09:00:00Z'})
+                             'is_independent': True, 'first_seen_at': _iso(BASE)})
     _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
 
     first = _lane(db, 'hot', limit=3)
@@ -553,14 +572,14 @@ def test_the_prune_removes_old_rows_and_leaves_recent_coverage_intact(db):
     window and would read as zero if it did."""
     old_url = 'https://example.test/prune-old'
     recent_url = 'https://example.test/prune-recent'
+    long_ago = NOW - timedelta(days=30)
     rows = [_row(old_url, source_id='oldwire', source_name='Old Wire',
-                 published_at='2026-08-01T10:00:00Z', source_observed_at='2026-08-01T10:00:00Z'),
+                 published_at=_iso(long_ago), source_observed_at=_iso(long_ago)),
             _row(recent_url, source_id='newwire', source_name='New Wire',
-                 published_at=datetime.now(timezone.utc).isoformat(),
-                 source_observed_at=datetime.now(timezone.utc).isoformat())]
+                 published_at=_iso(NOW), source_observed_at=_iso(NOW))]
     _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
     coverage = [{'story_id': _story_id(url), 'publisher_id': publisher, 'is_independent': True,
-                 'first_seen_at': datetime.now(timezone.utc).isoformat()}
+                 'first_seen_at': _iso(NOW)}
                 for url in (old_url, recent_url) for publisher in ('a', 'b')]
     _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
 
