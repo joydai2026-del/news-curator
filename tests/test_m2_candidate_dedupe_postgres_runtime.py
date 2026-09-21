@@ -37,6 +37,12 @@ MIGRATIONS = (
     'supabase/migrations/202609160002_m2_translation_spend_and_decisions.sql',
     'supabase/migrations/202609160003_m2_exclusive_lane_from_decisions.sql',
     'supabase/migrations/202609180101_m2_retained_candidates_dedupe.sql',
+    # The dedupe RULE is pinned by this file; 202609210001 changes only how
+    # it is computed (a lead() window instead of a correlated NOT EXISTS).
+    # Applying it here is what makes that claim testable rather than
+    # asserted: every twin, category, lane and page-boundary case below now
+    # runs against the new definition and must come out the same.
+    'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
 )
 POLICY = 'pairing-json-v1'
 NOW = datetime(2026, 9, 16, 10, 0, tzinfo=timezone.utc)

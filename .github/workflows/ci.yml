@@ -254,14 +254,14 @@ jobs:
       # feed actually sends, printing EXPLAIN (ANALYZE, BUFFERS) of the query
       # inside the function so the log carries the evidence.
       #
-      # -k "not SLOW" DESELECTS the two lanes that are currently pathological
-      # (general-pool at about 102s, interested at about 15s). They are
-      # deselected rather than skipped, because the guard below treats a skip as
-      # a failure. Run them on demand with the same command minus the -k.
+      # The whole file runs. When it was written two lanes (general-pool at
+      # about 102s, interested at about 15s) had to be deselected by name to
+      # keep a pull request under an hour; 202609210001 put both back on the
+      # 1500 ms budget with the other three.
       - name: Measure the lane RPC at corpus scale
         run: |
           python -m pytest -p no:cacheprovider -q tests/test_m2_candidate_scale_postgres_runtime.py \
-            -k "not SLOW" -s --junitxml=/tmp/scale-db.xml
+            -s --junitxml=/tmp/scale-db.xml
           python - <<'PYTHON'
           import xml.etree.ElementTree as ET
           root = ET.parse("/tmp/scale-db.xml").getroot()

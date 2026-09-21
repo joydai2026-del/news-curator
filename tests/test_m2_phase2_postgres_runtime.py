@@ -54,6 +54,10 @@ MIGRATIONS = (
     # RPC inherits its rule in 0102. Applied in the same order CI applies them.
     'supabase/migrations/202609180101_m2_retained_candidates_dedupe.sql',
     'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
+    # 202609210001 replaces the quadratic dedupe with a lead() window over
+    # the same set. Applied here so every assertion below is made against
+    # the definition production actually runs, not the one it replaced.
+    'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
