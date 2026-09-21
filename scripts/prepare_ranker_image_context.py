@@ -11,7 +11,11 @@ from pathlib import Path
 import yaml
 
 RANKER_POLICY = Path("config/ranker-policy-r1.yaml")
-CONFIG_ROOT = "config/"
+# The only directory staged into the image, and the only place a policy may
+# point at. Mirrored by curator/recommendation/composition.RETENTION_INPUTS_FILE,
+# which the runtime reads; tests assert the two agree.
+CONFIG_ROOT = "config"
+RETENTION_INPUTS = Path("config/retention-inputs.yaml")
 
 
 def sha(path: Path) -> str:
@@ -54,53 +58,99 @@ def copy_reviewed_vendor(source: Path, destination: Path, manifest_path: Path) -
         raise SystemExit("vendor tree has unreviewed files")
 
 
-def _string_values(document):
+def _path_shaped_values(document, key="<root>"):
+    """Every value that names a file, with the key that named it.
+
+    A path is a value with a separator and no URL scheme: `endpoint:
+    https://api.openai.com/v1` is not a file, `config/ranking-policy-r2.yaml`
+    is. Only the POLICY document is walked. The files it names hold prose and
+    numbers, and a prompt template that writes "A/B" must not read as a path.
+    """
     if isinstance(document, str):
-        yield document
+        if "/" in document and "://" not in document:
+            yield key, document
     elif isinstance(document, dict):
-        for value in document.values():
-            yield from _string_values(value)
+        for name, value in document.items():
+            yield from _path_shaped_values(value, str(name))
     elif isinstance(document, list):
         for value in document:
-            yield from _string_values(value)
+            yield from _path_shaped_values(value, key)
+
+
+def _validated_reference(repo: Path, key: str, value: str) -> Path:
+    """One reference, refused rather than skipped when it escapes config/.
+
+    A staging script that quietly ignores a reference it did not expect is how
+    the Phase 2 files went missing, so every path-shaped value either stages or
+    fails the build naming the key that carried it.
+    """
+    def refuse(reason: str):
+        raise SystemExit(f"ranker policy {key}: {value} {reason}")
+
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        refuse("must be a repository-relative path with no parent traversal")
+    if relative.parts[:1] != (CONFIG_ROOT,):
+        refuse(f"must live inside {CONFIG_ROOT}/, the only directory staged into the image")
+    current = repo
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            refuse("passes through a symlink")
+    if not current.is_file():
+        refuse("is missing")
+    if not current.resolve().is_relative_to(repo.resolve()):
+        refuse("resolves outside the repository")
+    return relative
 
 
 def referenced_config_files(repo: Path, policy: Path = RANKER_POLICY) -> list[Path]:
-    """Every config file the ranker policy names, transitively, policy first.
+    """Every config file the ranker policy names, the policy itself first.
 
-    The runtime reads these paths out of the policy itself (prompt_template,
-    composition_policy, and anything a referenced file names in turn), so the
-    image context is discovered from the same file the runtime loads instead of
-    a second hardcoded list here that silently drifts out of date. Only parsed
-    VALUES count: a `config/...` path inside a YAML comment is not a reference.
+    Discovered from the same file the runtime loads, so adding a key like
+    prompt_template is a config change and not a second edit here. The old
+    hardcoded pair is what shipped an image whose policy named two files it did
+    not contain.
     """
-    ordered: list[Path] = []
-    pending = [policy.as_posix()]
-    seen: set[str] = set()
-    while pending:
-        relative = Path(pending.pop(0))
-        if relative.as_posix() in seen:
-            continue
-        seen.add(relative.as_posix())
-        if relative.is_absolute() or ".." in relative.parts:
-            raise SystemExit(f"unsafe config reference: {relative.as_posix()}")
-        path = repo / relative
-        if path.is_symlink() or not path.is_file():
-            raise SystemExit(f"ranker policy references a missing file: {relative.as_posix()}")
-        ordered.append(relative)
-        if path.suffix in {".yaml", ".yml"}:
-            pending.extend(value for value in _string_values(yaml.safe_load(path.read_text(encoding="utf-8")))
-                           if value.startswith(CONFIG_ROOT))
+    document = yaml.safe_load((repo / policy).read_text(encoding="utf-8"))
+    ordered = [policy]
+    for key, value in _path_shaped_values(document):
+        relative = _validated_reference(repo, key, value)
+        if relative not in ordered:
+            ordered.append(relative)
     return ordered
 
 
-def stage_referenced_config(repo: Path, context: Path, policy: Path = RANKER_POLICY) -> list[Path]:
-    """Copy exactly the config files the policy names into the image context."""
+def stage_retention_inputs(repo: Path, context: Path) -> int:
+    """Generate the boot-time retention input the image has no sources.yaml for.
+
+    sources.yaml configures collection, not the ranker, so it does not belong in
+    the ranker image. The one value the retention cross-check needs does, and the
+    runtime now REFUSES to boot without it instead of skipping the check.
+    """
+    document = yaml.safe_load((repo / "sources.yaml").read_text(encoding="utf-8"))
+    coverage = document.get("coverage") if isinstance(document, dict) else None
+    days = coverage.get("observations_retention_days") if isinstance(coverage, dict) else None
+    if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+        raise SystemExit("sources.yaml coverage.observations_retention_days must be a positive integer")
+    target = context / RETENTION_INPUTS
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("# Generated by scripts/prepare_ranker_image_context.py from sources.yaml.\n"
+                      "# The image carries no sources.yaml. curator/recommendation/composition.py\n"
+                      "# reads this file at boot and refuses to start without it.\n"
+                      f"schema_version: 1\ncoverage:\n  observations_retention_days: {days}\n",
+                      encoding="utf-8")
+    return days
+
+
+def stage_config(repo: Path, context: Path, policy: Path = RANKER_POLICY) -> list[Path]:
+    """Copy exactly the config files the policy names, plus the generated input."""
     staged = referenced_config_files(repo, policy)
     for relative in staged:
         target = context / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, target)
+    stage_retention_inputs(repo, context)
     return staged
 
 
@@ -125,7 +175,7 @@ def main() -> None:
     copy_reviewed_vendor(repo / "deploy/ranker/vendor", args.output / "vendor",
                          repo / "deploy/ranker/rankllm-vendor-manifest.json")
     copy_python_tree(repo / "curator", args.output / "curator")
-    stage_referenced_config(repo, args.output)
+    stage_config(repo, args.output)
     shutil.copy2(repo / "deploy/ranker/Containerfile", args.output / "Containerfile")
     shutil.copy2(repo / "deploy/ranker/requirements-linux-cp312-x86_64.lock", args.output / "requirements.lock")
     shutil.copy2(repo / "deploy/ranker/linux-wheel-provenance.json", args.output / "wheel-provenance.json")
