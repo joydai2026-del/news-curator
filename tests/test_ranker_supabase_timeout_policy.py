@@ -22,11 +22,13 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_shipped_policy_declares_a_timeout_the_heavy_query_can_finish_in():
     _, policy = load_ranker_policy({}, RANKER_POLICY_DEFAULT, root=ROOT)
     value = supabase_timeout_seconds(policy)
-    assert value == 10.0
-    # The failing production request gave up at about 4.8 seconds. A ceiling at
-    # or below that reproduces the outage, so this asserts the gap, not the
-    # literal.
-    assert value > 4.8
+    assert value == 5.0
+    # 5, not 10: this value multiplies CLAIMED_SECTION_MAX_TRANSPORT_CALLS inside
+    # composition.py Check 10, so every second here costs sixteen seconds of
+    # reading-run claim, and a long claim is how long a crashed request blocks
+    # the feed. The two known-broken candidate lanes (15s and 102s at 7,000
+    # corpus rows) cannot be rescued by ANY legal value of this key; their fix is
+    # the query.
 
 
 def test_an_absent_section_refuses_the_boot_rather_than_defaulting():
@@ -65,4 +67,4 @@ def test_a_misspelled_key_is_refused_rather_than_silently_ignored():
 
 def test_the_policy_file_on_disk_parses_to_the_value_the_transport_receives():
     raw = yaml.safe_load((ROOT / RANKER_POLICY_DEFAULT).read_text())
-    assert raw["supabase"] == {"timeout_seconds": 10}
+    assert raw["supabase"] == {"timeout_seconds": 5}

@@ -171,7 +171,9 @@ def _text(document: Mapping[str, object], dotted: str, *, maximum: int) -> str:
 
 def parse_composition_policy(document: object, *, retention_days: int | None = None,
                              provider_deadline_seconds: float | None = None,
-                             settle_window_seconds: float | None = None) -> CompositionPolicy:
+                             settle_window_seconds: float | None = None,
+                             supabase_timeout_seconds: float | None = None,
+                             claimed_section_transport_calls: int | None = None) -> CompositionPolicy:
     if not isinstance(document, Mapping) or document.get("schema_version") != 1:
         raise CompositionPolicyError("invalid composition policy")
 
@@ -289,12 +291,25 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
     if provider_deadline_seconds is not None and settle_window_seconds is not None:
         claim = int(numbers["run.ranking_claim_seconds"])
         margin = int(numbers["run.ranking_claim_margin_seconds"])
-        needed = float(provider_deadline_seconds) + float(settle_window_seconds) + margin
+        # THE SUPABASE BUDGET IS PART OF THE CLAIMED SECTION. The provider call
+        # is not the only thing the claim holder does: it also makes up to
+        # CLAIMED_SECTION_MAX_TRANSPORT_CALLS Supabase round trips, each of
+        # which may run to supabase.timeout_seconds. Sizing the claim against
+        # the provider deadline alone let a slow-but-successful request outlive
+        # its own claim, and a second caller then paid for the same view.
+        # Caught by Codex review on 2026-09-21.
+        transport = 0.0
+        if supabase_timeout_seconds is not None and claimed_section_transport_calls is not None:
+            transport = float(supabase_timeout_seconds) * int(claimed_section_transport_calls)
+        needed = float(provider_deadline_seconds) + float(settle_window_seconds) + transport + margin
         if claim <= needed:
             raise CompositionPolicyError(
                 f"run.ranking_claim_seconds ({claim}) must exceed the provider deadline "
                 f"({provider_deadline_seconds}) plus the settle window ({settle_window_seconds}) "
-                f"plus run.ranking_claim_margin_seconds ({margin}), which is {needed}")
+                f"plus the claimed-section Supabase budget "
+                f"({claimed_section_transport_calls} calls x {supabase_timeout_seconds}s "
+                f"= {transport}) plus run.ranking_claim_margin_seconds ({margin}), "
+                f"which is {needed}")
 
     return CompositionPolicy(
         lane_ratios=ratios, lane_priority=tuple(priority), page_size=page_size,
@@ -333,11 +348,15 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
 
 def load_composition_policy(path: str | Path, *, retention_days: int | None = None,
                             provider_deadline_seconds: float | None = None,
-                            settle_window_seconds: float | None = None) -> CompositionPolicy:
+                            settle_window_seconds: float | None = None,
+                            supabase_timeout_seconds: float | None = None,
+                            claimed_section_transport_calls: int | None = None) -> CompositionPolicy:
     return parse_composition_policy(yaml.safe_load(Path(path).read_text(encoding="utf-8")),
                                     retention_days=retention_days,
                                     provider_deadline_seconds=provider_deadline_seconds,
-                                    settle_window_seconds=settle_window_seconds)
+                                    settle_window_seconds=settle_window_seconds,
+                                    supabase_timeout_seconds=supabase_timeout_seconds,
+                                    claimed_section_transport_calls=claimed_section_transport_calls)
 
 
 def configured_retention_days(sources_path: str | Path = "sources.yaml") -> int | None:
