@@ -11,11 +11,42 @@ import httpx
 import yaml
 
 from .asgi import RankingASGI
-from .composition import configured_retention_days, load_composition_policy
+from .composition import RETENTION_INPUTS_FILE, boot_retention_days, load_composition_policy
 from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder, ScoringPolicy
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import RankingService, ServicePolicy
 from .supabase_http import SupabaseHTTP
+
+
+RANKER_POLICY_DEFAULT = "config/ranker-policy-r1.yaml"
+
+
+def load_ranker_policy(env, policy_path: str | Path | None = None, *, root: Path | None = None):
+    """The ranker policy and the path it was read from.
+
+    Service mode and smoke mode both come through here, so neither can drift
+    onto a config filename of its own. `root` anchors a relative path for a
+    caller that cannot rely on the working directory (the Modal image).
+    """
+    path = Path(policy_path or env.get("NEWS_CURATOR_RANKER_POLICY") or RANKER_POLICY_DEFAULT)
+    if root is not None and not path.is_absolute():
+        path = Path(root) / path
+    policy = yaml.safe_load(path.read_text())
+    if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+        raise ValueError("invalid ranker policy")
+    return path, policy
+
+
+def policy_reference(policy_path: Path, value: str | Path) -> Path:
+    """Resolve a `config/...` path the policy names, relative to the policy itself.
+
+    The values are written from the tree root (`config/<name>`) and the policy
+    lives at `<root>/config/<name>`, so the root is the policy's grandparent.
+    Resolving against it instead of the process working directory means a
+    checkout and an image read the same file. An absolute override is honored.
+    """
+    path = Path(value)
+    return path if path.is_absolute() else policy_path.parent.parent / path
 
 
 def configured_token_counter(policy, env):
@@ -48,10 +79,7 @@ def configured_token_counter(policy, env):
 
 def build_application(*, environ=None, policy_path: str | None = None):
     env = os.environ if environ is None else environ
-    path = Path(policy_path or env.get("NEWS_CURATOR_RANKER_POLICY", "config/ranker-policy-r1.yaml"))
-    policy = yaml.safe_load(path.read_text())
-    if not isinstance(policy, dict) or policy.get("schema_version") != 1:
-        raise ValueError("invalid ranker policy")
+    path, policy = load_ranker_policy(env, policy_path)
     enabled = policy.get("service_enabled") is True
     reader_origin = _required(env, "NEWS_CURATOR_READER_ORIGIN")
     supabase_origin = _required(env, "NEWS_CURATOR_SUPABASE_URL")
@@ -76,15 +104,18 @@ def build_application(*, environ=None, policy_path: str | None = None):
     # Cross-file check at boot: the corpus retention window (sources.yaml) must
     # still cover the window the feed reads back (this policy).
     composition = load_composition_policy(
-        composition_path,
-        retention_days=configured_retention_days(env.get("NEWS_CURATOR_SOURCES", "sources.yaml")),
+        policy_reference(path, composition_path),
+        # Local checkout first, then the value staged into the image. Missing
+        # from BOTH is a refusal, never a skipped check.
+        retention_days=boot_retention_days(env.get("NEWS_CURATOR_SOURCES", "sources.yaml"),
+                                           policy_reference(path, RETENTION_INPUTS_FILE)),
         # The claim window is validated against the call it protects.
         provider_deadline_seconds=policy["deadline_seconds"],
         settle_window_seconds=policy.get("settle_window_seconds", 5),
     ) if composition_path else None
     scoring = ScoringPolicy.from_composition(composition) if composition else None
-    prompt = ReviewedRankLLMPromptBuilder(env.get("NEWS_CURATOR_RANKLLM_TEMPLATE") or
-        _required(policy, "prompt_template"))
+    prompt = ReviewedRankLLMPromptBuilder(str(policy_reference(path,
+        env.get("NEWS_CURATOR_RANKLLM_TEMPLATE") or _required(policy, "prompt_template"))))
     engine = OpenAIRankLLMEngine(prompt_builder=prompt, endpoint=ranker_policy.endpoint, api_key=provider_key or "disabled",
         model=ranker_policy.model_id, maximum_output_tokens=policy["maximum_output_tokens"],
         reasoning_token_allowance=policy["reasoning_token_allowance"],
