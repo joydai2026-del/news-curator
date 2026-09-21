@@ -22,6 +22,7 @@ from curator.contracts.ranking_request import (
 )
 from .async_provider import (ProviderHTTPError, ProviderResponseError, ProviderResponseInvalid,
     ProviderTimeout, ProviderTransportFailure)
+from .diagnostics import log_suppressed_exception
 
 
 class RankLLMEngine(Protocol):
@@ -152,7 +153,9 @@ class RankLLMAdapter:
                     usage_observer(ProviderOutcome((), error.input_tokens, error.output_tokens,
                         error.request_id), attempt, self._clock() - started)
                 return self._fallback(request, "invalid_provider_permutation")
-            except Exception:
+            except Exception as error:
+                log_suppressed_exception("m2_provider_call_failed", error,
+                    candidates=len(request.candidates), history_events=len(request.ordered_history))
                 return self._fallback(request, "provider_failure")
         if outcome is None:
             return self._fallback(request, "provider_failure")
@@ -265,7 +268,9 @@ class RankLLMAdapter:
             return None, "provider_preparation_unavailable"
         try:
             prepared = self.prepare(request)
-        except Exception:
+        except Exception as error:
+            log_suppressed_exception("m2_provider_preparation_failed", error,
+                candidates=len(request.candidates), history_events=len(request.ordered_history))
             return None, "provider_preparation_failed"
         return (prepared, "" if prepared is not None else "request_cost_limit")
 

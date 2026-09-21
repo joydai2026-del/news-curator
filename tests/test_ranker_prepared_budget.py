@@ -370,6 +370,116 @@ def test_prepare_with_reason_does_not_swallow_process_control():
         adapter.prepare_with_reason(request)
 
 
+def test_prepare_with_reason_logs_one_structured_line_with_no_request_content(capsys):
+    """A raising engine produces exactly one stdout line naming the exception
+    class, and never leaks candidate titles/summaries or the vendor message."""
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    class VendorEngine:
+        def prepare(self, model_input): raise RuntimeError('vendor payload: never print me')
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+        max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=VendorEngine())
+    model_input=captured_input()
+    request=RankingRequest(1,'diagnostics-request',AuthenticatedOwner('tenant','user','principal',ActorKind.HUMAN),
+        model_input.candidates,tuple(c.candidate_id for c in model_input.candidates),(),0,0,1,1,
+        'test-policy','test-model')
+    prepared,reason=adapter.prepare_with_reason(request)
+    assert prepared is None and reason=='provider_preparation_failed'
+    captured=capsys.readouterr()
+    assert captured.err==''
+    lines=[line for line in captured.out.splitlines() if line.strip()]
+    assert len(lines)==1, f'expected exactly one stdout line, got {lines!r}'
+    payload=json.loads(lines[0])
+    assert payload['event']=='m2_provider_preparation_failed'
+    assert payload['exception_class']=='RuntimeError'
+    assert payload['detail']=='suppressed'
+    assert payload['candidates']==len(model_input.candidates)
+    assert payload['history_events']==0
+    assert payload['frame'].startswith('curator/recommendation/rankllm_adapter.py:')
+    assert set(payload)=={'event','exception_class','detail','candidates','history_events','frame'}
+    assert 'vendor payload' not in captured.out
+    for candidate in model_input.candidates:
+        if candidate.title:
+            assert candidate.title not in captured.out
+        if candidate.summary:
+            assert candidate.summary not in captured.out
+
+
+def test_prepare_with_reason_passes_through_a_curator_raised_literal(capsys):
+    """A ValueError whose message is a reviewed, registered literal (here,
+    RankerPolicy.validate's constant-string raise) is passed through
+    verbatim, unlike the vendor RuntimeError above, which the previous test
+    proved comes back "suppressed"."""
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    class CuratorRaisingEngine:
+        def prepare(self, model_input):
+            RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+                deadline_seconds=999).validate()
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+        max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),
+        engine=CuratorRaisingEngine())
+    model_input=captured_input()
+    request=RankingRequest(1,'passthrough-request',AuthenticatedOwner('tenant','user','principal',ActorKind.HUMAN),
+        model_input.candidates,tuple(c.candidate_id for c in model_input.candidates),(),0,0,1,1,
+        'test-policy','test-model')
+    prepared,reason=adapter.prepare_with_reason(request)
+    assert prepared is None and reason=='provider_preparation_failed'
+    payload=json.loads(capsys.readouterr().out.strip())
+    assert payload['exception_class']=='ValueError'
+    assert payload['detail']=='ranker deadline must be within six seconds'
+    assert payload['frame'].startswith('curator/recommendation/rankllm_adapter.py:')
+
+
+def test_prepare_with_reason_suppresses_a_curator_f_string_message(capsys):
+    """Being a ValueError raised from curator/ code is NOT enough: a message
+    built from an f-string can embed request-derived text, so only an exact
+    match against the reviewed KNOWN_DIAGNOSTIC_MESSAGES literals passes
+    through. Here `curator/contracts/ranking_request.py`'s `_require_nonblank`
+    raises ValueError(f"{field_name} must be non-blank and unpadded") for a
+    blank request_id: a real curator ValueError, never registered as a
+    literal because its source is an f-string, so it must come back
+    "suppressed" even though the previous test proved a registered literal
+    from the same adapter passes through."""
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    class Engine:
+        def prepare(self, model_input): pytest.fail('must fail validation before the engine is ever called')
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+        max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=Engine())
+    model_input=captured_input()
+    request=RankingRequest(1,'',AuthenticatedOwner('tenant','user','principal',ActorKind.HUMAN),
+        model_input.candidates,tuple(c.candidate_id for c in model_input.candidates),(),0,0,1,1,
+        'test-policy','test-model')
+    prepared,reason=adapter.prepare_with_reason(request)
+    assert prepared is None and reason=='provider_preparation_failed'
+    payload=json.loads(capsys.readouterr().out.strip())
+    assert payload['exception_class']=='ValueError'
+    assert payload['detail']=='suppressed'
+    assert 'request_id must be non-blank' not in json.dumps(payload)
+
+
+def test_rank_logs_structured_diagnostics_on_a_swallowed_provider_exception(capsys):
+    """The sibling `except Exception:` around the live provider call in
+    rank() (not just prepare_with_reason) gets the same one-line treatment."""
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy, BudgetState
+    class VendorEngine:
+        def rerank(self, model_input, timeout_seconds): raise RuntimeError('vendor rerank blew up')
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+        max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=VendorEngine())
+    model_input=captured_input()
+    request=RankingRequest(1,'rank-provider-failure-request',AuthenticatedOwner('tenant','user','principal',ActorKind.HUMAN),
+        model_input.candidates,tuple(c.candidate_id for c in model_input.candidates),(),0,0,1,1,
+        'test-policy','test-model')
+    receipt=adapter.rank(request,provider_processing_consent=True,budget=BudgetState(0.0),
+        estimated_input_tokens=100,estimated_output_tokens=100)
+    assert receipt.fallback_reason=='provider_failure'
+    payload=json.loads(capsys.readouterr().out.strip())
+    assert payload['event']=='m2_provider_call_failed'
+    assert payload['exception_class']=='RuntimeError'
+    assert payload['detail']=='suppressed'
+    assert payload['candidates']==len(model_input.candidates)
+    assert payload['history_events']==0
+    assert 'vendor rerank blew up' not in json.dumps(payload)
+
+
 def test_observed_retry_settlement_retains_only_unknown_attempt_ceiling():
     from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
     adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
