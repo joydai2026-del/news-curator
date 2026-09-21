@@ -23,6 +23,7 @@ from curator.contracts.ranking_request import (
 )
 
 from .composition import BACKFILL_LANE, CompositionPolicy
+from .diagnostics import log_suppressed_exception
 from .finalize import finalize_order
 from .profile import BehaviorProfile, build_profile
 from .rankllm_adapter import BudgetState, RankLLMAdapter
@@ -590,9 +591,9 @@ class RankingService:
                 bindings={"corpus_cursor": self._next_corpus_cursor(rows, hot_story_ids),
                           "corpus_has_more": len(rows) > len(added),
                           "continuation_mode": "recipe_only"})
-        except Exception:
-            print(json.dumps({"event": "m2_continuation_failed", "reason": "store_unavailable"},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+        except Exception as error:
+            log_suppressed_exception("m2_continuation_failed", error, stream=sys.stderr,
+                reason="store_unavailable", frozen_order_id=frozen_order_id)
             return ()
         if not isinstance(total, int) or total <= len(frozen.get("cards", ())):
             # The order did not grow: it has reached its cap, or the row was not
@@ -608,9 +609,9 @@ class RankingService:
         try:
             previous = self._store.record_run_page(user_id=owner.user_id, run_id=run_id,
                                                    eligibility_key=eligibility_key, pages=pages)
-        except Exception:
-            print(json.dumps({"event": "m2_page_budget_unavailable", "run_id": run_id},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+        except Exception as error:
+            log_suppressed_exception("m2_page_budget_unavailable", error, stream=sys.stderr,
+                run_id=run_id)
             return 0
         return previous if isinstance(previous, int) and not isinstance(previous, bool) else 0
 
@@ -636,11 +637,11 @@ class RankingService:
             if not isinstance(recorded, int) or recorded <= 0:
                 print(json.dumps({"event": "m2_filter_not_recorded", "run_id": str(run_id)},
                                  separators=(",", ":")), file=sys.stderr, flush=True)
-        except Exception:
+        except Exception as error:
             # A page must render even when the audit write fails. The filter
             # itself already happened; this only records it.
-            print(json.dumps({"event": "m2_filter_record_failed", "run_id": str(run_id)},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+            log_suppressed_exception("m2_filter_record_failed", error, stream=sys.stderr,
+                run_id=str(run_id))
 
     @staticmethod
     def _hot_cursor(cursor):
@@ -866,9 +867,9 @@ class RankingService:
         try:
             self._store.release_run_ranking_claim(user_id=owner.user_id,
                 run_id=str(run["run_id"]), eligibility_key=eligibility_key, token=str(claim_token))
-        except Exception:
-            print(json.dumps({"event": "m2_claim_release_failed", "run_id": str(run["run_id"])},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+        except Exception as error:
+            log_suppressed_exception("m2_claim_release_failed", error, stream=sys.stderr,
+                run_id=str(run["run_id"]))
 
     def _reserve(self, owner, request_id, estimate, run, eligibility_key, claim_token):
         """Reserve, re-validating the claim in the same transaction when held."""
@@ -907,9 +908,9 @@ class RankingService:
         try:
             self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
                                       actual_usd=0.0, status="released")
-        except Exception:
-            print(json.dumps({"event": "m2_release_failed", "request_id": request_id},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+        except Exception as error:
+            log_suppressed_exception("m2_release_failed", error, stream=sys.stderr,
+                request_id=request_id)
 
     @staticmethod
     def _eligibility_key(category_id, query, exclusive) -> str:
@@ -928,9 +929,9 @@ class RankingService:
         try:
             view = self._store.open_run_view(user_id=owner.user_id, run_id=str(run["run_id"]),
                                              eligibility_key=eligibility_key)
-        except Exception:
-            print(json.dumps({"event": "m2_view_unavailable", "run_id": str(run["run_id"])},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+        except Exception as error:
+            log_suppressed_exception("m2_view_unavailable", error, stream=sys.stderr,
+                run_id=str(run["run_id"]))
             return None
         return view if isinstance(view, Mapping) else None
 
@@ -942,12 +943,12 @@ class RankingService:
             claim = self._store.claim_run_ranking(user_id=owner.user_id, run_id=str(run["run_id"]),
                 eligibility_key=eligibility_key, token=str(uuid.uuid4()),
                 ttl_seconds=composition.ranking_claim_seconds)
-        except Exception:
+        except Exception as error:
             # A claim store that is down must not take the feed down with it. The
             # worst case without it is the pre-existing behavior: two concurrent
             # first ranks, which is what this fixes, not what it depends on.
-            print(json.dumps({"event": "m2_claim_unavailable", "run_id": str(run["run_id"])},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+            log_suppressed_exception("m2_claim_unavailable", error, stream=sys.stderr,
+                run_id=str(run["run_id"]))
             return None
         return claim if isinstance(claim, Mapping) else None
 
