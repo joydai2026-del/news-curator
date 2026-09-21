@@ -14,8 +14,8 @@ from .asgi import RankingASGI
 from .composition import RETENTION_INPUTS_FILE, boot_retention_days, load_composition_policy
 from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder, ScoringPolicy
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
-from .service import RankingService, ServicePolicy
-from .supabase_http import SupabaseHTTP
+from .service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS, RankingService, ServicePolicy
+from .supabase_http import DEFAULT_TIMEOUT_SECONDS, SupabaseHTTP, validate_timeout_seconds
 
 
 RANKER_POLICY_DEFAULT = "config/ranker-policy-r1.yaml"
@@ -97,6 +97,9 @@ def build_application(*, environ=None, policy_path: str | None = None):
         request_cost_limit_usd=policy["request_cost_limit_usd"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
         input_cost_per_million_tokens_usd=policy.get("input_cost_per_million_tokens_usd"),
         output_cost_per_million_tokens_usd=policy.get("output_cost_per_million_tokens_usd"))
+    # Read before the composition policy, because the claim-window check inside
+    # it is sized against this value.
+    supabase_timeout = supabase_timeout_seconds(policy)
     # The composition policy is loaded FIRST: it decides whether the ranker asks
     # for action predictions or for a bare permutation, which changes the schema,
     # the prompt and the output budget together.
@@ -109,9 +112,13 @@ def build_application(*, environ=None, policy_path: str | None = None):
         # from BOTH is a refusal, never a skipped check.
         retention_days=boot_retention_days(env.get("NEWS_CURATOR_SOURCES", "sources.yaml"),
                                            policy_reference(path, RETENTION_INPUTS_FILE)),
-        # The claim window is validated against the call it protects.
+        # The claim window is validated against everything it protects: the
+        # provider call AND the claimed section's Supabase round trips, which
+        # are bounded by the per-call timeout this policy now sets.
         provider_deadline_seconds=policy["deadline_seconds"],
         settle_window_seconds=policy.get("settle_window_seconds", 5),
+        supabase_timeout_seconds=supabase_timeout,
+        claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS,
     ) if composition_path else None
     scoring = ScoringPolicy.from_composition(composition) if composition else None
     prompt = ReviewedRankLLMPromptBuilder(str(policy_reference(path,
@@ -126,7 +133,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
         scoring=scoring,
         client_factory=lambda: httpx.AsyncClient(timeout=None, follow_redirects=False))
     adapter = RankLLMAdapter(policy=ranker_policy, engine=engine)
-    transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key)
+    transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key,
+        timeout_seconds=supabase_timeout)
     service_policy = ServicePolicy(policy_version=_required(policy, "prompt_revision"),
         model_version=_required(policy, "model"), provider_policy_id=_required(policy, "prompt_revision"),
         tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
@@ -148,6 +156,33 @@ def build_application(*, environ=None, policy_path: str | None = None):
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,
         maximum_body_bytes=policy["maximum_request_body_bytes"])
+
+
+def supabase_timeout_seconds(policy) -> float:
+    """`supabase.timeout_seconds` from the ranker policy, validated at boot.
+
+    A per-call budget is an operational value, so it belongs in the policy file
+    rather than in the transport's signature: the heavy Phase 2 candidate query
+    grows with the corpus, and raising the ceiling must not require a code
+    change. Validated HERE, at startup, so a bad value refuses the boot instead
+    of surfacing as an opaque 503 on the first request.
+    """
+    # REQUIRED, not defaulted. A misspelled section name (`supabse:`) would
+    # otherwise fall back to the old 3.0 on a policy file that reads as correct,
+    # which is the original outage with the fix apparently applied. An absent
+    # section is a refused boot; DEFAULT_TIMEOUT_SECONDS stays the transport's
+    # own signature default for callers that build it directly.
+    if "supabase" not in policy:
+        raise ValueError("ranker policy must declare a `supabase` section with timeout_seconds")
+    section = policy["supabase"]
+    if not isinstance(section, dict):
+        raise ValueError("ranker policy `supabase` must be a mapping")
+    unknown = set(section) - {"timeout_seconds"}
+    if unknown:
+        raise ValueError(f"unknown ranker policy supabase keys: {sorted(unknown)}")
+    if "timeout_seconds" not in section:
+        raise ValueError("ranker policy supabase section must declare timeout_seconds")
+    return validate_timeout_seconds(section["timeout_seconds"])
 
 
 def preview_owner_allowlist(env, *, enabled: bool) -> tuple[str, ...]:

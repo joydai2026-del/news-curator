@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,13 +12,53 @@ from typing import Mapping
 
 
 class SupabaseHTTPError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(self, message: str, *, status_code: int | None = None,
+                 path: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        # The request that failed, WITHOUT its query string. "Supabase request
+        # failed" on its own is unactionable: it cannot tell a 401 on one RPC
+        # from a client-side timeout on the heavy candidate query, which is the
+        # exact ambiguity that cost a production debugging session on
+        # 2026-09-21. The query string is dropped because it carries user ids.
+        self.path = path
 
 
 class SupabaseAuthenticationError(SupabaseHTTPError):
     pass
+
+
+DEFAULT_TIMEOUT_SECONDS = 3.0
+MINIMUM_TIMEOUT_SECONDS = 1.0
+MAXIMUM_TIMEOUT_SECONDS = 30.0
+
+
+def validate_timeout_seconds(value) -> float:
+    """The client-side budget for one Supabase call, in seconds.
+
+    Operational, so it is policy rather than a literal: the heavy candidate
+    query grows with the corpus and the old hardcoded 3.0s turned that growth
+    into an opaque 503. Bounded on both sides, because 0 would mean "never wait"
+    and an unbounded value would hold a Modal container open behind a dead
+    database.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("supabase.timeout_seconds must be a number of seconds")
+    value = float(value)
+    if not MINIMUM_TIMEOUT_SECONDS <= value <= MAXIMUM_TIMEOUT_SECONDS:
+        raise ValueError(
+            f"supabase.timeout_seconds must be between {MINIMUM_TIMEOUT_SECONDS} "
+            f"and {MAXIMUM_TIMEOUT_SECONDS} seconds")
+    return value
+
+
+def _failure_reason(exc) -> str:
+    """"timeout" (we gave up waiting) versus "url" (we could not reach it)."""
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, (TimeoutError, OSError)):
+        return "timeout" if isinstance(exc.reason, TimeoutError) else "url"
+    return "url"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -33,12 +75,13 @@ def validate_https_origin(origin: str) -> str:
 
 
 class SupabaseHTTP:
-    def __init__(self, *, origin: str, publishable_key: str, service_role_key: str, timeout_seconds: float = 3.0) -> None:
+    def __init__(self, *, origin: str, publishable_key: str, service_role_key: str,
+                 timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> None:
         validate_https_origin(origin)
         if not publishable_key or not service_role_key:
             raise ValueError("Supabase keys must be configured")
         self._origin, self._publishable, self._service = origin, publishable_key, service_role_key
-        self._timeout = timeout_seconds
+        self._timeout = validate_timeout_seconds(timeout_seconds)
         self._opener = urllib.request.build_opener(_NoRedirect)
 
     def _service_token(self) -> str:
@@ -49,7 +92,8 @@ class SupabaseHTTP:
             return self._request("GET", "/auth/v1/user", token=access_token, key=self._publishable)
         except SupabaseHTTPError as error:
             if error.status_code == 401:
-                raise SupabaseAuthenticationError("Supabase rejected the user session", status_code=401) from error
+                raise SupabaseAuthenticationError("Supabase rejected the user session",
+                    status_code=401, path=error.path) from error
             raise
 
     def history_snapshot(self, access_token: str) -> Mapping[str, object]:
@@ -239,14 +283,30 @@ class SupabaseHTTP:
         if prefer:
             headers["Prefer"] = prefer
         request = urllib.request.Request(self._origin + path, data=data, headers=headers, method=method)
+        # Query strings on this transport carry user ids (the frozen-order read),
+        # so only the route is ever recorded or reported.
+        route = path.split("?", 1)[0]
+        started = time.monotonic()
         try:
             with self._opener.open(request, timeout=self._timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            raise SupabaseHTTPError("Supabase request failed", status_code=exc.code) from exc
+            raise self._failure(route, method, started, reason="http", status_code=exc.code) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise SupabaseHTTPError("Supabase request failed") from exc
+            raise self._failure(route, method, started, reason=_failure_reason(exc)) from exc
         return None if not raw else json.loads(raw)
+
+    def _failure(self, route, method, started, *, reason, status_code=None):
+        """One structured line, then the exception that carries the same facts.
+
+        Never the body, the headers, the key or the token: a Supabase error body
+        can echo the statement, and the headers hold the service-role bearer.
+        """
+        print(json.dumps({"event": "m2_supabase_request_failed", "path": route,
+            "method": method, "status_code": status_code,
+            "elapsed_ms": int((time.monotonic() - started) * 1000), "reason": reason},
+            separators=(",", ":")), file=sys.stdout, flush=True)
+        return SupabaseHTTPError("Supabase request failed", status_code=status_code, path=route)
 
     @staticmethod
     def _iso_timestamp(epoch: int) -> str:

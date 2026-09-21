@@ -1,4 +1,5 @@
 import io
+import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
@@ -7,9 +8,12 @@ import urllib.request
 import pytest
 
 from curator.recommendation.supabase_http import (
+    DEFAULT_TIMEOUT_SECONDS,
     SupabaseAuthenticationError,
     SupabaseHTTP,
+    SupabaseHTTPError,
     _NoRedirect,
+    validate_timeout_seconds,
 )
 
 
@@ -84,3 +88,101 @@ def test_service_key_type_controls_bearer_header_without_affecting_apikey(key, e
     assert client.reserve_budget(user_id="owner", request_id="request", amount_usd=.01, daily_limit_usd=2)
     assert seen["Apikey"] == key
     assert seen.get("Authorization") == expected
+
+
+def _client(timeout_seconds=None):
+    kwargs = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
+    return SupabaseHTTP(origin="https://example.test", publishable_key="public",
+                        service_role_key="sb_secret_canary", **kwargs)
+
+
+class _Raise:
+    """An opener that fails the way one specific network condition fails."""
+
+    def __init__(self, error):
+        self._error = error
+        self.seen_timeout = None
+
+    def open(self, request, timeout):
+        self.seen_timeout = timeout
+        raise self._error
+
+
+@pytest.mark.parametrize(("error", "reason", "status_code"), [
+    (urllib.error.HTTPError("https://example.test/x", 500, "boom", {}, io.BytesIO()), "http", 500),
+    (TimeoutError("timed out"), "timeout", None),
+    (urllib.error.URLError(TimeoutError("timed out")), "timeout", None),
+    (urllib.error.URLError(OSError("no route to host")), "url", None),
+])
+def test_failed_request_prints_one_structured_line_and_carries_path(capsys, error, reason, status_code):
+    """"Supabase request failed" alone cannot tell a 500 from a client timeout.
+
+    Production returned exactly that string for every POST /rank on 2026-09-21
+    and the Modal log held only the access line, so the failing RPC, its status
+    and how long it ran were all unrecoverable.
+    """
+    client = _client()
+    client._opener = _Raise(error)
+    with pytest.raises(SupabaseHTTPError) as raised:
+        client.open_run_view(user_id="owner", run_id="run", eligibility_key="key")
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert len(lines) == 1, lines
+    record = json.loads(lines[0])
+    assert record["event"] == "m2_supabase_request_failed"
+    assert record["path"] == "/rest/v1/rpc/m2_open_run_view"
+    assert record["method"] == "POST"
+    assert record["status_code"] == status_code
+    assert record["reason"] == reason
+    assert isinstance(record["elapsed_ms"], int) and record["elapsed_ms"] >= 0
+    assert set(record) == {"event", "path", "method", "status_code", "elapsed_ms", "reason"}
+    assert raised.value.path == "/rest/v1/rpc/m2_open_run_view"
+    assert raised.value.status_code == status_code
+
+
+def test_failure_line_never_carries_the_query_string_or_any_credential(capsys):
+    """The frozen-order read puts a user id in the query string, and every call
+    carries the service-role key in a header. Neither may reach a log line."""
+    client = _client()
+    client._opener = _Raise(urllib.error.URLError(OSError("down")))
+    with pytest.raises(SupabaseHTTPError):
+        client.load_frozen_order(user_id="11111111-1111-1111-1111-111111111111",
+                                 frozen_order_id="order-canary")
+
+    printed = capsys.readouterr().out
+    record = json.loads(printed.strip())
+    assert record["path"] == "/rest/v1/m2_frozen_rankings"
+    assert "?" not in record["path"]
+    for secret in ("11111111-1111-1111-1111-111111111111", "order-canary",
+                   "sb_secret_canary", "public", "Authorization", "apikey"):
+        assert secret not in printed
+
+
+def test_configured_timeout_reaches_the_socket():
+    client = _client(12.5)
+    opener = _Raise(urllib.error.URLError(OSError("down")))
+    client._opener = opener
+    with pytest.raises(SupabaseHTTPError):
+        client.open_run_view(user_id="owner", run_id="run", eligibility_key="key")
+    assert opener.seen_timeout == 12.5
+
+
+def test_default_timeout_is_unchanged_when_the_policy_says_nothing():
+    assert DEFAULT_TIMEOUT_SECONDS == 3.0
+    client = _client()
+    opener = _Raise(urllib.error.URLError(OSError("down")))
+    client._opener = opener
+    with pytest.raises(SupabaseHTTPError):
+        client.open_run_view(user_id="owner", run_id="run", eligibility_key="key")
+    assert opener.seen_timeout == 3.0
+
+
+@pytest.mark.parametrize("value", [0, 0.9, 30.1, 120, -5, "10", None, True])
+def test_out_of_range_timeout_is_refused(value):
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        validate_timeout_seconds(value)
+
+
+@pytest.mark.parametrize("value", [1, 1.0, 3.0, 10, 30])
+def test_in_range_timeout_is_accepted(value):
+    assert validate_timeout_seconds(value) == float(value)

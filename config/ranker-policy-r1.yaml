@@ -46,3 +46,25 @@ exclusivity_policy_id: pairing-json-v1
 # this at a revision-1-shaped file, or removing the key, returns the feed to the
 # newest-`candidate_limit` window without a code change.
 composition_policy: config/ranking-policy-r2.yaml
+# Client-side budget for ONE Supabase call, in seconds (1 to 30, validated at
+# boot). The transport used to hardcode 3.0, and every POST /rank answered 503
+# "Supabase request failed" with no way to tell a timeout from a permission
+# error.
+#
+# This value is part of the reading-run claim arithmetic, which
+# composition.py Check 10 now enforces:
+#
+#   run.ranking_claim_seconds
+#     > deadline_seconds (6)
+#     + settle_window_seconds (5)
+#     + CLAIMED_SECTION_MAX_TRANSPORT_CALLS (16) x timeout_seconds (5) = 80
+#     + run.ranking_claim_margin_seconds (10)
+#     = 101, so run.ranking_claim_seconds is 110.
+#
+# Raising this number raises the claim with it, and a longer claim is how long a
+# hard-crashed request blocks the reader's feed. 5 is chosen to keep that cost
+# bounded: it is above every candidate lane that is not already known-broken,
+# and the broken ones are 15s and 102s, which no legal value of this key can
+# accommodate. See docs and PR #52: the fix for those is the query, not this.
+supabase:
+  timeout_seconds: 5

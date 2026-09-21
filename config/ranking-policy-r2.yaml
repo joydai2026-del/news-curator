@@ -117,7 +117,10 @@ run:
   # it over. It is a crash guard, not a timeout: the claim is released as soon as
   # the ranking binds or fails. Too short and two requests pay twice; too long
   # and a died-mid-flight request locks its own reader out for that long.
-  ranking_claim_seconds: 60
+  # 110, not 60: Check 10 now counts the claimed section's Supabase budget, not
+  # the provider deadline alone. 6 (deadline) + 5 (settle) + 16 x 5 (transport)
+  # + 10 (margin) = 101, rounded up to the next 10.
+  ranking_claim_seconds: 110
   # The margin in the rule above. Boot fails unless
   # ranking_claim_seconds > provider deadline + settle window + this, so a claim
   # can never expire while its holder is still allowed to be calling the

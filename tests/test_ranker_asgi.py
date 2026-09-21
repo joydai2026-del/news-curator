@@ -84,3 +84,39 @@ def test_value_error_logs_only_safe_location_metadata(capsys):
     assert event["exception_class"] == "ValueError"
     assert event["source_basename"] == "test_ranker_asgi.py"
     assert type(event["source_line"]) is int and event["source_line"] > 0
+
+
+def test_supabase_failure_503_names_the_call_and_nothing_else():
+    """503 {"error":"Supabase request failed"} on its own is unactionable.
+
+    It cannot distinguish a permission error on one RPC from a client-side
+    timeout on the heavy candidate query, which is what production returned all
+    of 2026-09-21. The reply now carries the route and the status the database
+    gave, and still no body, headers or key.
+    """
+    from curator.recommendation.supabase_http import SupabaseHTTPError
+
+    class Failing(Service):
+        def rank(self, *, authorization, body):
+            raise SupabaseHTTPError("Supabase request failed", status_code=None,
+                                    path="/rest/v1/rpc/m2_retained_candidates_v2")
+
+    sent = request(RankingASGI(service=Failing(), reader_origin="https://reader.example"),
+                   method="POST", path="/rank", body=b"{}",
+                   headers=[(b"authorization", b"Bearer valid")])
+    assert sent[0]["status"] == 503
+    payload = json.loads(sent[1]["body"])
+    assert payload == {"error": "Supabase request failed",
+                       "path": "/rest/v1/rpc/m2_retained_candidates_v2", "status_code": None}
+
+
+def test_plain_runtime_error_503_is_unchanged():
+    class Failing(Service):
+        def rank(self, *, authorization, body):
+            raise RuntimeError("ranker unavailable")
+
+    sent = request(RankingASGI(service=Failing(), reader_origin="https://reader.example"),
+                   method="POST", path="/rank", body=b"{}",
+                   headers=[(b"authorization", b"Bearer valid")])
+    assert sent[0]["status"] == 503
+    assert json.loads(sent[1]["body"]) == {"error": "ranker unavailable"}

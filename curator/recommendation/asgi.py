@@ -10,6 +10,7 @@ import traceback
 
 from .service import (AuthenticationError, ProviderConsentRequiredError,
                       RankingInProgressError, StaleRankingError)
+from .supabase_http import SupabaseHTTPError
 
 
 class RankingASGI:
@@ -63,6 +64,13 @@ class RankingASGI:
                 "source_basename": os.path.basename(frame.filename),
                 "source_line": frame.lineno}, separators=(",", ":")), file=sys.stderr, flush=True)
             await self._reply(send, 400, {"error": "invalid_request"})
+        except SupabaseHTTPError as exc:
+            # Which call failed, and whether the database answered at all. The
+            # transport already printed the timing line; this is the part an
+            # operator reads off a curl. Nothing else is added: no body, no
+            # headers, and the path is already query-stripped at the transport.
+            await self._reply(send, 503, {"error": str(exc), "path": exc.path,
+                                          "status_code": exc.status_code})
         except RuntimeError as exc:
             await self._reply(send, 503, {"error": str(exc)})
 

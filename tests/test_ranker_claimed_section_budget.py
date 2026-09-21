@@ -1,0 +1,148 @@
+"""The claim must outlive everything its holder does, Supabase calls included.
+
+Red before the fix: composition.py Check 10 sized run.ranking_claim_seconds
+against the PROVIDER deadline plus the settle window only. The claim holder also
+makes a dozen-plus Supabase round trips, each bounded by
+supabase.timeout_seconds, so a slow-but-successful request could outlive its own
+claim. A second caller then took the claim over and paid the provider again for
+the same view, bounded only by the daily USD cap. Found by Codex review of PR
+#52 on 2026-09-21, when raising the per-call timeout widened that window.
+
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS is the term Check 10 needs, and a constant
+nobody measures is a guess. This file measures it.
+"""
+from __future__ import annotations
+
+import sys
+from collections import Counter
+from pathlib import Path
+
+import pytest
+
+# The harness that already models the whole paid path lives beside this file.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from curator.recommendation.composition import CompositionPolicyError, parse_composition_policy
+from curator.recommendation.service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+
+from test_m2_phase2_service import PaidStore, liked_events, paid, rank
+
+CLAIM_METHOD = "claim_run_ranking"
+
+
+class CountingStore(PaidStore):
+    """Counts every transport method called from the claim onward.
+
+    Wrapping the store rather than the HTTP layer is deliberate: one store
+    method is one Supabase round trip, and that is the unit Check 10 multiplies
+    by the per-call timeout.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        object.__setattr__(self, "claimed_calls", [])
+        object.__setattr__(self, "holding_claim", False)
+
+    def __getattribute__(self, name):
+        value = object.__getattribute__(self, name)
+        if name.startswith("_") or name in {"claimed_calls", "holding_claim"} or not callable(value):
+            return value
+
+        def counted(*args, **kwargs):
+            if name == CLAIM_METHOD:
+                object.__setattr__(self, "holding_claim", True)
+            if object.__getattribute__(self, "holding_claim"):
+                object.__getattribute__(self, "claimed_calls").append(name)
+            return value(*args, **kwargs)
+
+        return counted
+
+
+def _longest_path_calls(capsys):
+    """One /rank down the longest claimed path, paid, with the exclusive lane on."""
+    store = CountingStore(events=liked_events())
+    store.exclusive = list(store.rows[:5])
+    subject = paid(store, exclusive_category="only-other-language-press", promote=5)
+    result = rank(subject, store)
+    assert result["result_mode"] == "model", "the paid path must actually be reached"
+    return store.claimed_calls
+
+
+def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
+    calls = _longest_path_calls(capsys)
+    breakdown = Counter(calls)
+    with capsys.disabled():
+        print("\n===== claimed-section Supabase calls on the longest path =====")
+        for name, count in sorted(breakdown.items()):
+            print(f"  {count:>2} x {name}")
+        print(f"  total: {len(calls)}   constant: {CLAIMED_SECTION_MAX_TRANSPORT_CALLS}")
+
+    assert len(calls) <= CLAIMED_SECTION_MAX_TRANSPORT_CALLS, (
+        f"the claimed section makes {len(calls)} Supabase calls, above the "
+        f"CLAIMED_SECTION_MAX_TRANSPORT_CALLS of {CLAIMED_SECTION_MAX_TRANSPORT_CALLS} "
+        "that sizes run.ranking_claim_seconds. Raise the constant AND the claim "
+        "together (composition.py Check 10 will refuse the boot otherwise), or "
+        "take the call back out of the claimed section.")
+    # The constant may not drift arbitrarily above what anyone has measured: an
+    # inflated constant forces a longer claim, and a long claim is how long a
+    # crashed request blocks the feed.
+    assert CLAIMED_SECTION_MAX_TRANSPORT_CALLS - len(calls) <= 2, (
+        f"the constant ({CLAIMED_SECTION_MAX_TRANSPORT_CALLS}) sits more than two "
+        f"above the measured longest path ({len(calls)}). Lower it, and lower the "
+        "claim with it.")
+    assert calls[0] == CLAIM_METHOD, "the count must start at the claim itself"
+
+
+def test_the_claim_covers_the_measured_section_at_the_shipped_values():
+    """The shipped numbers satisfy the rule they are validated by."""
+    calls = CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+    deadline, settle, timeout, margin, claim = 6, 5, 5, 10, 110
+    assert claim > deadline + settle + calls * timeout + margin
+
+
+def _document(**overrides):
+    import yaml
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    document = yaml.safe_load((root / "config/ranking-policy-r2.yaml").read_text())
+    for dotted, value in overrides.items():
+        section, key = dotted.split(".", 1)
+        document[section][key] = value
+    return document
+
+
+def test_a_claim_that_cannot_cover_the_supabase_budget_refuses_the_boot():
+    """The red this whole file exists for."""
+    with pytest.raises(CompositionPolicyError, match="claimed-section Supabase budget"):
+        parse_composition_policy(_document(**{"run.ranking_claim_seconds": 60}),
+            provider_deadline_seconds=6, settle_window_seconds=5,
+            supabase_timeout_seconds=5,
+            claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS)
+
+
+def test_raising_the_per_call_timeout_alone_refuses_the_boot():
+    """Raising supabase.timeout_seconds without raising the claim is the exact
+    mistake PR #52 shipped in its first draft. It is now a refused boot."""
+    with pytest.raises(CompositionPolicyError, match="claimed-section Supabase budget"):
+        parse_composition_policy(_document(),
+            provider_deadline_seconds=6, settle_window_seconds=5,
+            supabase_timeout_seconds=10,
+            claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS)
+
+
+def test_the_shipped_policy_passes_the_check_it_is_validated_by():
+    policy = parse_composition_policy(_document(), provider_deadline_seconds=6,
+        settle_window_seconds=5, supabase_timeout_seconds=5,
+        claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS)
+    assert policy is not None
+
+
+def test_the_error_names_every_term_so_the_fix_is_obvious():
+    with pytest.raises(CompositionPolicyError) as raised:
+        parse_composition_policy(_document(**{"run.ranking_claim_seconds": 60}),
+            provider_deadline_seconds=6, settle_window_seconds=5, supabase_timeout_seconds=5,
+            claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS)
+    message = str(raised.value)
+    for term in ("run.ranking_claim_seconds", "provider deadline", "settle window",
+                 "claimed-section Supabase budget", "run.ranking_claim_margin_seconds"):
+        assert term in message, f"the error does not name {term}: {message}"

@@ -30,6 +30,23 @@ from .recipe import LanedCandidate, build_window, lane_window_quotas
 from .supabase_http import SupabaseAuthenticationError
 
 
+# The most Supabase round trips one /rank can make WHILE HOLDING the run's
+# ranking claim. It sizes run.ranking_claim_seconds: the claim may not expire
+# while its holder is still working, or a second caller takes over and pays for
+# the same view. Measured, not guessed, by
+# tests/test_ranker_claimed_section_budget.py, which walks the longest path with
+# a counting transport and refuses a count above this number.
+#
+# The longest measured path is 14: the claim itself, five retained_candidates_v2
+# calls (the general pool plus one per lane in lane_priority), one
+# retained_candidates_language_exclusive for the promotion, reserve_budget,
+# reserve_budget_claimed, settle_budget, history_snapshot, owner_states,
+# save_frozen_order and bind_run_frozen_order. Two more are allowed for the
+# branches that harness cannot reach in one pass (record_run_page, and the
+# release_run_ranking_claim on the failure path).
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 16
+
+
 class AuthenticationError(ValueError):
     pass
 
