@@ -160,15 +160,22 @@ def supabase_timeout_seconds(policy) -> float:
     change. Validated HERE, at startup, so a bad value refuses the boot instead
     of surfacing as an opaque 503 on the first request.
     """
-    section = policy.get("supabase", {})
-    if section is None:
-        section = {}
+    # REQUIRED, not defaulted. A misspelled section name (`supabse:`) would
+    # otherwise fall back to the old 3.0 on a policy file that reads as correct,
+    # which is the original outage with the fix apparently applied. An absent
+    # section is a refused boot; DEFAULT_TIMEOUT_SECONDS stays the transport's
+    # own signature default for callers that build it directly.
+    if "supabase" not in policy:
+        raise ValueError("ranker policy must declare a `supabase` section with timeout_seconds")
+    section = policy["supabase"]
     if not isinstance(section, dict):
         raise ValueError("ranker policy `supabase` must be a mapping")
     unknown = set(section) - {"timeout_seconds"}
     if unknown:
         raise ValueError(f"unknown ranker policy supabase keys: {sorted(unknown)}")
-    return validate_timeout_seconds(section.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+    if "timeout_seconds" not in section:
+        raise ValueError("ranker policy supabase section must declare timeout_seconds")
+    return validate_timeout_seconds(section["timeout_seconds"])
 
 
 def preview_owner_allowlist(env, *, enabled: bool) -> tuple[str, ...]:

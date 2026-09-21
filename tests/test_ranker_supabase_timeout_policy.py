@@ -29,10 +29,18 @@ def test_shipped_policy_declares_a_timeout_the_heavy_query_can_finish_in():
     assert value > 4.8
 
 
-def test_absent_section_keeps_the_previous_default():
-    assert supabase_timeout_seconds({}) == 3.0
-    assert supabase_timeout_seconds({"supabase": None}) == 3.0
-    assert supabase_timeout_seconds({"supabase": {}}) == 3.0
+def test_an_absent_section_refuses_the_boot_rather_than_defaulting():
+    """A misspelled section name (`supabse:`) would otherwise silently keep 3.0
+    on a policy file that reads as correct: the original outage, with the fix
+    apparently applied. Caught by Codex review on 2026-09-21."""
+    with pytest.raises(ValueError, match="must declare a `supabase` section"):
+        supabase_timeout_seconds({})
+    with pytest.raises(ValueError, match="must declare a `supabase` section"):
+        supabase_timeout_seconds({"supabse": {"timeout_seconds": 10}})
+    with pytest.raises(ValueError, match="`supabase` must be a mapping"):
+        supabase_timeout_seconds({"supabase": None})
+    with pytest.raises(ValueError, match="must declare timeout_seconds"):
+        supabase_timeout_seconds({"supabase": {}})
 
 
 @pytest.mark.parametrize("value", [1, 1.0, 5, 10, 30])
