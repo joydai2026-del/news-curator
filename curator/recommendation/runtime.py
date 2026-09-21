@@ -19,6 +19,44 @@ from .supabase_http import DEFAULT_TIMEOUT_SECONDS, SupabaseHTTP, validate_timeo
 
 
 RANKER_POLICY_DEFAULT = "config/ranker-policy-r1.yaml"
+PROMPT_TEMPLATE_ENV = "NEWS_CURATOR_RANKLLM_TEMPLATE"
+PROMPT_TEMPLATE_OVERRIDE_ENV = "NEWS_CURATOR_ALLOW_TEMPLATE_OVERRIDE"
+
+
+def resolve_prompt_template(env, policy, policy_path: Path) -> tuple[Path, str]:
+    """The prompt template the ranker boots with, and where it came from.
+
+    In production the POLICY is the source of truth. The environment override
+    exists for smoke runs, which boot the image without the service secret and
+    need to point at a template of their own. A production secret written in an
+    earlier phase still carries a stale `NEWS_CURATOR_RANKLLM_TEMPLATE`, and
+    while that env value silently won, every `/rank` fell back with
+    `provider_preparation_failed` because the named file was no longer in the
+    image. So the override is honoured ONLY in smoke mode or when explicitly
+    allowed, and in every mode a template that does not exist refuses the boot
+    naming the path and its source, instead of failing per request later.
+    """
+    configured = _required(policy, "prompt_template")
+    override = (env.get(PROMPT_TEMPLATE_ENV) or "").strip()
+    allowed = (env.get("NEWS_CURATOR_MODAL_MODE") == "smoke"
+               or env.get(PROMPT_TEMPLATE_OVERRIDE_ENV) == "true")
+    if override and not allowed:
+        # One structured line, on stdout, so the ignored override is visible in
+        # the deployment log rather than being a silent difference between the
+        # secret and the running service.
+        print(json.dumps({"event": "prompt_template_override_ignored",
+                          "reason": "policy is the source of truth outside smoke mode",
+                          "ignored_env": PROMPT_TEMPLATE_ENV, "ignored_value": override,
+                          "using_policy_value": configured,
+                          "allow_with": PROMPT_TEMPLATE_OVERRIDE_ENV},
+                         sort_keys=True), flush=True)
+        override = ""
+    source = "env" if override else "policy"
+    value = override or configured
+    path = policy_reference(policy_path, value)
+    if not path.is_file():
+        raise ValueError(f"prompt template {path} (from {source}: {value}) does not exist")
+    return path, source
 
 
 def load_ranker_policy(env, policy_path: str | Path | None = None, *, root: Path | None = None):
@@ -121,8 +159,7 @@ def build_application(*, environ=None, policy_path: str | None = None):
         claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS,
     ) if composition_path else None
     scoring = ScoringPolicy.from_composition(composition) if composition else None
-    prompt = ReviewedRankLLMPromptBuilder(str(policy_reference(path,
-        env.get("NEWS_CURATOR_RANKLLM_TEMPLATE") or _required(policy, "prompt_template"))))
+    prompt = ReviewedRankLLMPromptBuilder(str(resolve_prompt_template(env, policy, path)[0]))
     engine = OpenAIRankLLMEngine(prompt_builder=prompt, endpoint=ranker_policy.endpoint, api_key=provider_key or "disabled",
         model=ranker_policy.model_id, maximum_output_tokens=policy["maximum_output_tokens"],
         reasoning_token_allowance=policy["reasoning_token_allowance"],

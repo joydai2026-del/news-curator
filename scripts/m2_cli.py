@@ -21,7 +21,39 @@ from curator.personalization import AgentAuth, AuthConfig, AuthError, MacOSKeych
 from curator.personalization.preferences import JsonRestTransport  # noqa: E402
 
 MAX_INPUT_BYTES = 16 * 1024
-MAX_OUTPUT_BYTES = 64 * 1024
+# The private-output ceiling is an operational value, not a security boundary:
+# it bounds what one owner command may write to her own disk. A real Phase 2
+# rank response measured 77,745 bytes on 2026-09-21, so the old hardcoded 64 KiB
+# turned every successful `rank` into an opaque failure that could only be
+# raised by editing source. Programmable per user.md's operational-policy rule:
+# flag first, then environment, then this default.
+DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
+MIN_MAX_OUTPUT_BYTES = 64 * 1024
+MAX_MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_OUTPUT_BYTES_ENV = "NEWS_CURATOR_M2_CLI_MAX_OUTPUT_BYTES"
+
+
+class OutputTooLarge(ValueError):
+    """The response was valid; it did not fit under the configured cap."""
+
+
+def max_output_bytes(value: int | None, env: Mapping[str, str] | None = None) -> int:
+    """The private-output cap: --max-output-bytes, then the environment, then the default.
+
+    Validated HERE so an out-of-range value refuses the command before any
+    remote effect, rather than surfacing as a truncated or missing receipt.
+    """
+    source = os.environ if env is None else env
+    if value is None:
+        raw = source.get(MAX_OUTPUT_BYTES_ENV, "")
+        if raw == "":
+            return DEFAULT_MAX_OUTPUT_BYTES
+        if not raw.isdigit():
+            raise ValueError(f"{MAX_OUTPUT_BYTES_ENV} must be a decimal byte count")
+        value = int(raw)
+    if not MIN_MAX_OUTPUT_BYTES <= value <= MAX_MAX_OUTPUT_BYTES:
+        raise ValueError("max output bytes must be between 65536 and 16777216")
+    return value
 
 
 def _bool(value: str) -> bool:
@@ -74,11 +106,15 @@ def _validate_output_path(path_value: str) -> Path:
     return path
 
 
-def _private_output(path_value: str, payload: Any) -> None:
+def _private_output(path_value: str, payload: Any, limit: int = DEFAULT_MAX_OUTPUT_BYTES) -> None:
     path = _validate_output_path(path_value)
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    if len(raw) > MAX_OUTPUT_BYTES:
-        raise ValueError("response exceeds private output limit")
+    if len(raw) > limit:
+        # The byte counts are the CLI's own measurements of its own response
+        # size. They name nothing about the owner or her data, so they are safe
+        # to print, and without them a successful call is indistinguishable
+        # from an authentication failure.
+        raise OutputTooLarge(f"output too large ({len(raw)} bytes > cap {limit} bytes)")
     descriptor = None
     temporary = None
     try:
@@ -232,7 +268,32 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--exclude-story-id", action="append", default=[])
     parser.add_argument("--hour", type=_hour, help="ISO-8601 instant naming the hour of pages to review.")
     parser.add_argument("--timeout", type=float, default=15.0)
+    parser.add_argument("--max-output-bytes", type=int, default=None,
+                        help=f"Private output cap in bytes (65536..16777216). Falls back to ${MAX_OUTPUT_BYTES_ENV}, then 1 MiB.")
     return parser
+
+
+def _failure_class(error: BaseException) -> str:
+    """Name WHY the command failed, without naming anything the owner owns.
+
+    Before this, every failure printed one identical line, so a 78 KB success
+    that overflowed the cap looked exactly like a denied token. The label is
+    derived from the exception type only; the message is included solely for
+    OutputTooLarge, whose text is the CLI's own byte counts.
+    """
+    if isinstance(error, OutputTooLarge):
+        return str(error)
+    if isinstance(error, AuthError):
+        # The shared transport turns an unreachable endpoint into AuthError too,
+        # so this label names both rather than overclaiming a denied token.
+        return "auth or service unavailable"
+    # socket.error IS OSError in Python 3, so a network class has to name the
+    # network subclasses; everything else OSError is a local file or env fault.
+    if isinstance(error, (TimeoutError, ConnectionError, socket.gaierror, socket.herror)):
+        return "network"
+    if isinstance(error, ValueError):
+        return "invalid input"
+    return "local file or environment error"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -240,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not 1 <= args.timeout <= 20:
             raise ValueError("timeout is invalid")
+        limit = max_output_bytes(args.max_output_bytes)
         _validate_args(args)
         _validate_output_path(args.output)  # Refuse an unsafe output before any remote effect.
         config = _auth_config()
@@ -251,11 +313,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             name, build = _RPC_BUILDERS[args.command]
             payload = _rpc(config, session, name, build(args), args.timeout)
-        _private_output(args.output, payload)
+        _private_output(args.output, payload, limit)
         print(f"M2 {args.command} completed. Private output written.")
         return 0
-    except (AuthError, ValueError, socket.error, OSError):
-        print("M2 request failed safely. No credential or private response was printed.", file=sys.stderr)
+    except (AuthError, ValueError, socket.error, OSError) as error:
+        print(f"M2 request failed safely ({_failure_class(error)}). "
+              "No credential or private response was printed.", file=sys.stderr)
         return 1
 
 
