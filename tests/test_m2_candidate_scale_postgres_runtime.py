@@ -1,10 +1,10 @@
 """What m2_retained_candidates_v2 COSTS at real corpus scale, on PostgreSQL 17.11.
 
 Production POST /rank answered 503 "Supabase request failed" after about 4.8s
-against a 3.0s client timeout, and the review of PR #51 flagged this RPC as
-"cost grows with corpus size, unmeasured". Unmeasured is the part this file
-fixes. Every other Phase 2 test seeds a handful of rows, so all of them would
-stay green while the one query the feed cannot live without walked off a cliff.
+against a 3.0s client timeout. This file is the measurement that found it and
+the measurement that proves it fixed: the numbers below were taken on this exact
+fixture before and after 202609210001 replaced the quadratic dedupe with a
+window function.
 
 The shape of the measurement matters as much as the number:
 
@@ -20,25 +20,19 @@ The shape of the measurement matters as much as the number:
     auto_explain rather than EXPLAIN on the function call (which only ever
     reports a Function Scan and tells you nothing). The full plan is printed to
     the test log so CI carries the evidence.
+  * A worst case the natural corpus does not contain: 3,000 rows carrying ONE
+    identical title in one language, all inside the dedupe window. That is the
+    input the old correlated NOT EXISTS was quadratic in, so it is the input a
+    fix has to survive.
 
 HOW TO RUN IT
 
-    # as CI runs it: the three healthy lanes, about 10 seconds
-    pytest tests/test_m2_candidate_scale_postgres_runtime.py -k "not SLOW" -s
-
-    # everything, including the two lanes that are currently pathological
     pytest tests/test_m2_candidate_scale_postgres_runtime.py -s
 
-The SLOW half is deselected in CI by name rather than skipped, because the
-postgres job in .github/workflows/ci.yml treats a skipped test as a failure.
-general-pool alone is about 102 seconds per call; putting that on every PR buys
-nothing the tripwire test does not already buy in milliseconds.
-
-WHAT THIS FILE DOES NOT DO: it does not fix the query. It measures it, names
-the cause, and pins it so it cannot get worse unnoticed. The fix (a window
-function over a sorted set, or a stored normalized dedupe-key column with an
-index, in place of the correlated NOT EXISTS against a CTE) changes the
-projection contract and is a decision, not a cleanup.
+Every test in this file runs in CI. Nothing is deselected any more: when this
+file was written, general-pool alone took 102 seconds and two lanes had to be
+tagged SLOW and skipped by name. The whole file now finishes in seconds, which
+is the point.
 
 Container fixture, MIGRATIONS ordering and the _sql / _service helpers are
 lifted from tests/test_m2_phase2_postgres_runtime.py unchanged.
@@ -74,6 +68,7 @@ MIGRATIONS = (
     'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
     'supabase/migrations/202609180101_m2_retained_candidates_dedupe.sql',
     'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
+    'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
 )
 
 # Seeded corpus size. The live retained corpus was about 6,500 rows when the
@@ -86,57 +81,49 @@ CATEGORY_IDS = ('ai', 'crypto', 'quantum', 'energy', 'space', 'biotech',
                 'world', 'us-news', 'business', 'trending')
 
 # THE MEASUREMENT, taken 2026-09-21 on this exact fixture (7,000 rows,
-# postgres:17.11 in Docker on an Apple M4, three repeats, median):
+# postgres:17.11 in Docker on an Apple M4, three repeats, median), BEFORE and
+# AFTER supabase/migrations/202609210001:
 #
-#     lane            median      what the 3.0s client timeout does with it
-#     --------------  ----------  ----------------------------------------
-#     updates             72 ms   fits
-#     hot                111 ms   fits
-#     surprise           568 ms   fits
-#     interested      15,481 ms   blows it by 5x
-#     general-pool   102,241 ms   blows it by 34x
+#     lane             before      after    vs the 3.0s client timeout
+#     --------------  ---------  ---------   --------------------------
+#     updates             72 ms     7.4 ms   fit before, fits now
+#     hot                111 ms    10.3 ms   fit before, fits now
+#     surprise           568 ms    18.1 ms   fit before, fits now
+#     interested      15,481 ms   157.0 ms   was 5x over, now fits
+#     general-pool   102,241 ms   280.7 ms   was 34x over, now fits
 #
-# The asked-for budget was 1500 ms per lane. Three lanes meet it and keep it.
-# Two do not, and NOT because the budget is wrong: `general-pool` applies no
-# age bound at all, so its `visible` CTE holds the whole 7,000-row corpus, and
-# the `chosen` CTE then self-joins that CTE against itself once per row. The
-# plan node is `CTE Scan on visible peer` under `SubPlan 7`, 7,000 loops of a
-# 7,000-row scan, about 49 million comparisons, each one calling
-# m2_story_dedupe_key twice. No index fixes this: a CTE has no indexes, and the
-# NOT EXISTS is correlated so the planner cannot turn it into a hash anti-join.
-# The fix is a different dedupe rule (a window function over a sorted set, or a
-# stored normalized key column), which is a migration nobody has written yet.
+# All five lanes together are now about 474 ms, against the 4.8s ONE of them
+# was taking in production. The `after` column is one clean run with nothing
+# else on the machine; an earlier run sharing the laptop with a second
+# container measured the same lanes 30% to 90% higher, which is worth knowing
+# before anyone reads a single number here as precise.
 #
-# So the two broken lanes carry a REGRESSION CEILING rather than a budget: a
-# number set from the measurement above with headroom, whose only job is to
-# catch this getting worse. It is a record of a known defect, not a latency
-# anyone accepted. test_the_broken_lanes_still_cannot_fit_the_client_timeout is
-# the tripwire that fires when someone fixes them, so these ceilings cannot
-# quietly outlive the bug.
+# The bill was the `chosen` CTE: a correlated NOT EXISTS against the `visible`
+# CTE, which has no indexes, so the planner ran `CTE Scan on visible peer` once
+# per row. 7,000 loops over a 7,000-row CTE is about 49 million comparisons,
+# each calling m2_story_dedupe_key twice. 202609210001 replaced it with a
+# lead() over the same set: one sort, one pass, the key computed once per row.
+# The rule is unchanged, which tests/test_m2_candidate_dedupe_postgres_runtime.py
+# and test_the_identical_title_worst_case_is_not_quadratic below both pin.
+#
+# The budget is 1500 ms per lane, the number PR #51's reviewers asked to have
+# proven. It is not a target anybody chose and it is not the production timeout:
+# the feed issues five of these calls per /rank, so a lane AT the budget still
+# means a request that cannot fit the client's timeout. Read a PASS as "no lane
+# is pathological at this scale", not as "the endpoint is fast enough".
+#
+# If this ever fails, do NOT raise the number. The query is doing work the
+# lane's own filters should have avoided, and the plan printed below says which.
 LANE_BUDGET_MS = 1500.0
-LANE_BUDGET_OVERRIDES_MS = {
-    'interested': 30_000.0,    # measured 15,481 ms; ceiling is about 2x
-    'general-pool': 180_000.0,  # measured 102,241 ms; ceiling is about 1.8x
-}
 
 # What the HTTP client allows for the WHOLE request. Named here because the
 # budgets above only mean something against it.
 CLIENT_TIMEOUT_MS = 3000.0
 
-
-def _budget_ms(lane):
-    return LANE_BUDGET_OVERRIDES_MS.get(lane, LANE_BUDGET_MS)
-
-
 # Repeats per lane. The first execution of a plpgsql function in a session pays
 # for parse and plan; the median of several runs is the steady-state cost the
-# feed actually pays on a warm connection pool. The two broken lanes get ONE
-# run, because three of general-pool is five minutes of CI on its own.
+# feed actually pays on a warm connection pool.
 REPEATS = 3
-
-
-def _repeats(lane):
-    return 1 if lane in LANE_BUDGET_OVERRIDES_MS else REPEATS
 
 
 def _run(*args, input_text=None, check=True, timeout=180):
@@ -347,17 +334,26 @@ def _call_sql(spec, *, limit=None):
 _TIMING = re.compile(r'^Time:\s+([0-9.]+)\s+ms', re.MULTILINE)
 
 
-def _timed(container, statement, repeats=REPEATS):
+def _timed(container, statement, repeats=REPEATS, prelude='', postlude='', timeout=900):
     """Median server-side wall clock, from psql's own \\timing.
 
     Measured inside the container so docker-exec startup is not counted as
     query cost. The SET statements run before \\timing is on, so every number
     parsed out belongs to the RPC call itself.
+
+    `prelude` and `postlude` let a caller seed extra rows inside a transaction
+    it then rolls back, so a worst case can be measured without leaving the
+    shared corpus different for whatever test runs next. The prelude runs
+    BEFORE the role switch, as the connecting superuser, because seeding needs
+    the extensions schema that service_role deliberately cannot reach. Both run
+    with timing off, so their cost is never counted as the query's.
     """
-    script = ("set role service_role;\n"
-              "set request.jwt.claims = '{\"role\":\"service_role\"}';\n"
-              "\\timing on\n" + (statement + "\n") * repeats)
-    result = _sql(container, script, timeout=900)
+    script = (prelude
+              + "set role service_role;\n"
+              + "set request.jwt.claims = '{\"role\":\"service_role\"}';\n"
+              + "\\timing on\n" + (statement + "\n") * repeats
+              + "\\timing off\n" + postlude)
+    result = _sql(container, script, timeout=timeout)
     samples = [float(value) for value in _TIMING.findall(result.stdout)]
     assert len(samples) == repeats, f'expected {repeats} timings, parsed {samples}'
     return samples
@@ -372,11 +368,15 @@ def _explain(container, statement):
     the client instead of the server log.
     """
     script = ("load 'auto_explain';\n"
-              # 50 ms, not 0. m2_story_dedupe_key carries `set search_path`, which
+              # 1 ms, not 0. m2_story_dedupe_key carries `set search_path`, which
               # blocks SQL-function inlining, so at log_min_duration=0 auto_explain
-              # emits one plan per CALL: 38 million log lines for the general pool.
-              # 50 ms keeps the one plan that matters and drops the noise.
-              "set auto_explain.log_min_duration = 50;\n"
+              # emits one plan per CALL of it, and log_nested_statements has to
+              # stay on because the RPC body is itself a nested statement. 1 ms
+              # keeps the plan that matters and drops every sub-millisecond key
+              # call. It used to be 50, which was fine when the cheapest lane
+              # took 72 ms; after 202609210001 a lane can finish under 50 ms and
+              # the capture would come back empty.
+              "set auto_explain.log_min_duration = 1;\n"
               "set auto_explain.log_analyze = on;\n"
               "set auto_explain.log_buffers = on;\n"
               # log_timing OFF on purpose. With per-node timing on, the 49M-comparison
@@ -439,38 +439,19 @@ def test_the_corpus_really_is_at_scale_and_spread_across_the_window(db):
     assert collisions > 50, f'only {collisions} duplicate title groups; the dedupe CTE is untested'
 
 
-SLOW_SUFFIX = 'SLOW'
-
-
-@pytest.mark.parametrize('lane', list(LANE_CALLS), ids=[
-    # The two broken lanes are tagged SLOW in their parameter id, and CI runs
-    # this file with -k "not SLOW". DESELECTED, never skipped: .github's
-    # postgres job treats a skipped test as a failure, and rightly.
-    #
-    #     on demand:  pytest tests/test_m2_candidate_scale_postgres_runtime.py
-    #     as CI runs: pytest ... -k "not SLOW"
-    #
-    # general-pool alone is 102 seconds a run. Putting that on every PR buys
-    # nothing the tripwire below does not already buy for free.
-    (lane + '-' + SLOW_SUFFIX if lane in LANE_BUDGET_OVERRIDES_MS else lane)
-    for lane in LANE_CALLS])
+@pytest.mark.parametrize('lane', list(LANE_CALLS))
 def test_each_lane_stays_inside_the_latency_budget(db, lane, capsys):
     """Per-lane cost at 7,000 rows, with the full plan printed for the record.
 
-    The budget is 1500 ms per lane. Two things it is NOT: it is not a
-    performance target anybody chose, and it is not the production timeout. It
-    is the number PR #51's reviewers asked to have proven, and the feed issues
-    five of these calls per /rank, so a lane at the budget already means a
-    request that cannot fit the client's timeout. Read a PASS here as "no lane
-    is pathological at this scale", not as "the endpoint is fast enough".
-
-    If this ever fails, do NOT raise the number. The query is doing work the
-    lane's own filters should have avoided, and the plan below says which.
+    Before 202609210001 two of these five lanes could not be run on a pull
+    request at all: they were tagged SLOW in the parameter id and deselected
+    with -k, and carried regression CEILINGS of 30s and 180s instead of a
+    budget. They are back on the 1500 ms budget with the other three, which is
+    the whole result of that migration stated as a test.
     """
     spec = LANE_CALLS[lane]
-    budget = _budget_ms(lane)
     statement = _call_sql(spec)
-    samples = _timed(db, statement, repeats=_repeats(lane))
+    samples = _timed(db, statement, repeats=REPEATS)
     median = statistics.median(samples)
 
     plan = _explain(db, statement)
@@ -479,60 +460,164 @@ def test_each_lane_stays_inside_the_latency_budget(db, lane, capsys):
     print(f'call: {statement}')
     print('timings (ms): ' + ', '.join(f'{value:.1f}' for value in samples))
     print(f'median: {median:.1f} ms   min: {min(samples):.1f} ms   max: {max(samples):.1f} ms')
-    print(f'budget: {budget:.0f} ms' + ('  (REGRESSION CEILING for a known defect, not an accepted latency)'
-                                       if lane in LANE_BUDGET_OVERRIDES_MS else ''))
+    print(f'budget: {LANE_BUDGET_MS:.0f} ms')
     print(f'busiest node (rows x loops = {elapsed}): {line}')
     print('--- EXPLAIN (ANALYZE, BUFFERS) of the query inside the function ---')
     print(plan)
 
     assert 'Seq Scan' in plan or 'Index' in plan or 'Bitmap' in plan, \
         'auto_explain returned no plan; the measurement below is unproven'
-    assert median < budget, (
+    assert median < LANE_BUDGET_MS, (
         f'lane {lane} took {median:.1f} ms at {CORPUS_ROWS} rows, over its '
-        f'{budget:.0f} ms ceiling. Fix the query, not this number.')
+        f'{LANE_BUDGET_MS:.0f} ms budget. Fix the query, not this number.')
 
 
-def test_SLOW_the_broken_lanes_still_cannot_fit_the_client_timeout(db, capsys):
-    """The tripwire on the two ceilings above.
+def test_no_lane_carries_the_correlated_dedupe_self_join_any_more(db, capsys):
+    """The plan-shape assertion, so a REVERT cannot pass on timing alone.
 
-    A ceiling set from a measurement of a defect has one failure mode: the
-    defect gets fixed and the ceiling stays, silently permitting a latency
-    nobody would accept again. This test asserts the defect is STILL THERE. It
-    goes red the day someone makes the general pool fast, and the message says
-    to delete the ceilings and put both lanes back on the 1500 ms budget.
+    A timing budget on a fast laptop can be met by a query that is still
+    quadratic, just on a smaller corpus. This reads the plan instead: the
+    defect's signature was `CTE Scan on visible peer` running once per row
+    under a SubPlan, and it is gone. What replaces it is a WindowAgg.
     """
-    print('\n===== the two lanes that do not fit the 3.0s client timeout =====')
-    for lane in LANE_BUDGET_OVERRIDES_MS:
-        median = statistics.median(_timed(db, _call_sql(LANE_CALLS[lane]), repeats=1))
-        print(f'  {lane:<14} {median:10.1f} ms   vs a {CLIENT_TIMEOUT_MS:.0f} ms client timeout')
-        assert median > CLIENT_TIMEOUT_MS, (
-            f'lane {lane} now answers in {median:.1f} ms, inside the client timeout. '
-            f'Good. Delete its entry from LANE_BUDGET_OVERRIDES_MS, delete this test, '
-            f'and let it run on the {LANE_BUDGET_MS:.0f} ms budget with the others.')
+    print('\n===== plan shape, every lane =====')
+    for lane, spec in LANE_CALLS.items():
+        plan = _explain(db, _call_sql(spec))
+        loops = [int(match) for match in
+                 re.findall(r'CTE Scan on \w+ peer[^\n]*loops=([0-9]+)', plan)]
+        windowed = 'WindowAgg' in plan
+        print(f'  {lane:<14} WindowAgg={windowed}  peer-CTE-scans={loops or "none"}')
+        assert not loops, (
+            f'lane {lane} still scans the visible CTE per row ({loops}); the '
+            'correlated dedupe self-join is back')
+        assert windowed, (
+            f'lane {lane} has no WindowAgg in its plan, so the lead() dedupe is '
+            'not running: check the migration order in MIGRATIONS')
 
 
-def test_SLOW_the_cost_is_the_dedupe_self_join_and_not_the_row_fetch(db, capsys):
-    """Names the cause, so the next person does not reach for an index.
+def test_the_dedupe_now_costs_about_what_turning_it_off_costs(db, capsys):
+    """Dedupe ON versus the one switch that turns it OFF.
 
-    Same lane, same rows, dedupe window set to 0, which is the one documented
-    switch that turns the `chosen` CTE's self-join off (202609180102 keeps 0
-    operable on purpose). If the cost were the corpus scan, the coverage
-    subquery or the category lateral, this would barely move. It collapses,
-    which is the proof that the self-join is the whole bill and that an index
-    on the base tables cannot help: a CTE has no indexes to scan.
+    This test used to assert the opposite: `with_dedupe > without * 10` was the
+    proof that the self-join was the whole bill. Inverted now, it is the proof
+    that the bill is gone. p_dedupe_window_hours => 0 short-circuits the
+    `chosen` filter, so the difference between the two numbers is the sort the
+    window function needs and nothing else.
     """
     spec = LANE_CALLS['general-pool']
     arguments = _call_sql(spec).replace(
         f"p_limit => {spec['limit']}", f"p_limit => {spec['limit']}, p_dedupe_window_hours => 0")
-    without = statistics.median(_timed(db, arguments, repeats=REPEATS))
-    with_dedupe = statistics.median(_timed(db, _call_sql(spec), repeats=1))
+    off_samples = _timed(db, arguments, repeats=REPEATS)
+    on_samples = _timed(db, _call_sql(spec), repeats=REPEATS)
+    # Best of each, not median: this container's timings swing by 3x run to run,
+    # and a ratio guard that flakes gets deleted instead of read.
+    without, with_dedupe = min(off_samples), min(on_samples)
     print('\n===== where the general pool spends its time =====')
     print(f'  dedupe ON  (36h window, production default) {with_dedupe:10.1f} ms')
     print(f'  dedupe OFF (p_dedupe_window_hours => 0)     {without:10.1f} ms')
-    print(f'  the self-join is {with_dedupe / max(without, 0.001):.0f}x the rest of the query')
-    assert without < LANE_BUDGET_MS, (
-        f'with the self-join off the same lane still takes {without:.1f} ms, so the '
-        'cost is NOT only the dedupe and this diagnosis is wrong')
-    assert with_dedupe > without * 10, (
-        f'the self-join is only {with_dedupe / max(without, 0.001):.1f}x the rest; '
-        're-read the plan before blaming it')
+    print(f'  the dedupe now adds {with_dedupe - without:+.1f} ms '
+          f'({with_dedupe / max(without, 0.001):.2f}x), best of {REPEATS} on each side')
+    assert with_dedupe < without * 4 + 100, (
+        f'collapsing duplicates costs {with_dedupe:.1f} ms against {without:.1f} ms '
+        'with it off. It should be a sort, not a join. Read the plan.')
+    assert with_dedupe < LANE_BUDGET_MS, f'{with_dedupe:.1f} ms with the dedupe on'
+
+
+# The worst case the natural corpus does not contain: one title, thousands of
+# times, one language, all inside the dedupe window. 3,000 is deliberately not
+# a round fraction of CORPUS_ROWS, and they are 90 seconds apart so EVERY row
+# has its successor inside the 36h window and the whole block must collapse to
+# exactly one.
+# The ceiling for the worst case, which is NOT the per-lane budget: this call
+# runs against 10,000 rows rather than 7,000, and the ratio assertion below is
+# the real check. Measured 2026-09-21 on an M4, across repeated runs: 285 to
+# 970 ms with collapsing on and 250 to 3,140 ms with it off, which says two
+# things. The dedupe is no longer the cost, and this fixture's timings are
+# NOISY at the hundred-millisecond scale (Docker on a laptop, a 10,000-row scan
+# per call). That is why the ratio assertion below compares the BEST of each
+# sample rather than the median, and why the ceiling is 3,000 ms rather than
+# the per-lane budget.
+WORST_CASE_CEILING_MS = 3000.0
+
+IDENTICAL_TITLE_ROWS = 3000
+IDENTICAL_TITLE = 'One headline, printed three thousand times'
+
+
+def _identical_title_prelude():
+    return f"""begin;
+      insert into public.canonical_stories(
+        story_id, canonical_url, title, summary, language, source_kind, source_name, published_at)
+      select 'story:' || encode(extensions.digest('https://identical.test/' || i, 'sha256'), 'hex'),
+             'https://identical.test/' || i, {_quote(IDENTICAL_TITLE)},
+             'Summary body.', 'en', 'outlet', 'Source 5', now() - make_interval(secs => i * 90)
+      from generate_series(1, {IDENTICAL_TITLE_ROWS}) as g(i);
+      insert into public.retained_corpus_observations(
+        story_id, source_id, source_name, source_is_aggregator, language, title, summary,
+        canonical_url, published_at, first_observed_at, source_observed_at)
+      select s.story_id, 'source-5', 'Source 5', false, s.language, s.title, s.summary,
+             s.canonical_url, s.published_at, s.published_at, s.published_at
+      from public.canonical_stories s
+      where s.canonical_url like 'https://identical.test/%';
+      analyze public.retained_corpus_observations;
+"""
+
+
+def test_the_identical_title_worst_case_is_not_quadratic(db, capsys):
+    """Three thousand copies of one headline, then the general pool.
+
+    The rows are seeded inside a transaction this test rolls back, so the
+    shared corpus is the same afterwards for whatever runs next.
+
+    Two things are asserted, and the second is the one that matters: the call
+    stays inside the budget, AND the block still collapses to exactly one row.
+    A "fix" that got fast by not deduplicating would pass the first assertion
+    and fail the second.
+    """
+    spec = LANE_CALLS['general-pool']
+    # p_limit is the RPC's hard cap of 100 here, not the feed's 75: the point is
+    # to prove the whole 3,000-row block collapses, and a 75-row page could hide
+    # 25 survivors below the fold.
+    statement = _call_sql(spec, limit=100)
+    samples = _timed(db, statement, repeats=REPEATS,
+                     prelude=_identical_title_prelude(), postlude='rollback;\n')
+    median = statistics.median(samples)
+    # The same call on the same 10,000 rows with collapsing switched off. This
+    # is what separates "the dedupe is quadratic again" from "a 43% bigger
+    # corpus costs more to scan", and it is the assertion that survives being
+    # run on slower hardware than the laptop these numbers came from.
+    without_samples = _timed(
+        db, statement.replace('p_limit => 100', 'p_limit => 100, p_dedupe_window_hours => 0'),
+        repeats=REPEATS, prelude=_identical_title_prelude(), postlude='rollback;\n')
+    without = statistics.median(without_samples)
+    best, best_without = min(samples), min(without_samples)
+
+    survivors = _sql(db, _identical_title_prelude()
+                     + "set role service_role;"
+                     + "set request.jwt.claims = '{\"role\":\"service_role\"}';"
+                     + "select count(*) from public.m2_retained_candidates_v2("
+                     + "p_category_id => null, p_lane => null, p_limit => 100) as rows(value)"
+                     + f" where value->>'title' = {_quote(IDENTICAL_TITLE)};"
+                     + "rollback;")
+    # Not _last(): the script ends with the ROLLBACK that puts the corpus
+    # back, so the count is the last line that is only digits.
+    kept = int([line for line in survivors.stdout.splitlines()
+                if line.strip().isdigit()][-1])
+
+    print('\n===== worst case: one title, '
+          f'{IDENTICAL_TITLE_ROWS} times, all inside the dedupe window =====')
+    print('timings (ms): ' + ', '.join(f'{value:.1f}' for value in samples))
+    print(f'median: {median:.1f} ms   with the dedupe off: {without:.1f} ms')
+    print(f'best of {REPEATS}: {best:.1f} ms   with the dedupe off: {best_without:.1f} ms')
+    print(f'the dedupe adds {best - best_without:+.1f} ms '
+          f'({best / max(best_without, 0.001):.2f}x) on 3,000 colliding titles, best vs best')
+    print(f'copies surviving the dedupe: {kept} (must be exactly 1)')
+    assert kept == 1, (
+        f'{kept} copies of one headline survived. The dedupe rule changed; '
+        'that is a correctness regression, not a performance one.')
+    assert best < best_without * 4 + 100, (
+        f'{IDENTICAL_TITLE_ROWS} identical titles cost {best:.1f} ms at best '
+        f'against {best_without:.1f} ms with collapsing off. A sort does not do '
+        'that: the dedupe is quadratic again.')
+    assert median < WORST_CASE_CEILING_MS, (
+        f'{IDENTICAL_TITLE_ROWS} identical titles took {median:.1f} ms, over the '
+        f'{WORST_CASE_CEILING_MS:.0f} ms ceiling.')
