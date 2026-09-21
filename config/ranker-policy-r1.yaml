@@ -52,5 +52,24 @@ composition_policy: config/ranking-policy-r2.yaml
 # "Supabase request failed" with no way to tell a timeout from a permission
 # error. Raised to 10 here so a slow-but-correct query finishes; the provider
 # deadline above still bounds the paid half of the request.
+#
+# Interaction with run.ranking_claim_seconds (Codex review, 2026-09-21): the
+# claimed section of one /rank makes about a dozen Supabase calls, and
+# composition.py Check 10 sizes the claim against the PROVIDER deadline only,
+# not against those. A worst case where every claimed-section call runs near
+# this ceiling and still succeeds would outlast the 60s claim and let a second
+# request pay for the same view. Deliberately not "fixed" by raising the claim:
+# the arithmetic that would satisfy the validator needs a claim near 150s, and a
+# crashed request would then block the reader's feed for two and a half minutes.
+# Double payment costs at most request_cost_limit_usd once and is still fenced
+# by the frozen-order bind; a two-and-a-half-minute dead feed is the larger and
+# far likelier harm. Recoverability wins. The real fix is to make Check 10 count
+# the claimed-section Supabase budget, tracked as follow-up, not to inflate the
+# claim here.
+#
+# Reader side, verified live 2026-09-21 on https://news.joydong.org: the
+# rendered page carries transport-timeout-ms 20000, so the browser's fetch abort
+# sits well above this ceiling. request-timeout-ms 8000 only swaps in the
+# captured edition while the request keeps running.
 supabase:
   timeout_seconds: 10
