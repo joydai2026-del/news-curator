@@ -8,6 +8,11 @@ import shutil
 import re
 from pathlib import Path
 
+import yaml
+
+RANKER_POLICY = Path("config/ranker-policy-r1.yaml")
+CONFIG_ROOT = "config/"
+
 
 def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -49,6 +54,56 @@ def copy_reviewed_vendor(source: Path, destination: Path, manifest_path: Path) -
         raise SystemExit("vendor tree has unreviewed files")
 
 
+def _string_values(document):
+    if isinstance(document, str):
+        yield document
+    elif isinstance(document, dict):
+        for value in document.values():
+            yield from _string_values(value)
+    elif isinstance(document, list):
+        for value in document:
+            yield from _string_values(value)
+
+
+def referenced_config_files(repo: Path, policy: Path = RANKER_POLICY) -> list[Path]:
+    """Every config file the ranker policy names, transitively, policy first.
+
+    The runtime reads these paths out of the policy itself (prompt_template,
+    composition_policy, and anything a referenced file names in turn), so the
+    image context is discovered from the same file the runtime loads instead of
+    a second hardcoded list here that silently drifts out of date. Only parsed
+    VALUES count: a `config/...` path inside a YAML comment is not a reference.
+    """
+    ordered: list[Path] = []
+    pending = [policy.as_posix()]
+    seen: set[str] = set()
+    while pending:
+        relative = Path(pending.pop(0))
+        if relative.as_posix() in seen:
+            continue
+        seen.add(relative.as_posix())
+        if relative.is_absolute() or ".." in relative.parts:
+            raise SystemExit(f"unsafe config reference: {relative.as_posix()}")
+        path = repo / relative
+        if path.is_symlink() or not path.is_file():
+            raise SystemExit(f"ranker policy references a missing file: {relative.as_posix()}")
+        ordered.append(relative)
+        if path.suffix in {".yaml", ".yml"}:
+            pending.extend(value for value in _string_values(yaml.safe_load(path.read_text(encoding="utf-8")))
+                           if value.startswith(CONFIG_ROOT))
+    return ordered
+
+
+def stage_referenced_config(repo: Path, context: Path, policy: Path = RANKER_POLICY) -> list[Path]:
+    """Copy exactly the config files the policy names into the image context."""
+    staged = referenced_config_files(repo, policy)
+    for relative in staged:
+        target = context / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / relative, target)
+    return staged
+
+
 def validate_containerfile_sources(context: Path) -> None:
     for line in (context / "Containerfile").read_text().splitlines():
         match = re.fullmatch(r"COPY\s+([^\s]+)\s+[^\s]+", line.strip())
@@ -70,10 +125,7 @@ def main() -> None:
     copy_reviewed_vendor(repo / "deploy/ranker/vendor", args.output / "vendor",
                          repo / "deploy/ranker/rankllm-vendor-manifest.json")
     copy_python_tree(repo / "curator", args.output / "curator")
-    (args.output / "config").mkdir()
-    shutil.copy2(repo / "config/ranker-policy-r1.yaml", args.output / "config/ranker-policy-r1.yaml")
-    shutil.copy2(repo / "config/rankllm-news-curator-json.yaml",
-                 args.output / "config/rankllm-news-curator-json.yaml")
+    stage_referenced_config(repo, args.output)
     shutil.copy2(repo / "deploy/ranker/Containerfile", args.output / "Containerfile")
     shutil.copy2(repo / "deploy/ranker/requirements-linux-cp312-x86_64.lock", args.output / "requirements.lock")
     shutil.copy2(repo / "deploy/ranker/linux-wheel-provenance.json", args.output / "wheel-provenance.json")
