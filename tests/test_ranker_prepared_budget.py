@@ -405,9 +405,10 @@ def test_prepare_with_reason_logs_one_structured_line_with_no_request_content(ca
 
 
 def test_prepare_with_reason_passes_through_a_curator_raised_literal(capsys):
-    """A ValueError whose `raise` statement lives in curator/ code (here,
-    RankerPolicy.validate) is passed through verbatim, unlike the vendor
-    RuntimeError above, which the previous test proved comes back "suppressed"."""
+    """A ValueError whose message is a reviewed, registered literal (here,
+    RankerPolicy.validate's constant-string raise) is passed through
+    verbatim, unlike the vendor RuntimeError above, which the previous test
+    proved comes back "suppressed"."""
     from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
     class CuratorRaisingEngine:
         def prepare(self, model_input):
@@ -426,6 +427,33 @@ def test_prepare_with_reason_passes_through_a_curator_raised_literal(capsys):
     assert payload['exception_class']=='ValueError'
     assert payload['detail']=='ranker deadline must be within six seconds'
     assert payload['frame'].startswith('curator/recommendation/rankllm_adapter.py:')
+
+
+def test_prepare_with_reason_suppresses_a_curator_f_string_message(capsys):
+    """Being a ValueError raised from curator/ code is NOT enough: a message
+    built from an f-string can embed request-derived text, so only an exact
+    match against the reviewed KNOWN_DIAGNOSTIC_MESSAGES literals passes
+    through. Here `curator/contracts/ranking_request.py`'s `_require_nonblank`
+    raises ValueError(f"{field_name} must be non-blank and unpadded") for a
+    blank request_id: a real curator ValueError, never registered as a
+    literal because its source is an f-string, so it must come back
+    "suppressed" even though the previous test proved a registered literal
+    from the same adapter passes through."""
+    from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
+    class Engine:
+        def prepare(self, model_input): pytest.fail('must fail validation before the engine is ever called')
+    adapter=RankLLMAdapter(policy=RankerPolicy('test-provider','test-model','https://provider.example','test-policy',
+        max_retries=0,input_cost_per_million_tokens_usd=.25,output_cost_per_million_tokens_usd=2),engine=Engine())
+    model_input=captured_input()
+    request=RankingRequest(1,'',AuthenticatedOwner('tenant','user','principal',ActorKind.HUMAN),
+        model_input.candidates,tuple(c.candidate_id for c in model_input.candidates),(),0,0,1,1,
+        'test-policy','test-model')
+    prepared,reason=adapter.prepare_with_reason(request)
+    assert prepared is None and reason=='provider_preparation_failed'
+    payload=json.loads(capsys.readouterr().out.strip())
+    assert payload['exception_class']=='ValueError'
+    assert payload['detail']=='suppressed'
+    assert 'request_id must be non-blank' not in json.dumps(payload)
 
 
 def test_rank_logs_structured_diagnostics_on_a_swallowed_provider_exception(capsys):
