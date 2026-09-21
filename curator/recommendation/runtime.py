@@ -15,7 +15,7 @@ from .composition import RETENTION_INPUTS_FILE, boot_retention_days, load_compos
 from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder, ScoringPolicy
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import RankingService, ServicePolicy
-from .supabase_http import SupabaseHTTP
+from .supabase_http import DEFAULT_TIMEOUT_SECONDS, SupabaseHTTP, validate_timeout_seconds
 
 
 RANKER_POLICY_DEFAULT = "config/ranker-policy-r1.yaml"
@@ -126,7 +126,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
         scoring=scoring,
         client_factory=lambda: httpx.AsyncClient(timeout=None, follow_redirects=False))
     adapter = RankLLMAdapter(policy=ranker_policy, engine=engine)
-    transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key)
+    transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key,
+        timeout_seconds=supabase_timeout_seconds(policy))
     service_policy = ServicePolicy(policy_version=_required(policy, "prompt_revision"),
         model_version=_required(policy, "model"), provider_policy_id=_required(policy, "prompt_revision"),
         tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
@@ -148,6 +149,26 @@ def build_application(*, environ=None, policy_path: str | None = None):
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,
         maximum_body_bytes=policy["maximum_request_body_bytes"])
+
+
+def supabase_timeout_seconds(policy) -> float:
+    """`supabase.timeout_seconds` from the ranker policy, validated at boot.
+
+    A per-call budget is an operational value, so it belongs in the policy file
+    rather than in the transport's signature: the heavy Phase 2 candidate query
+    grows with the corpus, and raising the ceiling must not require a code
+    change. Validated HERE, at startup, so a bad value refuses the boot instead
+    of surfacing as an opaque 503 on the first request.
+    """
+    section = policy.get("supabase", {})
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        raise ValueError("ranker policy `supabase` must be a mapping")
+    unknown = set(section) - {"timeout_seconds"}
+    if unknown:
+        raise ValueError(f"unknown ranker policy supabase keys: {sorted(unknown)}")
+    return validate_timeout_seconds(section.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
 
 
 def preview_owner_allowlist(env, *, enabled: bool) -> tuple[str, ...]:

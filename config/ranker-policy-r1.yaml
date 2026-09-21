@@ -46,3 +46,11 @@ exclusivity_policy_id: pairing-json-v1
 # this at a revision-1-shaped file, or removing the key, returns the feed to the
 # newest-`candidate_limit` window without a code change.
 composition_policy: config/ranking-policy-r2.yaml
+# Client-side budget for ONE Supabase call, in seconds (1 to 30, validated at
+# boot). The transport used to hardcode 3.0, and the Phase 2 feed's candidate
+# query outgrew it as the retained corpus filled: every POST /rank answered 503
+# "Supabase request failed" with no way to tell a timeout from a permission
+# error. Raised to 10 here so a slow-but-correct query finishes; the provider
+# deadline above still bounds the paid half of the request.
+supabase:
+  timeout_seconds: 10
