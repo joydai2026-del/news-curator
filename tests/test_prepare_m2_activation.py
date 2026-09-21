@@ -192,3 +192,50 @@ def test_cli_help_runs_from_an_arbitrary_current_directory(tmp_path):
     assert result.returncode == 0
     assert "Prepare bounded M2 deployment artifacts" in result.stdout
     assert result.stderr == ""
+
+
+def test_the_template_field_is_optional_and_absent_from_the_secret_when_omitted(tmp_path, monkeypatch):
+    """The prompt template is the ranker policy's job in production. Listing it as
+    REQUIRED here is what wrote the Phase 1 path into the live secret."""
+    private = tmp_path / "binding.json"
+    binding(private, "odurwknvigshekaprjvj")
+    output = tmp_path / "secret.json"
+    args = secret_args(tmp_path, private, output)
+    args.template = None
+    monkeypatch.setattr(activation, "token", lambda _: "protocol-management-token")
+    monkeypatch.setattr(activation, "api_keys", lambda *values: ("sb_publishable_x", "sb_secret_y"))
+
+    activation.stage_secret(args)
+    secret = json.loads(output.read_text())
+    assert "NEWS_CURATOR_RANKLLM_TEMPLATE" not in secret
+    assert set(secret) == set(activation.REQUIRED_SECRET_FIELDS)
+
+
+def test_a_template_that_is_not_in_this_checkout_is_refused(tmp_path, monkeypatch):
+    private = tmp_path / "binding.json"
+    binding(private, "odurwknvigshekaprjvj")
+    args = secret_args(tmp_path, private, tmp_path / "secret.json")
+    args.template = "/opt/news-curator/config/absent-template.yaml"
+    monkeypatch.setattr(activation, "token", lambda _: "protocol-management-token")
+    monkeypatch.setattr(activation, "api_keys", lambda *values: ("sb_publishable_x", "sb_secret_y"))
+
+    with pytest.raises(ValueError, match="not present in this checkout"):
+        activation.stage_secret(args)
+    assert not (tmp_path / "secret.json").exists()
+
+
+@pytest.mark.parametrize("value", [
+    "config/rankllm-news-curator-json.yaml",
+    "/opt/news-curator/curator/recommendation/runtime.py",
+    "/opt/news-curator/config/../curator/runtime.py",
+    "/etc/passwd",
+])
+def test_only_a_staged_config_path_is_accepted(value):
+    with pytest.raises(ValueError):
+        activation.image_template_repo_path(value)
+
+
+def test_a_template_that_exists_resolves_to_its_checkout_file():
+    assert activation.image_template_repo_path(
+        "/opt/news-curator/config/rankllm-news-curator-json.yaml"
+    ) == ROOT / "config/rankllm-news-curator-json.yaml"

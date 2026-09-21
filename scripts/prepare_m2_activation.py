@@ -28,8 +28,26 @@ REQUIRED_SECRET_FIELDS = (
     "NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY", "NEWS_CURATOR_SUPABASE_SERVICE_ROLE_KEY",
     "NEWS_CURATOR_CURSOR_SIGNING_KEY", "NEWS_CURATOR_TENANT_ID",
     "NEWS_CURATOR_PREVIEW_OWNER_IDS", "NEWS_CURATOR_READER_ORIGIN",
-    "NEWS_CURATOR_RANKLLM_TEMPLATE",
 )
+# The prompt template is OPTIONAL: the ranker policy is the source of truth in
+# production, and the service now ignores this key outside smoke mode. Carrying
+# it as REQUIRED is what put a Phase 1 path into the production secret and made
+# every /rank fall back with provider_preparation_failed once the image stopped
+# staging that file. When it IS given, it must name a file that exists in this
+# checkout, so a path that cannot resolve is refused here instead of at boot.
+OPTIONAL_SECRET_FIELDS = ("NEWS_CURATOR_RANKLLM_TEMPLATE",)
+IMAGE_ROOT = "/opt/news-curator/"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def image_template_repo_path(value: str, root: Path | None = None) -> Path:
+    """The checkout file an image template path names. Raises when it is absent."""
+    if not value.startswith(IMAGE_ROOT + "config/") or ".." in Path(value).parts:
+        raise ValueError("invalid image template path")
+    path = (root or REPO_ROOT) / value[len(IMAGE_ROOT):]
+    if not path.is_file():
+        raise ValueError(f"template {value} is not present in this checkout at {path}")
+    return path
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -173,8 +191,10 @@ def stage_secret(args: argparse.Namespace) -> None:
     access = token(args.management_token_helper)
     publishable, service = api_keys(ref, access, args.service_key_name)
     model = dotenv_value(args.model_env, "NEWS_CURATOR_MODEL_API_KEY")
-    if not args.template.startswith("/opt/news-curator/config/") or not args.reader_origin.startswith("https://"):
-        raise ValueError("invalid image template path or reader origin")
+    if not args.reader_origin.startswith("https://"):
+        raise ValueError("invalid reader origin")
+    if args.template is not None:
+        image_template_repo_path(args.template)
     secret = {
         "NEWS_CURATOR_MODEL_API_KEY": model,
         "NEWS_CURATOR_SUPABASE_URL": f"https://{ref}.supabase.co",
@@ -184,9 +204,11 @@ def stage_secret(args: argparse.Namespace) -> None:
         "NEWS_CURATOR_TENANT_ID": ref,
         "NEWS_CURATOR_PREVIEW_OWNER_IDS": json.dumps([owner], separators=(",", ":")),
         "NEWS_CURATOR_READER_ORIGIN": args.reader_origin,
-        "NEWS_CURATOR_RANKLLM_TEMPLATE": args.template,
     }
-    if set(secret) != set(REQUIRED_SECRET_FIELDS) or len(base64.urlsafe_b64decode(secret["NEWS_CURATOR_CURSOR_SIGNING_KEY"] + "=")) < 32:
+    if args.template is not None:
+        secret["NEWS_CURATOR_RANKLLM_TEMPLATE"] = args.template
+    expected = set(REQUIRED_SECRET_FIELDS) | ({OPTIONAL_SECRET_FIELDS[0]} if args.template is not None else set())
+    if set(secret) != expected or len(base64.urlsafe_b64decode(secret["NEWS_CURATOR_CURSOR_SIGNING_KEY"] + "=")) < 32:
         raise RuntimeError("secret payload invariant failed")
     secure_write(args.output, secret)
     print(json.dumps({"stage":"stage-secret","output":str(args.output),"field_names":sorted(secret),"owner_allowlist_count":1,"cursor_random_bytes":32}, sort_keys=True))
@@ -203,7 +225,8 @@ def main() -> int:
     secret_parser = commands.add_parser("stage-secret")
     secret_parser.add_argument("--model-env", type=Path, required=True)
     secret_parser.add_argument("--reader-origin", required=True)
-    secret_parser.add_argument("--template", required=True)
+    secret_parser.add_argument("--template", default=None,
+        help="Optional image path for the smoke-mode prompt template. Must exist in this checkout.")
     secret_parser.add_argument("--service-key-name", default="news_curator_github")
     secret_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
