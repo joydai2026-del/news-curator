@@ -14,6 +14,15 @@ class PromptBuilder(Protocol):
     def create_prompt(self, *, query: str, passages: Sequence[str]) -> object: ...
 
 
+# The longest wall-clock budget any single provider request may be given, in
+# seconds. It is a SAFETY CEILING on the configured value, not the operational
+# knob: `deadline_seconds` in the ranker policy is what an operator changes, and
+# the policy validates itself against this same number, so the transport and the
+# adapter can never disagree about the ceiling.
+# Changing it means changing RankerPolicy.validate's reviewed literal with it.
+MAXIMUM_PROVIDER_DEADLINE_SECONDS = 60.0
+
+
 # The five actions the model predicts. Exactly the actions the product captures:
 # read_more, open_original, save, more_like_this and less_like_this all have a
 # live write path. ask_question, dwell and dismiss deliberately are NOT here,
@@ -104,7 +113,8 @@ class AsyncOpenAIResponses:
             raise ValueError("provider endpoint must be HTTPS")
         if (not api_key or not model or type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 65536
                 or reasoning_effort not in {"none", "minimal", "low", "medium", "high"}
-                or verbosity not in {"low", "medium", "high"} or not 0 < total_seconds <= 6):
+                or verbosity not in {"low", "medium", "high"}
+                or not 0 < total_seconds <= MAXIMUM_PROVIDER_DEADLINE_SECONDS):
             raise ValueError("invalid provider transport configuration")
         self._client, self._endpoint, self._api_key = client, endpoint.rstrip("/"), api_key
         self._model, self._total = model, total_seconds

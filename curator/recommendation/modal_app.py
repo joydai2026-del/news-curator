@@ -8,6 +8,7 @@ from pathlib import Path
 
 import modal
 
+from .deployment import bounded_int, function_timeout_seconds
 from .modal_handlers import endpoint as _endpoint
 from .modal_handlers import smoke_rankllm_image as _smoke_rankllm_image
 
@@ -20,13 +21,8 @@ def _enabled(name: str, *, default: bool = False) -> bool:
 
 
 def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    raw = os.environ.get(name, str(default))
-    if not re.fullmatch(r"[0-9]+", raw):
-        raise ValueError(f"{name} must be an integer")
-    value = int(raw)
-    if not minimum <= value <= maximum:
-        raise ValueError(f"{name} must be between {minimum} and {maximum}")
-    return value
+    # One implementation, shared with the container's own boot validation.
+    return bounded_int(os.environ, name, default, minimum, maximum)
 
 
 def _name(name: str, default: str) -> str:
@@ -81,7 +77,11 @@ image = modal.Image.from_dockerfile(context_path / "Containerfile", context_dir=
 deployment_mode = os.environ.get("NEWS_CURATOR_MODAL_MODE", "service")
 if deployment_mode not in {"service", "smoke"}:
     raise ValueError("NEWS_CURATOR_MODAL_MODE must be service or smoke")
-function_timeout = _bounded_int("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", 15, 7, 60)
+# The container's wall clock for one request. The service refuses to boot when
+# its own worst case (provider deadline + settle window + the claimed section's
+# Supabase budget) is not strictly below this, so the two are validated together
+# rather than drifting apart across a deploy.
+function_timeout = function_timeout_seconds(os.environ)
 max_containers = _bounded_int("NEWS_CURATOR_MODAL_MAX_CONTAINERS", 4, 1, 20)
 max_inputs = _bounded_int("NEWS_CURATOR_MODAL_MAX_INPUTS_PER_CONTAINER", 8, 1, 32)
 # Modal SDK 1.4.2 only rejects non-positive values. The observed server

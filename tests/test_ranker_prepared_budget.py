@@ -1,5 +1,6 @@
 """Provider-boundary tests. Captured public candidates, no external model calls."""
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 import httpx
@@ -425,7 +426,7 @@ def test_prepare_with_reason_passes_through_a_curator_raised_literal(capsys):
     assert prepared is None and reason=='provider_preparation_failed'
     payload=json.loads(capsys.readouterr().out.strip())
     assert payload['exception_class']=='ValueError'
-    assert payload['detail']=='ranker deadline must be within six seconds'
+    assert payload['detail']=='ranker deadline must be within sixty seconds'
     assert payload['frame'].startswith('curator/recommendation/rankllm_adapter.py:')
 
 
@@ -499,7 +500,11 @@ def test_tokenizer_rejects_unknown_or_missing_cache_before_library_import(tmp_pa
 
 def test_budget_fit_trims_only_oldest_whole_events_and_keeps_newest_negative_and_repetition():
     from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
-    model_input=captured_input(); base_time=model_input.candidates[0].published_at
+    # Exactly the prompt budget's candidate count, so THIS test exercises the
+    # cost fitting and nothing else: a longer candidate list would be trimmed
+    # by prompt.max_model_candidates first and never reach the binary search.
+    model_input=replace(captured_input(),candidates=captured_input().candidates[:25])
+    base_time=model_input.candidates[0].published_at
     repeated=model_input.candidates[2]
     events=(
         OrderedHistoryEvent('event-1',EventType.READ_MORE,base_time,1,model_input.candidates[0].candidate_id,

@@ -7,6 +7,7 @@ imports it, reads credentials, chooses an endpoint, or opens a socket.
 from __future__ import annotations
 
 import math
+import threading
 import time
 from dataclasses import dataclass, replace
 from typing import Protocol
@@ -20,8 +21,8 @@ from curator.contracts.ranking_request import (
     validate_ranking_request,
     validate_ranking_response,
 )
-from .async_provider import (ProviderHTTPError, ProviderResponseError, ProviderResponseInvalid,
-    ProviderTimeout, ProviderTransportFailure)
+from .async_provider import (MAXIMUM_PROVIDER_DEADLINE_SECONDS, ProviderHTTPError, ProviderResponseError,
+    ProviderResponseInvalid, ProviderTimeout, ProviderTransportFailure)
 from .diagnostics import log_suppressed_exception
 
 
@@ -51,6 +52,10 @@ class RankerPolicy:
     daily_cost_limit_usd: float = 2.0
     input_cost_per_million_tokens_usd: float | None = None
     output_cost_per_million_tokens_usd: float | None = None
+    # The prompt BUDGET. How much of the request the model is shown, before any
+    # cost fitting runs. Both come from the ranker policy's `prompt` section.
+    max_history_events: int = 24
+    max_model_candidates: int = 25
 
     def validate(self) -> None:
         def finite_number(value: object) -> bool:
@@ -65,8 +70,17 @@ class RankerPolicy:
             raise ValueError("ranker endpoint must be a credential-free HTTPS origin")
         if parsed.path not in ("", "/", "/v1") or parsed.query or parsed.fragment:
             raise ValueError("ranker endpoint must be a fixed API base")
-        if not finite_number(self.deadline_seconds) or self.deadline_seconds <= 0 or self.deadline_seconds > 6:
-            raise ValueError("ranker deadline must be within six seconds")
+        if (not finite_number(self.deadline_seconds) or self.deadline_seconds <= 0
+                or self.deadline_seconds > MAXIMUM_PROVIDER_DEADLINE_SECONDS):
+            # Constant literal on purpose: diagnostics.py only passes a reviewed
+            # constant through to the operator log, and an f-string here would
+            # come back "suppressed". Change it with
+            # MAXIMUM_PROVIDER_DEADLINE_SECONDS, never separately.
+            raise ValueError("ranker deadline must be within sixty seconds")
+        if type(self.max_history_events) is not int or not 0 <= self.max_history_events <= 200:
+            raise ValueError("ranker prompt.max_history_events must be an integer between 0 and 200")
+        if type(self.max_model_candidates) is not int or not 5 <= self.max_model_candidates <= 100:
+            raise ValueError("ranker prompt.max_model_candidates must be an integer between 5 and 100")
         if self.max_retries not in (0, 1):
             raise ValueError("ranker permits at most one retry")
         if any(
@@ -134,8 +148,12 @@ class RankLLMAdapter:
                 # have been charged and must retain its reservation.
                 if attempt_observer is not None:
                     attempt_observer(attempt, self._clock() - started)
-                outcome = (self._engine.rerank_prepared(prepared, timeout_seconds=remaining) if prepared is not None
-                    else self._engine.rerank(request.model_input(), timeout_seconds=remaining))
+                outcome = self._call_within(
+                    (lambda: self._engine.rerank_prepared(prepared, timeout_seconds=remaining))
+                    if prepared is not None else
+                    (lambda: self._engine.rerank(self._budgeted_input(request.model_input())[0],
+                                                 timeout_seconds=remaining)),
+                    remaining)
                 break
             except RetryableProviderError:
                 if attempt >= self._policy.max_retries:
@@ -168,7 +186,7 @@ class RankLLMAdapter:
             return self._fallback(request, "observed_cost_limit")
         receipt = self._receipt(
             request,
-            ranked_ids=outcome.ranked_candidate_ids,
+            ranked_ids=self._complete_order(request, outcome.ranked_candidate_ids),
             mode=RankingResultMode.MODEL,
             reason="",
         )
@@ -195,6 +213,84 @@ class RankLLMAdapter:
             raise ValueError("observed usage exceeded its reservation")
         return amount
 
+    def _budgeted_input(self, model_input):
+        """Apply the prompt budget: newest N history events, first N candidates.
+
+        This runs BEFORE the cost fitting below, and it is the reason a request
+        fits at all. The live owner request prepared 50 candidates and 72 history
+        events, about 38,000 input tokens, and every attempt ran out of the
+        provider deadline. The budget is config (`prompt.max_history_events`,
+        `prompt.max_model_candidates`), so shrinking or growing what the model
+        reads never needs a code change.
+
+        Candidates are cut from the TAIL, so the model reorders the first N of
+        the recipe order and the rest keep the recipe order behind them (see
+        `_complete_order`). History is cut from the FRONT, so the newest
+        behavior, which is the behavior that describes the reader now, survives.
+        """
+        history = model_input.ordered_history
+        candidates = model_input.candidates
+        kept_history = history[len(history) - self._policy.max_history_events:] if (
+            self._policy.max_history_events < len(history)) else history
+        kept_candidates = candidates[:self._policy.max_model_candidates]
+        if len(kept_history) == len(history) and len(kept_candidates) == len(candidates):
+            return model_input, 0, 0
+        return (replace(model_input, ordered_history=kept_history, candidates=kept_candidates),
+                len(history) - len(kept_history), len(candidates) - len(kept_candidates))
+
+    @staticmethod
+    def _complete_order(request: RankingRequest, ranked_ids: tuple[str, ...]) -> tuple[str, ...]:
+        """The model's order, then every candidate it never saw, in recipe order.
+
+        The prompt budget hands the provider the first `prompt.max_model_candidates`
+        candidates. The response contract is still an exact permutation of the
+        WHOLE request, so the tail is appended here, unreordered. A model that
+        returns a malformed head still fails `validate_ranking_response`, because
+        nothing is dropped or invented: ids arrive in the order the model gave
+        them, then the untouched remainder in the order the recipe chose.
+        """
+        seen = set(ranked_ids)
+        if len(seen) != len(ranked_ids):
+            # A repeated id is a malformed answer, not a short one. Completing it
+            # would turn a duplicate into a valid-looking permutation, so it is
+            # handed back untouched for `validate_ranking_response` to reject.
+            return tuple(ranked_ids)
+        return tuple(ranked_ids) + tuple(
+            candidate.candidate_id for candidate in request.candidates
+            if candidate.candidate_id not in seen)
+
+    def _call_within(self, call, seconds: float):
+        """Run the provider call under a wall clock the ADAPTER owns.
+
+        The engine already cancels its own HTTP request on the same budget, and
+        normally that typed timeout is what returns. This is the backstop for the
+        case it cannot cover: an engine that blocks somewhere other than the
+        awaited request still has to answer the reader, because the alternative
+        is the container's function timeout killing the whole request and the
+        reader seeing a 500 instead of a typed `provider_deadline` fallback.
+
+        The worker is a daemon, so a wedged provider call can never hold the
+        process open, and it is the only thing inside the bound: the observers
+        that record usage and cost run on this thread, after it returns.
+        """
+        result: list = []
+        failure: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                result.append(call())
+            except BaseException as error:  # re-raised on the calling thread below
+                failure.append(error)
+
+        worker = threading.Thread(target=run, name="m2-provider-call", daemon=True)
+        worker.start()
+        worker.join(seconds)
+        if worker.is_alive():
+            raise ProviderTimeout("provider wait exceeded the adapter deadline")
+        if failure:
+            raise failure[0]
+        return result[0]
+
     def prepare(self, request: RankingRequest):
         """Prepare the largest policy-safe history selection that fits the request cap.
 
@@ -206,11 +302,11 @@ class RankLLMAdapter:
         prepare = getattr(self._engine, "prepare", None)
         if prepare is None:
             return None
-        model_input = request.model_input()
+        model_input, events_dropped, candidates_dropped = self._budgeted_input(request.model_input())
         full = prepare(model_input)
         if self.reservation_estimate(estimated_input_tokens=full.input_tokens_bound,
                 estimated_output_tokens=full.output_tokens_budget) is not None:
-            return full
+            return self._with_budget_counters(full, events_dropped, candidates_dropped)
         history_count = len(model_input.ordered_history)
         if history_count == 0:
             return None
@@ -257,7 +353,14 @@ class RankLLMAdapter:
                 low = omitted + 1
         if hasattr(best, "history_events_omitted"):
             best = replace(best, history_events_omitted=best_omitted)
-        return best
+        return self._with_budget_counters(best, events_dropped, candidates_dropped)
+
+    @staticmethod
+    def _with_budget_counters(prepared, history_events_omitted: int, candidates_omitted: int):
+        if not hasattr(prepared, "history_events_budget_omitted"):
+            return prepared
+        return replace(prepared, history_events_budget_omitted=history_events_omitted,
+                       candidates_budget_omitted=candidates_omitted)
 
     def prepare_with_reason(self, request: RankingRequest):
         """Return a prepared request or a stable, known pre-call fallback reason."""

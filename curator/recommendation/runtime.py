@@ -12,6 +12,7 @@ import yaml
 
 from .asgi import RankingASGI
 from .composition import RETENTION_INPUTS_FILE, boot_retention_days, load_composition_policy
+from .deployment import FUNCTION_TIMEOUT_ENV, function_timeout_seconds
 from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder, ScoringPolicy
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS, RankingService, ServicePolicy
@@ -129,15 +130,20 @@ def build_application(*, environ=None, policy_path: str | None = None):
     provider_key = env.get("NEWS_CURATOR_MODEL_API_KEY", "")
     if enabled and not provider_key:
         raise ValueError("enabled ranker requires a scoped model key")
+    history_events, model_candidates = prompt_budget(policy)
     ranker_policy = RankerPolicy(provider_id=_required(policy, "provider"), model_id=_required(policy, "model"),
         endpoint=_required(policy, "endpoint"), prompt_revision=_required(policy, "prompt_revision"),
         deadline_seconds=policy["deadline_seconds"], max_retries=policy["max_retries"],
         request_cost_limit_usd=policy["request_cost_limit_usd"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
         input_cost_per_million_tokens_usd=policy.get("input_cost_per_million_tokens_usd"),
-        output_cost_per_million_tokens_usd=policy.get("output_cost_per_million_tokens_usd"))
+        output_cost_per_million_tokens_usd=policy.get("output_cost_per_million_tokens_usd"),
+        max_history_events=history_events, max_model_candidates=model_candidates)
     # Read before the composition policy, because the claim-window check inside
     # it is sized against this value.
     supabase_timeout = supabase_timeout_seconds(policy)
+    # And before anything is served: one request must be able to finish inside
+    # the container's own wall clock. See assert_request_fits_function_timeout.
+    assert_request_fits_function_timeout(policy, supabase_timeout, env)
     # The composition policy is loaded FIRST: it decides whether the ranker asks
     # for action predictions or for a bare permutation, which changes the schema,
     # the prompt and the output budget together.
@@ -193,6 +199,65 @@ def build_application(*, environ=None, policy_path: str | None = None):
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,
         maximum_body_bytes=policy["maximum_request_body_bytes"])
+
+
+def assert_request_fits_function_timeout(policy, supabase_timeout: float, env) -> float:
+    """Refuse the boot when one request may outlive the container that serves it.
+
+    The service has a typed 200 answer for every way a provider call can go
+    wrong, including `provider_deadline`. None of it reaches the reader if the
+    platform kills the function first: on 2026-09-21 a POST /rank was killed at
+    15.2s and answered 500, because the function timeout was 15 while the
+    request was allowed to spend longer than that.
+
+    Every term is named, and every one of them is config:
+
+        provider deadline (`deadline_seconds`)
+      + settle window (`settle_window_seconds`)
+      + claimed-section Supabase budget
+        (CLAIMED_SECTION_MAX_TRANSPORT_CALLS x `supabase.timeout_seconds`)
+      MUST be strictly below the function timeout (NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS)
+
+    Raising any of the three means raising the function timeout with them, which
+    is a deploy-time environment change, never a code change.
+    """
+    deadline = float(policy["deadline_seconds"])
+    settle = float(policy.get("settle_window_seconds", 5))
+    transport = float(supabase_timeout) * CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+    worst_case = deadline + settle + transport
+    timeout = function_timeout_seconds(env)
+    if worst_case >= timeout:
+        raise ValueError(
+            f"one request may take up to {worst_case}s (deadline_seconds {deadline} "
+            f"+ settle_window_seconds {settle} + {CLAIMED_SECTION_MAX_TRANSPORT_CALLS} "
+            f"claimed-section Supabase calls x supabase.timeout_seconds {supabase_timeout} "
+            f"= {transport}), which is not below the function timeout "
+            f"{FUNCTION_TIMEOUT_ENV} ({timeout}s)")
+    return worst_case
+
+
+def prompt_budget(policy) -> tuple[int, int]:
+    """`prompt.max_history_events` and `prompt.max_model_candidates`, validated here.
+
+    How much of a request the model is shown is an operational value: it decides
+    the token bound, and through it whether a call finishes inside the deadline
+    at all. It lives in the policy with a safe default, and an unknown key or an
+    out-of-range value refuses the boot rather than being silently ignored.
+    """
+    section = policy.get("prompt", {})
+    if not isinstance(section, dict):
+        raise ValueError("ranker policy `prompt` must be a mapping")
+    unknown = set(section) - {"max_history_events", "max_model_candidates"}
+    if unknown:
+        raise ValueError(f"unknown ranker policy prompt keys: {sorted(unknown)}")
+    # The ranges are enforced by RankerPolicy.validate, which is the one place
+    # that knows them; this only refuses a value of the wrong shape.
+    for key in ("max_history_events", "max_model_candidates"):
+        if key in section and type(section[key]) is not int:
+            raise ValueError(f"ranker policy prompt.{key} must be an integer")
+    # One home for the default: the dataclass that enforces the range.
+    return (section.get("max_history_events", RankerPolicy.max_history_events),
+            section.get("max_model_candidates", RankerPolicy.max_model_candidates))
 
 
 def supabase_timeout_seconds(policy) -> float:
