@@ -434,6 +434,13 @@ class RankingService:
                 "attempts_started": attempts_started,
                 "history_events_included": getattr(prepared, "history_events_included", 0) if prepared else 0,
                 "history_events_omitted": getattr(prepared, "history_events_omitted", 0) if prepared else 0,
+                # What the PROMPT BUDGET dropped, separate from what cost fitting
+                # dropped: the operator reading a receipt can tell a configured
+                # window from a corpus that outgrew its budget.
+                "history_events_budget_omitted":
+                    getattr(prepared, "history_events_budget_omitted", 0) if prepared else 0,
+                "candidates_budget_omitted":
+                    getattr(prepared, "candidates_budget_omitted", 0) if prepared else 0,
                 "cost_basis": "observed_with_unknown_attempt_reserves" if observed_usage else
                     "unknown_provider_charge_reserved" if reservation_created and attempts_started else
                     "released_no_provider_call" if reservation_created else "no_provider_call",

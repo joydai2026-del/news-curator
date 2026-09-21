@@ -11,6 +11,7 @@ from typing import Mapping
 from curator.contracts.ranking_request import ModelRankingInput
 
 from .async_provider import (
+    MAXIMUM_PROVIDER_DEADLINE_SECONDS,
     PREDICTED_ACTIONS,
     AsyncOpenAIResponses,
     AsyncRankLLMProvider,
@@ -93,6 +94,12 @@ class PreparedProviderRequest:
     output_tokens_budget: int
     history_events_included: int = 0
     history_events_omitted: int = 0
+    # Dropped by the prompt BUDGET (policy `prompt.max_history_events` and
+    # `prompt.max_model_candidates`), not by cost fitting. Two counters, because
+    # they answer different questions: the budget ones are a constant of the
+    # configuration, the cost-fitting one moves with the corpus.
+    history_events_budget_omitted: int = 0
+    candidates_budget_omitted: int = 0
 
 
 class OpenAIRankLLMEngine:
@@ -162,7 +169,14 @@ class OpenAIRankLLMEngine:
             transport = AsyncOpenAIResponses(client=client, endpoint=self._endpoint, api_key=self._api_key,
                 model=self._model, max_output_tokens=self._maximum_output_tokens,
                 reasoning_effort=self._reasoning_effort, verbosity=self._verbosity,
-                total_seconds=min(timeout_seconds, 6.0), predict_actions=bool(self._scoring))
+                # The budget the ADAPTER computed, capped only by the transport's
+                # own safety ceiling. It used to be `min(timeout_seconds, 6.0)`,
+                # a second deadline hidden in code: raising the policy deadline
+                # changed nothing, every call still gave up at six seconds and
+                # every reorder came back `result_mode: fallback,
+                # fallback_reason: provider_deadline`.
+                total_seconds=min(timeout_seconds, MAXIMUM_PROVIDER_DEADLINE_SECONDS),
+                predict_actions=bool(self._scoring))
             provider = AsyncRankLLMProvider(prompt_builder=self._builder, transport=transport)
             try:
                 return await provider.rerank_prompt(prompt=prepared.prompt, candidate_count=len(prepared.candidate_ids))

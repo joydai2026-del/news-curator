@@ -97,7 +97,10 @@ def test_remote_handlers_import_without_deployment_environment(monkeypatch):
 def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(monkeypatch, tmp_path):
     _, captured = _load(monkeypatch, **_required(tmp_path))
     assert captured["app_name"] == "news-curator-m2-ranker"
-    assert captured["functions"][0]["timeout"] == 15
+    # 120: the container must outlive the service's own worst case (provider
+    # deadline + settle window + the claimed section's Supabase budget = 110s),
+    # which curator.recommendation.runtime refuses to boot without.
+    assert captured["functions"][0]["timeout"] == 120
     assert captured["functions"][0]["max_containers"] == 4
     assert captured["functions"][0]["scaledown_window"] == 60
     assert captured["functions"][0]["enable_memory_snapshot"] is True
@@ -149,6 +152,8 @@ def test_context_mutation_is_rejected(monkeypatch, tmp_path):
         ("NEWS_CURATOR_MODAL_MEMORY_SNAPSHOT_ENABLED", "yes"),
         ("NEWS_CURATOR_MODAL_APP_NAME", "News Curator"),
         ("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", "6"),
+        ("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", "301"),
+        ("NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS", "sixty"),
         ("NEWS_CURATOR_MODAL_MAX_CONTAINERS", "0"),
         ("NEWS_CURATOR_MODAL_MAX_INPUTS_PER_CONTAINER", "33"),
         ("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", "0"),

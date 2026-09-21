@@ -14,7 +14,13 @@ prompt_framing_tokens_per_message: 8
 tokenizer_encoding: o200k_base
 reasoning_effort: minimal
 verbosity: low
-deadline_seconds: 6
+# 25, not 6. The transport used to cap itself at six seconds in code, so this
+# number changed nothing and every owner reorder came back
+# `result_mode: fallback, fallback_reason: provider_deadline` while the provider
+# was still thinking. Validated range is up to 60 seconds; raising it means
+# raising NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS and
+# run.ranking_claim_seconds with it (both checks refuse the boot otherwise).
+deadline_seconds: 25
 # How long settling an observed cost may take after the provider answers. Named
 # here because the reading-run claim window is validated against it at boot.
 settle_window_seconds: 5
@@ -25,6 +31,20 @@ daily_cost_limit_usd: 2.00
 # https://developers.openai.com/api/docs/models/gpt-5-mini
 input_cost_per_million_tokens_usd: 0.25
 output_cost_per_million_tokens_usd: 2.0
+# How much of one request the model is shown. This is the token bound, and the
+# token bound is what a 25-second deadline has to cover: the live owner request
+# prepared 50 candidates and 72 history events, about 38,000 input tokens, and
+# never finished. Both values are config, so the reading window can be widened
+# again without a code change once the measured latency allows it.
+prompt:
+  # The newest N behavior events reach the prompt. Older ones are dropped before
+  # the adapter's cost fitting runs. Range 0 to 200.
+  max_history_events: 24
+  # The model reorders the first N candidates of the recipe order; the remaining
+  # candidates keep the recipe order behind them, with their lanes and labels
+  # unchanged. Range 5 to 100, and it is independent of candidate_limit (50),
+  # which is still the window the recipe composes and paginates.
+  max_model_candidates: 25
 raw_prompt_logging: false
 raw_response_logging: false
 invocation_history_persistence: false
@@ -55,11 +75,17 @@ composition_policy: config/ranking-policy-r2.yaml
 # composition.py Check 10 now enforces:
 #
 #   run.ranking_claim_seconds
-#     > deadline_seconds (6)
+#     > deadline_seconds (25)
 #     + settle_window_seconds (5)
 #     + CLAIMED_SECTION_MAX_TRANSPORT_CALLS (16) x timeout_seconds (5) = 80
 #     + run.ranking_claim_margin_seconds (10)
-#     = 101, so run.ranking_claim_seconds is 110.
+#     = 120, so run.ranking_claim_seconds is 130.
+#
+# The same three terms without the margin are also checked against the container
+# itself at boot: deadline (25) + settle (5) + transport (80) = 110 must be
+# strictly below NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS (120), or the
+# platform kills the request and the reader gets a 500 instead of the typed
+# fallback the service already had ready.
 #
 # Raising this number raises the claim with it, and a longer claim is how long a
 # hard-crashed request blocks the reader's feed. 5 is chosen to keep that cost
