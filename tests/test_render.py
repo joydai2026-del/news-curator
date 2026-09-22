@@ -75,6 +75,14 @@ def render(ranked, results=None, now=None, *, fill_summaries=True, **kw):
     return render_html(ranked, results or [], now or NOW, **kw)
 
 
+def test_meta_csp_does_not_emit_the_browser_ignored_frame_ancestors_directive(now):
+    html = render({"T": [make_item("A real headline")]}, now=now)
+    root = Path(__file__).resolve().parents[1]
+    meta_documents = [html, (root / "static/auth/callback/index.html").read_text(),
+                      (root / "static/dashboard/index.html").read_text()]
+    assert all("frame-ancestors" not in document for document in meta_documents)
+
+
 class TestEscaping:
     def test_script_in_a_headline_is_escaped(self, now):
         html = render({"T": [make_item("<script>alert(1)</script> hi")]}, now=now)

@@ -268,6 +268,7 @@ class RankingService:
                 composition, exclusive, category_id, query, page_size, body, excluded_set,
                 before_published, before_story, corpus_cursor):
         promotion: list[Mapping[str, object]] = []
+        hot_story_ids: set[str] = set()
         profile = BehaviorProfile.from_snapshot(run.get("profile_snapshot")) if run else BehaviorProfile()
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
@@ -308,7 +309,7 @@ class RankingService:
             laned = build_window(filtered, profile=profile, policy=composition,
                                  now=self._now(), size=composition.candidate_window_size)
             rows = [item.row for item in laned]
-            has_more = len(filtered) > len(rows)
+            has_more = has_more or len(filtered) > len(rows)
         next_corpus = None
         if composition is not None:
             # The SAME cursor shape the continuation writes, hot key included, so
@@ -576,10 +577,22 @@ class RankingService:
         query = eligibility.get("query") if isinstance(eligibility, Mapping) else None
         profile = BehaviorProfile.from_snapshot(bindings.get("profile_snapshot"))
         seen = {str(card.get("story_id")) for card in frozen.get("cards", ())}
-        pooled, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
-                                                cursor.get("before_published_at"),
-                                                cursor.get("before_story_id"),
-                                                self._hot_cursor(cursor))
+        exclusive = self._is_exclusive_category(category_id)
+        if exclusive:
+            pooled = self._store.retained_candidates_language_exclusive(
+                display_language=self._policy.display_language, query=query,
+                limit=self._policy.candidate_limit + 1,
+                before_published_at=cursor.get("before_published_at"),
+                before_story_id=cursor.get("before_story_id"),
+                policy_id=self._policy.exclusivity_policy_id,
+            )
+            hot_story_ids: set[str] = set()
+        else:
+            pooled, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
+                                                    cursor.get("before_published_at"),
+                                                    cursor.get("before_story_id"),
+                                                    self._hot_cursor(cursor))
+        fetched_more = len(pooled) > self._policy.candidate_limit
         rows = [row for row in pooled if str(row.get("story_id")) not in seen]
         if not rows:
             return ()
@@ -587,7 +600,6 @@ class RankingService:
                              size=composition.candidate_window_size)
         if not laned:
             return ()
-        exclusive = self._is_exclusive_category(category_id)
         owner_states = self._store.owner_states(token, [item.story_id for item in laned])
         finalization = finalize_order(laned, policy=composition, owner_states=owner_states,
             page_size=min(size, composition.page_size), pages=composition.max_pages_per_run,
@@ -606,7 +618,7 @@ class RankingService:
             total = self._store.extend_frozen_order(user_id=owner.user_id,
                 frozen_order_id=frozen_order_id, cards=added,
                 bindings={"corpus_cursor": self._next_corpus_cursor(rows, hot_story_ids),
-                          "corpus_has_more": len(rows) > len(added),
+                          "corpus_has_more": fetched_more or len(rows) > len(added),
                           "continuation_mode": "recipe_only"})
         except Exception as error:
             log_suppressed_exception("m2_continuation_failed", error, stream=sys.stderr,
@@ -1103,9 +1115,10 @@ class RankingService:
         summaries = row.get("summary_translations") or {}
         if not isinstance(titles, Mapping) or not isinstance(summaries, Mapping):
             raise ValueError("invalid_translation_overlay")
-        # Version 3 is version 2 plus the element labels. The reader accepts both
-        # for one release, so reader and ranker deploy in any order.
-        card = {"card_schema_version": 3 if composition is not None else 2,
+        # Version 4 is version 3 plus the measured coverage count. The reader
+        # accepts every older version during the deploy, so either side can land
+        # first without rejecting the feed.
+        card = {"card_schema_version": 4 if composition is not None else 2,
             "story_id": row["story_id"], "title": row["title"],
             "summary": row.get("summary", ""), "source_name": row["source_name"], "published_at": row["published_at"],
             "url": row["canonical_url"], "source_id": row["source_id"], "language": language,
@@ -1138,6 +1151,10 @@ class RankingService:
             card["exclusive_label"] = (composition.exclusive_label(self._policy.display_language)
                                        if exclusive else None)
             card["also_covered_by"] = list(also_covered_by)
+            coverage_count = row.get("independent_source_count", 1)
+            if type(coverage_count) is not int or coverage_count < 0:
+                raise ValueError("invalid_independent_source_count")
+            card["coverage_count"] = coverage_count
         return card
 
     @staticmethod

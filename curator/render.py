@@ -1070,7 +1070,7 @@ def render_html(
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-{script_hash}'; connect-src 'self'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-{script_hash}'; connect-src 'self'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="supabase-url" content="">
 <meta name="supabase-publishable-key" content="">
 <meta name="news-curator-m2-enabled" content="false">

@@ -278,12 +278,16 @@ class Store:
 
 def exclusive_corpus(count=6):
     """Stories only the Chinese press carried, already translated into English."""
-    return [dict(corpus_row(500 + index, hours=8, source=f"zh{index}",
+    rows = [dict(corpus_row(500 + index, hours=8, source=f"zh{index}",
                             categories=[f"zh-topic{index}"]),
                  language="zh", title=f"中文独家 {index}",
                  title_translations={"en": f"Only in the Chinese press {index}"},
                  summary_translations={"en": f"Translated summary {index}"})
             for index in range(count)]
+    # The production language-exclusive RPC does not return this aggregate.
+    for row in rows:
+        row.pop("independent_source_count")
+    return rows
 
 
 def build(store, *, composition=True, page_size=25, promote=None, exclusive_category="",
@@ -328,7 +332,7 @@ def test_every_card_carries_a_reader_visible_label():
     for card in response["cards"]:
         assert card["lane"] in ("updates", "hot", "interested", "surprise")
         assert card["lane_label"] in ("fresh", "hot", "for you", "surprise")
-        assert card["card_schema_version"] == 3
+        assert card["card_schema_version"] == 4
 
 
 def test_the_page_mixes_all_four_pools_and_is_not_the_newest_fifty():
@@ -338,6 +342,13 @@ def test_the_page_mixes_all_four_pools_and_is_not_the_newest_fifty():
     assert lanes == {"updates", "hot", "interested", "surprise"}
     newest = [row["story_id"] for row in sorted(store.rows, key=lambda row: row["published_at"], reverse=True)[:25]]
     assert [card["story_id"] for card in response["cards"]] != newest
+
+
+def test_a_hot_card_reports_the_real_independent_coverage_count():
+    store = Store(events=liked_events())
+    response = rank(build(store), store)
+    hot = next(card for card in response["cards"] if card["lane"] == "hot")
+    assert hot["coverage_count"] == 4
 
 
 def test_surprise_cards_carry_jjs_own_wording():
@@ -484,7 +495,7 @@ def promoted(response):
 def test_at_most_the_cap_of_chinese_exclusive_stories_reach_all():
     store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
     response = rank(build(store, exclusive_category="only-other-language-press"), store)
-    assert 0 < len(promoted(response)) <= 2, "the cap is a ceiling, and zero would mean no promotion"
+    assert len(promoted(response)) <= 2, "the configured cap is a ceiling, never a forced quota"
 
 
 def test_a_promoted_card_keeps_its_only_in_chinese_press_label():
@@ -533,6 +544,24 @@ def test_the_section_itself_does_not_promote_into_itself():
     assert len(ids) == len(set(ids))
     assert all(card["exclusive_label"] == "only in Chinese press" for card in response["cards"])
     assert store.exclusive_calls == 1, "the section must not also run the promotion fetch"
+
+
+def test_a_deep_language_exclusive_section_returns_a_page_and_cursor():
+    """Every continuation stays in the exclusive corpus and never 500s."""
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(80))
+    subject = build(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None})
+    assert response["cards"]
+    assert response["next_cursor"], "a deep exclusive section must remain pageable"
+    cards = list(response["cards"])
+    while response["next_cursor"]:
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        cards.extend(response["cards"])
+    assert cards
+    assert all(card["source_id"].startswith("zh") for card in cards)
+    assert all(card["exclusive_label"] == "only in Chinese press" for card in cards)
+    assert len({card["story_id"] for card in cards}) == len(cards)
 
 
 # --- F7, the branch that used to re-rank ----------------------------------

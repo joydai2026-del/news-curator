@@ -74,6 +74,7 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'invalid_corpus_cursor',
     'invalid_eligibility',
     'invalid_exclude_story_ids',
+    'invalid_independent_source_count',
     'invalid_optional_string',
     'invalid_page_size',
     'invalid_translation_overlay',
