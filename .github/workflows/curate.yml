@@ -487,7 +487,8 @@ jobs:
                 --publishable-key "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" \
                 --output ./site/auth/callback/index.html \
                 "${personalization_link_args[@]}" \
-                --m2-config "$m2_config_path"
+                --m2-config "$m2_config_path" \
+                --ranker-policy ./config/ranker-policy-r1.yaml
             else
               python scripts/build_auth_callback.py \
                 --supabase-url "$NEWS_CURATOR_SUPABASE_URL" \

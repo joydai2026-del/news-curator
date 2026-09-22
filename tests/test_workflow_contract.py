@@ -353,6 +353,7 @@ def test_build_materializes_auth_callback_without_overwriting_it() -> None:
     assert "personalization_link_args=(--site-index ./site/index.html)" in command
     assert '"${personalization_link_args[@]}"' in command
     assert '--m2-config "$m2_config_path"' in command
+    assert '--ranker-policy ./config/ranker-policy-r1.yaml' in command
     assert '--output ./site/auth/callback/index.html' in command
     assert 'if [ -z "$NEWS_CURATOR_SUPABASE_URL" ] && [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]' in command
     assert 'elif [ -z "$NEWS_CURATOR_SUPABASE_URL" ] || [ -z "$NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY" ]' in command
