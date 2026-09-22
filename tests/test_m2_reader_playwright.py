@@ -95,7 +95,8 @@ def asgi_request(app, request):
         return executor.submit(lambda: asyncio.run(dispatch())).result(timeout=10)
 
 
-def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surprise=False):
+def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surprise=False,
+                      inject_slow_valid_fallback=False):
     """The whole reader drive. `include_the_tail` selects everything from the
     saved-navigation step onward, which is the part issue #48 breaks."""
     artifact_dir = Path(os.environ.get('NEWS_CURATOR_QA_OUTPUT_DIR', str(tmp_path)))
@@ -249,7 +250,7 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                 ?new Promise((resolve,reject)=>{
                     const timer=setTimeout(()=>originalFetch(url,options).then(async(response)=>{
                       const payload=await response.json();
-                      payload.result_mode="model";payload.fallback_reason="";
+                      if(window.__stallM2ForceModel!==false){payload.result_mode="model";payload.fallback_reason="";}
                       resolve(new Proxy(response,{get(target,key){
                         return key==="text" ? async()=>JSON.stringify(payload) : Reflect.get(target,key,target);
                       }}));
@@ -265,6 +266,21 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
             page.goto(READER,wait_until='networkidle')
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
             assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
+            if inject_slow_valid_fallback:
+                page.evaluate('''() => {
+                    window.__stallM2=true;
+                    window.__stallM2Delay=8500;
+                    window.__stallM2ForceModel=false;
+                }''')
+                with page.expect_request(lambda request: urlsplit(request.url).path == '/rank'):
+                    page.evaluate('document.querySelector("#m2-refresh").click()')
+                page.wait_for_function('''() =>
+                    document.querySelectorAll('[data-m2-card=true]').length===0 &&
+                    document.querySelector('#m2-mode').textContent.includes('still loading')''', timeout=12000)
+                page.wait_for_function('''() =>
+                    document.querySelectorAll('[data-m2-card=true]').length===25 &&
+                    document.querySelector('#m2-mode').textContent.includes('Freshness order')''', timeout=15000)
+                return
             race_card = page.locator('[data-m2-card=true]').nth(1)
             race_story_id = race_card.get_attribute('data-story-id')
             second_race_card = page.locator('[data-m2-card=true]').nth(2)
@@ -595,6 +611,11 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
 def test_m2_category_displays_server_selected_surprise_story(tmp_path):
     """A ranked category response owns its full membership, including surprise."""
     _drive_the_reader(tmp_path, include_the_tail=False, inject_server_selected_surprise=True)
+
+
+def test_slow_valid_server_fallback_renders_after_loading_threshold(tmp_path):
+    """A valid server fallback remains usable even when it arrives after the loading threshold."""
+    _drive_the_reader(tmp_path, include_the_tail=False, inject_slow_valid_fallback=True)
 
 
 # The ONE expected failure this suite carries, and the CI guard names exactly
