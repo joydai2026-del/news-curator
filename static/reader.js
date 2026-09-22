@@ -704,6 +704,10 @@
   // Version 3 adds the element labels: why this story is in front of her.
   const M2_LABEL_FIELDS = ["lane", "lane_label", "surprise_label", "exclusive_label", "also_covered_by"];
   const M2_CARD_FIELDS_V3 = [...M2_CARD_FIELDS, ...M2_LABEL_FIELDS];
+  // Version 4 carries the independently measured number of outlets. Names are
+  // optional because the retained corpus can prove the count without exposing
+  // every member of the source cluster.
+  const M2_CARD_FIELDS_V4 = [...M2_CARD_FIELDS_V3, "coverage_count"];
   const M2_LANES = ["updates", "hot", "interested", "surprise", "more"];
   // Same bound the database column carries, so an oversized translated summary
   // is rejected here rather than rendered.
@@ -786,16 +790,18 @@
     value.cards.forEach((card) => {
       // One release accepts both card schemas, so the reader and the ranker can
       // deploy in either order without every card failing validation.
-      const labelled = card.card_schema_version === 3;
+      const labelled = card.card_schema_version >= 3;
+      const countedCoverage = card.card_schema_version === 4;
       const translated = card.card_schema_version >= 2;
-      if (![1, 2, 3].includes(card.card_schema_version) ||
-          !exactFields(card, labelled ? M2_CARD_FIELDS_V3 : translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) ||
+      if (![1, 2, 3, 4].includes(card.card_schema_version) ||
+          !exactFields(card, countedCoverage ? M2_CARD_FIELDS_V4 : labelled ? M2_CARD_FIELDS_V3 : translated ? M2_CARD_FIELDS : M2_CARD_FIELDS_V1) ||
           !STORY_ID.test(card.story_id) ||
           (labelled && (!M2_LANES.includes(card.lane) || !boundedString(card.lane_label, 40) ||
             !(card.surprise_label === null || boundedString(card.surprise_label, 80)) ||
             !(card.exclusive_label === null || boundedString(card.exclusive_label, 80)) ||
             !Array.isArray(card.also_covered_by) ||
-            !card.also_covered_by.every((name) => boundedString(name, 200)))) ||
+            !card.also_covered_by.every((name) => boundedString(name, 200)) ||
+            (countedCoverage && (!Number.isSafeInteger(card.coverage_count) || card.coverage_count < 0)))) ||
           (translated && (
             !DISPLAY_LANGUAGES.every((code) => typeof card[`title_${code}`] === "string" &&
               card[`title_${code}`].length <= 2000 && typeof card[`summary_${code}`] === "string" &&
@@ -818,6 +824,7 @@
         card.lane = null; card.lane_label = null; card.surprise_label = null;
         card.exclusive_label = null; card.also_covered_by = [];
       }
+      if (!countedCoverage) card.coverage_count = Math.max(1, card.also_covered_by.length + 1);
       if (!translated) {
         const other = card.language === "en" ? "zh" : "en";
         card[`title_${card.language}`] = card.title;
@@ -826,7 +833,7 @@
         card[`summary_${other}`] = "";
         card.translation_status = { [card.language]: "original", [other]: "untranslated" };
       }
-      card.card_schema_version = 3;
+      card.card_schema_version = 4;
       seen.add(card.story_id);
     });
     value.end_of_run = endOfRun;
@@ -1275,7 +1282,8 @@
           ? strings().untranslated(OTHER_LANGUAGE_NAME[displayLanguage][entry.language]) : "",
         element_labels: [entry.lane_label, entry.surprise_label, entry.exclusive_label]
           .filter((label) => typeof label === "string" && label !== ""),
-        also_covered_by: Array.isArray(entry.also_covered_by) ? entry.also_covered_by : [] };
+        also_covered_by: Array.isArray(entry.also_covered_by) ? entry.also_covered_by : [],
+        coverage_count: Number.isSafeInteger(entry.coverage_count) ? entry.coverage_count : 1 };
     }
     // Every card says why it is on the page. The wording comes from the server,
     // which reads it from config, so renaming a pool never means editing the
@@ -1291,9 +1299,11 @@
     // persisted and validated, and then never shown: the reader could not tell a
     // story three outlets carried from one nobody else did.
     function markAlsoCovered(card, row) {
-      if (!row.also_covered_by || !row.also_covered_by.length) return;
-      const line = element("p", "also-covered", strings().alsoCovered(row.also_covered_by.length));
-      line.title = row.also_covered_by.join(", ");
+      const names = Array.isArray(row.also_covered_by) ? row.also_covered_by : [];
+      const otherCount = Math.max(names.length, (row.coverage_count || 1) - 1);
+      if (otherCount < 1) return;
+      const line = element("p", "also-covered", strings().alsoCovered(otherCount));
+      if (names.length) line.title = names.join(", ");
       card.querySelector(".story-heading")?.after(line);
     }
     function markUntranslated(card, row) {
