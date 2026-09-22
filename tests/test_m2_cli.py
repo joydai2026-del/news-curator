@@ -54,7 +54,7 @@ def test_history_writes_owner_only_file_and_no_payload_to_stdout(tmp_path, monke
         "_session",
         lambda value, email, *, minimum_validity: Session(),
     )
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: transport)
     output = tmp_path / "receipt.json"
 
     assert m2_cli.main(["history", "--output", str(output)]) == 0
@@ -65,6 +65,31 @@ def test_history_writes_owner_only_file_and_no_payload_to_stdout(tmp_path, monke
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert transport.calls[0][1].endswith("/rest/v1/rpc/m2_history_snapshot")
     assert transport.calls[0][4] == 15
+
+
+def test_history_uses_validated_private_response_bound(tmp_path, monkeypatch, capsys):
+    payload = {"history": "x" * 70_000}
+    bounds = []
+
+    class BoundedTransport:
+        def __init__(self, *, max_response_bytes=64 * 1024):
+            bounds.append(max_response_bytes)
+
+        def request(self, *_args, **_kwargs):
+            if len(json.dumps(payload).encode("utf-8")) > bounds[-1]:
+                raise m2_cli.AuthError("The preference response was invalid.")
+            return 200, payload
+
+    monkeypatch.setattr(m2_cli, "_auth_config", config)
+    monkeypatch.setattr(m2_cli, "_session", lambda *_args, **_kwargs: Session())
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", BoundedTransport)
+    output = tmp_path / "history.json"
+
+    assert m2_cli.main(["history", "--output", str(output)]) == 0
+    assert bounds == [1024 * 1024]
+    assert json.loads(output.read_text()) == payload
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert "x" * 100 not in capsys.readouterr().out
 
 
 def test_rank_and_page_defaults_cover_the_deployed_transport_window():
@@ -111,7 +136,7 @@ def test_rank_reuses_current_history_bindings_and_fixed_origin(tmp_path, monkeyp
         (200, {"included_history_revision": 2, "history_revision": 3, "history_generation": 4, "consent_revision": 5}),
         (200, {"result_mode": "fallback", "cards": []}),
     ])
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: transport)
     args = m2_cli._parser().parse_args([
         "rank", "--output", str(tmp_path / "receipt.json"), "--ranker-origin", "https://rank.example",
         "--policy-version", "policy-r1", "--model-version", "model-r1", "--category", "ai", "--query", "test", "--timeout", "7",
@@ -133,7 +158,7 @@ def test_page_encodes_opaque_cursor_and_uses_get(tmp_path, monkeypatch):
     transport = Transport([(200, {"cards": []})])
     input_path = tmp_path / "page.json"
     input_path.write_text(json.dumps({"cursor": "a+/= cursor"}))
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: transport)
     args = m2_cli._parser().parse_args(["page", "--output", str(tmp_path / "receipt.json"), "--input", str(input_path), "--ranker-origin", "https://rank.example", "--timeout", "6"])
 
     assert m2_cli._page(config(), Session(), args) == {"cards": []}
@@ -172,7 +197,7 @@ def test_failures_do_not_create_output_or_emit_private_data(tmp_path, monkeypatc
 def test_expected_owner_rejection_stops_before_rpc_or_rank(tmp_path, monkeypatch, status, profile):
     owner_auth(monkeypatch)
     transport = Transport([(status, profile)])
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: transport)
     output = tmp_path / "receipt.json"
 
     assert m2_cli.main(["history", "--output", str(output),
@@ -189,7 +214,7 @@ def test_expected_owner_match_allows_owner_scoped_rpc(tmp_path, monkeypatch):
         (200, {"email": "owner@example.com"}),
         (200, {"history_revision": 3}),
     ])
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: transport)
     output = tmp_path / "receipt.json"
 
     assert m2_cli.main(["history", "--output", str(output),
@@ -207,7 +232,7 @@ def test_main_rank_and_page_dispatch_to_private_outputs(tmp_path, monkeypatch):
                "history_generation": 4, "consent_revision": 5}),
         (200, {"result_mode": "fallback", "cards": [], "next_cursor": "opaque"}),
     ])
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: rank_transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: rank_transport)
     rank_output = tmp_path / "rank.json"
     assert m2_cli.main([
         "rank", "--output", str(rank_output), "--expected-owner-email", "owner@example.com",
@@ -221,7 +246,7 @@ def test_main_rank_and_page_dispatch_to_private_outputs(tmp_path, monkeypatch):
         (200, {"email": "owner@example.com"}),
         (200, {"cards": [], "next_cursor": None}),
     ])
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: page_transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: page_transport)
     page_input = tmp_path / "page-input.json"
     page_input.write_text(json.dumps({"cursor": "opaque"}))
     page_output = tmp_path / "page.json"
@@ -251,7 +276,7 @@ def test_main_mutation_and_export_dispatch_preserve_exact_rpc_body(
         (200, {"email": "owner@example.com"}),
         (200, {"ok": True}),
     ])
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: transport)
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: transport)
     output = tmp_path / f"{command}.json"
     invocation = [command, "--output", str(output),
                   "--expected-owner-email", "owner@example.com", *extra]
