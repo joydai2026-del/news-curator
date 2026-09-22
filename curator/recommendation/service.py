@@ -10,7 +10,7 @@ import re
 import sys
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Mapping, Protocol, Sequence
 
@@ -157,6 +157,10 @@ class ServicePolicy:
     # `candidate_limit` rows), which is the documented rollback: the recipe is
     # turned off by unsetting one config path, not by reverting code.
     composition: CompositionPolicy | None = None
+    # Hash of the complete effective ranking contract. The production runtime
+    # binds checked-in policies, prompt content, and ranking code into this.
+    # Alternate composition roots receive a deterministic dataclass digest.
+    effective_policy_digest: str = ""
 
     def __post_init__(self) -> None:
         # Two layers, both required, because the gap between them is where F5
@@ -170,6 +174,8 @@ class ServicePolicy:
             raise ValueError("an enabled ranking service requires a non-empty preview owner allowlist")
         if any(not isinstance(value, str) or not value.strip() for value in self.preview_owner_ids):
             raise ValueError("preview_owner_ids entries must be non-empty owner ids")
+        if self.effective_policy_digest and re.fullmatch(r"[0-9a-f]{64}", self.effective_policy_digest) is None:
+            raise ValueError("effective_policy_digest must be lowercase SHA-256")
         if self.display_language not in ("en", "zh"):
             raise ValueError("display_language must be a supported language")
         if self.exclusive_category_id and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", self.exclusive_category_id):
@@ -428,6 +434,7 @@ class RankingService:
                 "lane_counts": {lane: sum(1 for item in finalization.cards if item.lane == lane)
                                 for lane in (*composition.lane_priority, BACKFILL_LANE)}})
         bindings.update({"eligibility": {"category": category_id, "query": query},
+            "eligibility_key": eligibility_key,
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
             "corpus_start": dict(corpus_cursor), "excluded_story_ids": list(excluded_set),
             "execution": {**observed_usage, "settled_cost_usd": settled_cost,
@@ -506,11 +513,14 @@ class RankingService:
                 # Per VIEW: the pages she has read of All say nothing about how
                 # many of a category she has read.
                 bindings = frozen.get("bindings") or {}
-                eligibility = bindings.get("eligibility") or {}
-                key = self._eligibility_key(eligibility.get("category"), eligibility.get("query"),
-                                            self._is_exclusive_category(eligibility.get("category")))
-                served_before = max(page_index,
-                                    self._record_run_page(owner, str(run_id), key, page_index + 1))
+                key = bindings.get("eligibility_key")
+                # Orders created before policy-bound views did not persist the
+                # exact key. Reconstructing it with the CURRENT deploy poisons
+                # that deploy's page budget, so a legacy cursor keeps its own
+                # page-index cap but never writes into a different view.
+                if isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key):
+                    served_before = max(page_index,
+                                        self._record_run_page(owner, str(run_id), key, page_index + 1))
             if page_index >= composition.max_pages_per_run or served_before >= composition.max_pages_per_run:
                 # The run has served every page it promises. Reaching further
                 # would keep returning older and older stories that met no pool's
@@ -919,14 +929,25 @@ class RankingService:
             log_suppressed_exception("m2_release_failed", error, stream=sys.stderr,
                 request_id=request_id)
 
-    @staticmethod
-    def _eligibility_key(category_id, query, exclusive) -> str:
+    def _eligibility_key(self, category_id, query, exclusive) -> str:
         """One view: All, a category, a search, or the exclusive section.
 
         A DIGEST, not the values: a search query is text the owner typed, and
-        this key is an index, not a place to keep what she searched for.
+        this key is an index, not a place to keep what she searched for. The
+        serving contract is part of the identity too. Otherwise a deploy can
+        reuse an open run's old-policy response, which the new reader must
+        reject before rendering.
         """
-        raw = json.dumps([category_id, query, bool(exclusive)], separators=(",", ":"), sort_keys=True)
+        policy_identity = self._policy.effective_policy_digest
+        if not policy_identity:
+            policy_identity = hashlib.sha256(json.dumps(asdict(self._policy),
+                separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+        raw = json.dumps([
+            policy_identity,
+            category_id,
+            query,
+            bool(exclusive),
+        ], separators=(",", ":"), sort_keys=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _open_view(self, owner, run, eligibility_key):

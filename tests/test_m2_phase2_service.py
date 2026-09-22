@@ -286,18 +286,21 @@ def exclusive_corpus(count=6):
             for index in range(count)]
 
 
-def build(store, *, composition=True, page_size=25, promote=None, exclusive_category=""):
-    adapter = RankLLMAdapter(policy=RankerPolicy("openai", "gpt-5-mini", "https://provider.invalid", "policy",
+def build(store, *, composition=True, page_size=25, promote=None, exclusive_category="",
+          policy_version="policy", model_version="gpt-5-mini", provider_policy_id="policy",
+          effective_policy_digest=""):
+    adapter = RankLLMAdapter(policy=RankerPolicy("openai", model_version, "https://provider.invalid", policy_version,
         input_cost_per_million_tokens_usd=.25, output_cost_per_million_tokens_usd=2), engine=object())
     loaded = load_composition_policy(POLICY_PATH) if composition else None
     if loaded is not None and promote is not None:
         loaded = replace(loaded, exclusive_promote_to_all_max=promote)
-    policy = ServicePolicy("policy", "gpt-5-mini", "policy", "tenant", candidate_limit=50,
+    policy = ServicePolicy(policy_version, model_version, provider_policy_id, "tenant", candidate_limit=50,
         maximum_page_size=page_size, enabled=True, composition=loaded,
         # F5, from PR #47: an enabled service fails closed on an empty allowlist.
         # The harness names the owner the Auth stub authenticates.
         preview_owner_ids=(OWNER_ID,),
-        exclusive_category_id=exclusive_category or "")
+        exclusive_category_id=exclusive_category or "",
+        effective_policy_digest=effective_policy_digest)
     return RankingService(auth=Auth(), store=store, adapter=adapter, policy=policy,
                           cursor_key=b"x" * 32, clock=lambda: CLOCK)
 
@@ -996,6 +999,68 @@ def test_a_refresh_inside_a_run_returns_the_ranking_it_already_paid_for():
     assert len(store.frozen) == 1, "a refresh wrote a second frozen order"
     assert len(store.reservations) == 1, "a refresh reserved provider budget again"
     assert subject._adapter.calls == 1, "a refresh bought a second provider call"
+
+
+def test_a_policy_deploy_never_reuses_the_old_policys_frozen_view():
+    """The browser rejects a frozen response whose policy no longer matches.
+
+    A deploy can happen while an hourly reading run is still open. The new
+    service must open a new policy-bound view rather than serving the prior
+    policy's order and making the live reader fall back with an empty feed.
+    """
+    store = PaidStore(events=liked_events())
+    old = paid(store, policy_version="policy-v1")
+    first = rank(old, store)
+    current = paid(store, policy_version="policy-v2")
+    second = rank(current, store)
+
+    assert first["policy_version"] == "policy-v1"
+    assert second["policy_version"] == "policy-v2"
+    assert second["request_id"] != first["request_id"]
+    assert len(store.frozen) == 2
+    assert len(store.views) == 2
+
+
+def test_a_code_only_deploy_never_reuses_the_old_effective_policy_view():
+    store = PaidStore(events=liked_events())
+    old = paid(store, effective_policy_digest="a" * 64)
+    first = rank(old, store)
+    current = paid(store, effective_policy_digest="b" * 64)
+    second = rank(current, store)
+
+    assert second["request_id"] != first["request_id"]
+    assert len(store.reservations) == 2
+    assert len(store.views) == 2
+
+
+def test_request_page_size_does_not_buy_a_second_ranking_for_one_view():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store, page_size=24)
+    second = rank(subject, store, page_size=25)
+
+    assert second["request_id"] == first["request_id"]
+    assert subject._adapter.calls == 1
+    assert len(store.reservations) == 1
+    assert len(store.frozen) == 1
+
+
+def test_a_legacy_cursor_cannot_spend_the_new_deploys_page_budget():
+    store = PaidStore(events=liked_events())
+    old = paid(store, effective_policy_digest="a" * 64)
+    old_page = rank(old, store)
+    # Simulate an order stored before exact eligibility keys were persisted.
+    store.frozen["frozen-1"]["bindings"].pop("eligibility_key")
+
+    current = paid(store, effective_policy_digest="b" * 64)
+    new_page = rank(current, store)
+    current_key = current._eligibility_key(None, None, False)
+    assert store.views[("run-1", current_key)]["pages_served"] == 0
+
+    current.page(authorization="Bearer valid", cursor=old_page["next_cursor"])
+
+    assert store.views[("run-1", current_key)]["pages_served"] == 0
+    assert current.page(authorization="Bearer valid", cursor=new_page["next_cursor"])["cards"]
 
 
 def test_a_refresh_cannot_reset_the_per_run_page_budget():
