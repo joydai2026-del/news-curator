@@ -58,6 +58,7 @@ MIGRATIONS = (
     # the same set. Applied here so every assertion below is made against
     # the definition production actually runs, not the one it replaced.
     'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
+    'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -243,7 +244,8 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
                       'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
                       'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
                       'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
-                      'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql'):
+                      'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
+                      'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)
         assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
 
@@ -268,6 +270,19 @@ def test_the_migrations_apply_and_the_new_objects_exist(db):
     result = _sql(db, "select table_name from information_schema.tables "
                       "where table_name in ('retained_corpus_coverage','m2_reading_runs') order by table_name;")
     assert result.stdout.split() == ['m2_reading_runs', 'retained_corpus_coverage']
+
+
+def test_atomic_run_rpc_is_versioned_for_a_safe_two_phase_rollout(db):
+    """The migration lands before the new Modal revision.  The old function
+    must therefore keep accepting the old profile shape until traffic switches,
+    while v2 refuses that shape and enforces explicit privacy epochs."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OTHER)}::uuid;")
+    legacy = _service(db, "select public.m2_open_or_join_reading_run("
+        f"{_quote(OTHER)}::uuid,60,'{{}}'::jsonb,60);", check=False)
+    assert legacy.returncode == 0, legacy.stderr
+    strict = _service(db, "select public.m2_open_or_join_reading_run_v2("
+        f"{_quote(OTHER)}::uuid,60,'{{}}'::jsonb,60);", check=False)
+    assert strict.returncode != 0 and 'stale reading run epoch' in strict.stderr
 
 
 def test_one_coverage_row_per_distinct_publisher(db):
@@ -615,8 +630,16 @@ def test_an_out_of_range_retention_window_is_refused(db):
 # --- reading runs ----------------------------------------------------------
 
 def _open_run(container, user_id=OWNER, idle=60, profile='{}', max_minutes=60):
-    result = _service(container, "select public.m2_open_or_join_reading_run("
-                      f"{_quote(user_id)}::uuid, {idle}, {_quote(profile)}::jsonb, {max_minutes});")
+    profile_value = json.loads(profile)
+    epoch = json.loads(_last(_sql(container,
+        "select jsonb_build_object("
+        f"'history_generation', coalesce((select history_generation from public.user_behavior_revisions where user_id={_quote(user_id)}::uuid),1), "
+        f"'consent_revision', coalesce((select consent_revision from public.user_behavior_settings where user_id={_quote(user_id)}::uuid),0));")))
+    profile_value.update({"_history_generation": epoch["history_generation"],
+                          "_consent_revision": epoch["consent_revision"]})
+    result = _service(container, "select public.m2_open_or_join_reading_run_v2("
+                      f"{_quote(user_id)}::uuid, {idle}, "
+                      f"{_quote(json.dumps(profile_value))}::jsonb, {max_minutes});")
     return json.loads(_last(result))
 
 
@@ -624,8 +647,10 @@ def test_concurrent_first_ranks_join_one_run_with_one_profile(db):
     _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
     statement = ("set role service_role;"
                  "set request.jwt.claims = '{\"role\":\"service_role\"}';"
-                 "select public.m2_open_or_join_reading_run("
-                 f"{_quote(OWNER)}::uuid, 60, '{{\"schema_version\":1,\"event_count\":7}}'::jsonb);")
+                 "select public.m2_open_or_join_reading_run_v2("
+                 f"{_quote(OWNER)}::uuid, 60, "
+                 "'{\"schema_version\":1,\"event_count\":7,"
+                 "\"_history_generation\":1,\"_consent_revision\":0}'::jsonb);")
     processes = [subprocess.Popen(
         ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(8)]
@@ -693,9 +718,9 @@ def test_a_run_also_ends_on_age_so_an_hourly_reader_is_ever_learned_from(db):
 
 
 def test_an_out_of_range_run_age_cap_is_refused(db):
-    assert _service(db, f"select public.m2_open_or_join_reading_run({_quote(OWNER)}::uuid, 60, '{{}}'::jsonb, 5);",
+    assert _service(db, f"select public.m2_open_or_join_reading_run_v2({_quote(OWNER)}::uuid, 60, '{{}}'::jsonb, 5);",
                     check=False).returncode != 0
-    assert _service(db, f"select public.m2_open_or_join_reading_run({_quote(OWNER)}::uuid, 60, '{{}}'::jsonb, 999);",
+    assert _service(db, f"select public.m2_open_or_join_reading_run_v2({_quote(OWNER)}::uuid, 60, '{{}}'::jsonb, 999);",
                     check=False).returncode != 0
 
 
@@ -713,6 +738,14 @@ def _record(container, run_id, key, pages, user_id=OWNER):
     return int(_last(_service(container, "select public.m2_record_run_page("
                               f"{_quote(user_id)}::uuid, {_quote(run_id)}::uuid, "
                               f"{_quote(key)}, {pages});")))
+
+
+def _reserve_response(container, run_id, key, frozen_order_id, response, offset, next_offset,
+                      user_id=OWNER):
+    result = _service(container, "select public.m2_reserve_run_response("
+        f"{_quote(user_id)}::uuid, {_quote(run_id)}::uuid, {_quote(key)}, "
+        f"{_quote(frozen_order_id)}::uuid, {response}, {offset}, {next_offset});")
+    return json.loads(_last(result))
 
 
 def _claim(container, run_id, key, ttl=60, user_id=OWNER):
@@ -742,6 +775,76 @@ def test_an_unknown_view_spends_nothing(db):
     _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
     run = _open_run(db, OWNER)
     assert _record(db, run['run_id'], 'c' * 64, 3) == 0
+
+
+def test_a_stale_privacy_epoch_cannot_replace_the_current_run(db):
+    """The old close/open gap let a request carrying epoch 1 recreate an epoch
+    1 run after epoch 2 had closed it.  The RPC now validates against the live
+    behavior rows while it holds the same lock as reset/consent."""
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.user_behavior_settings where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.user_behavior_revisions where user_id = {_quote(OWNER)}::uuid;")
+    old = _open_run(db, OWNER)
+    _sql(db, "insert into public.user_behavior_revisions(user_id,latest_revision,history_generation) "
+        f"values ({_quote(OWNER)}::uuid,0,2) on conflict(user_id) do update set history_generation=2;")
+    current = _open_run(db, OWNER)
+    assert current['run_id'] != old['run_id'] and current['created'] is True
+
+    stale = _service(db, "select public.m2_open_or_join_reading_run_v2("
+        f"{_quote(OWNER)}::uuid,60,"
+        "'{\"_history_generation\":1,\"_consent_revision\":0}'::jsonb,60);",
+        check=False)
+    assert stale.returncode != 0 and 'stale reading run epoch' in stale.stderr
+    still_open = _sql(db, "select run_id from public.m2_reading_runs "
+        f"where user_id={_quote(OWNER)}::uuid and closed_at is null;")
+    assert _last(still_open) == current['run_id'], 'the stale caller displaced the current run'
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.user_behavior_settings where user_id = {_quote(OWNER)}::uuid;")
+    _sql(db, f"delete from public.user_behavior_revisions where user_id = {_quote(OWNER)}::uuid;")
+
+
+def test_response_number_and_offset_commit_together(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    cards = [{"story_id": f"story:{index:064x}", "title": f"Story {index}",
+              "source_name": "Wire", "lane": "updates", "lane_label": "fresh",
+              "surprise_label": None, "exclusive_label": None} for index in range(60)]
+    request_id = _freeze_page(db, OWNER, _iso(BASE), cards, run_id=run['run_id'])
+    frozen_id = _last(_sql(db, "select frozen_order_id from public.m2_frozen_rankings "
+        f"where request_id={_quote(request_id)}::uuid;"))
+    assert _last(_service(db, "select public.m2_bind_run_frozen_order("
+        f"{_quote(OWNER)}::uuid,{_quote(run['run_id'])}::uuid,{_quote(ALL_VIEW)},"
+        f"{_quote(frozen_id)}::uuid,null);")) == 't'
+
+    first = _reserve_response(db, run['run_id'], ALL_VIEW, frozen_id, 1, 0, 25)
+    assert first == {'previous': 0, 'reserved': True}
+    stored = _sql(db, "select v.pages_served, f.bindings->>'responses_served',"
+        "f.bindings->>'last_served_offset',f.bindings->>'last_served_next_offset' "
+        "from public.m2_reading_run_views v join public.m2_frozen_rankings f "
+        "on f.frozen_order_id=v.frozen_order_id "
+        f"where v.run_id={_quote(run['run_id'])}::uuid and v.eligibility_key={_quote(ALL_VIEW)};")
+    assert _last(stored) == '1|1|0|25'
+    assert _reserve_response(db, run['run_id'], ALL_VIEW, frozen_id, 1, 1, 26)['reserved'] is False
+    second = _reserve_response(db, run['run_id'], ALL_VIEW, frozen_id, 2, 25, 50)
+    assert second == {'previous': 1, 'reserved': True}
+
+
+def test_response_reservation_takes_the_privacy_lock_before_row_locks(db):
+    definition = _sql(db, "select pg_get_functiondef('public.m2_reserve_run_response("
+        "uuid,uuid,text,uuid,integer,integer,integer)'::regprocedure);").stdout
+    privacy_lock = definition.index("pg_advisory_xact_lock")
+    view_lock = definition.index("for update of v")
+    frozen_lock = definition.index("for update;", view_lock + 1)
+    assert privacy_lock < view_lock < frozen_lock
+
+
+def test_frozen_extension_takes_the_privacy_lock_before_its_row_lock(db):
+    definition = _sql(db, "select pg_get_functiondef('public.m2_extend_frozen_ranking("
+        "uuid,uuid,jsonb,jsonb)'::regprocedure);").stdout
+    privacy_lock = definition.index("pg_advisory_xact_lock")
+    frozen_lock = definition.index("update public.m2_frozen_rankings")
+    assert privacy_lock < frozen_lock
 
 
 def test_a_view_needs_a_run_that_belongs_to_the_caller(db):
@@ -926,7 +1029,7 @@ def test_a_losing_bind_cannot_overwrite_the_winners_order_in_sql(db):
 
 
 def test_an_out_of_range_idle_window_is_refused(db):
-    assert _service(db, f"select public.m2_open_or_join_reading_run({_quote(OWNER)}::uuid, 4000, '{{}}'::jsonb);",
+    assert _service(db, f"select public.m2_open_or_join_reading_run_v2({_quote(OWNER)}::uuid, 4000, '{{}}'::jsonb);",
                     check=False).returncode != 0
 
 

@@ -158,7 +158,7 @@ class SupabaseHTTP:
         return page
 
     def open_reading_run(self, *, user_id: str, idle_minutes: int, max_minutes: int, profile):
-        result = self._request("POST", "/rest/v1/rpc/m2_open_or_join_reading_run", token=self._service_token(),
+        result = self._request("POST", "/rest/v1/rpc/m2_open_or_join_reading_run_v2", token=self._service_token(),
             key=self._service, body={"p_user_id": user_id, "p_idle_minutes": idle_minutes,
                 "p_max_minutes": max_minutes, "p_profile": dict(profile)})
         if not isinstance(result, Mapping):
@@ -266,6 +266,20 @@ class SupabaseHTTP:
             key=self._service, body={"p_user_id": user_id, "p_run_id": run_id,
                 "p_eligibility_key": eligibility_key, "p_pages": pages})
         return result if isinstance(result, int) else 0
+
+    def reserve_run_response(self, *, user_id: str, run_id: str, eligibility_key: str,
+                             frozen_order_id: str, response_number: int,
+                             offset: int, next_offset: int):
+        result = self._request("POST", "/rest/v1/rpc/m2_reserve_run_response",
+            token=self._service_token(), key=self._service,
+            body={"p_user_id": user_id, "p_run_id": run_id,
+                "p_eligibility_key": eligibility_key,
+                "p_frozen_order_id": frozen_order_id,
+                "p_response_number": response_number,
+                "p_offset": offset, "p_next_offset": next_offset})
+        if not isinstance(result, Mapping):
+            raise SupabaseHTTPError("response reservation RPC returned a non-object")
+        return result
 
     def extend_frozen_order(self, *, user_id: str, frozen_order_id: str, cards, bindings) -> int:
         result = self._request("POST", "/rest/v1/rpc/m2_extend_frozen_ranking", token=self._service_token(),

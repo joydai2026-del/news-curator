@@ -290,6 +290,21 @@ async function main() {
     refreshedProjection.access_token,
   );
 
+  // A long rank request refreshes before expiry rather than letting the bearer
+  // die while the backend is still composing the response.
+  const almostExpired = { ...projected, expires_at: now + 300 };
+  browser.storage.set("news-curator.auth.session", JSON.stringify(almostExpired));
+  let earlyRefreshCalls = 0;
+  const early = await client.readerSessionForRequest(async (url, options) => {
+    earlyRefreshCalls += 1;
+    assertFailClosedFetch({ url, options });
+    return response(200, refreshedSession(), url);
+  }, now, 340);
+  assert.equal(earlyRefreshCalls, 1);
+  assert.equal(early.access_token, refreshedProjection.access_token);
+  await assert.rejects(() => client.readerSessionForRequest(undefined, now, 3601),
+    /validity window/);
+
   browser.storage.set("news-curator.auth.session", JSON.stringify(expired));
   await assert.rejects(
     client.readerSessionForRequest(

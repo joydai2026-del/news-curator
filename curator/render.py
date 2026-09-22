@@ -1161,7 +1161,10 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
     if config == {"enabled": False}:
         return
     config = {"request_timeout_ms": 8000, **config}
-    config = {"transport_timeout_ms": config["request_timeout_ms"], **config}
+    # The server permits a function timeout up to 300 seconds. The browser must
+    # outlive every legal server configuration, not silently inherit the 8s
+    # baseline-display timer and abort a healthy ranking.
+    config = {"transport_timeout_ms": 310000, **config}
     fields = {"enabled", "url", "policy_version", "model_version", "provider_policy_id",
               "provider_retention_url", "page_size", "request_timeout_ms", "transport_timeout_ms"}
     if set(config) != fields or config["enabled"] is not True:
@@ -1170,7 +1173,7 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
         raise ValueError("invalid M2 page size")
     if type(config["request_timeout_ms"]) is not int or not 1 <= config["request_timeout_ms"] <= 8000:
         raise ValueError("invalid M2 request deadline")
-    if type(config["transport_timeout_ms"]) is not int or not config["request_timeout_ms"] <= config["transport_timeout_ms"] <= 20000:
+    if type(config["transport_timeout_ms"]) is not int or not 310000 <= config["transport_timeout_ms"] <= 600000:
         raise ValueError("invalid M2 transport deadline")
     for key in fields - {"enabled", "page_size", "request_timeout_ms", "transport_timeout_ms"}:
         value = config[key]

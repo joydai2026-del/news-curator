@@ -116,13 +116,14 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
     activate_personalization_link(site/'index.html',supabase_url=DATABASE,publishable_key='sb_publishable_localtest',
         m2_config={'enabled':True,'url':RANKER,'policy_version':'test-policy',
         'model_version':'test-model','provider_policy_id':'test-policy','provider_retention_url':'https://policy.example',
-        'page_size':25,'request_timeout_ms':8000,'transport_timeout_ms':20000})
+        'page_size':25,'request_timeout_ms':8000,'transport_timeout_ms':310000})
     store=LocalStore(rows)
     service=RankingService(auth=LocalAuth(),store=store,adapter=RankLLMAdapter(
         policy=RankerPolicy('test-provider','test-model','https://provider.example','test-prompt'),engine=NoProvider()),
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True,preview_owner_ids=(OWNER,)),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
     requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}
+    cursor_mode={'reject_once':False,'rejections':0}
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
@@ -137,6 +138,10 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
             file=site/(parsed.path.lstrip('/') or 'index.html')
             return route.fulfill(status=200,content_type='text/javascript' if file.suffix=='.js' else 'text/html',body=file.read_bytes())
         if request.url.startswith(RANKER):
+            if parsed.path=='/page' and cursor_mode['reject_once']:
+                cursor_mode['reject_once']=False;cursor_mode['rejections']+=1
+                return route.fulfill(status=409,content_type='application/json',
+                    body=json.dumps({'error':'cursor_version'}))
             status,payload=asgi_request(app,request)
             return route.fulfill(status=status,content_type='application/json',body=payload)
         if request.url.startswith(DATABASE):
@@ -250,6 +255,15 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
                 page.locator('#m2-controls summary').click()
             page.set_viewport_size({'width': 390, 'height': 844})
             page.locator('#m2-controls summary').click()
+            # A tab holding a cursor from the pre-atomic release gets one 409,
+            # discards that cursor, and re-ranks onto the current contract.
+            rank_before_cursor_upgrade=requests.count('/rank')
+            cursor_mode['reject_once']=True
+            with page.expect_response(lambda response:urlsplit(response.url).path=='/rank'):
+                page.locator('#load-more').click()
+            page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+            assert cursor_mode['rejections']==1
+            assert requests.count('/rank')==rank_before_cursor_upgrade+1
             # The real continuation route must exceed an initial 200-row window.
             for _ in range(9):
                 before=page.locator('[data-m2-card=true]').count()
@@ -351,16 +365,16 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
             page.evaluate('''() => {
                 const timeout=AbortSignal.timeout.bind(AbortSignal);
                 window.__m2Timeouts=[];
-                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===20000?300:ms);};
+                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===310000?300:ms);};
                 const later=window.setTimeout.bind(window);
-                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===20000?300:ms,...args);
+                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===310000?300:ms,...args);
                 window.__stallM2=true;window.__stallM2Delay=120;
                 const policy=document.querySelector("#m2-provider-retention");policy.hidden=true;policy.removeAttribute("href");
             }''')
             store.learning=True;store.provider=True
             page.locator('#m2-refresh').click()
             page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
-            assert page.evaluate('window.__m2Timeouts.includes(20000)')
+            assert page.evaluate('window.__m2Timeouts.includes(310000)')
             assert page.locator('#m2-local-learning').is_checked()
             assert page.locator('#m2-provider-processing').is_checked()
             assert page.locator('#m2-local-learning').is_enabled()

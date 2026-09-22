@@ -38,14 +38,24 @@ from .supabase_http import SupabaseAuthenticationError
 # tests/test_ranker_claimed_section_budget.py, which walks the longest path with
 # a counting transport and refuses a count above this number.
 #
-# The longest measured path is 14: the claim itself, five retained_candidates_v2
-# calls (the general pool plus one per lane in lane_priority), one
-# retained_candidates_language_exclusive for the promotion, reserve_budget,
-# reserve_budget_claimed, settle_budget, history_snapshot, owner_states,
-# save_frozen_order and bind_run_frozen_order. Two more are allowed for the
+# The longest measured path is 20: an exclusive request scanning eleven raw
+# 100-row batches before finding complete display copy, plus the claim, budget,
+# history, state, frozen-order and binding calls. Two more are allowed for the
 # branches that harness cannot reach in one pass (record_run_page, and the
 # release_run_ranking_claim on the failure path).
-CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 16
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 22
+
+# Private control result from `_existing_run_page`: a bound order that was
+# deleted by a consent/history invalidation may be replaced, while an expired
+# order that still exists must not buy a second ranking in the same view.
+_MISSING_FROZEN_ORDER = object()
+
+# The request accepts at most 1,000 exclusions. Eleven batches can step past all
+# of them and fill the 51-row candidate-plus-lookahead window; one additional
+# batch absorbs a full page of incomplete translations without making the
+# paid, claim-held section unbounded.
+EXCLUSIVE_SCAN_MAX_BATCHES = 12
+EXCLUSIVE_CONTINUATION_MAX_BATCHES = 2
 
 
 class AuthenticationError(ValueError):
@@ -115,6 +125,9 @@ class RankingStore(Protocol):
                                   token: str) -> bool: ...
     def record_run_page(self, *, user_id: str, run_id: str, eligibility_key: str,
                         pages: int) -> int: ...
+    def reserve_run_response(self, *, user_id: str, run_id: str, eligibility_key: str,
+                             frozen_order_id: str, response_number: int,
+                             offset: int, next_offset: int) -> Mapping[str, object]: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def reserve_budget_claimed(self, *, user_id: str, request_id: str, amount_usd: float,
@@ -137,7 +150,9 @@ class ServicePolicy:
     candidate_limit: int = 200
     maximum_page_size: int = 25
     maximum_excluded_story_ids: int = 1000
-    cursor_ttl_seconds: int = 900
+    exclusive_scan_max_batches: int = EXCLUSIVE_SCAN_MAX_BATCHES
+    exclusive_continuation_max_batches: int = EXCLUSIVE_CONTINUATION_MAX_BATCHES
+    cursor_ttl_seconds: int = 3600
     daily_cost_limit_usd: float = 2.0
     # The owners allowed to reach the paid path. EMPTY IS NOBODY, never
     # everybody: see `_authenticate`.
@@ -180,6 +195,22 @@ class ServicePolicy:
             raise ValueError("display_language must be a supported language")
         if self.exclusive_category_id and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", self.exclusive_category_id):
             raise ValueError("exclusive_category_id must be a category id")
+        if (not isinstance(self.maximum_excluded_story_ids, int)
+                or isinstance(self.maximum_excluded_story_ids, bool)
+                or not 0 <= self.maximum_excluded_story_ids <= 1000):
+            raise ValueError("maximum_excluded_story_ids must be between 0 and 1000")
+        if (not isinstance(self.cursor_ttl_seconds, int)
+                or isinstance(self.cursor_ttl_seconds, bool)
+                or self.cursor_ttl_seconds < 1):
+            raise ValueError("cursor_ttl_seconds must be a positive integer")
+        if (self.composition is not None
+                and self.cursor_ttl_seconds < self.composition.max_run_minutes * 60):
+            raise ValueError("cursor_ttl_seconds must cover the complete reading run")
+        for name, value, maximum in (
+                ("exclusive_scan_max_batches", self.exclusive_scan_max_batches, 50),
+                ("exclusive_continuation_max_batches", self.exclusive_continuation_max_batches, 10)):
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be between 1 and {maximum}")
         # The lane RPC refuses a malformed policy id on EVERY request, so an
         # empty or mistyped value takes the section down for every reader.
         if not isinstance(self.exclusivity_policy_id, str) or not re.fullmatch(
@@ -232,11 +263,21 @@ class RankingService:
         # eligibility): All, a category, a search and the language-exclusive
         # section are four different things to look at, and keying this by the
         # run alone made a category tap return the All page for up to an hour.
-        eligibility_key = self._eligibility_key(category_id, query, exclusive)
+        eligibility_key = self._eligibility_key(category_id, query, exclusive,
+            history_generation=snapshot.get("history_generation"),
+            consent_revision=snapshot.get("consent_revision"))
         view = self._open_view(owner, run, eligibility_key)
         existing = self._existing_run_page(token, owner, view, snapshot, page_size)
-        if existing is not None:
+        if existing is not None and existing is not _MISSING_FROZEN_ORDER:
             return existing
+        if (composition is not None and view and view.get("frozen_order_id")
+                and existing is not _MISSING_FROZEN_ORDER):
+            # The order expired or became unusable after this run had already
+            # bound a ranking. Binding is the durable proof that this view used
+            # its one ranking, even when finalization produced no readable
+            # cards. Buying another ranking would silently charge again. The
+            # next reading run is the point at which fresh content may be bought.
+            return self._run_end_response(snapshot, run, eligibility_key)
         # CLAIM BEFORE PAYING. Reusing an order the run has already bound closes
         # the refresh hole; it does not close the race, because a second request
         # arriving while the first is still in flight sees no bound order yet.
@@ -245,8 +286,8 @@ class RankingService:
         claim = self._claim_ranking(owner, run, eligibility_key, composition)
         if claim is not None and not claim.get("granted"):
             served = self._existing_run_page(token, owner,
-                {"frozen_order_id": claim.get("frozen_order_id")}, snapshot, page_size)
-            if served is not None:
+                self._open_view(owner, run, eligibility_key), snapshot, page_size)
+            if isinstance(served, Mapping):
                 return served
             raise RankingInProgressError()
         claim_token = (claim or {}).get("token")
@@ -269,16 +310,28 @@ class RankingService:
                 before_published, before_story, corpus_cursor):
         promotion: list[Mapping[str, object]] = []
         hot_story_ids: set[str] = set()
-        profile = BehaviorProfile.from_snapshot(run.get("profile_snapshot")) if run else BehaviorProfile()
+        exclusive_consumed_rows: list[Mapping[str, object]] = []
+        exclusive_has_more = False
+        run_snapshot = run.get("profile_snapshot") if run else None
+        same_epoch = (isinstance(run_snapshot, Mapping)
+            and run_snapshot.get("_history_generation", snapshot.get("history_generation"))
+                == snapshot.get("history_generation")
+            and run_snapshot.get("_consent_revision", snapshot.get("consent_revision"))
+                == snapshot.get("consent_revision"))
+        # Clearing history or changing consent is an explicit privacy boundary.
+        # The SQL run may remain open for its reading-hour audit, but a new epoch
+        # must not reuse the old learned profile.
+        profile = (BehaviorProfile.from_snapshot(run_snapshot) if same_epoch else
+                   build_profile(snapshot, policy=composition, now=self._now())
+                   if composition is not None else BehaviorProfile())
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
         if exclusive:
-            rows = self._store.retained_candidates_language_exclusive(
-                display_language=self._policy.display_language, query=query,
-                limit=self._policy.candidate_limit + len(excluded_set) + 1,
-                before_published_at=before_published, before_story_id=before_story,
-                policy_id=self._policy.exclusivity_policy_id,
-            )
+            rows, exclusive_consumed_rows, exclusive_has_more = self._exclusive_display_rows(
+                query=query, before_published=before_published, before_story=before_story,
+                target_count=self._policy.candidate_limit + 1,
+                excluded_story_ids=excluded_set,
+                max_batches=self._policy.exclusive_scan_max_batches)
         elif composition is not None:
             rows, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
                                                   before_published, before_story)
@@ -299,8 +352,11 @@ class RankingService:
         # section. When the section itself is being served, every row has it.
         exclusive_ids = ({str(row["story_id"]) for row in rows} if exclusive
                          else {str(row["story_id"]) for row in promotion})
-        filtered = [row for row in rows if row.get("story_id") not in excluded_set]
-        has_more = len(filtered) > self._policy.candidate_limit
+        filtered = ([row for row in rows if row.get("story_id") not in excluded_set]
+                    if not exclusive else rows)
+        has_more = (exclusive_has_more if exclusive else
+                    len(filtered) > self._policy.candidate_limit)
+        has_more = has_more or len(filtered) > self._policy.candidate_limit
         rows = filtered[:self._policy.candidate_limit]
         laned: tuple[LanedCandidate, ...] = ()
         if composition is not None:
@@ -315,7 +371,14 @@ class RankingService:
             # The SAME cursor shape the continuation writes, hot key included, so
             # the first "load more" resumes from a cursor of the shape it expects
             # rather than from a narrower one written by a different code path.
-            if has_more and filtered:
+            if exclusive:
+                cursor_rows = self._exclusive_safe_cursor_rows(
+                    exclusive_consumed_rows, {str(row.get("story_id")) for row in rows}, excluded_set)
+                if has_more:
+                    next_corpus = (self._exclusive_corpus_cursor(cursor_rows) if cursor_rows else
+                                   {"before_published_at": before_published,
+                                    "before_story_id": before_story})
+            elif has_more and filtered:
                 next_corpus = self._next_corpus_cursor(filtered, hot_story_ids)
         elif has_more and rows:
             boundary = rows[-1]
@@ -436,6 +499,16 @@ class RankingService:
                                 for lane in (*composition.lane_priority, BACKFILL_LANE)}})
         bindings.update({"eligibility": {"category": category_id, "query": query},
             "eligibility_key": eligibility_key,
+            # Count responses the owner can actually read, not offset/page-size
+            # arithmetic. A diversity-constrained view can legitimately return
+            # a short page, and offset arithmetic let that view serve many more
+            # than the configured number of responses.
+            # An empty bounded scan is not a readable response. Start it below
+            # offset zero so the first continuation that finds cards is not
+            # mistaken for a free replay and must reserve response slot one.
+            "responses_served": 1 if cards else 0,
+            "last_served_offset": 0 if cards else -1,
+            "last_served_next_offset": min(page_size, len(cards)) if cards else 0,
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
             "corpus_start": dict(corpus_cursor), "excluded_story_ids": list(excluded_set),
             "execution": {**observed_usage, "settled_cost_usd": settled_cost,
@@ -472,10 +545,16 @@ class RankingService:
                 self._abandon_unbound_order(owner, request_id, reservation_created, observed_usage)
                 served = self._existing_run_page(token, owner,
                     self._open_view(owner, run, eligibility_key), latest, page_size)
-                if served is not None:
+                if isinstance(served, Mapping):
                     return served
                 raise RankingInProgressError()
-        next_cursor = self._cursor(frozen_id, min(page_size, len(cards)), expires_at) if page_size < len(cards) or has_more else None
+            if cards and self._reserve_response_slot(owner, str(run["run_id"]),
+                    eligibility_key, frozen_id, 1, 0,
+                    min(page_size, len(cards))) is None:
+                raise RuntimeError("page_budget_unavailable")
+        next_cursor = (self._cursor(frozen_id, min(page_size, len(cards)), expires_at,
+                                    response_number=2 if cards else 1)
+                       if page_size < len(cards) or has_more else None)
         return self._page_response(bindings, cards[:page_size], next_cursor, receipt)
 
     def page(self, *, authorization: str, cursor: str) -> dict[str, object]:
@@ -503,31 +582,34 @@ class RankingService:
         cards = list(frozen["cards"])
         size = int(frozen.get("page_size", self._policy.maximum_page_size))
         composition = self._policy.composition
-        run_id = (frozen.get("bindings") or {}).get("run_id")
+        bindings = frozen.get("bindings") or {}
+        run_id = bindings.get("run_id")
+        eligibility_key = bindings.get("eligibility_key")
+        response_number = payload.get("response_number")
+        legacy_cursor = response_number is None
+        if legacy_cursor and composition is not None:
+            # The atomic response budget cannot prove the offset represented by
+            # a pre-cutover cursor. Refuse it so an old tab refreshes through
+            # rank() onto the versioned eligibility view instead of spending
+            # additional content against a legacy page counter.
+            raise StaleRankingError("cursor_version")
+        if legacy_cursor:
+            # The non-composed legacy policy has no per-run response budget.
+            response_number = max(1, offset // max(size, 1) + 1)
+        if (not isinstance(response_number, int) or isinstance(response_number, bool)
+                or response_number < 1 or response_number > 1000):
+            raise StaleRankingError("invalid_cursor")
         if composition is not None and size > 0:
-            page_index = offset // size
-            # The budget is counted per RUN, not per frozen order. Counting it on
-            # the cursor let a refresh (which used to mint a new order and a new
-            # cursor) hand the whole budget back.
-            served_before = page_index
-            if run_id:
-                # Per VIEW: the pages she has read of All say nothing about how
-                # many of a category she has read.
-                bindings = frozen.get("bindings") or {}
-                key = bindings.get("eligibility_key")
-                # Orders created before policy-bound views did not persist the
-                # exact key. Reconstructing it with the CURRENT deploy poisons
-                # that deploy's page budget, so a legacy cursor keeps its own
-                # page-index cap but never writes into a different view.
-                if isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key):
-                    served_before = max(page_index,
-                                        self._record_run_page(owner, str(run_id), key, page_index + 1))
-            if page_index >= composition.max_pages_per_run or served_before >= composition.max_pages_per_run:
+            # The response ordinal is signed into the cursor, so a short page or
+            # bounded empty scan cannot distort the budget. Empty scans retain
+            # the same ordinal; only a readable response reserves it.
+            if response_number > composition.max_pages_per_run:
                 # The run has served every page it promises. Reaching further
                 # would keep returning older and older stories that met no pool's
                 # rule, so the honest answer is that this run is over.
                 return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
                         "cards": [], "next_cursor": None, "end_of_run": True}
+        continuation_pending = False
         if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
             # F7, the branch that used to re-rank. Inside a reading run there is
             # never a second provider call: load more browses OLDER news, in the
@@ -535,7 +617,32 @@ class RankingService:
             # no model. The new cards are APPENDED to this frozen order, so every
             # already-signed cursor keeps pointing at the same card.
             if self._policy.composition is not None:
-                added = self._continue_frozen_order(token, owner, frozen, str(payload["frozen_order_id"]), size)
+                if (not run_id or not isinstance(eligibility_key, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is None):
+                    raise RuntimeError("page_budget_unavailable")
+                continuation_token = self._claim_continuation(
+                    owner, str(run_id), eligibility_key, composition)
+                try:
+                    # The first snapshot was loaded before the lock. Reload
+                    # inside it: a caller that waited for another continuation
+                    # must observe the batch that caller already appended rather
+                    # than append the same corpus cursor again.
+                    locked = self._store.load_frozen_order(user_id=owner.user_id,
+                        frozen_order_id=str(payload["frozen_order_id"]))
+                    if not locked or int(locked["expires_at"]) < int(self._clock()):
+                        raise StaleRankingError("cursor_expired")
+                    frozen = locked
+                    cards = list(frozen["cards"])
+                    if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
+                        added, continuation_pending = self._continue_frozen_order(
+                            token, owner, frozen, str(payload["frozen_order_id"]), size)
+                    else:
+                        added = ()
+                        continuation_pending = bool(frozen["bindings"].get("corpus_has_more"))
+                finally:
+                    self._release_claim(owner, {"run_id": str(run_id)}, eligibility_key,
+                                        continuation_token)
+                frozen["bindings"]["corpus_has_more"] = continuation_pending
                 if added:
                     cards = cards + list(added)
                     frozen["cards"] = cards
@@ -550,66 +657,116 @@ class RankingService:
         visible, next_offset, removed = self._slice(cards, offset, size, current)
         self._record_filtered(owner, frozen, removed)
         next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
+        if offset >= len(cards) and continuation_pending:
+            return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
+                    "cards": [], "next_cursor": self._cursor(
+                        str(payload["frozen_order_id"]), offset, int(frozen["expires_at"]),
+                        response_number=response_number)}
         if offset >= len(cards):
             # End of the run, said explicitly rather than as an empty page that
             # looks like a failure. There is nothing more to serve from this
             # frozen order, and a new reading run is what brings new stories.
             return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
                     "cards": [], "next_cursor": None, "end_of_run": True}
+        # An empty filtered slice is not a readable response. Keep its signed
+        # ordinal so the first older card that survives the filter reserves the
+        # slot instead of skipping it and failing the strict page budget.
+        next_response_number = response_number + 1 if visible else response_number
+        if not visible and composition is not None:
+            # Moving an already-spent ordinal to a later offset would authorize
+            # an extra unique page as an "idempotent replay". The row-locked
+            # view is the authority on whether this ordinal is still unspent.
+            view = self._open_view(owner, {"run_id": str(run_id)}, eligibility_key)
+            served = view.get("pages_served") if isinstance(view, Mapping) else None
+            if (not isinstance(served, int) or isinstance(served, bool) or served < 0):
+                return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
+                        "cards": [], "next_cursor": None, "end_of_run": True}
+            if served >= response_number:
+                next_response_number = max(served, response_number) + 1
         if next_cursor is None and frozen["bindings"].get("corpus_has_more"):
-            next_cursor = self._cursor(str(payload["frozen_order_id"]), len(cards), int(frozen["expires_at"]))
+            next_cursor = self._cursor(str(payload["frozen_order_id"]), len(cards),
+                                       int(frozen["expires_at"]),
+                                       response_number=next_response_number)
+        elif next_cursor is not None:
+            next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset,
+                                       int(frozen["expires_at"]),
+                                       response_number=next_response_number)
+        if visible and composition is not None:
+            if (not run_id or not isinstance(eligibility_key, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is None
+                    or self._reserve_response_slot(
+                        owner, str(run_id), eligibility_key,
+                        str(payload["frozen_order_id"]), response_number,
+                        offset, next_offset) is None):
+                # The row-locked RPC is the authority. A concurrent cursor that
+                # lost this slot cannot serve another readable response even if
+                # it loaded the frozen bindings before the winner committed.
+                return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
+                        "cards": [], "next_cursor": None, "end_of_run": True}
+            frozen["bindings"].update({"responses_served": response_number,
+                                       "last_served_offset": offset,
+                                       "last_served_next_offset": next_offset})
         return {"schema_version": 1, **self._public_bindings(frozen["bindings"]), "cards": visible, "next_cursor": next_cursor}
 
     def _continue_frozen_order(self, token, owner, frozen, frozen_order_id, size):
         """Older news, composed by the recipe alone. No provider call, ever.
 
-        Returns the cards appended, or an empty tuple when there is nothing more
-        to add. Any failure here degrades to "no more cards" rather than to a
+        Returns the cards appended and whether another bounded continuation may
+        exist. Any failure here degrades to "no more cards" rather than to a
         paid ranking: a page turn that quietly bills is the bug being fixed.
         """
         composition = self._policy.composition
         bindings = frozen.get("bindings", {})
         cursor = bindings.get("corpus_cursor") or {}
         if composition is None or not isinstance(cursor, Mapping) or not cursor:
-            return ()
+            return (), False
         eligibility = bindings.get("eligibility") or {}
         category_id = eligibility.get("category") if isinstance(eligibility, Mapping) else None
         query = eligibility.get("query") if isinstance(eligibility, Mapping) else None
         profile = BehaviorProfile.from_snapshot(bindings.get("profile_snapshot"))
         seen = {str(card.get("story_id")) for card in frozen.get("cards", ())}
+        original_exclusions = {str(story_id) for story_id in
+                               (bindings.get("excluded_story_ids") or ())}
         exclusive = self._is_exclusive_category(category_id)
         if exclusive:
-            pooled = self._store.retained_candidates_language_exclusive(
-                display_language=self._policy.display_language, query=query,
-                limit=self._policy.candidate_limit + 1,
-                before_published_at=cursor.get("before_published_at"),
-                before_story_id=cursor.get("before_story_id"),
-                policy_id=self._policy.exclusivity_policy_id,
-            )
+            pooled, cursor_rows, fetched_more = self._exclusive_display_rows(
+                query=query, before_published=cursor.get("before_published_at"),
+                before_story=cursor.get("before_story_id"),
+                target_count=self._policy.candidate_limit + 1,
+                excluded_story_ids=seen | original_exclusions,
+                max_batches=self._policy.exclusive_continuation_max_batches)
             hot_story_ids: set[str] = set()
         else:
             pooled, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
                                                     cursor.get("before_published_at"),
                                                     cursor.get("before_story_id"),
                                                     self._hot_cursor(cursor))
-        fetched_more = len(pooled) > self._policy.candidate_limit
-        rows = [row for row in pooled if str(row.get("story_id")) not in seen]
-        if not rows:
-            return ()
+            cursor_rows = pooled
+            fetched_more = len(pooled) > self._policy.candidate_limit
+        rows = [row for row in pooled
+                if str(row.get("story_id")) not in (seen | original_exclusions)]
+        if not exclusive and not rows:
+            return (), False
         laned = build_window(rows, profile=profile, policy=composition, now=self._now(),
-                             size=composition.candidate_window_size)
-        if not laned:
-            return ()
-        owner_states = self._store.owner_states(token, [item.story_id for item in laned])
+                             size=composition.candidate_window_size) if rows else ()
+        if not exclusive and not laned:
+            return (), False
+        owner_states = self._store.owner_states(token, [item.story_id for item in laned]) if laned else {}
         finalization = finalize_order(laned, policy=composition, owner_states=owner_states,
             page_size=min(size, composition.page_size), pages=composition.max_pages_per_run,
-            profile=profile)
+            profile=profile) if laned else None
         added = [self._card(item.row, owner_states.get(item.story_id, {}), lane=item.lane,
                             composition=composition, exclusive=exclusive,
                             also_covered_by=finalization.also_covered_by.get(item.story_id, ()))
-                 for item in finalization.cards]
-        if not added:
-            return ()
+                 for item in (finalization.cards if finalization else ())]
+        if exclusive:
+            safe_rows = self._exclusive_safe_cursor_rows(
+                cursor_rows, {item.story_id for item in laned},
+                seen | original_exclusions)
+            next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
+        else:
+            next_corpus = self._next_corpus_cursor(cursor_rows, hot_story_ids)
+        more = fetched_more or len(rows) > len(added)
         # The return is the whole point: the RPC refuses to grow an order past
         # its cap and returns 0, and a transport failure raises. Serving cards
         # this store did not accept would show her the same stories again on the
@@ -617,21 +774,23 @@ class RankingService:
         try:
             total = self._store.extend_frozen_order(user_id=owner.user_id,
                 frozen_order_id=frozen_order_id, cards=added,
-                bindings={"corpus_cursor": self._next_corpus_cursor(rows, hot_story_ids),
-                          "corpus_has_more": fetched_more or len(rows) > len(added),
+                bindings={"corpus_cursor": next_corpus,
+                          "corpus_has_more": more,
                           "continuation_mode": "recipe_only"})
         except Exception as error:
             log_suppressed_exception("m2_continuation_failed", error, stream=sys.stderr,
                 reason="store_unavailable", frozen_order_id=frozen_order_id)
-            return ()
-        if not isinstance(total, int) or total <= len(frozen.get("cards", ())):
+            return (), False
+        previous_total = len(frozen.get("cards", ()))
+        if (not isinstance(total, int) or total < previous_total
+                or (added and total <= previous_total)):
             # The order did not grow: it has reached its cap, or the row was not
             # matched. Either way this run is over, and saying so is better than
             # silently repeating the page she just read.
             print(json.dumps({"event": "m2_continuation_exhausted", "reason": "order_at_capacity"},
                              separators=(",", ":")), file=sys.stderr, flush=True)
-            return ()
-        return tuple(added)
+            return (), False
+        return tuple(added), more
 
     def _record_run_page(self, owner, run_id, eligibility_key, pages):
         """This view's page high-water mark before this page. Never fails a page."""
@@ -643,6 +802,46 @@ class RankingService:
                 run_id=run_id)
             return 0
         return previous if isinstance(previous, int) and not isinstance(previous, bool) else 0
+
+    def _reserve_response_slot(self, owner, run_id, eligibility_key, frozen_order_id,
+                               response_number, offset, next_offset):
+        """Reserve or replay one signed readable-response ordinal.
+
+        The database locks the view row and updates its high-water mark plus the
+        frozen order's offset in one transaction. ``previous == ordinal - 1``
+        reserves a new response; ``previous == ordinal`` is an exact replay.
+        Older, skipped, or same-ordinal/different-offset requests fail closed.
+        """
+        try:
+            result = self._store.reserve_run_response(user_id=owner.user_id, run_id=run_id,
+                eligibility_key=eligibility_key, frozen_order_id=frozen_order_id,
+                response_number=response_number, offset=offset, next_offset=next_offset)
+        except Exception as error:
+            log_suppressed_exception("m2_page_budget_unavailable", error, stream=sys.stderr,
+                run_id=run_id)
+            raise RuntimeError("page_budget_unavailable") from error
+        if not isinstance(result, Mapping) or not isinstance(result.get("reserved"), bool):
+            raise RuntimeError("page_budget_unavailable")
+        if result.get("reserved") is not True:
+            return None
+        previous = result.get("previous")
+        if not isinstance(previous, int) or isinstance(previous, bool):
+            raise RuntimeError("page_budget_unavailable")
+        return previous
+
+    def _run_end_response(self, snapshot, run, eligibility_key):
+        request_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
+            f"news-curator:{(run or {}).get('run_id')}:{eligibility_key}:end"))
+        bindings = {"request_id": request_id,
+            "policy_version": self._policy.policy_version,
+            "model_version": self._policy.model_version,
+            "history_revision": snapshot.get("included_history_revision", 0),
+            "history_generation": snapshot.get("history_generation"),
+            "consent_revision": snapshot.get("consent_revision"),
+            "server_commit_revision": snapshot.get("history_revision"),
+            "result_mode": "fallback", "fallback_reason": "run_page_budget_exhausted"}
+        return {"schema_version": 1, **bindings, "cards": [], "next_cursor": None,
+                "end_of_run": True}
 
     def _record_filtered(self, owner, frozen, removed):
         """Persist what "less like this" removed, so the page replays.
@@ -821,8 +1020,11 @@ class RankingService:
             if before.get(key) != after.get(key):
                 raise StaleRankingError(f"changed_{key}")
 
-    def _cursor(self, frozen_id, offset, expires_at):
-        raw = json.dumps({"frozen_order_id": frozen_id, "offset": offset, "expires_at": expires_at}, separators=(",", ":"), sort_keys=True).encode()
+    def _cursor(self, frozen_id, offset, expires_at, *, response_number=None):
+        payload = {"frozen_order_id": frozen_id, "offset": offset, "expires_at": expires_at}
+        if response_number is not None:
+            payload["response_number"] = response_number
+        raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
         signature = hmac.new(self._cursor_key, raw, hashlib.sha256).digest()
         return base64.urlsafe_b64encode(raw + signature).decode().rstrip("=")
 
@@ -859,10 +1061,21 @@ class RankingService:
         if composition is None:
             return None
         fresh = build_profile(snapshot, policy=composition, now=self._now())
+        frozen_profile = {**fresh.as_snapshot(),
+            "_history_generation": snapshot.get("history_generation"),
+            "_consent_revision": snapshot.get("consent_revision")}
         run = self._store.open_reading_run(user_id=owner.user_id, idle_minutes=composition.idle_minutes,
                                            max_minutes=composition.max_run_minutes,
-                                           profile=fresh.as_snapshot())
-        return run if isinstance(run, Mapping) else {}
+                                           profile=frozen_profile)
+        if not isinstance(run, Mapping):
+            return {}
+        stored = run.get("profile_snapshot")
+        same_epoch = (isinstance(stored, Mapping)
+            and stored.get("_history_generation") == snapshot.get("history_generation")
+            and stored.get("_consent_revision") == snapshot.get("consent_revision"))
+        if not same_epoch:
+            raise RuntimeError("reading_run_epoch_unavailable")
+        return run
 
     def _promotion_rows(self, query, composition, before_published, before_story):
         """Language-exclusive candidates allowed to compete for a place in All.
@@ -873,10 +1086,98 @@ class RankingService:
         cap = composition.exclusive_promote_to_all_max
         if not (self._policy.other_lane_enabled and self._policy.exclusive_category_id and cap > 0):
             return []
-        return list(self._store.retained_candidates_language_exclusive(
-            display_language=self._policy.display_language, query=query,
-            limit=min(100, max(cap * 4, cap)), before_published_at=before_published,
-            before_story_id=before_story, policy_id=self._policy.exclusivity_policy_id))
+        ready, _boundary, _has_more = self._exclusive_display_rows(
+            query=query, before_published=before_published, before_story=before_story,
+            target_count=max(cap * 4, cap), excluded_story_ids=(), max_batches=2)
+        return ready
+
+    def _exclusive_display_rows(self, *, query, before_published, before_story,
+                                target_count, excluded_story_ids, max_batches):
+        """Read through raw exclusive rows until enough complete display copy exists.
+
+        The RPC caps one call at 100 rows. Its cursor is over the raw corpus, so
+        the returned boundary always advances across untranslated rows instead
+        of falsely declaring the section exhausted.
+        """
+        ready = []
+        excluded = {str(story_id) for story_id in excluded_story_ids}
+        consumed_rows = []
+        batches = 0
+        while len(ready) < target_count and (max_batches is None or batches < max_batches):
+            batch = list(self._store.retained_candidates_language_exclusive(
+                display_language=self._policy.display_language, query=query, limit=100,
+                before_published_at=before_published, before_story_id=before_story,
+                policy_id=self._policy.exclusivity_policy_id))
+            batches += 1
+            if not batch:
+                return ready, consumed_rows, False
+            for row in batch:
+                consumed_rows.append(row)
+                story_id = str(row.get("story_id"))
+                if story_id not in excluded and self._display_ready_rows((row,)):
+                    ready.append(row)
+                if len(ready) >= target_count:
+                    # The last candidate is a look-ahead sentinel proving there
+                    # is another page. It was not offered to the recipe, so it
+                    # remains on the next scan rather than being skipped.
+                    return ready, consumed_rows[:-1], True
+            has_more = len(batch) == 100
+            if not has_more:
+                return ready, consumed_rows, False
+            boundary = batch[-1]
+            before_published = str(boundary["published_at"])
+            before_story = str(boundary["story_id"])
+        return ready, consumed_rows, True
+
+    def _display_ready_rows(self, rows):
+        """Keep other-language cards only when the configured display copy is complete.
+
+        The language-exclusive surface promises a readable title and summary in
+        the reader's display language. Translation failures remain reviewable in
+        storage, but they cannot leak raw copy into that promised surface or its
+        capped All-page promotion.
+        """
+        target = self._policy.display_language
+        ready = []
+        for row in rows:
+            if str(row.get("language")) == target:
+                title, summary = row.get("title"), row.get("summary")
+            else:
+                titles = row.get("title_translations")
+                summaries = row.get("summary_translations")
+                if not isinstance(titles, Mapping) or not isinstance(summaries, Mapping):
+                    continue
+                title, summary = titles.get(target), summaries.get(target)
+            if isinstance(title, str) and title.strip() and isinstance(summary, str) and summary.strip():
+                ready.append(row)
+        return ready
+
+    def _exclusive_safe_cursor_rows(self, consumed_rows, admitted_story_ids, excluded_story_ids):
+        """Return the raw prefix that can be retired without losing a story.
+
+        Display-incomplete and explicitly excluded rows are intentionally
+        skipped. A ready row advances the cursor only when the recipe actually
+        admitted it; the first source-capped row stops the prefix so a later
+        continuation can reconsider it with a fresh per-window cap.
+        """
+        admitted = {str(story_id) for story_id in admitted_story_ids}
+        excluded = {str(story_id) for story_id in excluded_story_ids}
+        safe = []
+        for row in consumed_rows:
+            story_id = str(row.get("story_id"))
+            if (story_id in excluded or not self._display_ready_rows((row,))
+                    or story_id in admitted):
+                safe.append(row)
+                continue
+            break
+        return safe
+
+    @staticmethod
+    def _exclusive_corpus_cursor(consumed_rows):
+        """Resume after the last row in the exclusive RPC's declared order."""
+        boundary = consumed_rows[-1]
+        return {"before_published_at": boundary["published_at"],
+                "before_story_id": boundary["story_id"]}
 
     @staticmethod
     def _cap_promotions(ordered, exclusive_ids, cap):
@@ -941,7 +1242,8 @@ class RankingService:
             log_suppressed_exception("m2_release_failed", error, stream=sys.stderr,
                 request_id=request_id)
 
-    def _eligibility_key(self, category_id, query, exclusive) -> str:
+    def _eligibility_key(self, category_id, query, exclusive, *, history_generation=1,
+                         consent_revision=1) -> str:
         """One view: All, a category, a search, or the exclusive section.
 
         A DIGEST, not the values: a search query is text the owner typed, and
@@ -955,10 +1257,18 @@ class RankingService:
             policy_identity = hashlib.sha256(json.dumps(asdict(self._policy),
                 separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
         raw = json.dumps([
+            # A deploy using atomic response progress must never share a view
+            # with an in-flight pre-migration worker that can advance the old
+            # page counter without its offset.  This is a data-contract version,
+            # not a provider/model version, and changes only when that contract
+            # changes.
+            "atomic-response-progress-v1",
             policy_identity,
             category_id,
             query,
             bool(exclusive),
+            history_generation,
+            consent_revision,
         ], separators=(",", ":"), sort_keys=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -992,12 +1302,33 @@ class RankingService:
             return None
         return claim if isinstance(claim, Mapping) else None
 
+    def _claim_continuation(self, owner, run_id, eligibility_key, composition):
+        """Serialize append-at-end continuations on the existing view row.
+
+        The frozen-order append RPC concatenates by design. Reusing the ranking
+        claim as a short mutation lock prevents two identical signed cursors
+        from appending the same batch twice. Unlike the first-rank compatibility
+        path, failure here is fail-closed because serving can safely retry.
+        """
+        token = str(uuid.uuid4())
+        try:
+            claim = self._store.claim_run_ranking(user_id=owner.user_id, run_id=run_id,
+                eligibility_key=eligibility_key, token=token,
+                ttl_seconds=composition.ranking_claim_seconds)
+        except Exception as error:
+            log_suppressed_exception("m2_claim_unavailable", error, stream=sys.stderr,
+                run_id=run_id)
+            raise RuntimeError("page_budget_unavailable") from error
+        if not isinstance(claim, Mapping) or not claim.get("granted"):
+            raise RankingInProgressError()
+        return token
+
     def _existing_run_page(self, token, owner, view, snapshot, page_size):
         """Page one of the ranking this VIEW already paid for, or None.
 
-        Returns None when there is no run, no bound order, the order has expired,
-        or the scoped staleness values have moved, which are exactly the cases
-        where a new ranking is the right answer. A refresh in every other case is
+        A deleted bound order returns a private sentinel because consent/history
+        invalidation may rank again. An expired order returns None and the caller
+        ends that view without buying again. A refresh in every valid case is
         free: same request id, no new frozen order, no reservation, no provider
         call.
         """
@@ -1005,7 +1336,9 @@ class RankingService:
             return None
         frozen = self._store.load_frozen_order(user_id=owner.user_id,
                                                frozen_order_id=str(view["frozen_order_id"]))
-        if not frozen or int(frozen["expires_at"]) < int(self._clock()):
+        if not frozen:
+            return _MISSING_FROZEN_ORDER
+        if int(frozen["expires_at"]) < int(self._clock()):
             return None
         bindings = frozen.get("bindings") or {}
         for key in ("history_generation", "consent_revision"):
@@ -1013,12 +1346,71 @@ class RankingService:
                 return None
         if bindings.get("result_mode") == "model" and not snapshot.get("provider_processing_enabled"):
             return None
+        # Read progress AFTER the frozen order.  New responses commit the view
+        # high-water mark and frozen offset atomically; this order means a
+        # concurrent commit either leaves us with the older consistent pair or
+        # exposes a mismatch.  One second frozen read completes the latter pair.
+        eligibility_key = view.get("eligibility_key")
+        run_id = view.get("run_id")
+        fresh_view = self._open_view(owner, {"run_id": run_id}, eligibility_key)
+        view_pages = fresh_view.get("pages_served") if isinstance(fresh_view, Mapping) else None
+        bound_pages = bindings.get("responses_served")
+        if view_pages != bound_pages:
+            latest = self._store.load_frozen_order(user_id=owner.user_id,
+                frozen_order_id=str(view["frozen_order_id"]))
+            if not latest or int(latest["expires_at"]) < int(self._clock()):
+                return _MISSING_FROZEN_ORDER if not latest else None
+            latest_bindings = latest.get("bindings") or {}
+            for key in ("history_generation", "consent_revision"):
+                if latest_bindings.get(key) != snapshot.get(key):
+                    return None
+            frozen, bindings = latest, latest_bindings
+            bound_pages = bindings.get("responses_served")
+        if view_pages != bound_pages:
+            # The only safe repair is the initial page: the saved order already
+            # carries its exact start/end offsets, while the failed reservation
+            # left the view at zero.  Any other mismatch lacks enough durable
+            # information to mint a cursor, so retry instead of duplicating a
+            # page or bypassing the response cap.
+            last_offset = bindings.get("last_served_offset")
+            last_next = bindings.get("last_served_next_offset")
+            repaired = (view_pages == 0 and bound_pages == 1
+                and isinstance(last_offset, int) and not isinstance(last_offset, bool)
+                and isinstance(last_next, int) and not isinstance(last_next, bool)
+                and self._reserve_response_slot(owner, str(run_id), eligibility_key,
+                    str(view["frozen_order_id"]), 1, last_offset, last_next) is not None)
+            if not repaired:
+                raise RankingInProgressError()
+            view_pages = bound_pages
         size = int(frozen.get("page_size", page_size))
         cards = list(frozen["cards"])
         visible, next_offset, removed = self._slice(cards, 0, size, snapshot)
         self._record_filtered(owner, frozen, removed)
-        next_cursor = (self._cursor(str(view["frozen_order_id"]), next_offset, int(frozen["expires_at"]))
-                       if next_offset < len(cards) or bindings.get("corpus_has_more") else None)
+        pages_served = view_pages
+        if (not isinstance(pages_served, int) or isinstance(pages_served, bool)
+                or pages_served < 0):
+            pages_served = 0
+        # A refresh replays page one; it never resets the view's durable
+        # high-water mark. A visible legacy order proves page one was served
+        # even when the old view row says zero. A newly filtered-empty replay
+        # consumes no new response, but must still continue after every response
+        # the view already served.
+        next_response_number = (max(pages_served, 1) + 1
+                                if visible else pages_served + 1)
+        resume_offset = next_offset
+        if pages_served > 1:
+            stored_next = bindings.get("last_served_next_offset")
+            if (not isinstance(stored_next, int) or isinstance(stored_next, bool)
+                    or stored_next < 0 or stored_next > len(cards)):
+                last_start = bindings.get("last_served_offset")
+                stored_next = (last_start + size
+                    if isinstance(last_start, int) and not isinstance(last_start, bool)
+                    and last_start >= 0 else next_offset)
+            resume_offset = min(len(cards), max(next_offset, stored_next))
+        next_cursor = (self._cursor(str(view["frozen_order_id"]), resume_offset,
+                                    int(frozen["expires_at"]),
+                                    response_number=next_response_number)
+                       if resume_offset < len(cards) or bindings.get("corpus_has_more") else None)
         return {"schema_version": 1, **self._public_bindings(bindings), "cards": visible,
                 "next_cursor": next_cursor, "end_of_run": False}
 

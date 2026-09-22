@@ -25,7 +25,8 @@ from curator.recommendation.composition import CompositionPolicyError, parse_com
 from curator.recommendation.deployment import FUNCTION_TIMEOUT_ENV, function_timeout_seconds
 from curator.recommendation.engine import OpenAIRankLLMEngine
 from curator.recommendation.rankllm_adapter import BudgetState, RankLLMAdapter, RankerPolicy
-from curator.recommendation.runtime import assert_request_fits_function_timeout, prompt_budget
+from curator.recommendation.runtime import (PRECLAIM_TRANSPORT_CALLS,
+    assert_request_fits_function_timeout, prompt_budget)
 from curator.recommendation.service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -228,38 +229,39 @@ def test_the_shipping_policy_declares_the_budget_and_the_raised_deadline():
 
 def _shipping_worst_case():
     return (float(RANKER_POLICY['deadline_seconds']) + float(RANKER_POLICY['settle_window_seconds'])
-            + CLAIMED_SECTION_MAX_TRANSPORT_CALLS * float(RANKER_POLICY['supabase']['timeout_seconds']))
+            + (CLAIMED_SECTION_MAX_TRANSPORT_CALLS + PRECLAIM_TRANSPORT_CALLS)
+            * float(RANKER_POLICY['supabase']['timeout_seconds']))
 
 
 def test_boot_refuses_when_one_request_can_outlive_its_own_container():
     """15 is what was deployed, and it is what turned a fallback into a 500."""
     worst_case = _shipping_worst_case()
-    assert worst_case == 110.0
+    assert worst_case == 170.0
     with pytest.raises(ValueError, match=FUNCTION_TIMEOUT_ENV):
         assert_request_fits_function_timeout(RANKER_POLICY,
             RANKER_POLICY['supabase']['timeout_seconds'], {FUNCTION_TIMEOUT_ENV: '15'})
     # Equal is not enough: the request must finish strictly inside the container.
     with pytest.raises(ValueError, match='not below the function timeout'):
         assert_request_fits_function_timeout(RANKER_POLICY,
-            RANKER_POLICY['supabase']['timeout_seconds'], {FUNCTION_TIMEOUT_ENV: '110'})
+            RANKER_POLICY['supabase']['timeout_seconds'], {FUNCTION_TIMEOUT_ENV: '170'})
 
 
 def test_the_shipping_policy_fits_the_default_function_timeout():
     environment = {}
-    assert function_timeout_seconds(environment) == 120
+    assert function_timeout_seconds(environment) == 180
     assert assert_request_fits_function_timeout(RANKER_POLICY,
         RANKER_POLICY['supabase']['timeout_seconds'], environment) == _shipping_worst_case()
 
 
 def test_the_claim_window_covers_the_raised_deadline():
-    """Check 10, recomputed: 25 + 5 + 16 x 5 + 10 = 120, so 130 is the value."""
+    """Check 10, recomputed: 25 + 5 + 22 x 5 + 10 = 150, so 160 is the value."""
     terms = dict(provider_deadline_seconds=RANKER_POLICY['deadline_seconds'],
                  settle_window_seconds=RANKER_POLICY['settle_window_seconds'],
                  supabase_timeout_seconds=RANKER_POLICY['supabase']['timeout_seconds'],
                  claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS)
-    assert COMPOSITION_POLICY['run']['ranking_claim_seconds'] == 130
+    assert COMPOSITION_POLICY['run']['ranking_claim_seconds'] == 160
     parse_composition_policy(COMPOSITION_POLICY, **terms)
     stale = json.loads(json.dumps(COMPOSITION_POLICY))
-    stale['run']['ranking_claim_seconds'] = 120
+    stale['run']['ranking_claim_seconds'] = 150
     with pytest.raises(CompositionPolicyError, match='must exceed the provider deadline'):
         parse_composition_policy(stale, **terms)

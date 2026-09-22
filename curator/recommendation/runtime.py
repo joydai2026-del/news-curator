@@ -16,7 +16,14 @@ from .deployment import FUNCTION_TIMEOUT_ENV, function_timeout_seconds
 from .engine import OpenAIRankLLMEngine, ReviewedRankLLMPromptBuilder, ScoringPolicy
 from .rankllm_adapter import RankLLMAdapter, RankerPolicy
 from .service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS, RankingService, ServicePolicy
-from .supabase_http import DEFAULT_TIMEOUT_SECONDS, SupabaseHTTP, validate_timeout_seconds
+from .supabase_http import SupabaseHTTP, validate_timeout_seconds
+
+
+# Authentication, the initial history snapshot, run and view opening all happen
+# before the ranking claim. A privacy-epoch boundary may add one precisely scoped
+# run close and one replacement open. They consume the Modal function's wall
+# clock and therefore belong in the full-request budget, but not in the claim TTL.
+PRECLAIM_TRANSPORT_CALLS = 6
 
 
 RANKER_POLICY_DEFAULT = "config/ranker-policy-r1.yaml"
@@ -148,6 +155,12 @@ def build_application(*, environ=None, policy_path: str | None = None):
     env = os.environ if environ is None else environ
     path, policy = load_ranker_policy(env, policy_path)
     enabled = policy.get("service_enabled") is True
+    exclusive_scan_max_batches, exclusive_continuation_max_batches = \
+        exclusive_scan_limits(policy)
+    # Lowering the exclusive scan is allowed to shorten that view, but it must
+    # never under-size the independent general paid path measured by the claim
+    # budget harness. Raising it still grows both claim and function budgets.
+    claimed_section_transport_calls = claimed_transport_call_budget(policy)
     reader_origin = _required(env, "NEWS_CURATOR_READER_ORIGIN")
     supabase_origin = _required(env, "NEWS_CURATOR_SUPABASE_URL")
     publishable = _required(env, "NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY")
@@ -171,7 +184,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
     supabase_timeout = supabase_timeout_seconds(policy)
     # And before anything is served: one request must be able to finish inside
     # the container's own wall clock. See assert_request_fits_function_timeout.
-    assert_request_fits_function_timeout(policy, supabase_timeout, env)
+    assert_request_fits_function_timeout(policy, supabase_timeout, env,
+        claimed_section_transport_calls + PRECLAIM_TRANSPORT_CALLS)
     # The composition policy is loaded FIRST: it decides whether the ranker asks
     # for action predictions or for a bare permutation, which changes the schema,
     # the prompt and the output budget together.
@@ -191,7 +205,7 @@ def build_application(*, environ=None, policy_path: str | None = None):
         provider_deadline_seconds=policy["deadline_seconds"],
         settle_window_seconds=policy.get("settle_window_seconds", 5),
         supabase_timeout_seconds=supabase_timeout,
-        claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS,
+        claimed_section_transport_calls=claimed_section_transport_calls,
     ) if composition_path else None
     scoring = ScoringPolicy.from_composition(composition) if composition else None
     prompt_path, _ = resolve_prompt_template(env, policy, path)
@@ -212,6 +226,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
         model_version=_required(policy, "model"), provider_policy_id=_required(policy, "prompt_revision"),
         tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
         maximum_excluded_story_ids=policy["maximum_excluded_story_ids"],
+        exclusive_scan_max_batches=exclusive_scan_max_batches,
+        exclusive_continuation_max_batches=exclusive_continuation_max_batches,
         cursor_ttl_seconds=policy["cursor_ttl_seconds"], daily_cost_limit_usd=policy["daily_cost_limit_usd"],
         preview_owner_ids=tuple(preview_ids), enabled=enabled,
         display_language=policy.get("display_language", "en"),
@@ -233,7 +249,10 @@ def build_application(*, environ=None, policy_path: str | None = None):
         maximum_body_bytes=policy["maximum_request_body_bytes"])
 
 
-def assert_request_fits_function_timeout(policy, supabase_timeout: float, env) -> float:
+def assert_request_fits_function_timeout(policy, supabase_timeout: float, env,
+                                         claimed_section_transport_calls: int =
+                                         CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+                                         + PRECLAIM_TRANSPORT_CALLS) -> float:
     """Refuse the boot when one request may outlive the container that serves it.
 
     The service has a typed 200 answer for every way a provider call can go
@@ -246,8 +265,8 @@ def assert_request_fits_function_timeout(policy, supabase_timeout: float, env) -
 
         provider deadline (`deadline_seconds`)
       + settle window (`settle_window_seconds`)
-      + claimed-section Supabase budget
-        (CLAIMED_SECTION_MAX_TRANSPORT_CALLS x `supabase.timeout_seconds`)
+      + full-request Supabase budget
+        ((pre-claim + claimed-section calls) x `supabase.timeout_seconds`)
       MUST be strictly below the function timeout (NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS)
 
     Raising any of the three means raising the function timeout with them, which
@@ -255,17 +274,35 @@ def assert_request_fits_function_timeout(policy, supabase_timeout: float, env) -
     """
     deadline = float(policy["deadline_seconds"])
     settle = float(policy.get("settle_window_seconds", 5))
-    transport = float(supabase_timeout) * CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+    transport = float(supabase_timeout) * claimed_section_transport_calls
     worst_case = deadline + settle + transport
     timeout = function_timeout_seconds(env)
     if worst_case >= timeout:
         raise ValueError(
             f"one request may take up to {worst_case}s (deadline_seconds {deadline} "
-            f"+ settle_window_seconds {settle} + {CLAIMED_SECTION_MAX_TRANSPORT_CALLS} "
-            f"claimed-section Supabase calls x supabase.timeout_seconds {supabase_timeout} "
+            f"+ settle_window_seconds {settle} + {claimed_section_transport_calls} "
+            f"full-request Supabase calls x supabase.timeout_seconds {supabase_timeout} "
             f"= {transport}), which is not below the function timeout "
             f"{FUNCTION_TIMEOUT_ENV} ({timeout}s)")
     return worst_case
+
+
+def exclusive_scan_limits(policy) -> tuple[int, int]:
+    """Validated operational limits for initial and continuation scans."""
+    values = []
+    for key, maximum in (("exclusive_scan_max_batches", 50),
+                         ("exclusive_continuation_max_batches", 10)):
+        value = policy.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= maximum:
+            raise ValueError(f"{key} must be an integer between 1 and {maximum}")
+        values.append(value)
+    return values[0], values[1]
+
+
+def claimed_transport_call_budget(policy) -> int:
+    """Call bound shared by claim-window and function-timeout validation."""
+    initial_batches, _ = exclusive_scan_limits(policy)
+    return max(CLAIMED_SECTION_MAX_TRANSPORT_CALLS, initial_batches + 10)
 
 
 def prompt_budget(policy) -> tuple[int, int]:
