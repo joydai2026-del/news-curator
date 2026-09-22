@@ -17,6 +17,7 @@ ROOT=Path(__file__).parents[1]
 def _workspace(path: Path) -> Path:
     path.mkdir()
     shutil.copytree(ROOT/'curator',path/'curator')
+    shutil.copytree(ROOT/'config',path/'config')
     shutil.copytree(ROOT/'scripts',path/'scripts')
     shutil.copytree(ROOT/'static',path/'static')
     render_site({},[],datetime(2026,9,14,tzinfo=timezone.utc),path/'site',require_summaries=False)
@@ -53,8 +54,8 @@ def test_disabled_workflow_step_is_byte_identical_to_existing_m1_callback_path(t
 
 def test_enabled_workflow_step_validates_and_applies_public_m2_config(tmp_path):
     workspace=_workspace(tmp_path/'enabled');(workspace/'runner-temp').mkdir()
-    config=json.dumps({'enabled':True,'url':'https://ranker.example','policy_version':'policy-1',
-        'model_version':'model-1','provider_policy_id':'provider-policy-1',
+    config=json.dumps({'enabled':True,'url':'https://ranker.example','policy_version':'m2-rankllm-predictions-r1',
+        'model_version':'gpt-5-mini','provider_policy_id':'m2-rankllm-predictions-r1',
         'provider_retention_url':'https://policy.example/privacy','page_size':25,
         'request_timeout_ms':8000,'transport_timeout_ms':20000})
     result=subprocess.run(['/bin/bash','-euo','pipefail','-c',_step_command()],cwd=workspace,
@@ -68,11 +69,12 @@ def test_enabled_workflow_step_validates_and_applies_public_m2_config(tmp_path):
 
 
 def test_enabled_workflow_step_fails_closed_without_valid_config(tmp_path):
-    base={'enabled':True,'url':'https://ranker.example','policy_version':'policy-1',
-        'model_version':'model-1','provider_policy_id':'provider-policy-1',
+    base={'enabled':True,'url':'https://ranker.example','policy_version':'m2-rankllm-predictions-r1',
+        'model_version':'gpt-5-mini','provider_policy_id':'m2-rankllm-predictions-r1',
         'provider_retention_url':'https://policy.example/privacy','page_size':25}
     invalid_configs=('', '{invalid', json.dumps({**base,'request_timeout_ms':8001}),
         json.dumps({**base,'request_timeout_ms':30000}),
+        json.dumps({**base,'policy_version':'stale-policy','request_timeout_ms':8000,'transport_timeout_ms':20000}),
         json.dumps({**base,'request_timeout_ms':8000,'transport_timeout_ms':7999}),
         json.dumps({**base,'request_timeout_ms':8000,'transport_timeout_ms':20001}))
     for index,config in enumerate(invalid_configs):
