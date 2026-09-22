@@ -41,7 +41,11 @@ class Transport:
 
 def owner(monkeypatch, payload):
     monkeypatch.setattr(m2_cli, "_auth_config", config)
-    monkeypatch.setattr(m2_cli, "_session", lambda value, email: Session())
+    monkeypatch.setattr(
+        m2_cli,
+        "_session",
+        lambda value, email, *, minimum_validity: Session(),
+    )
     monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: Transport([(200, payload)]))
 
 
@@ -113,7 +117,11 @@ def test_the_environment_raises_the_cap_without_a_flag(tmp_path, monkeypatch):
 def test_an_invalid_cap_is_refused_before_any_remote_request(tmp_path, monkeypatch, capsys):
     called = []
     monkeypatch.setattr(m2_cli, "_auth_config", lambda: called.append("config") or config())
-    monkeypatch.setattr(m2_cli, "_session", lambda value, email: called.append("session") or Session())
+    monkeypatch.setattr(
+        m2_cli,
+        "_session",
+        lambda value, email, *, minimum_validity: called.append("session") or Session(),
+    )
 
     assert m2_cli.main(["history", "--output", str(tmp_path / "r.json"), "--max-output-bytes", "10"]) == 1
     assert called == []
@@ -135,7 +143,7 @@ def test_each_failure_class_gets_its_own_label(error, expected):
 def test_an_auth_failure_reads_differently_from_an_oversized_success(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(m2_cli, "_auth_config", config)
 
-    def deny(value, email):
+    def deny(value, email, *, minimum_validity):
         raise m2_cli.AuthError("denied")
 
     monkeypatch.setattr(m2_cli, "_session", deny)

@@ -124,7 +124,7 @@ def build_site(tmp_path):
         m2_config={'enabled': True, 'url': RANKER, 'policy_version': 'test-policy',
                    'model_version': 'test-model', 'provider_policy_id': 'test-policy',
                    'provider_retention_url': 'https://policy.example', 'page_size': 25,
-                   'request_timeout_ms': 8000, 'transport_timeout_ms': 20000})
+                   'request_timeout_ms': 8000, 'transport_timeout_ms': 310000})
     return site
 
 
@@ -271,8 +271,9 @@ def test_language_toggle_section_and_untranslated_mark(tmp_path):
 
             # Opening the section serves only language-exclusive stories.
             page.locator('.chip[data-language-exclusive=true]').nth(1).click()
-            page.wait_for_function(VISIBLE_CARDS + " === 2")
+            page.wait_for_function(VISIBLE_CARDS + " === 1")
             assert store.exclusive_calls == ['en']
+            assert visible_headlines(page) == ['Chinese exclusive: seven new rules published']
             section_title = page.locator('#sections [data-section="__m2__"] .section-title').first
             assert section_title.inner_text() == 'Only in Chinese press'
             assert page.locator('.m2-empty').count() == 0

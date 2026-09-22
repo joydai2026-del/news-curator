@@ -30,12 +30,12 @@ function response(value, url) { return { ok: true, redirected: false, url,
 (async () => {
   assert.deepEqual(reader.validateM2Config({ enabled: false }), { enabled: false });
   assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000 }).request_timeout_ms, 8000);
-  assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000 }).transport_timeout_ms, 8000);
-  assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 20000 }).transport_timeout_ms, 20000);
+  assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000 }).transport_timeout_ms, 310000);
+  assert.equal(reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 310000 }).transport_timeout_ms, 310000);
   assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8001 }), /configuration/);
-  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 30000 }), /configuration/);
-  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 7999 }), /configuration/);
-  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 20001 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 310000 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 309999 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, request_timeout_ms: 8000, transport_timeout_ms: 600001 }), /configuration/);
   let token = "token-a";
   const calls = [];
   const service = reader.createM2Service(config, async () => ({ access_token: token }),
@@ -52,6 +52,20 @@ function response(value, url) { return { ok: true, redirected: false, url,
     async (url) => { token = "token-b"; return response(payload(), url); });
   await assert.rejects(() => changed.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /account changed/);
   token = "token-a";
+  const validityRequests = [];
+  let rotatingToken = "token-a";
+  const rotatedSameOwner = reader.createM2Service(config, async (minimumValiditySeconds) => {
+    validityRequests.push(minimumValiditySeconds);
+    return { access_token: rotatingToken, user_id: "owner-a" };
+  }, async (url) => { rotatingToken = "token-b"; return response(payload(), url); });
+  await rotatedSameOwner.rank(history, { as_of: "2026-09-14T16:00:00Z" });
+  assert.deepEqual(validityRequests, [340, 0]);
+  let activeOwner = "owner-a";
+  const switchedOwner = reader.createM2Service(config,
+    async () => ({ access_token: "token-a", user_id: activeOwner }),
+    async (url) => { activeOwner = "owner-b"; return response(payload(), url); });
+  await assert.rejects(() => switchedOwner.rank(history, { as_of: "2026-09-14T16:00:00Z" }),
+    /account changed/);
   const stale = reader.createM2Service(config, async () => ({ access_token: token }),
     async (url) => response(payload({ history_generation: 1 }), url));
   await assert.rejects(() => stale.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
@@ -89,6 +103,11 @@ function response(value, url) { return { ok: true, redirected: false, url,
   await assert.rejects(() => busyService.rank(history, { as_of: "2026-09-14T16:00:00Z" }),
     (error) => error.rankingInProgress === true &&
       !/The M2 reader request failed/.test(error.message));
+  const oldCursorService = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => ({ ok: false, redirected: false, url, text: async () => JSON.stringify(
+      { error: "cursor_version" }) }));
+  await assert.rejects(() => oldCursorService.page("old-cursor", frozenBinding),
+    (error) => error.staleCursor === true && /current reader version/.test(error.message));
   // The retry budget is config, with safe defaults.
   assert.equal(reader.validateM2Config(config).in_progress_retry_ms, 2000);
   assert.equal(reader.validateM2Config(config).in_progress_max_attempts, 3);

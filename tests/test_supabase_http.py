@@ -90,6 +90,33 @@ def test_service_key_type_controls_bearer_header_without_affecting_apikey(key, e
     assert seen.get("Authorization") == expected
 
 
+def test_response_reservation_uses_the_atomic_rpc_with_exact_progress():
+    client = _client()
+    seen = {}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return b'{"reserved":true,"previous":1}'
+
+    class Capture:
+        def open(self, request, timeout):
+            seen.update(method=request.method, url=request.full_url,
+                        body=json.loads(request.data), headers=dict(request.header_items()))
+            return Response()
+
+    client._opener = Capture()
+    result = client.reserve_run_response(user_id="owner-1", run_id="run-1",
+        eligibility_key="a" * 64, frozen_order_id="frozen-1",
+        response_number=2, offset=25, next_offset=50)
+    assert result == {"reserved": True, "previous": 1}
+    assert seen["method"] == "POST"
+    assert seen["url"].endswith("/rest/v1/rpc/m2_reserve_run_response")
+    assert seen["body"] == {"p_user_id": "owner-1", "p_run_id": "run-1",
+        "p_eligibility_key": "a" * 64, "p_frozen_order_id": "frozen-1",
+        "p_response_number": 2, "p_offset": 25, "p_next_offset": 50}
+
+
 def _client(timeout_seconds=None):
     kwargs = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
     return SupabaseHTTP(origin="https://example.test", publishable_key="public",

@@ -145,9 +145,10 @@ def _auth_config() -> AuthConfig:
     return AuthConfig(os.environ.get("NEWS_CURATOR_SUPABASE_URL", ""), os.environ.get("NEWS_CURATOR_SUPABASE_PUBLISHABLE_KEY", ""))
 
 
-def _session(config: AuthConfig, expected_email: str | None):
+def _session(config: AuthConfig, expected_email: str | None, *, minimum_validity: float = 30.0):
     account = urllib.parse.urlsplit(config.supabase_url).hostname or "news-curator"
-    session = AgentAuth(config, MacOSKeychainStorage(account=account)).valid_session()
+    session = AgentAuth(config, MacOSKeychainStorage(account=account)).valid_session(
+        leeway=minimum_validity)
     if expected_email:
         status, profile = JsonRestTransport().request("GET", f"{config.supabase_url}/auth/v1/user", headers={
             "apikey": config.publishable_key, "authorization": f"Bearer {session.access_token}"})
@@ -174,6 +175,26 @@ _RPC_BUILDERS = {
                                                               "p_limit": args.limit or 24}),
 }
 _RPC_NAMES = {item[0] for item in _RPC_BUILDERS.values()}
+RPC_TIMEOUT_SECONDS = 15.0
+RANK_TIMEOUT_SECONDS = 310.0
+MAX_TIMEOUT_SECONDS = 600.0
+SESSION_REFRESH_MARGIN_SECONDS = 30.0
+
+
+def _command_timeout(command: str, value: float | None) -> float:
+    timeout = value if value is not None else (
+        RANK_TIMEOUT_SECONDS if command in {"rank", "page"} else RPC_TIMEOUT_SECONDS)
+    if not 1 <= timeout <= MAX_TIMEOUT_SECONDS:
+        raise ValueError("timeout is invalid")
+    return timeout
+
+
+def _session_minimum_validity(command: str, timeout: float) -> float:
+    # Rank has two sequential remote legs: the history snapshot and the paid
+    # rank request. The remaining commands have one. The margin also covers the
+    # optional owner-profile verification performed after refresh.
+    remote_legs = 2 if command == "rank" else 1
+    return timeout * remote_legs + SESSION_REFRESH_MARGIN_SECONDS
 
 
 def _rpc(config: AuthConfig, session, name: str, body: Mapping[str, Any], timeout: float) -> Any:
@@ -267,7 +288,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--query")
     parser.add_argument("--exclude-story-id", action="append", default=[])
     parser.add_argument("--hour", type=_hour, help="ISO-8601 instant naming the hour of pages to review.")
-    parser.add_argument("--timeout", type=float, default=15.0)
+    parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--max-output-bytes", type=int, default=None,
                         help=f"Private output cap in bytes (65536..16777216). Falls back to ${MAX_OUTPUT_BYTES_ENV}, then 1 MiB.")
     return parser
@@ -299,13 +320,16 @@ def _failure_class(error: BaseException) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if not 1 <= args.timeout <= 20:
-            raise ValueError("timeout is invalid")
+        args.timeout = _command_timeout(args.command, args.timeout)
         limit = max_output_bytes(args.max_output_bytes)
         _validate_args(args)
         _validate_output_path(args.output)  # Refuse an unsafe output before any remote effect.
         config = _auth_config()
-        session = _session(config, args.expected_owner_email)
+        session = _session(
+            config,
+            args.expected_owner_email,
+            minimum_validity=_session_minimum_validity(args.command, args.timeout),
+        )
         if args.command == "rank":
             payload = _rank(config, session, args)
         elif args.command == "page":

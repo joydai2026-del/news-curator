@@ -748,7 +748,10 @@
     // buying this view's ranking, and how many times. Config, not a constant.
     value = { in_progress_retry_ms: 2000, in_progress_max_attempts: 3, ...value };
     value = { request_timeout_ms: 8000, ...value };
-    value = { transport_timeout_ms: value.request_timeout_ms, ...value };
+    // The backend's validated function timeout can be as high as 300 seconds.
+    // Keep the transport alive beyond that; the 8s timer only paints the
+    // baseline and is not permission to abort a healthy ranking.
+    value = { transport_timeout_ms: 310000, ...value };
     if (!exactFields(value, ["enabled", "model_version", "page_size", "policy_version",
       "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms",
       "transport_timeout_ms", "in_progress_retry_ms", "in_progress_max_attempts"]) || !boundedString(value.policy_version, 256) ||
@@ -756,7 +759,7 @@
       !boundedString(value.model_version, 256) || !safeDestination(value.provider_retention_url) ||
       !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
       !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000 ||
-      !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < value.request_timeout_ms || value.transport_timeout_ms > 20000 ||
+      !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < 310000 || value.transport_timeout_ms > 600000 ||
       !Number.isInteger(value.in_progress_retry_ms) || value.in_progress_retry_ms < 100 || value.in_progress_retry_ms > 10000 ||
       !Number.isInteger(value.in_progress_max_attempts) || value.in_progress_max_attempts < 1 || value.in_progress_max_attempts > 10) {
       fail("M2 reader configuration is invalid.");
@@ -843,7 +846,11 @@
     const config = validateM2Config(rawConfig);
     if (!config.enabled) return Object.freeze({ enabled: false });
     async function request(path, method, body, expected) {
-      const before = await sessionProvider();
+      // Refresh before a request when the bearer cannot outlive the longest
+      // accepted transport window.  The extra 30 seconds covers client/server
+      // clock skew and the final response validation round trip.
+      const minimumValiditySeconds = Math.ceil(config.transport_timeout_ms / 1000) + 30;
+      const before = await sessionProvider(minimumValiditySeconds);
       if (!before || !boundedString(before.access_token, 16384)) fail("Sign in to continue.");
       const url = `${config.url}${path}`;
       const response = await fetchImpl(url, { method, headers: {
@@ -853,8 +860,17 @@
       redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(config.transport_timeout_ms) });
       const payload = await boundedJson(response, "The M2 reader response was invalid.");
       if (response.redirected !== false || response.url !== url) fail("The M2 endpoint redirected unexpectedly.");
-      const after = await sessionProvider();
-      if (!after || after.access_token !== before.access_token) fail("The signed-in account changed.");
+      const after = await sessionProvider(0);
+      const beforeOwner = boundedString(before.user_id, 256) ? before.user_id : null;
+      const afterOwner = after && boundedString(after.user_id, 256) ? after.user_id : null;
+      // Production sessions carry user_id, so an ordinary token rotation for
+      // the same owner is accepted while an account switch is still refused.
+      // The token comparison remains only for small contract doubles that do
+      // not model identity.
+      const sameOwner = beforeOwner && afterOwner
+        ? beforeOwner === afterOwner
+        : after && after.access_token === before.access_token;
+      if (!after || !sameOwner) fail("The signed-in account changed.");
       if (!response.ok) {
         // A ranking prompt revision is a QUESTION, not an outage: the owner
         // agreed to a different provider policy than the one now running, and
@@ -866,6 +882,11 @@
         if (isObject(payload) && payload.error === "ranking_in_progress") {
           const error = new Error("Still preparing your page.");
           error.rankingInProgress = true;
+          throw error;
+        }
+        if (isObject(payload) && payload.error === "cursor_version") {
+          const error = new Error("Refreshing this page onto the current reader version.");
+          error.staleCursor = true;
           throw error;
         }
         if (isObject(payload) && payload.error === "provider_consent_required") {
@@ -956,7 +977,8 @@
         request_timeout_ms: Number(meta("request-timeout-ms") || 8000),
         transport_timeout_ms: Number(meta("transport-timeout-ms") || meta("request-timeout-ms") || 8000),
       } : { enabled: false });
-      m2 = createM2Service(m2Config, () => auth.sessionForRequest());
+      m2 = createM2Service(m2Config, (minimumValiditySeconds = 0) =>
+        auth.sessionForRequest(undefined, undefined, minimumValiditySeconds));
     } catch (_) { announce("Personalized feed configuration is unavailable. Public stories remain available."); }
     let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null;
     let m2Section = null, m2PublicCards = [], m2Position = 0, m2Entries = [];
@@ -1569,6 +1591,13 @@
             return loadM2(append, searchEvent, attempt + 1);
           }
           stillPreparing();
+        } else if (error && error.staleCursor && append) {
+          // A cursor from the pre-atomic release cannot safely share the new
+          // response budget. Start one current-contract rank instead of
+          // showing a dead feed or retrying the stale page cursor.
+          clearTimeout(deadline); clearTimeout(transportDeadline);
+          m2Cursor = null; m2Binding = null;
+          return loadM2(false, false);
         } else if (error && error.consentRequired) consentRequired(); else terminalFallback();
       } finally {
         clearTimeout(deadline); clearTimeout(transportDeadline); pageRequests.delete(pageRequest); refreshLoadButton();

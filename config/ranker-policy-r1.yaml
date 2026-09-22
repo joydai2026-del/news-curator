@@ -53,7 +53,12 @@ maximum_request_body_bytes: 32768
 candidate_limit: 50
 maximum_page_size: 25
 maximum_excluded_story_ids: 1000
-cursor_ttl_seconds: 900
+# Bounded raw-corpus scans for the language-exclusive view. These are policy,
+# not code constants: they trade latency and Supabase calls against how sparse a
+# translated corpus can be while still yielding a page.
+exclusive_scan_max_batches: 12
+exclusive_continuation_max_batches: 2
+cursor_ttl_seconds: 3600
 service_enabled: true
 # M2.1 Phase 1 reading-surface language policy. Mirrors sources.yaml
 # `language:` for the request path; exclusivity is stated against this value.
@@ -77,13 +82,14 @@ composition_policy: config/ranking-policy-r2.yaml
 #   run.ranking_claim_seconds
 #     > deadline_seconds (25)
 #     + settle_window_seconds (5)
-#     + CLAIMED_SECTION_MAX_TRANSPORT_CALLS (16) x timeout_seconds (5) = 80
+#     + CLAIMED_SECTION_MAX_TRANSPORT_CALLS (22) x timeout_seconds (5) = 110
 #     + run.ranking_claim_margin_seconds (10)
-#     = 120, so run.ranking_claim_seconds is 130.
+#     = 150, so run.ranking_claim_seconds is 160.
 #
-# The same three terms without the margin are also checked against the container
-# itself at boot: deadline (25) + settle (5) + transport (80) = 110 must be
-# strictly below NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS (120), or the
+# The container check also includes six pre-claim calls (authentication,
+# history, run open, optional run replacement, and view): deadline (25) + settle (5) + transport
+# (28 x 5) = 170 must be strictly below
+# NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS (180), or the
 # platform kills the request and the reader gets a 500 instead of the typed
 # fallback the service already had ready.
 #

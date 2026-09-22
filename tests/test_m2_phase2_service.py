@@ -7,6 +7,9 @@ and a save in another tab no longer throws away a rank that was already paid for
 from __future__ import annotations
 
 import json
+import copy
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +21,7 @@ from curator.recommendation.composition import load_composition_policy
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.service import (
     ProviderConsentRequiredError,
+    RankingInProgressError,
     RankingService,
     ServicePolicy,
     StaleRankingError,
@@ -163,9 +167,13 @@ class Store:
             selected.sort(key=lambda row: (row["published_at"], row["story_id"]), reverse=True)
         return selected[:limit]
 
-    def retained_candidates_language_exclusive(self, *, limit, **kwargs):
+    def retained_candidates_language_exclusive(self, *, limit, before_story_id=None, **kwargs):
         self.exclusive_calls += 1
-        return self.exclusive[:limit]
+        start = 0
+        if before_story_id is not None:
+            start = next((index + 1 for index, row in enumerate(self.exclusive)
+                          if row["story_id"] == before_story_id), len(self.exclusive))
+        return self.exclusive[start:start + limit]
 
     # --- runs --------------------------------------------------------------
     def record_reading_run_filter(self, *, user_id, run_id, story_ids):
@@ -176,11 +184,26 @@ class Store:
         return len(self.filtered[run_id])
 
     def open_reading_run(self, *, user_id, idle_minutes, max_minutes, profile):
-        if self.runs:
-            return {**self.runs[-1], "created": False}
+        active = [run for run in self.runs if not run.get("closed_at")]
+        if active:
+            current = active[-1]
+            same_epoch = (current["profile_snapshot"].get("_history_generation")
+                          == profile.get("_history_generation")
+                          and current["profile_snapshot"].get("_consent_revision")
+                          == profile.get("_consent_revision"))
+            if same_epoch:
+                return {**current, "created": False}
+            current["closed_at"] = "atomic-replacement"
         run = {"run_id": f"run-{len(self.runs) + 1}", "profile_snapshot": profile, "created": True}
         self.runs.append(run)
         return run
+
+    def close_reading_run(self, *, user_id, run_id, closed_at):
+        for run in self.runs:
+            if run["run_id"] == run_id and not run.get("closed_at"):
+                run["closed_at"] = closed_at
+                return True
+        return False
 
     # Everything below is keyed by (run, eligibility): All, a category, a search
     # and the exclusive section are four different views of one visit.
@@ -223,6 +246,30 @@ class Store:
         previous = view["pages_served"]
         view["pages_served"] = max(previous, pages)
         return previous
+
+    def reserve_run_response(self, *, user_id, run_id, eligibility_key,
+                             frozen_order_id, response_number, offset, next_offset):
+        view = self._view(run_id, eligibility_key)
+        stored = self.frozen.get(frozen_order_id)
+        previous = view["pages_served"]
+        if (stored is None or view["frozen_order_id"] != frozen_order_id
+                or offset < 0 or next_offset < offset
+                or offset > len(stored["cards"])):
+            return {"reserved": False, "previous": previous}
+        bindings = stored["bindings"]
+        if not (previous in (response_number - 1, response_number)
+                or (previous == 0 and response_number == 2)):
+            return {"reserved": False, "previous": previous}
+        if (previous == response_number
+                and bindings.get("responses_served") == response_number
+                and (bindings.get("last_served_offset") != offset
+                     or bindings.get("last_served_next_offset") != next_offset)):
+            return {"reserved": False, "previous": previous}
+        view["pages_served"] = max(previous, response_number)
+        bindings.update({"responses_served": response_number,
+                         "last_served_offset": offset,
+                         "last_served_next_offset": next_offset})
+        return {"reserved": True, "previous": previous}
 
     # --- owner state and budget -------------------------------------------
     def owner_states(self, token, story_ids):
@@ -314,6 +361,18 @@ def rank(subject, store, **overrides):
             "history_generation": 1, "consent_revision": 1, "page_size": 25}
     body.update(overrides)
     return subject.rank(authorization="Bearer valid", body=body)
+
+
+def test_frozen_order_ttl_must_cover_the_complete_reading_run():
+    composition = load_composition_policy(POLICY_PATH)
+    with pytest.raises(ValueError, match="complete reading run"):
+        ServicePolicy("policy", "model", "policy", "tenant",
+            cursor_ttl_seconds=composition.max_run_minutes * 60 - 1,
+            composition=composition)
+    accepted = ServicePolicy("policy", "model", "policy", "tenant",
+        cursor_ttl_seconds=composition.max_run_minutes * 60,
+        composition=composition)
+    assert accepted.cursor_ttl_seconds == composition.max_run_minutes * 60
 
 
 def liked_events():
@@ -417,7 +476,8 @@ def test_the_first_page_does_not_move_under_her_after_an_interaction():
     first = rank(subject, store)
     store.revision += 1
     again = subject.page(authorization="Bearer valid",
-                         cursor=subject._cursor("frozen-1", 0, int(store.frozen["frozen-1"]["expires_at"])))
+                         cursor=subject._cursor("frozen-1", 0,
+                             int(store.frozen["frozen-1"]["expires_at"]), response_number=1))
     assert [card["story_id"] for card in again["cards"]] == [card["story_id"] for card in first["cards"]]
 
 
@@ -436,6 +496,65 @@ def test_less_like_this_takes_effect_inside_the_run_without_moving_an_offset():
     second = subject.page(authorization="Bearer valid", cursor=cursor)
     assert all(card["source_id"] != removed for card in second["cards"])
     assert store.reservations == []
+
+
+def test_an_empty_filtered_slice_keeps_its_response_ordinal_for_older_cards():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    prototype = frozen["cards"][0]
+    frozen["cards"] = [
+        {**prototype, "story_id": f"story:{index:064x}",
+         "source_id": "blocked" if index < 75 else f"safe-{index}",
+         "category_ids": ["blocked"] if index < 75 else ["safe"]}
+        for index in range(100)
+    ]
+    frozen["bindings"]["corpus_has_more"] = False
+    store.events.append({"event_id": "dislike", "event_type": "less_like_this",
+        "event_revision": 9, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": "story:" + "0" * 64, "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": "blocked"})
+
+    empty = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    assert empty["cards"] == [] and empty["next_cursor"]
+    assert subject._decode_cursor(empty["next_cursor"])["response_number"] == 2
+
+    recovered = subject.page(authorization="Bearer valid", cursor=empty["next_cursor"])
+    assert recovered["cards"]
+    assert store.views[next(iter(store.views))]["pages_served"] == 2
+
+
+def test_an_empty_filtered_replay_cannot_move_a_spent_ordinal_to_new_cards():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    prototype = frozen["cards"][0]
+    frozen["cards"] = [
+        {**prototype, "story_id": f"story:{index:064x}",
+         "source_id": "blocked" if 75 <= index < 125 else f"safe-{index}",
+         "category_ids": ["blocked"] if 75 <= index < 125 else ["safe"]}
+        for index in range(150)
+    ]
+    frozen["bindings"]["corpus_has_more"] = False
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    third = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
+    page_four_cursor = third["next_cursor"]
+    fourth = subject.page(authorization="Bearer valid", cursor=page_four_cursor)
+    assert fourth["cards"]
+    assert store.views[next(iter(store.views))]["pages_served"] == 4
+
+    store.events.append({"event_id": "dislike", "event_type": "less_like_this",
+        "event_revision": 9, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": "story:" + "0" * 64, "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": "blocked"})
+    moved = subject.page(authorization="Bearer valid", cursor=page_four_cursor)
+    assert moved["cards"] == [] and moved["next_cursor"]
+    decoded = subject._decode_cursor(moved["next_cursor"])
+    assert decoded["offset"] == 125 and decoded["response_number"] == 5
+    ended = subject.page(authorization="Bearer valid", cursor=moved["next_cursor"])
+    assert ended["cards"] == [] and ended.get("end_of_run") is True
 
 
 # --- F1: a paid rank is not thrown away -----------------------------------
@@ -546,6 +665,155 @@ def test_the_section_itself_does_not_promote_into_itself():
     assert store.exclusive_calls == 1, "the section must not also run the promotion fetch"
 
 
+def test_language_exclusive_section_only_serves_complete_display_translations():
+    rows = exclusive_corpus(3)
+    rows[0]["title_translations"] = {}
+    rows[1]["summary_translations"] = {}
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None})
+    assert [card["story_id"] for card in response["cards"]] == [rows[2]["story_id"]]
+    assert response["cards"][0]["title_en"]
+    assert response["cards"][0]["summary_en"]
+
+
+def test_language_exclusive_section_scans_past_an_untranslated_rpc_page():
+    rows = exclusive_corpus(101)
+    for row in rows[:100]:
+        row["title_translations"] = {}
+        row["summary_translations"] = {}
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None})
+    assert [card["story_id"] for card in response["cards"]] == [rows[100]["story_id"]]
+    assert store.exclusive_calls == 2
+
+
+def test_language_exclusive_cursor_stops_after_the_last_candidate_it_consumed():
+    # Keep the corpus within the four-response run budget. The separate short-
+    # page regression below proves that a larger corpus stops at that budget.
+    rows = exclusive_corpus(60)
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None})
+    cards = list(response["cards"])
+    while response["next_cursor"]:
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        cards.extend(response["cards"])
+    assert {card["story_id"] for card in cards} == {row["story_id"] for row in rows}
+
+
+def test_language_exclusive_cursor_preserves_rows_rejected_by_source_caps():
+    rows = exclusive_corpus(80)
+    for row in rows[:10]:
+        row["source_id"] = "same-source"
+        row["source_name"] = "Same Source"
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+    # This test isolates cursor preservation. Give it enough response budget to
+    # reach every deliberately deferred source-capped row; the separate budget
+    # regression proves the production four-response stop.
+    subject._policy = replace(subject._policy, composition=replace(
+        subject._policy.composition, max_pages_per_run=10))
+    excluded = rows[20]["story_id"]
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None},
+                    exclude_story_ids=[excluded])
+    cards = list(response["cards"])
+    while response["next_cursor"]:
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        cards.extend(response["cards"])
+    assert {card["story_id"] for card in cards} == \
+        {row["story_id"] for row in rows} - {excluded}
+
+
+def test_language_exclusive_empty_bounded_continuation_advances_and_resumes():
+    rows = exclusive_corpus(326)
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+    rank(subject, store, eligibility={"category": "only-other-language-press",
+                                      "query": None})
+    # The 51st ready row was the initial look-ahead sentinel. Make the next 250
+    # raw rows incomplete after the first page is frozen, reproducing a sparse
+    # continuation without changing the already-served order.
+    for row in rows[50:301]:
+        row["title_translations"] = {}
+        row["summary_translations"] = {}
+    frozen = store.frozen["frozen-1"]
+    exhausted = len(frozen["cards"])
+    cursor = subject._cursor("frozen-1", exhausted, int(frozen["expires_at"]),
+                             response_number=2)
+    empty = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert empty["cards"] == []
+    assert empty["next_cursor"], "a bounded empty scan must remain resumable"
+    assert store.exclusive_calls == 3, "initial scan plus exactly two continuation batches"
+    resumed = subject.page(authorization="Bearer valid", cursor=empty["next_cursor"])
+    assert resumed["cards"], "the next bounded scan must reach older translated rows"
+    assert store.exclusive_calls == 4
+
+
+def test_language_exclusive_initial_empty_scan_reserves_first_recovered_page():
+    rows = exclusive_corpus(1300)
+    for row in rows[:1200]:
+        row["title_translations"] = {}
+        row["summary_translations"] = {}
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+
+    initial = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                "query": None})
+    assert initial["cards"] == [] and initial["next_cursor"]
+    frozen = store.frozen["frozen-1"]
+    assert frozen["bindings"]["responses_served"] == 0
+    assert next(iter(store.views.values()))["pages_served"] == 0
+
+    recovered = subject.page(authorization="Bearer valid", cursor=initial["next_cursor"])
+    assert recovered["cards"] and recovered["next_cursor"]
+    assert frozen["bindings"]["responses_served"] == 1
+    assert next(iter(store.views.values()))["pages_served"] == 1
+
+    following = subject.page(authorization="Bearer valid", cursor=recovered["next_cursor"])
+    assert following["cards"], "the recovered first page must not prematurely end pagination"
+    assert frozen["bindings"]["responses_served"] == 2
+    assert next(iter(store.views.values()))["pages_served"] == 2
+
+
+def test_language_exclusive_continuation_retires_an_already_opened_row():
+    rows = exclusive_corpus(80)
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None})
+    blocked = rows[50]["story_id"]
+    store.owner_states = lambda token, ids: ({blocked: {"read_at": NOW.isoformat()}}
+                                              if blocked in ids else {})
+    cards = list(response["cards"])
+    attempts = 0
+    while response["next_cursor"] and attempts < 8:
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        cards.extend(response["cards"])
+        attempts += 1
+    assert response["next_cursor"] is None
+    assert blocked not in {card["story_id"] for card in cards}
+    assert len(cards) == 79
+
+
+def test_language_exclusive_scan_counts_only_nonexcluded_ready_rows():
+    rows = exclusive_corpus(151)
+    store = Store(events=liked_events(), exclusive=rows)
+    subject = build(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={"category": "only-other-language-press",
+                                                 "query": None},
+                    exclude_story_ids=[row["story_id"] for row in rows[:100]])
+    assert len(response["cards"]) == 25
+    assert not ({card["story_id"] for card in response["cards"]}
+                & {row["story_id"] for row in rows[:100]})
+    assert store.exclusive_calls == 2
+
+
 def test_a_deep_language_exclusive_section_returns_a_page_and_cursor():
     """Every continuation stays in the exclusive corpus and never 500s."""
     store = Store(events=liked_events(), exclusive=exclusive_corpus(80))
@@ -586,8 +854,8 @@ def test_paging_past_the_frozen_order_continues_without_a_provider_call():
     store.reservations.clear()
     before_orders = len(store.frozen)
     response = subject.page(authorization="Bearer valid",
-                            cursor=subject._cursor("frozen-1", exhausted,
-                                                   int(frozen["expires_at"])))
+        cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"]),
+                               response_number=2))
     assert store.reservations == [], "a page turn reserved provider budget"
     assert len(store.frozen) == before_orders, "a page turn minted a second ranking"
     assert response["request_id"] == first["request_id"], "a page turn minted a new request id"
@@ -601,10 +869,11 @@ def test_the_continuation_keeps_already_signed_cursors_pointing_at_the_same_card
     subject = build(store)
     first = rank(subject, store)
     frozen = store.frozen["frozen-1"]
-    early = subject._cursor("frozen-1", 0, int(frozen["expires_at"]))
+    early = subject._cursor("frozen-1", 0, int(frozen["expires_at"]), response_number=1)
     exhausted = len(frozen["cards"])
     subject.page(authorization="Bearer valid",
-                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"])))
+                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"]),
+                                        response_number=2))
     replayed = subject.page(authorization="Bearer valid", cursor=early)
     assert [card["story_id"] for card in replayed["cards"]] == [card["story_id"] for card in first["cards"]]
 
@@ -616,7 +885,8 @@ def test_a_continuation_never_repeats_a_story_already_in_the_order():
     frozen = store.frozen["frozen-1"]
     exhausted = len(frozen["cards"])
     subject.page(authorization="Bearer valid",
-                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"])))
+                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"]),
+                                        response_number=2))
     ids = [card["story_id"] for card in store.frozen["frozen-1"]["cards"]]
     assert len(ids) == len(set(ids))
 
@@ -769,7 +1039,8 @@ def test_less_like_this_is_recorded_so_the_page_replays():
     # Re-read the page the disliked card is actually ON. An offset further down
     # the order would prove nothing about this filter.
     subject.page(authorization="Bearer valid",
-                 cursor=subject._cursor("frozen-1", 0, int(store.frozen["frozen-1"]["expires_at"])))
+                 cursor=subject._cursor("frozen-1", 0,
+                     int(store.frozen["frozen-1"]["expires_at"]), response_number=1))
     recorded = store.filtered.get("run-1", [])
     assert recorded, "the filter must be recorded, or the page cannot be reviewed afterwards"
 
@@ -789,13 +1060,14 @@ def test_the_hot_lane_continuation_sends_a_whole_keyset_or_none():
     and the two never get mixed."""
     store = PaidStore(events=liked_events())
     subject = paid(store)
-    first = rank(subject, store)
+    rank(subject, store)
     frozen = store.frozen["frozen-1"]
     exhausted = len(frozen["cards"])
     # Would raise ValueError("invalid cursor") from the fake if half a keyset
     # reached the hot lane, which is exactly what the SQL does.
     subject.page(authorization="Bearer valid",
-                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"])))
+                 cursor=subject._cursor("frozen-1", exhausted, int(frozen["expires_at"]),
+                                        response_number=2))
     stored = store.frozen["frozen-1"]["bindings"]["corpus_cursor"]
     assert set(stored) >= {"before_published_at", "before_story_id"}
     if "hot" in stored:
@@ -803,7 +1075,8 @@ def test_the_hot_lane_continuation_sends_a_whole_keyset_or_none():
     # And a second continuation resumes from it without raising.
     frozen = store.frozen["frozen-1"]
     subject.page(authorization="Bearer valid",
-                 cursor=subject._cursor("frozen-1", len(frozen["cards"]), int(frozen["expires_at"])))
+                 cursor=subject._cursor("frozen-1", len(frozen["cards"]), int(frozen["expires_at"]),
+                                        response_number=3))
 
 
 def test_a_half_written_hot_cursor_is_ignored_rather_than_sent():
@@ -847,14 +1120,14 @@ def test_two_hundred_rows_over_two_days_with_no_profile_fill_the_page():
 def test_a_capped_order_ends_the_run_instead_of_repeating_the_last_page():
     store = PaidStore(events=liked_events())
     subject = paid(store)
-    first = rank(subject, store)
+    rank(subject, store)
     frozen = store.frozen["frozen-1"]
     # The store refuses to grow the order any further, exactly as the RPC does
     # when the card cap is reached.
     store.extend_frozen_order = lambda **kwargs: len(store.frozen["frozen-1"]["cards"])
     response = subject.page(authorization="Bearer valid",
                             cursor=subject._cursor("frozen-1", len(frozen["cards"]),
-                                                   int(frozen["expires_at"])))
+                                                   int(frozen["expires_at"]), response_number=2))
     assert response["cards"] == [], "a capped order served the same stories again"
     assert response["next_cursor"] is None
     assert response.get("end_of_run") is True, "the end of a run must be said, not implied"
@@ -863,7 +1136,7 @@ def test_a_capped_order_ends_the_run_instead_of_repeating_the_last_page():
 def test_a_failed_extend_degrades_rather_than_five_hundreds():
     store = PaidStore(events=liked_events())
     subject = paid(store)
-    first = rank(subject, store)
+    rank(subject, store)
     frozen = store.frozen["frozen-1"]
 
     def explode(**kwargs):
@@ -872,7 +1145,7 @@ def test_a_failed_extend_degrades_rather_than_five_hundreds():
     store.extend_frozen_order = explode
     response = subject.page(authorization="Bearer valid",
                             cursor=subject._cursor("frozen-1", len(frozen["cards"]),
-                                                   int(frozen["expires_at"])))
+                                                   int(frozen["expires_at"]), response_number=2))
     assert response["cards"] == [] and response.get("end_of_run") is True
 
 
@@ -889,7 +1162,8 @@ def test_the_filter_is_recorded_even_after_the_run_has_closed():
     # The run closed between the page being served and the filter being written.
     store.runs[0]["closed_at"] = NOW.isoformat()
     subject.page(authorization="Bearer valid",
-                 cursor=subject._cursor("frozen-1", 0, int(store.frozen["frozen-1"]["expires_at"])))
+                 cursor=subject._cursor("frozen-1", 0,
+                     int(store.frozen["frozen-1"]["expires_at"]), response_number=1))
     assert store.filtered.get("run-1"), "a closed run still owns the page it served"
 
 
@@ -930,7 +1204,8 @@ def test_a_continuation_still_returns_hot_stories_the_lane_had_left():
     frozen = store.frozen["frozen-1"]
     assert frozen["bindings"]["corpus_has_more"] is True, "the fixture must leave a continuation to make"
     subject.page(authorization="Bearer valid",
-                 cursor=subject._cursor("frozen-1", len(frozen["cards"]), int(frozen["expires_at"])))
+                 cursor=subject._cursor("frozen-1", len(frozen["cards"]), int(frozen["expires_at"]),
+                                        response_number=2))
     stored = store.frozen["frozen-1"]["bindings"]["corpus_cursor"]
     assert store.extensions, "the continuation did not run, so this proves nothing"
     if "hot" in stored:
@@ -1000,10 +1275,164 @@ def test_load_more_stops_at_the_configured_page_and_says_the_run_is_over():
     assert store.reservations == [], "the tail of a run bought a provider call"
 
 
+def test_short_exclusive_pages_cannot_bypass_the_response_budget():
+    """A one-source exclusive corpus produces short diversity-limited pages.
+
+    The cursor offset can advance by fewer than page_size cards, so deriving the
+    budget from offset // page_size served dozens of readable responses under a
+    four-response policy. Count non-empty responses instead.
+    """
+    rows = exclusive_corpus(100)
+    for row in rows:
+        row["source_id"] = "one-exclusive-source"
+        row["source_name"] = "One Exclusive Source"
+    store = PaidStore(events=liked_events(), exclusive=rows)
+    subject = paid(store, exclusive_category="only-other-language-press")
+    policy = load_composition_policy(POLICY_PATH)
+    response = rank(subject, store,
+        eligibility={"category": "only-other-language-press", "query": None})
+    nonempty = 1 if response["cards"] else 0
+    cursor = response["next_cursor"]
+    attempts = 0
+    while cursor and attempts < 100:
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        attempts += 1
+        if response["cards"]:
+            nonempty += 1
+        cursor = response.get("next_cursor")
+    assert nonempty == policy.max_pages_per_run
+    assert response.get("end_of_run") is True
+    assert attempts < 100, "the bounded continuation never terminated"
+
+
+def test_concurrent_valid_cursors_share_one_atomic_response_slot():
+    """Two signed cursors racing at count three may serve only one response."""
+    class AtomicPageStore(PaidStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.page_lock = threading.Lock()
+            self.load_barrier = None
+
+        def reserve_run_response(self, **kwargs):
+            with self.page_lock:
+                return super().reserve_run_response(**kwargs)
+
+        def load_frozen_order(self, **kwargs):
+            value = copy.deepcopy(super().load_frozen_order(**kwargs))
+            if self.load_barrier is not None:
+                self.load_barrier.wait(timeout=5)
+            return value
+
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = AtomicPageStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    cursor_page_two = first["next_cursor"]
+    second = subject.page(authorization="Bearer valid", cursor=cursor_page_two)
+    third = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
+    cursor_page_four = third["next_cursor"]
+    assert store.frozen["frozen-1"]["bindings"]["responses_served"] == 3
+
+    store.load_barrier = threading.Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(
+            lambda cursor: subject.page(authorization="Bearer valid", cursor=cursor),
+            (cursor_page_two, cursor_page_four)))
+    assert sum(bool(response["cards"]) for response in responses) == 1
+    assert store.views[next(iter(store.views))]["pages_served"] == 4
+
+
+def test_concurrent_end_cursors_append_one_continuation_batch():
+    class ContinuationRaceStore(PaidStore):
+        claim_barrier = None
+
+        def claim_run_ranking(self, **kwargs):
+            result = super().claim_run_ranking(**kwargs)
+            if self.claim_barrier is not None:
+                self.claim_barrier.wait(timeout=5)
+            return result
+
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = ContinuationRaceStore(rows, events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    cursor = subject._cursor("frozen-1", len(frozen["cards"]),
+        int(frozen["expires_at"]), response_number=2)
+    store.claim_barrier = threading.Barrier(2)
+
+    def turn_page():
+        try:
+            return subject.page(authorization="Bearer valid", cursor=cursor)
+        except RankingInProgressError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _value: turn_page(), range(2)))
+
+    assert sum(result is not None for result in results) == 1
+    ids = [card["story_id"] for card in store.frozen["frozen-1"]["cards"]]
+    assert len(ids) == len(set(ids)), "concurrent continuation appended a duplicate batch"
+
+
+def test_waiting_continuation_reloads_after_the_mutation_lock():
+    class SequentialLockStore(PaidStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.load_lock = threading.Lock()
+            self.load_barrier = None
+            self.initial_loads = 0
+            self.continuation_claims = 0
+
+        def load_frozen_order(self, **kwargs):
+            value = copy.deepcopy(super().load_frozen_order(**kwargs))
+            if self.load_barrier is not None:
+                with self.load_lock:
+                    self.initial_loads += 1
+                    wait = self.initial_loads <= 2
+                if wait:
+                    self.load_barrier.wait(timeout=5)
+            return value
+
+        def claim_run_ranking(self, **kwargs):
+            if self.load_barrier is not None:
+                with self.load_lock:
+                    self.continuation_claims += 1
+                    claim_number = self.continuation_claims
+                if claim_number == 2:
+                    import time
+                    time.sleep(0.05)
+            return super().claim_run_ranking(**kwargs)
+
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = SequentialLockStore(rows, events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    cursor = subject._cursor("frozen-1", len(frozen["cards"]),
+        int(frozen["expires_at"]), response_number=2)
+    store.load_barrier = threading.Barrier(2)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(
+            lambda _value: subject.page(authorization="Bearer valid", cursor=cursor),
+            range(2)))
+
+    assert all(response["cards"] for response in responses)
+    assert [card["story_id"] for card in responses[0]["cards"]] == \
+        [card["story_id"] for card in responses[1]["cards"]]
+    ids = [card["story_id"] for card in store.frozen["frozen-1"]["cards"]]
+    assert len(ids) == len(set(ids))
+    assert store.extensions.count(50) == 1
+
+
 def test_the_lane_counts_account_for_every_card_on_the_page():
     store = PaidStore(events=[])
     subject = paid(store)
-    response = rank(subject, store)
+    rank(subject, store)
     counts = store.frozen["frozen-1"]["bindings"]["lane_counts"]
     assert "more" in counts, "a page that counts 25 while reporting four lanes is hiding cards"
     served = [card for card in store.frozen["frozen-1"]["cards"]]
@@ -1028,6 +1457,261 @@ def test_a_refresh_inside_a_run_returns_the_ranking_it_already_paid_for():
     assert len(store.frozen) == 1, "a refresh wrote a second frozen order"
     assert len(store.reservations) == 1, "a refresh reserved provider budget again"
     assert subject._adapter.calls == 1, "a refresh bought a second provider call"
+
+
+def test_a_refresh_after_page_two_resumes_at_page_three():
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+
+    refreshed = rank(subject, store)
+    decoded = subject._decode_cursor(refreshed["next_cursor"])
+    assert decoded["offset"] == 50 and decoded["response_number"] == 3
+    third = subject.page(authorization="Bearer valid", cursor=refreshed["next_cursor"])
+    assert third["cards"]
+    assert [card["story_id"] for card in third["cards"]] != \
+        [card["story_id"] for card in second["cards"]]
+
+
+def test_refresh_never_combines_a_stale_view_count_with_a_newer_offset():
+    """A page-three commit between the refresh's view and order reads used to
+    mint ordinal three at offset 75.  That counted page four as a replay and
+    served five unique responses under a four-response cap."""
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    page_three_cursor = second["next_cursor"]
+    original_load = store.load_frozen_order
+    armed = {"value": True}
+
+    def interleaved_load(**kwargs):
+        snapshot = copy.deepcopy(original_load(**kwargs))
+        if armed["value"]:
+            armed["value"] = False
+            hidden_third = subject.page(authorization="Bearer valid", cursor=page_three_cursor)
+            assert hidden_third["cards"]
+        return snapshot
+
+    store.load_frozen_order = interleaved_load
+    refreshed = rank(subject, store)
+    store.load_frozen_order = original_load
+    decoded = subject._decode_cursor(refreshed["next_cursor"])
+    assert decoded["offset"] == 75 and decoded["response_number"] == 4
+    fourth = subject.page(authorization="Bearer valid", cursor=refreshed["next_cursor"])
+    assert fourth["cards"]
+    ended = subject.page(authorization="Bearer valid", cursor=fourth["next_cursor"])
+    assert ended["cards"] == [] and ended.get("end_of_run") is True
+    assert next(iter(store.views.values()))["pages_served"] == 4
+
+
+def test_a_filtered_empty_refresh_preserves_the_views_response_high_water_mark():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    prototype = frozen["cards"][0]
+    frozen["cards"] = [
+        {**prototype, "story_id": f"story:{index:064x}",
+         "source_id": "blocked" if index < 50 else f"safe-{index}",
+         "category_ids": ["blocked"] if index < 50 else ["safe"]}
+        for index in range(150)
+    ]
+    frozen["bindings"]["corpus_has_more"] = False
+    store.events.append({"event_id": "dislike", "event_type": "less_like_this",
+        "event_revision": 9, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": "story:" + "0" * 64, "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": "blocked"})
+
+    refreshed = rank(subject, store)
+    assert refreshed["cards"] == [] and refreshed["next_cursor"]
+    assert subject._decode_cursor(refreshed["next_cursor"])["response_number"] == 2
+
+    response = refreshed
+    for expected in (2, 3, 4):
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        assert response["cards"]
+        assert store.views[next(iter(store.views))]["pages_served"] == expected
+    assert response["next_cursor"]
+    ended = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+    assert ended["cards"] == [] and ended.get("end_of_run") is True
+    assert store.views[next(iter(store.views))]["pages_served"] == 4
+
+
+def test_an_expired_order_cannot_reset_the_same_runs_response_budget():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    now = [CLOCK]
+    subject._clock = lambda: now[0]
+    first = rank(subject, store)
+    assert first["cards"]
+    assert next(iter(store.views.values()))["pages_served"] == 1
+    now[0] += subject._policy.cursor_ttl_seconds + 1
+
+    after = rank(subject, store)
+
+    assert after.get("end_of_run") is True
+    assert after["cards"] == []
+    assert subject._adapter.calls == 1
+    assert len(store.reservations) == 1
+
+
+def test_an_expired_empty_paid_order_cannot_buy_a_second_ranking():
+    store = PaidStore(events=liked_events())
+    store.owner_states = lambda _token, story_ids: {
+        story_id: {"read_at": NOW.isoformat()} for story_id in story_ids
+    }
+    subject = paid(store)
+    now = [CLOCK]
+    subject._clock = lambda: now[0]
+
+    first = rank(subject, store)
+    assert first["cards"] == []
+    assert next(iter(store.views.values()))["pages_served"] == 0
+    assert subject._adapter.calls == 1 and len(store.reservations) == 1
+    now[0] += subject._policy.cursor_ttl_seconds + 1
+
+    after = rank(subject, store)
+
+    assert after.get("end_of_run") is True and after["cards"] == []
+    assert subject._adapter.calls == 1
+    assert len(store.reservations) == 1
+
+
+def test_a_deleted_stale_order_may_rank_again_inside_the_open_run():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    original = store.history_snapshot
+    store.frozen.clear()
+    store.load_frozen_order = lambda **kwargs: store.frozen.get(kwargs["frozen_order_id"])
+    store.history_snapshot = lambda token: {
+        **original(token), "history_generation": 2, "events": [],
+        "included_history_revision": 0, "history_revision": 0,
+    }
+
+    second = rank(subject, store, history_generation=2, history_revision=0,
+                  server_commit_revision=0)
+
+    assert second["cards"]
+    assert second["request_id"] != first["request_id"]
+    assert subject._adapter.calls == 2 and len(store.reservations) == 2
+    assert store.frozen["frozen-2"]["bindings"]["profile_snapshot"]["event_count"] == 0
+    assert len(store.views) == 2, "the new privacy epoch reused the old view budget"
+
+
+def test_an_epoch_replacement_profile_is_frozen_across_later_views():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    original = store.history_snapshot
+    store.frozen.clear()
+    state = {"events": [], "revision": 0}
+
+    def current(token):
+        return {**original(token), "history_generation": 2,
+            "events": list(state["events"]),
+            "included_history_revision": state["revision"],
+            "history_revision": state["revision"]}
+
+    store.history_snapshot = current
+    replacement = rank(subject, store, history_generation=2,
+                       history_revision=0, server_commit_revision=0)
+    assert replacement["cards"]
+    assert store.runs[-1]["profile_snapshot"]["event_count"] == 0
+
+    state["events"] = [{"event_id": "later", "event_type": "save", "event_revision": 1,
+        "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": "story:" + "f" * 64, "topic_id": "later", "saved": True},
+        "story_title": "Later", "story_summary": "", "source_id": "later-source"}]
+    state["revision"] = 1
+    later_view = rank(subject, store, history_generation=2,
+        history_revision=1, server_commit_revision=1,
+        eligibility={"category": "later", "query": None})
+    assert later_view["cards"]
+    assert store.frozen["frozen-3"]["bindings"]["profile_snapshot"]["event_count"] == 0
+
+
+def test_a_legacy_page_two_cursor_is_rejected_after_atomic_cutover():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    key = next(iter(store.views))
+    store.views[key]["pages_served"] = 0
+    legacy = subject._cursor("frozen-1", 25, int(frozen["expires_at"]))
+
+    with pytest.raises(StaleRankingError, match="cursor_version"):
+        subject.page(authorization="Bearer valid", cursor=legacy)
+
+    assert store.views[key]["pages_served"] == 0
+
+
+def test_response_progress_is_persisted_atomically_with_the_page_budget():
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    replay = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    third = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
+
+    assert second["cards"] and replay["cards"] and third["cards"]
+    assert [card["story_id"] for card in replay["cards"]] == \
+        [card["story_id"] for card in second["cards"]]
+    assert next(iter(store.views.values()))["pages_served"] == 3
+
+
+def test_an_initial_page_recording_failure_repairs_from_the_bound_order():
+    class FirstPageFailureStore(PaidStore):
+        fail_page_once = True
+
+        def reserve_run_response(self, **kwargs):
+            if self.fail_page_once:
+                self.fail_page_once = False
+                raise RuntimeError("transient page record")
+            return super().reserve_run_response(**kwargs)
+
+    store = FirstPageFailureStore(events=liked_events())
+    subject = paid(store)
+    with pytest.raises(RuntimeError, match="page_budget_unavailable"):
+        rank(subject, store)
+
+    recovered = rank(subject, store)
+    second = subject.page(authorization="Bearer valid", cursor=recovered["next_cursor"])
+
+    assert recovered["cards"] and second["cards"]
+    assert subject._adapter.calls == 1 and len(store.reservations) == 1
+    assert next(iter(store.views.values()))["pages_served"] == 2
+
+
+def test_a_transient_page_reservation_failure_remains_retryable():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    original = store.reserve_run_response
+
+    def unavailable(**kwargs):
+        if kwargs["response_number"] == 2:
+            raise RuntimeError("temporary database outage")
+        return original(**kwargs)
+
+    store.reserve_run_response = unavailable
+    with pytest.raises(RuntimeError, match="page_budget_unavailable"):
+        subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    assert next(iter(store.views.values()))["pages_served"] == 1
+
+    store.reserve_run_response = original
+    retried = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    assert retried["cards"] and retried.get("end_of_run") is not True
+    assert next(iter(store.views.values()))["pages_served"] == 2
 
 
 def test_a_policy_deploy_never_reuses_the_old_policys_frozen_view():
@@ -1077,18 +1761,21 @@ def test_request_page_size_does_not_buy_a_second_ranking_for_one_view():
 def test_a_legacy_cursor_cannot_spend_the_new_deploys_page_budget():
     store = PaidStore(events=liked_events())
     old = paid(store, effective_policy_digest="a" * 64)
-    old_page = rank(old, store)
+    rank(old, store)
     # Simulate an order stored before exact eligibility keys were persisted.
     store.frozen["frozen-1"]["bindings"].pop("eligibility_key")
 
     current = paid(store, effective_policy_digest="b" * 64)
     new_page = rank(current, store)
     current_key = current._eligibility_key(None, None, False)
-    assert store.views[("run-1", current_key)]["pages_served"] == 0
+    assert store.views[("run-1", current_key)]["pages_served"] == 1
 
-    current.page(authorization="Bearer valid", cursor=old_page["next_cursor"])
+    legacy = current._cursor("frozen-1", 25,
+        int(store.frozen["frozen-1"]["expires_at"]))
+    with pytest.raises(StaleRankingError, match="cursor_version"):
+        current.page(authorization="Bearer valid", cursor=legacy)
 
-    assert store.views[("run-1", current_key)]["pages_served"] == 0
+    assert store.views[("run-1", current_key)]["pages_served"] == 1
     assert current.page(authorization="Bearer valid", cursor=new_page["next_cursor"])["cards"]
 
 
@@ -1124,6 +1811,10 @@ def test_a_scoped_staleness_change_still_buys_exactly_one_new_ranking():
     # A history reset is the kind of change that makes a stored order wrong.
     original = store.history_snapshot
     store.history_snapshot = lambda token: {**original(token), "history_generation": 2}
+    # Production clears reading runs on a history-generation reset. Reproduce
+    # that trigger boundary rather than reusing an impossible stale run view.
+    store.runs.clear()
+    store.views.clear()
     second = rank(subject, store, history_generation=2)
     assert second["request_id"] != first["request_id"], "a real staleness change must re-rank"
     assert subject._adapter.calls == 2 and len(store.reservations) == 2
@@ -1166,7 +1857,8 @@ def test_an_expired_claim_is_taken_over_rather_than_waited_out():
     store = PaidStore(events=liked_events())
     subject = paid(store)
     # A request that died mid-flight: the claim is held and the run has no order.
-    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1,
+        "_history_generation": 1, "_consent_revision": 1}, "created": False})
     key = subject._eligibility_key(None, None, False)
     store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
                                    "claim_token": "dead-request", "claim_expired": True}
@@ -1178,7 +1870,8 @@ def test_an_expired_claim_is_taken_over_rather_than_waited_out():
 def test_a_held_claim_with_no_order_yet_is_reported_as_in_progress():
     store = PaidStore(events=liked_events())
     subject = paid(store)
-    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1,
+        "_history_generation": 1, "_consent_revision": 1}, "created": False})
     key = subject._eligibility_key(None, None, False)
     store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
                                    "claim_token": "someone-else", "claim_expired": False}
@@ -1276,7 +1969,8 @@ def test_a_takeover_before_the_reserve_costs_the_loser_nothing():
     store = PaidStore(events=liked_events())
     subject = paid(store)
     key = subject._eligibility_key(None, None, False)
-    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1,
+        "_history_generation": 1, "_consent_revision": 1}, "created": False})
     store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
                                    "claim_token": None, "claim_expired": False}
 
@@ -1309,6 +2003,7 @@ def test_a_takeover_after_the_reserve_serves_the_other_order_and_releases():
     # A second request that holds a claim which is about to be taken from it.
     store.views[("run-1", key)]["claim_token"] = None
     store.views[("run-1", key)]["frozen_order_id"] = None
+    store.views[("run-1", key)]["pages_served"] = 0
     second = paid(store)
     original_bind = store.bind_run_frozen_order
 
@@ -1364,7 +2059,8 @@ def test_ranking_in_progress_when_the_winner_has_not_bound_yet():
     store = PaidStore(events=liked_events())
     subject = paid(store)
     key = subject._eligibility_key(None, None, False)
-    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1,
+        "_history_generation": 1, "_consent_revision": 1}, "created": False})
     store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
                                    "claim_token": None, "claim_expired": False}
     original_bind = store.bind_run_frozen_order
@@ -1392,7 +2088,8 @@ def test_a_lost_claim_and_an_exhausted_budget_are_logged_apart(capsys):
     store = PaidStore(events=liked_events())
     subject = paid(store)
     key = subject._eligibility_key(None, None, False)
-    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1}, "created": False})
+    store.runs.append({"run_id": "run-1", "profile_snapshot": {"schema_version": 1,
+        "_history_generation": 1, "_consent_revision": 1}, "created": False})
     store.views[("run-1", key)] = {"frozen_order_id": None, "pages_served": 0,
                                    "claim_token": None, "claim_expired": False}
 

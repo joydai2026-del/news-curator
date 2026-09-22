@@ -19,7 +19,10 @@ class Session:
 
 
 class ValidAuth:
-    def valid_session(self):
+    last_leeway = None
+
+    def valid_session(self, *, leeway=30):
+        type(self).last_leeway = leeway
         return Session()
 
 
@@ -46,7 +49,11 @@ def owner_auth(monkeypatch):
 def test_history_writes_owner_only_file_and_no_payload_to_stdout(tmp_path, monkeypatch, capsys):
     transport = Transport([(200, {"history_revision": 3})])
     monkeypatch.setattr(m2_cli, "_auth_config", config)
-    monkeypatch.setattr(m2_cli, "_session", lambda value, email: Session())
+    monkeypatch.setattr(
+        m2_cli,
+        "_session",
+        lambda value, email, *, minimum_validity: Session(),
+    )
     monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: transport)
     output = tmp_path / "receipt.json"
 
@@ -57,6 +64,31 @@ def test_history_writes_owner_only_file_and_no_payload_to_stdout(tmp_path, monke
     assert json.loads(output.read_text()) == {"history_revision": 3}
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert transport.calls[0][1].endswith("/rest/v1/rpc/m2_history_snapshot")
+    assert transport.calls[0][4] == 15
+
+
+def test_rank_and_page_defaults_cover_the_deployed_transport_window():
+    assert m2_cli._command_timeout("rank", None) == 310
+    assert m2_cli._command_timeout("page", None) == 310
+    assert m2_cli._command_timeout("history", None) == 15
+    assert m2_cli._command_timeout("rank", 42) == 42
+    with pytest.raises(ValueError, match="timeout is invalid"):
+        m2_cli._command_timeout("rank", 601)
+
+
+def test_session_refresh_window_covers_the_complete_command_timeout(monkeypatch):
+    monkeypatch.setattr(m2_cli, "MacOSKeychainStorage", lambda *, account: object())
+    monkeypatch.setattr(m2_cli, "AgentAuth", lambda config, storage: ValidAuth())
+
+    rank_window = m2_cli._session_minimum_validity("rank", 310)
+    page_window = m2_cli._session_minimum_validity("page", 310)
+    rpc_window = m2_cli._session_minimum_validity("history", 15)
+    m2_cli._session(config(), None, minimum_validity=rank_window)
+
+    assert rank_window == 650
+    assert page_window == 340
+    assert rpc_window == 45
+    assert ValidAuth.last_leeway == 650
 
 
 def test_invalid_output_preflight_makes_no_remote_request(tmp_path, monkeypatch):
@@ -64,7 +96,11 @@ def test_invalid_output_preflight_makes_no_remote_request(tmp_path, monkeypatch)
     output.write_text("existing")
     called = []
     monkeypatch.setattr(m2_cli, "_auth_config", lambda: called.append("config") or config())
-    monkeypatch.setattr(m2_cli, "_session", lambda value, email: called.append("session") or Session())
+    monkeypatch.setattr(
+        m2_cli,
+        "_session",
+        lambda value, email, *, minimum_validity: called.append("session") or Session(),
+    )
 
     assert m2_cli.main(["history", "--output", str(output)]) == 1
     assert called == []
@@ -116,7 +152,11 @@ def test_export_continuation_uses_exact_structured_rpc_body(tmp_path):
 
 def test_failures_do_not_create_output_or_emit_private_data(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(m2_cli, "_auth_config", config)
-    monkeypatch.setattr(m2_cli, "_session", lambda value, email: (_ for _ in ()).throw(m2_cli.AuthError("secret")))
+    monkeypatch.setattr(
+        m2_cli,
+        "_session",
+        lambda value, email, *, minimum_validity: (_ for _ in ()).throw(m2_cli.AuthError("secret")),
+    )
     output = tmp_path / "receipt.json"
 
     assert m2_cli.main(["history", "--output", str(output)]) == 1

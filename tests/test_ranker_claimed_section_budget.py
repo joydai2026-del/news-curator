@@ -24,8 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from curator.recommendation.composition import CompositionPolicyError, parse_composition_policy
 from curator.recommendation.service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+from curator.recommendation.runtime import claimed_transport_call_budget
 
-from test_m2_phase2_service import PaidStore, liked_events, paid, rank
+from test_m2_phase2_service import PaidStore, exclusive_corpus, liked_events, paid, rank
 
 CLAIM_METHOD = "claim_run_ranking"
 
@@ -59,13 +60,24 @@ class CountingStore(PaidStore):
 
 
 def _longest_path_calls(capsys):
-    """One /rank down the longest claimed path, paid, with the exclusive lane on."""
+    """The longer of the general paid path and the bounded exclusive scan."""
     store = CountingStore(events=liked_events())
     store.exclusive = list(store.rows[:5])
     subject = paid(store, exclusive_category="only-other-language-press", promote=5)
     result = rank(subject, store)
     assert result["result_mode"] == "model", "the paid path must actually be reached"
-    return store.claimed_calls
+    general = list(store.claimed_calls)
+
+    rows = exclusive_corpus(1151)
+    for row in rows[:1100]:
+        row["title_translations"] = {}
+        row["summary_translations"] = {}
+    exclusive_store = CountingStore(events=liked_events(), exclusive=rows)
+    exclusive_subject = paid(exclusive_store, exclusive_category="only-other-language-press")
+    result = rank(exclusive_subject, exclusive_store,
+                  eligibility={"category": "only-other-language-press", "query": None})
+    assert result["result_mode"] == "model"
+    return max((general, list(exclusive_store.claimed_calls)), key=len)
 
 
 def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
@@ -96,8 +108,16 @@ def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
 def test_the_claim_covers_the_measured_section_at_the_shipped_values():
     """The shipped numbers satisfy the rule they are validated by."""
     calls = CLAIMED_SECTION_MAX_TRANSPORT_CALLS
-    deadline, settle, timeout, margin, claim = 6, 5, 5, 10, 110
+    deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 160
     assert claim > deadline + settle + calls * timeout + margin
+
+
+def test_lowering_exclusive_scan_never_under_sizes_the_general_paid_path():
+    policy = {"exclusive_scan_max_batches": 1,
+              "exclusive_continuation_max_batches": 1}
+    assert claimed_transport_call_budget(policy) == CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+    policy["exclusive_scan_max_batches"] = 20
+    assert claimed_transport_call_budget(policy) == 30
 
 
 def _document(**overrides):

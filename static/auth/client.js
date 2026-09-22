@@ -430,7 +430,8 @@
     }
   }
 
-  async function sessionForRequest(authConfig, currentSession, fetchImpl, nowSeconds = Date.now() / 1000) {
+  async function sessionForRequest(authConfig, currentSession, fetchImpl,
+                                   nowSeconds = Date.now() / 1000, minimumValiditySeconds = 0) {
     let session;
     try {
       session = validateSessionShape(currentSession);
@@ -438,7 +439,9 @@
       sessionStorage.removeItem(SESSION_KEY);
       fail("The saved session was invalid.");
     }
-    return session.expires_at > nowSeconds
+    if (!Number.isSafeInteger(minimumValiditySeconds) || minimumValiditySeconds < 0 ||
+        minimumValiditySeconds > 3600) fail("The session validity window was invalid.");
+    return session.expires_at > nowSeconds + minimumValiditySeconds
       ? session
       : refreshSession(authConfig, session, fetchImpl, nowSeconds);
   }
@@ -452,12 +455,16 @@
       return false;
     }
   }
-  async function readerSessionForRequest(fetchImpl = fetch, nowSeconds = Date.now() / 1000) {
+  async function readerSessionForRequest(fetchImpl = fetch, nowSeconds = Date.now() / 1000,
+                                         minimumValiditySeconds = 0) {
     if (!sessionStorage.getItem(SESSION_KEY)) return null;
     const candidate = loadSessionCandidate();
-    if (candidate.expires_at > nowSeconds) return candidate;
+    if (!Number.isSafeInteger(minimumValiditySeconds) || minimumValiditySeconds < 0 ||
+        minimumValiditySeconds > 3600) fail("The session validity window was invalid.");
+    if (candidate.expires_at > nowSeconds + minimumValiditySeconds) return candidate;
     if (!readerRefreshInFlight) {
-      readerRefreshInFlight = sessionForRequest(config(), candidate, fetchImpl, nowSeconds)
+      readerRefreshInFlight = sessionForRequest(
+        config(), candidate, fetchImpl, nowSeconds, minimumValiditySeconds)
         .finally(() => { readerRefreshInFlight = null; });
     }
     return readerRefreshInFlight;
