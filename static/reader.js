@@ -1664,7 +1664,7 @@
               JSON.stringify(m2Eligibility()) !== key || latest.history_generation !== history.history_generation ||
               latest.consent_revision !== history.consent_revision || latest.learning_enabled !== history.learning_enabled ||
               latest.provider_processing_enabled !== history.provider_processing_enabled ||
-              latest.provider_policy_id !== history.provider_policy_id || response.result_mode !== "model") {
+              latest.provider_policy_id !== history.provider_policy_id) {
             terminalFallback(); return;
           }
         }
