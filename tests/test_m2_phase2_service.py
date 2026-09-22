@@ -18,6 +18,7 @@ import pytest
 from dataclasses import replace
 
 from curator.recommendation.composition import load_composition_policy
+from curator.recommendation.profile import BehaviorProfile
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.service import (
     ProviderConsentRequiredError,
@@ -1190,6 +1191,65 @@ def test_exact_four_page_corpus_does_not_skip_overfetch_tail():
     assert response["next_cursor"] is None
 
 
+@pytest.mark.parametrize("excluded_head", [28, 100])
+def test_excluded_head_still_refills_four_pages_from_older_corpus(excluded_head):
+    rows = [corpus_row(index, hours=1 + index, source=f"excluded-{index}",
+                       categories=[f"topic-{index}"])
+            for index in range(excluded_head + 122)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    excluded = {row["story_id"] for row in rows[:excluded_head]}
+
+    response = rank(subject, store, exclude_story_ids=sorted(excluded))
+    pages = []
+    served = []
+    while True:
+        page_ids = [card["story_id"] for card in response["cards"]]
+        if page_ids:
+            pages.append(len(page_ids))
+            served.extend(page_ids)
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    assert pages == [25, 25, 25, 25]
+    assert len(served) == len(set(served)) == 100
+    assert not (set(served) & excluded)
+    assert subject._adapter.calls == 1
+
+
+def test_post_rank_less_like_feedback_refills_four_pages_from_older_corpus():
+    rows = [corpus_row(index, hours=1 + index, source=f"feedback-{index}",
+                       categories=[f"feedback-topic-{index}"])
+            for index in range(150)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    response = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    blocked = frozen["cards"][25:50] + frozen["bindings"]["pending_candidates"][:3]
+    assert len(blocked) == 28
+    for index, card in enumerate(blocked):
+        store.events.append({"event_id": f"post-rank-feedback-{index}",
+            "event_type": "less_like_this", "event_revision": 10 + index,
+            "occurred_at": NOW.isoformat(),
+            "payload": {"story_id": card["story_id"], "surface": "reader"},
+            "story_title": "", "story_summary": "", "source_id": card["source_id"]})
+
+    pages = [len(response["cards"])]
+    served = [card["story_id"] for card in response["cards"]]
+    while response["next_cursor"]:
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        if response["cards"]:
+            pages.append(len(response["cards"]))
+            served.extend(card["story_id"] for card in response["cards"])
+
+    assert pages == [25, 25, 25, 25]
+    assert len(served) == len(set(served)) == 100
+    assert not ({card["story_id"] for card in blocked} & set(served))
+    assert subject._adapter.calls == 1
+
+
 @pytest.mark.parametrize(("count", "expected_pages"), [
     (51, [25, 25, 1]),
     (60, [25, 25, 10]),
@@ -1767,6 +1827,41 @@ def test_the_hot_cursor_is_never_built_from_a_general_pool_row():
     assert cursor["hot"]["before_story_id"] == hot["story_id"]
     # The general cursor still resumes from the oldest row of the whole pool.
     assert cursor["before_story_id"] == general["story_id"]
+
+
+def test_general_cursor_stays_on_general_keyset_when_hot_lane_reaches_older():
+    subject = paid(PaidStore(events=liked_events()))
+    general = {"story_id": "story:" + "a" * 64,
+               "published_at": "2026-09-18T02:00:00+00:00",
+               "independent_source_count": 1}
+    hot = {"story_id": "story:" + "b" * 64,
+           "published_at": "2026-09-18T01:00:00+00:00",
+           "independent_source_count": 3}
+    cursor = subject._next_corpus_cursor(
+        [general, hot], {hot["story_id"]},
+        general_boundary=(general["published_at"], general["story_id"]))
+    assert cursor["before_story_id"] == general["story_id"]
+    assert cursor["hot"]["before_story_id"] == hot["story_id"]
+
+
+def test_general_scan_reports_saturation_independently_of_candidate_limit():
+    rows = [corpus_row(index, hours=1 + index, source=f"scan-{index}",
+                       categories=[f"scan-topic-{index}"])
+            for index in range(150)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    composition = subject._policy.composition
+    profile = BehaviorProfile()
+    first, _, boundary, more = subject._pool_rows(
+        None, None, profile, composition, None, None)
+    assert len(first) == 75 and more
+    assert boundary[1] == rows[74]["story_id"]
+    second, _, boundary, more = subject._pool_rows(
+        None, None, profile, composition, *boundary)
+    assert len(second) == 75 and more  # Exact end permits one safe empty probe.
+    third, _, _, more = subject._pool_rows(
+        None, None, profile, composition, *boundary)
+    assert third == [] and not more
 
 
 def test_no_hot_rows_means_no_hot_cursor_at_all():
