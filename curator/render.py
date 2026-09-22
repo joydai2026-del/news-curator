@@ -442,7 +442,12 @@ JS = """
       var lane=e.el.closest('[data-discovery-selected-lane]');
       var laneMatch=!lane||e.el.dataset.discoveryLane===lane.dataset.discoverySelectedLane;
       var remote=e.el.dataset.m2Card==='true';
-      var on=belongs&&laneMatch&&(remote?e.el.dataset.m2Query===q:(!q||e.text.indexOf(q)>=0));
+      // The ranker owns membership for M2 responses. It may deliberately put
+      // a surprise story outside the locally selected category in that result.
+      // Bind the response to its requested tab so an older result is not shown
+      // under a newly selected tab while the replacement request is in flight.
+      var remoteBelongs=remote&&e.el.dataset.m2Topic===tab;
+      var on=(remote?remoteBelongs:belongs)&&laneMatch&&(remote?e.el.dataset.m2Query===q:(!q||e.text.indexOf(q)>=0));
       e.el.hidden=!on;
       if(on){
         // CSS order does the per-tab reordering. One DOM node per story, exact

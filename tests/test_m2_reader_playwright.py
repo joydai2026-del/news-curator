@@ -95,7 +95,7 @@ def asgi_request(app, request):
         return executor.submit(lambda: asyncio.run(dispatch())).result(timeout=10)
 
 
-def _drive_the_reader(tmp_path, *, include_the_tail):
+def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surprise=False):
     """The whole reader drive. `include_the_tail` selects everything from the
     saved-navigation step onward, which is the part issue #48 breaks."""
     artifact_dir = Path(os.environ.get('NEWS_CURATOR_QA_OUTPUT_DIR', str(tmp_path)))
@@ -124,6 +124,7 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
     app=RankingASGI(service=service,reader_origin=READER)
     requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}
     cursor_mode={'reject_once':False,'rejections':0}
+    surprise_mode={'remaining':1 if inject_server_selected_surprise else 0}
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
         requests.append(parsed.path)
@@ -143,6 +144,16 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
                 return route.fulfill(status=409,content_type='application/json',
                     body=json.dumps({'error':'cursor_version'}))
             status,payload=asgi_request(app,request)
+            # M2 is the source of truth for a ranked response.  A category
+            # request may deliberately include a server-selected surprise
+            # story that does not carry the locally selected category.
+            selected=(body.get('eligibility') or {}).get('category')
+            if parsed.path=='/rank' and status==200 and selected and surprise_mode['remaining']:
+                response=json.loads(payload)
+                if response['cards']:
+                    response['cards'][0]['category_ids']=[next(c for c in categories if c!=selected)]
+                    payload=json.dumps(response).encode()
+                    surprise_mode['remaining']-=1
             return route.fulfill(status=status,content_type='application/json',body=payload)
         if request.url.startswith(DATABASE):
             name=parsed.path.rsplit('/',1)[-1]
@@ -405,7 +416,18 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
             page.locator('#q').fill('')
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             category=categories[0]
-            page.locator(f'.mobiletopics .chip[data-topic-id="{category}"]').click()
+            if inject_server_selected_surprise:
+                page.evaluate('window.__stallM2=true;window.__stallM2Delay=500')
+                with page.expect_response(lambda response:urlsplit(response.url).path=='/rank'):
+                    page.locator(f'.mobiletopics .chip[data-topic-id="{category}"]').click()
+                    page.locator('#m2-language-toggle').click()
+                    page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]:not([hidden])").length===0')
+                page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+                page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25 && document.querySelectorAll("[data-m2-card=true]:not([hidden])").length===25')
+                assert page.locator(f'[data-m2-card=true]:not([data-topic-api-ids~="{category}"])').count()==1
+                return
+            with page.expect_response(lambda response:urlsplit(response.url).path=='/rank'):
+                page.locator(f'.mobiletopics .chip[data-topic-id="{category}"]').click()
             page.wait_for_function('(category)=>document.querySelectorAll("[data-m2-card=true]").length>0 && Array.from(document.querySelectorAll("[data-m2-card=true]")).every(c=>c.dataset.topicApiIds.split(" ").includes(category))',arg=category)
             assert store.rank_reads[-1][0]==category
             card=page.locator('[data-m2-card=true]').first
@@ -568,6 +590,11 @@ def test_real_capture_reader_dispatch_actions_search_and_epochs(tmp_path):
     selection, less-like-this, the owner export including the oversized refusal
     and the clear-history race, and the delayed-model-result deadlines."""
     _drive_the_reader(tmp_path, include_the_tail=False)
+
+
+def test_m2_category_displays_server_selected_surprise_story(tmp_path):
+    """A ranked category response owns its full membership, including surprise."""
+    _drive_the_reader(tmp_path, include_the_tail=False, inject_server_selected_surprise=True)
 
 
 # The ONE expected failure this suite carries, and the CI guard names exactly
