@@ -334,8 +334,9 @@ class RankingService:
                 excluded_story_ids=excluded_set,
                 max_batches=self._policy.exclusive_scan_max_batches)
         elif composition is not None:
-            rows, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
-                                                  before_published, before_story)
+            rows, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
+                category_id, query, profile, composition, before_published, before_story,
+                excluded_story_ids=excluded_set)
             # Capped promotion: a few stories only the other language's press
             # carried get to compete for a place in All, on merit. They do NOT
             # get extra slots; they enter the same pool and take their own
@@ -356,6 +357,7 @@ class RankingService:
         filtered = ([row for row in rows if row.get("story_id") not in excluded_set]
                     if not exclusive else rows)
         has_more = (exclusive_has_more if exclusive else
+                    general_has_more if composition is not None else
                     len(filtered) > self._policy.candidate_limit)
         has_more = has_more or len(filtered) > self._policy.candidate_limit
         rows = filtered[:self._policy.candidate_limit]
@@ -380,7 +382,8 @@ class RankingService:
                                    {"before_published_at": before_published,
                                     "before_story_id": before_story})
             elif has_more and filtered:
-                next_corpus = self._next_corpus_cursor(filtered, hot_story_ids)
+                next_corpus = self._next_corpus_cursor(
+                    rows, hot_story_ids, general_boundary=general_boundary)
         elif has_more and rows:
             boundary = rows[-1]
             next_corpus = {"before_published_at": boundary["published_at"],
@@ -810,15 +813,15 @@ class RankingService:
                 fetched, hot_story_ids = [], set()
                 pooled, cursor_rows, fetched_more = pending, [], False
             else:
-                fetched, hot_story_ids = self._pool_rows(
+                fetched, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                     category_id, query, profile, composition,
                     cursor.get("before_published_at"), cursor.get("before_story_id"),
-                    self._hot_cursor(cursor))
+                    self._hot_cursor(cursor), excluded_story_ids=seen | original_exclusions)
                 known = {str(row.get("story_id")) for row in pending}
                 pooled = pending + [row for row in fetched
                                     if str(row.get("story_id")) not in known]
                 cursor_rows = fetched
-                fetched_more = len(fetched) > self._policy.candidate_limit
+                fetched_more = general_has_more
             used_pending = bool(pending)
         event_groups = dict(bindings.get("event_group_ids") or {})
         eligible_rows = [row for row in pooled
@@ -868,13 +871,17 @@ class RankingService:
             next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
             remaining_pending = []
         elif used_pending:
-            next_corpus = (self._next_corpus_cursor(cursor_rows, hot_story_ids)
+            next_corpus = (self._next_corpus_cursor(
+                cursor_rows, hot_story_ids, general_boundary=general_boundary)
                            if cursor_rows else dict(cursor))
             if "hot" not in next_corpus and isinstance(cursor.get("hot"), Mapping):
                 next_corpus["hot"] = dict(cursor["hot"])
             remaining_pending = deferred_pending
         else:
-            next_corpus = self._next_corpus_cursor(cursor_rows, hot_story_ids)
+            next_corpus = self._next_corpus_cursor(
+                cursor_rows, hot_story_ids, general_boundary=general_boundary)
+            if "hot" not in next_corpus and isinstance(cursor.get("hot"), Mapping):
+                next_corpus["hot"] = dict(cursor["hot"])
             remaining_pending = deferred_pending
         remaining_pending_ids = {str(row.get("story_id")) for row in remaining_pending}
         remaining_pending_exclusive_ids = sorted(
@@ -1135,7 +1142,7 @@ class RankingService:
         return exclusive_ids
 
     @staticmethod
-    def _next_corpus_cursor(rows, hot_story_ids=()):
+    def _next_corpus_cursor(rows, hot_story_ids=(), *, general_boundary=None):
         """Where the next continuation resumes, carrying BOTH orderings.
 
         The general lanes resume from the oldest row read. The hot lane resumes
@@ -1148,7 +1155,11 @@ class RankingService:
         if not rows:
             return {}
         oldest = min(rows, key=lambda item: (str(item["published_at"]), str(item["story_id"])))
-        cursor = {"before_published_at": oldest["published_at"], "before_story_id": oldest["story_id"]}
+        # A hot/interested lane may have fetched an older row than the general
+        # keyset. Only the general query's own last row is its safe boundary.
+        general = (general_boundary if general_boundary and all(general_boundary)
+                   else (oldest["published_at"], oldest["story_id"]))
+        cursor = {"before_published_at": general[0], "before_story_id": general[1]}
         hot = [row for row in rows
                if str(row.get("story_id")) in set(hot_story_ids)
                and isinstance(row.get("independent_source_count"), int)
@@ -1168,8 +1179,10 @@ class RankingService:
         The frozen array itself is never mutated, so the HMAC-signed cursor stays
         valid and an offset minted before the filter still resolves to the same
         position. A filtered slice is topped up by walking further into the same
-        array, bounded by one extra page of look-ahead, and the reported next
-        offset is the position actually reached.
+        array, and the reported next offset is the position actually reached.
+        An empty first look-ahead stays bounded so its response ordinal can be
+        retried safely. Once some cards are ready, scanning the rest of the
+        already-bounded frozen array avoids spending an ordinal on a short page.
         """
         composition = self._policy.composition
         if composition is None:
@@ -1185,8 +1198,10 @@ class RankingService:
                 and not any(boundary < offset + size for boundary in boundaries)):
             return cards[offset:offset + size], offset + size, []
         visible, removed, position = [], [], offset
-        limit = min(len(cards), offset + size * 2)
-        while position < limit and len(visible) < size:
+        first_limit = min(len(cards), offset + size * 2)
+        while position < len(cards) and len(visible) < size:
+            if position >= first_limit and not visible:
+                break
             card = cards[position]
             stitched = any(boundary <= position for boundary in boundaries)
             position += 1
@@ -1750,10 +1765,11 @@ class RankingService:
         return rendered
 
     def _pool_rows(self, category_id, query, profile, composition, before_published, before_story,
-                   hot_cursor=None):
+                   hot_cursor=None, *, excluded_story_ids=()):
         """Ask the corpus for each lane, then merge.
 
-        Returns ``(rows, hot_story_ids)``. The provenance matters: the hot lane
+        Returns ``(rows, hot_story_ids, general_boundary, general_has_more)``.
+        The provenance matters: the hot lane
         pages on its own sort key, so its cursor may only ever be built from rows
         THE HOT LANE RETURNED. The general pool carries every story, count-1 ones
         included, and letting one of those become the hot boundary makes the SQL
@@ -1773,25 +1789,37 @@ class RankingService:
         # last few hours alone and the page comes back short with hundreds of
         # candidates unread. Python assigns the lanes; this just makes sure the
         # recipe has a corpus to work from.
-        for row in self._store.retained_candidates_v2(
+        # The SQL RPC caps each batch at 100. A head full of excluded stories
+        # must not consume the whole fetch budget and hide older eligible rows.
+        # Walk its own keyset until the window plus one page is usable or the
+        # corpus ends. The exclusion count is bounded by ServicePolicy.
+        excluded = set(excluded_story_ids)
+        target = composition.candidate_window_size + composition.page_size
+        eligible_general = 0
+        general_boundary = (before_published, before_story)
+        general_has_more = False
+        while eligible_general < target:
+            limit = min(100, target - eligible_general + len(excluded))
+            batch = self._store.retained_candidates_v2(
                 category_id=category_id, query=query, lane=None,
                 profile_categories=(), profile_sources=(),
                 trend_window_hours=composition.trend_window_hours,
                 trend_min_sources=composition.trend_min_independent_sources,
                 max_age_hours=None, min_age_hours=None,
-                # Deliberately WIDER than the window. The window now fills every
-                # page the run promises, so a pool the same size as the window
-                # would always be consumed whole and "load more" would never have
-                # older news to reach for.
-                # Always one page wider than the window, never clamped: the
-                # config validator refuses a window that cannot be served this
-                # way, rather than letting "wider" silently become "the same".
-                limit=composition.candidate_window_size + composition.page_size,
-                before_published_at=before_published, before_story_id=before_story,
-                before_source_count=None):
-            story_id = row.get("story_id")
-            if isinstance(story_id, str):
-                merged.setdefault(story_id, row)
+                limit=limit, before_published_at=general_boundary[0],
+                before_story_id=general_boundary[1], before_source_count=None)
+            for row in batch:
+                story_id = row.get("story_id")
+                if isinstance(story_id, str):
+                    merged.setdefault(story_id, row)
+                    eligible_general += story_id not in excluded
+            if batch:
+                general_boundary = (batch[-1]["published_at"], batch[-1]["story_id"])
+            # A full batch might have more rows behind it. An exact-end batch
+            # permits one harmless empty continuation instead of losing news.
+            general_has_more = len(batch) == limit
+            if len(batch) < limit:
+                break
         hot_story_ids: set[str] = set()
         for lane in composition.lane_priority:
             if lane in ("interested", "surprise") and not (categories or sources):
@@ -1834,7 +1862,7 @@ class RankingService:
                 if lane == "hot":
                     hot_story_ids.add(story_id)
                 merged.setdefault(story_id, row)
-        return list(merged.values()), hot_story_ids
+        return list(merged.values()), hot_story_ids, general_boundary, general_has_more
 
     def _card(self, row, owner_state, *, lane=None, composition=None, exclusive=False, also_covered_by=()):
         language = str(row["language"])
