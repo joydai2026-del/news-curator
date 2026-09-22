@@ -1006,7 +1006,7 @@
       m2 = createM2Service(m2Config, (minimumValiditySeconds = 0) =>
         auth.sessionForRequest(undefined, undefined, minimumValiditySeconds));
     } catch (_) { announce("Personalized feed configuration is unavailable. Public stories remain available."); }
-    let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null;
+    let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null, m2Topic = null;
     let m2Section = null, m2PublicCards = [], m2Position = 0, m2Entries = [];
     const LANGUAGE_STORAGE_KEY = "news-curator-display-language";
     const configuredLanguage = document.querySelector('meta[name="news-curator-display-language"]')?.content;
@@ -1304,7 +1304,7 @@
     }
     function leaveM2(invalidate = true) {
       if (invalidate) m2Sequence += 1;
-      m2Cursor = null; m2Binding = null; m2Key = null;
+      m2Cursor = null; m2Binding = null; m2Key = null; m2Topic = null;
       clearTimeout(m2SearchTimer);
       if (m2Active) {
         clearM2Cards();
@@ -1454,6 +1454,7 @@
         const row = displayRow(entry, reason);
         const card = createStoryCard(row, selectedTopic(), topicSlugForId, topicIdForSlug(selectedTopic()));
         card.dataset.m2Card = "true"; card.dataset.m2Position = String(++m2Position);
+        card.dataset.m2Topic = m2Topic;
         // The view filter hides any remote card whose m2Query differs from the
         // live search box. Omitting it here blanked the page on every toggle.
         card.dataset.m2Query = (searchBox?.value.trim() || "").toLowerCase();
@@ -1474,7 +1475,7 @@
         if (pending?.pendingRead) card.newsCuratorPendingReadIntent = pending.pendingRead;
         if (pending?.interest) card.newsCuratorInterestMutation = pending.interest;
         restorePendingMutations(card);
-        cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
+        cards.set(entry.story_id, card); hydratedTopics(card).add(m2Topic);
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });
       applyExclusiveSectionTitle();
@@ -1503,7 +1504,7 @@
       rerenderM2Cards();
       announce(strings().toggleLabel);
     }
-    function applyM2Page(response, append, eligibility) {
+    function applyM2Page(response, append, eligibility, responseTopic) {
       const currentEntries = new Map(m2Entries.map((entry) => [entry.story_id, entry]));
       const sameHistoryContext = Boolean(m2Binding &&
         m2Binding.history_generation === response.history_generation &&
@@ -1522,6 +1523,7 @@
         });
       }
       if (!append) clearM2Cards();
+      m2Topic = responseTopic;
       if (!m2Section) {
         m2Section = element("section", "topic-section"); m2Section.dataset.section = "__m2__";
         m2Section.append(element("div", "grid")); document.getElementById("sections").append(m2Section);
@@ -1534,6 +1536,7 @@
         const row = displayRow(entry, reason);
         const card = createStoryCard(row, selectedTopic(), topicSlugForId, topicIdForSlug(selectedTopic()));
         card.dataset.m2Card = "true"; card.dataset.m2Position = String(++m2Position);
+        card.dataset.m2Topic = m2Topic;
         card.dataset.m2Query = (eligibility.query || "").toLowerCase();
         const interest = card.querySelector(".interest-action");
         if (interest) {
@@ -1544,7 +1547,7 @@
         markUntranslated(card, row);
         markElementLabels(card, row);
         markAlsoCovered(card, row);
-        cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
+        cards.set(entry.story_id, card); hydratedTopics(card).add(m2Topic);
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });
       m2Cursor = response.next_cursor; m2Binding = response;
@@ -1665,7 +1668,7 @@
             terminalFallback(); return;
           }
         }
-        applyM2Page(response, Boolean(canContinue), eligibility); m2Key = key;
+        applyM2Page(response, Boolean(canContinue), eligibility, pageRequest.topic); m2Key = key;
         if (response.end_of_run) {
           // Not a failure and not an empty page: she has read the whole run.
           const mode = document.getElementById("m2-mode");
