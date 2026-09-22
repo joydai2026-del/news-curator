@@ -25,7 +25,7 @@ from curator.contracts.ranking_request import (
 
 from .composition import BACKFILL_LANE, CompositionPolicy
 from .diagnostics import log_suppressed_exception
-from .finalize import finalize_order
+from .finalize import _duplicate_keys, finalize_order
 from .profile import BehaviorProfile, build_profile
 from .rankllm_adapter import BudgetState, RankLLMAdapter
 from .recipe import LanedCandidate, build_window, lane_window_quotas
@@ -476,6 +476,18 @@ class RankingService:
         else:
             by_id = {str(row["story_id"]): self._card(row, owner_states.get(str(row["story_id"]), {})) for row in rows}
             cards = [by_id[story_id] for story_id in receipt.ranked_candidate_ids]
+        pending_candidates = self._pending_after_finalization(
+            filtered, ordered, finalization,
+            {str(card.get("story_id")) for card in cards}, composition
+        ) if composition is not None and finalization is not None else []
+        pending_ids = {str(row.get("story_id")) for row in pending_candidates}
+        pending_exclusive_story_ids = sorted(pending_ids & exclusive_ids)
+        if pending_candidates and not exclusive:
+            has_more = True
+            if not next_corpus:
+                # A short corpus has no older database keyset, but its bounded
+                # unserved tail is still a complete continuation recipe.
+                next_corpus = {"pending_only": True}
         expires_at = int(self._clock()) + self._policy.cursor_ttl_seconds
         bindings = self._bindings(receipt)
         if latest.get("history_revision") != snapshot.get("history_revision"):
@@ -514,9 +526,15 @@ class RankingService:
             # offset zero so the first continuation that finds cards is not
             # mistaken for a free replay and must reserve response slot one.
             "responses_served": 1 if cards else 0,
+            # Unlike last_served_next_offset, this does not move when later
+            # responses are reserved. An old first-page cursor may replay only
+            # within its originally served range.
+            "initial_response_next_offset": min(page_size, len(cards)) if cards else None,
             "last_served_offset": 0 if cards else -1,
             "last_served_next_offset": min(page_size, len(cards)) if cards else 0,
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
+            "pending_candidates": pending_candidates,
+            "pending_exclusive_story_ids": pending_exclusive_story_ids,
             "corpus_start": dict(corpus_cursor), "excluded_story_ids": list(excluded_set),
             "execution": {**observed_usage, "settled_cost_usd": settled_cost,
                 "attempts_started": attempts_started,
@@ -721,7 +739,19 @@ class RankingService:
             next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset,
                                        int(frozen["expires_at"]),
                                        response_number=next_response_number)
-        if visible and composition is not None:
+        # The original first slice may replay, even after later pages. An
+        # initially empty order has no such range until its first reservation.
+        # Feedback can make an offset-zero cursor scan into new cards; that
+        # must not bypass the response reservation.
+        bindings = frozen.get("bindings", {})
+        served_responses = bindings.get("responses_served")
+        first_end = bindings.get("initial_response_next_offset")
+        first_response_replay = (response_number == 1 and offset == 0
+                                 and ((type(first_end) is int and first_end == next_offset)
+                                      or (first_end is None and served_responses == 1
+                                          and bindings.get("last_served_offset") == 0
+                                          and bindings.get("last_served_next_offset") == next_offset)))
+        if visible and composition is not None and not first_response_replay:
             if (not run_id or not isinstance(eligibility_key, str)
                     or re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is None
                     or self._reserve_response_slot(
@@ -749,7 +779,7 @@ class RankingService:
         composition = self._policy.composition
         bindings = frozen.get("bindings", {})
         cursor = bindings.get("corpus_cursor") or {}
-        if composition is None or not isinstance(cursor, Mapping) or not cursor:
+        if composition is None or not isinstance(cursor, Mapping):
             return (), False
         eligibility = bindings.get("eligibility") or {}
         category_id = eligibility.get("category") if isinstance(eligibility, Mapping) else None
@@ -759,6 +789,11 @@ class RankingService:
         original_exclusions = {str(story_id) for story_id in
                                (bindings.get("excluded_story_ids") or ())}
         exclusive = self._is_exclusive_category(category_id)
+        pending = self._load_pending_candidates(bindings, composition)
+        pending_exclusive_story_ids = self._load_pending_exclusive_story_ids(
+            bindings, pending, composition)
+        if not cursor and (exclusive or not pending):
+            return (), False
         if exclusive:
             pooled, cursor_rows, fetched_more = self._exclusive_display_rows(
                 query=query, before_published=cursor.get("before_published_at"),
@@ -767,30 +802,49 @@ class RankingService:
                 excluded_story_ids=seen | original_exclusions,
                 max_batches=self._policy.exclusive_continuation_max_batches)
             hot_story_ids: set[str] = set()
+            used_pending = False
         else:
-            pooled, hot_story_ids = self._pool_rows(category_id, query, profile, composition,
-                                                    cursor.get("before_published_at"),
-                                                    cursor.get("before_story_id"),
-                                                    self._hot_cursor(cursor))
-            cursor_rows = pooled
-            fetched_more = len(pooled) > self._policy.candidate_limit
-        rows = [row for row in pooled
-                if str(row.get("story_id")) not in (seen | original_exclusions)]
-        if not exclusive and not rows:
-            return (), False
+            pending_only = bool(pending) and (
+                not cursor or cursor.get("pending_only") is True)
+            if pending_only:
+                fetched, hot_story_ids = [], set()
+                pooled, cursor_rows, fetched_more = pending, [], False
+            else:
+                fetched, hot_story_ids = self._pool_rows(
+                    category_id, query, profile, composition,
+                    cursor.get("before_published_at"), cursor.get("before_story_id"),
+                    self._hot_cursor(cursor))
+                known = {str(row.get("story_id")) for row in pending}
+                pooled = pending + [row for row in fetched
+                                    if str(row.get("story_id")) not in known]
+                cursor_rows = fetched
+                fetched_more = len(fetched) > self._policy.candidate_limit
+            used_pending = bool(pending)
+        event_groups = dict(bindings.get("event_group_ids") or {})
+        eligible_rows = [row for row in pooled
+                         if str(row.get("story_id")) not in (seen | original_exclusions)]
+        rows = self._exclude_frozen_duplicates(
+            eligible_rows, frozen.get("cards", ()), event_groups)
+        retained_ids = {str(row.get("story_id")) for row in rows}
+        semantic_drop_ids = {str(row.get("story_id")) for row in eligible_rows
+                             if str(row.get("story_id")) not in retained_ids}
         laned = build_window(rows, profile=profile, policy=composition, now=self._now(),
                              size=composition.candidate_window_size) if rows else ()
-        if not exclusive and not laned:
-            return (), False
+        if laned and not exclusive and pending_exclusive_story_ids:
+            prefix_promotions = sum(
+                1 for card in page_prefix if card.get("exclusive_label"))
+            laned = self._cap_promotions(
+                laned, pending_exclusive_story_ids,
+                max(0, composition.exclusive_promote_to_all_max - prefix_promotions))
         owner_states = self._store.owner_states(token, [item.story_id for item in laned]) if laned else {}
         finalization = finalize_order(laned, policy=composition, owner_states=owner_states,
             page_size=min(size, composition.page_size), pages=composition.max_pages_per_run,
             profile=profile) if laned else None
         added = [self._card(item.row, owner_states.get(item.story_id, {}), lane=item.lane,
-                            composition=composition, exclusive=exclusive,
+                            composition=composition,
+                            exclusive=exclusive or item.story_id in pending_exclusive_story_ids,
                             also_covered_by=finalization.also_covered_by.get(item.story_id, ()))
                  for item in (finalization.cards if finalization else ())]
-        event_groups = dict(bindings.get("event_group_ids") or {})
         for item in (finalization.cards if finalization else ()):
             group = item.row.get("event_group_id")
             if isinstance(group, str) and group:
@@ -800,14 +854,35 @@ class RankingService:
             page_prefix=page_prefix)
         if event_groups:
             bindings["event_group_ids"] = event_groups
+        if finalization is not None:
+            deferred_pending = self._pending_after_finalization(
+                rows, laned, finalization,
+                {str(card.get("story_id")) for card in added}, composition)
+        else:
+            deferred_pending = self._pending_candidates(
+                rows, {str(card.get("story_id")) for card in added}, composition)
         if exclusive:
             safe_rows = self._exclusive_safe_cursor_rows(
                 cursor_rows, {item.story_id for item in laned},
-                seen | original_exclusions)
+                seen | original_exclusions | semantic_drop_ids)
             next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
+            remaining_pending = []
+        elif used_pending:
+            next_corpus = (self._next_corpus_cursor(cursor_rows, hot_story_ids)
+                           if cursor_rows else dict(cursor))
+            if "hot" not in next_corpus and isinstance(cursor.get("hot"), Mapping):
+                next_corpus["hot"] = dict(cursor["hot"])
+            remaining_pending = deferred_pending
         else:
             next_corpus = self._next_corpus_cursor(cursor_rows, hot_story_ids)
-        more = fetched_more or len(rows) > len(added)
+            remaining_pending = deferred_pending
+        remaining_pending_ids = {str(row.get("story_id")) for row in remaining_pending}
+        remaining_pending_exclusive_ids = sorted(
+            remaining_pending_ids & pending_exclusive_story_ids)
+        if exclusive:
+            more = fetched_more or len(rows) > len(added)
+        else:
+            more = fetched_more or bool(remaining_pending)
         previous_total = len(frozen.get("cards", ()))
         continuation_offsets = list(bindings.get("continuation_offsets") or ())
         if added and previous_total not in continuation_offsets:
@@ -816,6 +891,8 @@ class RankingService:
         continuation_bindings = {
             "corpus_cursor": next_corpus,
             "corpus_has_more": more,
+            "pending_candidates": remaining_pending,
+            "pending_exclusive_story_ids": remaining_pending_exclusive_ids,
             "continuation_mode": "recipe_only",
         }
         if event_groups:
@@ -938,6 +1015,124 @@ class RankingService:
         if not isinstance(count, int) or isinstance(count, bool) or not published or not story:
             return None
         return (published, story, count)
+
+    @staticmethod
+    def _pending_candidate_limit(composition):
+        """Policy-derived ceiling for unserved rows held by one reading run."""
+        quotas = lane_window_quotas(composition, composition.candidate_window_size)
+        fetched_per_round = composition.candidate_window_size + composition.page_size
+        fetched_per_round += sum(
+            RankingService._lane_fetch_limit(quotas[lane]) for lane in composition.lane_priority)
+        promotion_cap = composition.exclusive_promote_to_all_max
+        fetched_per_round += max(promotion_cap * 4, promotion_cap)
+        unserved_per_round = max(0, fetched_per_round - composition.candidate_window_size)
+        return unserved_per_round * composition.max_pages_per_run
+
+    @staticmethod
+    def _lane_fetch_limit(quota):
+        return min(100, max(quota * 3, 10))
+
+    @classmethod
+    def _pending_candidates(cls, rows, served_ids, composition):
+        """Bounded fetched rows that a frozen order has not served yet.
+
+        The corpus cursor advances past the whole over-fetch. Keeping its
+        unserved tail on the same frozen order prevents those rows from falling
+        behind that cursor while preserving stable signed offsets.
+        """
+        pending = []
+        seen = set()
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            story_id = row.get("story_id")
+            if not isinstance(story_id, str) or story_id in served_ids or story_id in seen:
+                continue
+            pending.append(dict(row))
+            seen.add(story_id)
+        if len(pending) > cls._pending_candidate_limit(composition):
+            raise RuntimeError("pending_candidate_limit_exceeded")
+        return pending
+
+    @classmethod
+    def _pending_after_finalization(cls, rows, offered, finalization, served_ids,
+                                    composition):
+        """Keep deferred rows without resurrecting a finalizer hard drop."""
+        offered_ids = {item.story_id for item in offered}
+        remaining_ids = {item.story_id for item in finalization.remaining}
+        eligible = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            story_id = str(row.get("story_id"))
+            if story_id not in offered_ids or story_id in remaining_ids:
+                eligible.append(row)
+        return cls._pending_candidates(eligible, served_ids, composition)
+
+    @staticmethod
+    def _semantic_duplicate_keys(row, event_group=None):
+        canonical = dict(row)
+        if not canonical.get("canonical_url") and canonical.get("url"):
+            canonical["canonical_url"] = canonical["url"]
+        if event_group:
+            canonical["event_group_id"] = event_group
+        candidate = LanedCandidate(
+            story_id=str(canonical.get("story_id", "")), lane=BACKFILL_LANE,
+            lane_score=0.0, row=canonical)
+        return _duplicate_keys(candidate)
+
+    @classmethod
+    def _exclude_frozen_duplicates(cls, rows, frozen_cards, event_groups):
+        """Drop only candidates duplicating an already frozen card.
+
+        Duplicates within ``rows`` still reach the finalizer together, where
+        their multi-outlet coverage is attached to the surviving card.
+        """
+        frozen_keys = set()
+        groups = event_groups if isinstance(event_groups, Mapping) else {}
+        for card in frozen_cards:
+            if not isinstance(card, Mapping):
+                continue
+            frozen_keys.update(cls._semantic_duplicate_keys(
+                card, groups.get(str(card.get("story_id")))))
+        return [row for row in rows if isinstance(row, Mapping)
+                and frozen_keys.isdisjoint(cls._semantic_duplicate_keys(row))]
+
+    @classmethod
+    def _load_pending_candidates(cls, bindings, composition):
+        raw = bindings.get("pending_candidates", ()) if isinstance(bindings, Mapping) else ()
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            raise RuntimeError("invalid_pending_candidates")
+        if len(raw) > cls._pending_candidate_limit(composition):
+            raise RuntimeError("invalid_pending_candidates")
+        pending = []
+        seen = set()
+        for row in raw:
+            if not isinstance(row, Mapping):
+                raise RuntimeError("invalid_pending_candidates")
+            story_id = row.get("story_id")
+            if not isinstance(story_id, str) or story_id in seen:
+                raise RuntimeError("invalid_pending_candidates")
+            pending.append(dict(row))
+            seen.add(story_id)
+        return pending
+
+    @classmethod
+    def _load_pending_exclusive_story_ids(cls, bindings, pending, composition):
+        raw = (bindings.get("pending_exclusive_story_ids", ())
+               if isinstance(bindings, Mapping) else ())
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            raise RuntimeError("invalid_pending_exclusive_story_ids")
+        if len(raw) > cls._pending_candidate_limit(composition):
+            raise RuntimeError("invalid_pending_exclusive_story_ids")
+        pending_ids = {str(row.get("story_id")) for row in pending}
+        exclusive_ids = set()
+        for story_id in raw:
+            if (not isinstance(story_id, str) or story_id in exclusive_ids
+                    or story_id not in pending_ids):
+                raise RuntimeError("invalid_pending_exclusive_story_ids")
+            exclusive_ids.add(story_id)
+        return exclusive_ids
 
     @staticmethod
     def _next_corpus_cursor(rows, hot_story_ids=()):
@@ -1605,7 +1800,7 @@ class RankingService:
                 continue
             # Over-fetch so caps and spacing have something to choose from, and
             # so a lane whose head is all one source is not silently short.
-            limit = min(100, max(quotas[lane] * 3, 10))
+            limit = self._lane_fetch_limit(quotas[lane])
             # The hot lane orders by independent source count first, so it pages
             # on the WHOLE sort key or on none of it. Half a keyset is refused by
             # the SQL, and sending one is how the first "load more" past a frozen
