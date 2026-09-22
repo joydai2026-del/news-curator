@@ -13,11 +13,11 @@ from __future__ import annotations
 import re
 
 FUNCTION_TIMEOUT_ENV = "NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS"
-# 180, not 15. The provider request deadline alone is 25s and the complete
-# request may spend another 145s on Supabase round trips and settlement, so a 15s container was
-# killing POST /rank mid-call and returning 500 where the service had a typed
-# 200 fallback ready. The maximum stays below Modal's own web-endpoint ceiling.
-FUNCTION_TIMEOUT_DEFAULT = 180
+# The shipped request budget is 180s including retries for both owner-state
+# reads on a continuation. 181 is the smallest integer strictly above it;
+# deploy host and runtime both honor FUNCTION_TIMEOUT_ENV for larger budgets.
+# The maximum stays below Modal's own web-endpoint ceiling.
+FUNCTION_TIMEOUT_DEFAULT = 181
 FUNCTION_TIMEOUT_MINIMUM = 7
 FUNCTION_TIMEOUT_MAXIMUM = 300
 

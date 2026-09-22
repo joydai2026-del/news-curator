@@ -97,10 +97,10 @@ def test_remote_handlers_import_without_deployment_environment(monkeypatch):
 def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(monkeypatch, tmp_path):
     _, captured = _load(monkeypatch, **_required(tmp_path))
     assert captured["app_name"] == "news-curator-m2-ranker"
-    # 180: the container must outlive the service's own worst case (provider
-    # deadline + settle window + every request Supabase call = 170s),
+    # 181: the container must outlive the service's own worst case (provider
+    # deadline + settle window + request calls and state retries = 180s),
     # which curator.recommendation.runtime refuses to boot without.
-    assert captured["functions"][0]["timeout"] == 180
+    assert captured["functions"][0]["timeout"] == 181
     assert captured["functions"][0]["max_containers"] == 4
     assert captured["functions"][0]["scaledown_window"] == 60
     assert captured["functions"][0]["enable_memory_snapshot"] is True
