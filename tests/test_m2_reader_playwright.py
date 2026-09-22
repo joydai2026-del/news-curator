@@ -163,6 +163,16 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
                 event=store.event({**body,'p_payload':{'story_id':sid,**({'saved':body['p_saved']} if body['p_event_type']=='save' else {}),'surface':'reader'}})
                 payload={'status':'updated','revision':current['state_revision'],'read_at':current['read_at'],
                          'saved_at':current['saved_at'],'behavior_event':event}
+            elif name=='set_story_state':
+                sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]
+                if current['state_revision'] != body['p_expected_revision']:
+                    payload={'status':'conflict','revision':current['state_revision']}
+                else:
+                    current.update(read_at=capture['generated_at'] if body['p_read'] else None,
+                        saved_at=capture['generated_at'] if body['p_saved'] else None,state_revision=current['state_revision']+1)
+                    store.states[sid]=current
+                    payload={'status':'updated','revision':current['state_revision'],
+                             'read_at':current['read_at'],'saved_at':current['saved_at']}
             elif name=='set_story_interest_with_event':
                 sid=body['p_story_id']; current=store.owner_states('',[sid])[sid]
                 signal=body['p_signal']; revision=body['p_expected_revision']+1
@@ -218,6 +228,12 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
                 return new Promise((resolve,reject)=>{window.__releaseExport=()=>originalFetch(url,options).then(resolve,reject);});
               if(window.__stallHistory && String(url).endsWith("/m2_history_snapshot"))
                 return new Promise((resolve,reject)=>setTimeout(()=>originalFetch(url,options).then(resolve,reject),400));
+              if(window.__stallState && (String(url).endsWith("/set_story_state_with_event") ||
+                  String(url).endsWith("/set_story_state")))
+                return new Promise((resolve,reject)=>{
+                  window.__stateReleases=window.__stateReleases||[];
+                  window.__stateReleases.push(()=>originalFetch(url,options).then(resolve,reject));
+                });
               return window.__stallM2 && String(url).startsWith("https://ranker.example")
                 ?new Promise((resolve,reject)=>{
                     const timer=setTimeout(()=>originalFetch(url,options).then(async(response)=>{
@@ -238,6 +254,65 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
             page.goto(READER,wait_until='networkidle')
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
             assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
+            race_card = page.locator('[data-m2-card=true]').nth(1)
+            race_story_id = race_card.get_attribute('data-story-id')
+            second_race_card = page.locator('[data-m2-card=true]').nth(2)
+            second_race_story_id = second_race_card.get_attribute('data-story-id')
+            page.evaluate('''() => {
+                window.__stallM2=true;window.__stallM2Delay=1000;window.__stallState=true;window.__stateReleases=[];
+                const cards=document.querySelectorAll('[data-m2-card=true]');window.__raceCards=[cards[1],cards[2]];
+            }''')
+            with page.expect_request(lambda request: urlsplit(request.url).path == '/rank'):
+                page.evaluate('document.querySelector("#m2-refresh").click()')
+            race_card.locator('.accordion-toggle').click()
+            second_race_card.locator('.accordion-toggle').click()
+            page.wait_for_function('() => window.__stateReleases?.length===1')
+            page.wait_for_timeout(1100)
+            page.evaluate('window.__stateReleases[0]()')
+            page.wait_for_function('() => window.__stateReleases?.length===2')
+            page.wait_for_timeout(100)
+            page.evaluate('window.__stallState=false;window.__stateReleases[1]()')
+            page.wait_for_function('([first,second]) => [first,second].every(storyId => { const card=document.querySelector(`[data-m2-card=true][data-story-id="${storyId}"]`); return card?.dataset.stateRevision==="1" && card.classList.contains("is-read"); })', arg=[race_story_id, second_race_story_id])
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
+            # A synchronous language rerender must carry the in-flight guard to
+            # the replacement card. Otherwise a second stale-revision save can
+            # start while the original RPC is still pending.
+            toggle_story_id = race_story_id
+            toggle_card = page.locator(f'[data-m2-card=true][data-story-id="{toggle_story_id}"]')
+            toggle_card.locator('.accordion-toggle').click()
+            page.evaluate('window.__stallState=true;window.__stateReleases=[]')
+            toggle_card.locator('.save-action').click()
+            page.wait_for_function('() => window.__stateReleases?.length===1')
+            page.locator('#m2-language-toggle').click()
+            replacement = page.locator(f'[data-m2-card=true][data-story-id="{toggle_story_id}"]')
+            assert replacement.locator('.save-action').is_disabled()
+            replacement.locator('.save-action').evaluate('(button) => button.click()')
+            page.wait_for_timeout(100)
+            assert page.evaluate('window.__stateReleases.length') == 1
+            page.evaluate('window.__stallState=false;window.__stateReleases[0]()')
+            page.wait_for_function('(storyId) => { const card=document.querySelector(`[data-m2-card=true][data-story-id="${storyId}"]`); return Number(card?.dataset.stateRevision)>=2 && card.classList.contains("is-saved") && !card.querySelector(".save-action").disabled; }', arg=toggle_story_id)
+            replacement.locator('.accordion-toggle').click()
+            replacement.locator('.save-action').click()
+            page.wait_for_function('(storyId) => { const card=document.querySelector(`[data-m2-card=true][data-story-id="${storyId}"]`); return Number(card?.dataset.stateRevision)>=3 && !card.classList.contains("is-saved"); }', arg=toggle_story_id)
+            # A replacement can arrive with a newer cross-tab revision while a
+            # direct mark-unread CAS is stalled. If that CAS conflicts, rollback
+            # must keep the newer server baseline instead of restoring revision N.
+            page.evaluate('''(storyId) => {
+                window.__stallM2=true;window.__stallM2Delay=500;window.__stallState=true;window.__stateReleases=[];
+                document.querySelector("#m2-refresh").click();
+                document.querySelector(`[data-m2-card=true][data-story-id="${storyId}"] .read-action`).click();
+            }''', toggle_story_id)
+            page.wait_for_function('() => window.__stateReleases?.length===1')
+            authoritative = copy.deepcopy(store.states[toggle_story_id])
+            authoritative.update(read_at=capture['generated_at'], state_revision=authoritative['state_revision']+1)
+            store.states[toggle_story_id] = authoritative
+            authoritative_revision = authoritative['state_revision']
+            page.wait_for_function('(args) => Number(document.querySelector(`[data-m2-card=true][data-story-id="${args.storyId}"]`)?.dataset.stateRevision)===args.revision',
+                arg={'storyId': toggle_story_id, 'revision': authoritative_revision})
+            page.evaluate('window.__stallState=false;window.__stateReleases[0]()')
+            page.wait_for_function('(args) => { const card=document.querySelector(`[data-m2-card=true][data-story-id="${args.storyId}"]`); return Number(card?.dataset.stateRevision)===args.revision && card.classList.contains("is-read") && document.querySelector("#reader-status").textContent.includes("could not be saved"); }',
+                arg={'storyId': toggle_story_id, 'revision': authoritative_revision})
+            page.evaluate('window.__stallM2=false;window.__stallM2Delay=0')
             assert page.locator('#discovery-controls').is_hidden()
             assert page.locator('.edition-meta').is_hidden()
             assert page.locator('.eyebrow').text_content()=='Reading feed'
@@ -292,14 +367,20 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
             page.locator('.chip[data-filter="__all__"]:visible').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             assert requests.count('/rank')>rank_reads
+            restored = page.locator(f'[data-m2-card=true][data-story-id="{saved_story_id}"]')
+            assert restored.get_attribute('data-state-revision') == '2'
+            assert 'is-read' in (restored.get_attribute('class') or '')
+            assert 'is-saved' in (restored.get_attribute('class') or '')
             assert page.locator('#load-more').inner_text()=='Load 25 more'
             page.locator('#m2-controls summary').click()
-            assert [e['event_type'] for e in store.events[:2]]==['read_more','save']
+            state_events = [e['event_type'] for e in store.events]
+            assert state_events[:4] == ['read_more', 'read_more', 'save', 'save']
+            assert state_events[-2:] == ['read_more', 'save']
             page.locator('#load-more').click()
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')
             ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
             assert len(ids)==len(set(ids))==50
-            assert store.rank_reads[-1][2]==2
+            assert store.rank_reads[-1][2]==len(store.events)
             # Search hits are real captured publisher titles; no fabricated news.
             query=next(row['title'] for row in rows if row['language']=='zh')[:6]
             page.locator('#q').fill(query)
@@ -365,9 +446,9 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
             page.evaluate('''() => {
                 const timeout=AbortSignal.timeout.bind(AbortSignal);
                 window.__m2Timeouts=[];
-                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===310000?300:ms);};
+                AbortSignal.timeout=(ms)=>{window.__m2Timeouts.push(ms);return timeout(ms===310000?(window.__transportDeadline||300):ms);};
                 const later=window.setTimeout.bind(window);
-                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?30:ms===310000?300:ms,...args);
+                window.setTimeout=(fn,ms,...args)=>later(fn,ms===8000?(window.__visibleDeadline||30):ms===310000?(window.__transportDeadline||300):ms,...args);
                 window.__stallM2=true;window.__stallM2Delay=120;
                 const policy=document.querySelector("#m2-provider-retention");policy.hidden=true;policy.removeAttribute("href");
             }''')
@@ -384,6 +465,23 @@ def _drive_the_reader(tmp_path, *, include_the_tail):
             assert page.locator('.card:not([hidden])').count()>0
             page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
             assert 'Ranked using' in page.locator('#m2-mode').inner_text()
+            # A real mark-unread click advances the interaction epoch. The
+            # delayed pre-click response must be discarded instead of restoring
+            # its older read state after the visible loading fallback.
+            unread = page.locator('[data-m2-card=true]').first
+            unread_story_id = unread.get_attribute('data-story-id')
+            unread.locator('.accordion-toggle').click()
+            page.wait_for_function('(storyId) => document.querySelector(`[data-m2-card=true][data-story-id="${storyId}"]`)?.classList.contains("is-read")', arg=unread_story_id)
+            page.evaluate('''(storyId) => {
+                window.__visibleDeadline=200;window.__transportDeadline=1000;window.__stallM2=true;window.__stallM2Delay=400;
+                document.querySelector("#m2-refresh").click();
+                const button=document.querySelector(`[data-m2-card=true][data-story-id="${storyId}"] .read-action`);
+                button.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true}));button.click();
+            }''', unread_story_id)
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("did not finish") && document.querySelectorAll("[data-m2-card=true]").length===0')
+            assert store.states[unread_story_id]['read_at'] is None
+            page.evaluate('window.__visibleDeadline=0;window.__transportDeadline=0;window.__stallM2=false;window.__stallM2Delay=0')
             # ---- the tail, from here on, depends on leaving the personalized
             # feed. Issue #48. Split out so the 46 assertions above stay
             # gating instead of riding under one file-wide expected failure.

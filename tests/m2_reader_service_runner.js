@@ -69,6 +69,45 @@ function response(value, url) { return { ok: true, redirected: false, url,
   const stale = reader.createM2Service(config, async () => ({ access_token: token }),
     async (url) => response(payload({ history_generation: 1 }), url));
   await assert.rejects(() => stale.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
+  // A rank request may honestly return the view's existing frozen order after
+  // a read or save advances live behavior revisions. Accept older revisions,
+  // but never a response claiming knowledge of a future revision.
+  const frozenRefresh = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => response(payload({ history_revision: 5, server_commit_revision: 7 }), url));
+  const reused = await frozenRefresh.rank(history, { as_of: "2026-09-14T16:00:00Z" });
+  assert.equal(reused.server_commit_revision, 7);
+  const concurrentCommit = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => response(payload({ server_commit_revision: 9 }), url));
+  const rebound = await concurrentCommit.rank(history, { as_of: "2026-09-14T16:00:00Z" });
+  assert.equal(rebound.server_commit_revision, 9,
+    "a concurrent behavior commit may legitimately advance beyond the request revision");
+  const futureRefresh = reader.createM2Service(config, async () => ({ access_token: token }),
+    async (url) => response(payload({ history_revision: 7, server_commit_revision: 9 }), url));
+  await assert.rejects(() => futureRefresh.rank(history, { as_of: "2026-09-14T16:00:00Z" }), /feed response/);
+  const currentCard = payload().cards[0];
+  const refreshedCard = reader.mergeM2CardState(
+    { ...currentCard, state_revision: 2, read_at: null, saved_at: null,
+      interests: [{ topic_id: "ai", signal: "more_like", revision: 1 }] },
+    { ...currentCard, state_revision: 4, read_at: "2026-09-14T15:00:00Z",
+      saved_at: "2026-09-14T15:01:00Z", interests: [
+        { topic_id: "ai", signal: "less_like", revision: 3 },
+        { topic_id: "policy", signal: "more_like", revision: 2 },
+      ] }, true);
+  assert.equal(refreshedCard.state_revision, 4);
+  assert.equal(refreshedCard.saved_at, "2026-09-14T15:01:00Z");
+  assert.deepEqual(refreshedCard.interests, [
+    { topic_id: "ai", signal: "less_like", revision: 3 },
+    { topic_id: "policy", signal: "more_like", revision: 2 },
+  ], "a frozen refresh must not roll back newer card or interest state");
+  const clearedCard = reader.mergeM2CardState(
+    { ...currentCard, state_revision: 0, read_at: null, saved_at: null, interests: [] },
+    { ...currentCard, state_revision: 4, read_at: "2026-09-14T15:00:00Z",
+      saved_at: "2026-09-14T15:01:00Z",
+      interests: [{ topic_id: "ai", signal: "more_like", revision: 3 }] }, false);
+  assert.equal(clearedCard.state_revision, 0,
+    "a new history generation must treat the server card state as authoritative");
+  assert.deepEqual(clearedCard.interests, [],
+    "a history reset or consent change must not resurrect deleted interests");
   assert.throws(() => reader.validateM2Config({ ...config, provider_retention_url: "javascript:bad" }), /configuration/);
 
   // Load more after a read or a save: /page returns the FROZEN order's binding,

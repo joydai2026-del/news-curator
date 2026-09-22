@@ -655,6 +655,7 @@ class RankingService:
                     "eligibility": frozen["bindings"].get("eligibility", {}), "exclude_story_ids": [],
                     "corpus_cursor": frozen["bindings"].get("corpus_cursor"), "page_size": size})
         visible, next_offset, removed = self._slice(cards, offset, size, current)
+        visible = self._overlay_owner_states(token, visible)
         self._record_filtered(owner, frozen, removed)
         next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
         if offset >= len(cards) and continuation_pending:
@@ -1385,6 +1386,7 @@ class RankingService:
         size = int(frozen.get("page_size", page_size))
         cards = list(frozen["cards"])
         visible, next_offset, removed = self._slice(cards, 0, size, snapshot)
+        visible = self._overlay_owner_states(token, visible)
         self._record_filtered(owner, frozen, removed)
         pages_served = view_pages
         if (not isinstance(pages_served, int) or isinstance(pages_served, bool)
@@ -1413,6 +1415,21 @@ class RankingService:
                        if resume_offset < len(cards) or bindings.get("corpus_has_more") else None)
         return {"schema_version": 1, **self._public_bindings(bindings), "cards": visible,
                 "next_cursor": next_cursor, "end_of_run": False}
+
+    def _overlay_owner_states(self, token, cards):
+        """Render mutable owner state live without changing the frozen order."""
+        if not cards:
+            return cards
+        states = self._store.owner_states(token, [str(card["story_id"]) for card in cards])
+        rendered = []
+        for card in cards:
+            state = states.get(str(card["story_id"]), {}) if isinstance(states, Mapping) else {}
+            rendered.append({**card,
+                "read_at": state.get("read_at", card.get("read_at")),
+                "saved_at": state.get("saved_at", card.get("saved_at")),
+                "state_revision": state.get("state_revision", card.get("state_revision", 0)),
+                "interests": state.get("interests", card.get("interests", []))})
+        return rendered
 
     def _pool_rows(self, category_id, query, profile, composition, before_published, before_story,
                    hot_cursor=None):
