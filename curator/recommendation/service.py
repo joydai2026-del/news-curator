@@ -526,6 +526,10 @@ class RankingService:
             # offset zero so the first continuation that finds cards is not
             # mistaken for a free replay and must reserve response slot one.
             "responses_served": 1 if cards else 0,
+            # Unlike last_served_next_offset, this does not move when later
+            # responses are reserved. An old first-page cursor may replay only
+            # within its originally served range.
+            "initial_response_next_offset": min(page_size, len(cards)) if cards else None,
             "last_served_offset": 0 if cards else -1,
             "last_served_next_offset": min(page_size, len(cards)) if cards else 0,
             "corpus_cursor": next_corpus, "corpus_has_more": has_more,
@@ -735,14 +739,18 @@ class RankingService:
             next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset,
                                        int(frozen["expires_at"]),
                                        response_number=next_response_number)
-        # The first response was atomically reserved by rank() before its
-        # cursor could exist. Replaying a signed offset-zero cursor returns that
-        # same immutable slice and must not compete for the current next slot.
-        served_responses = frozen.get("bindings", {}).get("responses_served")
+        # The original first slice may replay, even after later pages. An
+        # initially empty order has no such range until its first reservation.
+        # Feedback can make an offset-zero cursor scan into new cards; that
+        # must not bypass the response reservation.
+        bindings = frozen.get("bindings", {})
+        served_responses = bindings.get("responses_served")
+        first_end = bindings.get("initial_response_next_offset")
         first_response_replay = (response_number == 1 and offset == 0
-                                 and isinstance(served_responses, int)
-                                 and not isinstance(served_responses, bool)
-                                 and served_responses >= 1)
+                                 and ((type(first_end) is int and first_end == next_offset)
+                                      or (first_end is None and served_responses == 1
+                                          and bindings.get("last_served_offset") == 0
+                                          and bindings.get("last_served_next_offset") == next_offset)))
         if visible and composition is not None and not first_response_replay:
             if (not run_id or not isinstance(eligibility_key, str)
                     or re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is None

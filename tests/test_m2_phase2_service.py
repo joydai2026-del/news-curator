@@ -2255,6 +2255,42 @@ def test_a_legacy_page_two_cursor_is_rejected_after_atomic_cutover():
     assert store.views[key]["pages_served"] == 0
 
 
+def test_offset_zero_replay_cannot_mint_an_unbudgeted_page_after_feedback():
+    class OpenedStore(PaidStore):
+        def owner_states(self, token, story_ids):
+            return {story_id: {"read_at": NOW.isoformat()} for story_id in story_ids
+                    if int(story_id.split(":")[1], 16) < 50}
+
+    rows = [corpus_row(index, hours=index + 1, source=f"s{index}",
+                       categories=[f"t{index}"]) for index in range(300)]
+    store = OpenedStore(rows, events=liked_events())
+    subject = paid(store)
+    initial = rank(subject, store)
+    assert initial["cards"] == [] and initial["next_cursor"]
+    first_cursor = initial["next_cursor"]
+    first = subject.page(authorization="Bearer valid", cursor=first_cursor)
+    assert len(first["cards"]) == 25
+
+    for index, card in enumerate(first["cards"]):
+        store.events.append({"event_id": f"feedback-{index}",
+            "event_type": "less_like_this", "event_revision": 10 + index,
+            "occurred_at": NOW.isoformat(),
+            "payload": {"story_id": card["story_id"], "surface": "reader"},
+            "story_title": "", "story_summary": "", "source_id": card["source_id"]})
+
+    response = subject.page(authorization="Bearer valid", cursor=first_cursor)
+    readable = [first] + ([response] if response["cards"] else [])
+    for _ in range(12):
+        if not response.get("next_cursor"):
+            break
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        if response["cards"]:
+            readable.append(response)
+    assert len(readable) <= subject._policy.composition.max_pages_per_run
+    assert next(iter(store.views.values()))["pages_served"] <= 4
+    assert subject._adapter.calls == 1
+
+
 def test_response_progress_is_persisted_atomically_with_the_page_budget():
     rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
                        categories=[f"d{index % 9}"]) for index in range(300)]
