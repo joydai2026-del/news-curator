@@ -50,6 +50,7 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'canonical registry IDs must be unique',
     'cursor signing key must contain at least 32 bytes',
     'display_language must be a supported language',
+    'effective_policy_digest must be lowercase SHA-256',
     'empty history requires revision zero',
     'enabled ranker requires a non-empty preview owner allowlist',
     'enabled ranker requires a scoped model key',

@@ -88,6 +88,34 @@ def policy_reference(policy_path: Path, value: str | Path) -> Path:
     return path if path.is_absolute() else policy_path.parent.parent / path
 
 
+def effective_ranking_policy_digest(policy: dict, composition_path: Path | None,
+                                    prompt_path: Path) -> str:
+    """Bind a reading-run view to every input that can change its ranking.
+
+    Public policy/model fields stay human-readable on the wire. This internal
+    digest additionally covers the complete validated configuration, prompt
+    bytes, and ranking implementation, so a code-only deploy cannot inherit an
+    older deploy's frozen view.
+    """
+    implementation = {}
+    curator_root = Path(__file__).resolve().parents[1]
+    for source in sorted(curator_root.rglob("*.py")):
+        implementation[source.relative_to(curator_root.parent).as_posix()] = \
+            hashlib.sha256(source.read_bytes()).hexdigest()
+    composition_document = None
+    if composition_path is not None:
+        composition_document = yaml.safe_load(composition_path.read_text(encoding="utf-8"))
+    material = {
+        "schema_version": 1,
+        "ranker_policy": policy,
+        "composition_policy": composition_document,
+        "prompt_template_sha256": hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
+        "implementation": implementation,
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def configured_token_counter(policy, env):
     """Load only the reviewed, locally cached encoding. Never download at startup."""
     encoding_name = _required(policy, "tokenizer_encoding")
@@ -147,11 +175,12 @@ def build_application(*, environ=None, policy_path: str | None = None):
     # The composition policy is loaded FIRST: it decides whether the ranker asks
     # for action predictions or for a bare permutation, which changes the schema,
     # the prompt and the output budget together.
-    composition_path = env.get("NEWS_CURATOR_COMPOSITION_POLICY") or policy.get("composition_policy")
+    composition_reference = env.get("NEWS_CURATOR_COMPOSITION_POLICY") or policy.get("composition_policy")
+    composition_path = policy_reference(path, composition_reference) if composition_reference else None
     # Cross-file check at boot: the corpus retention window (sources.yaml) must
     # still cover the window the feed reads back (this policy).
     composition = load_composition_policy(
-        policy_reference(path, composition_path),
+        composition_path,
         # Local checkout first, then the value staged into the image. Missing
         # from BOTH is a refusal, never a skipped check.
         retention_days=boot_retention_days(env.get("NEWS_CURATOR_SOURCES", "sources.yaml"),
@@ -165,7 +194,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
         claimed_section_transport_calls=CLAIMED_SECTION_MAX_TRANSPORT_CALLS,
     ) if composition_path else None
     scoring = ScoringPolicy.from_composition(composition) if composition else None
-    prompt = ReviewedRankLLMPromptBuilder(str(resolve_prompt_template(env, policy, path)[0]))
+    prompt_path, _ = resolve_prompt_template(env, policy, path)
+    prompt = ReviewedRankLLMPromptBuilder(str(prompt_path))
     engine = OpenAIRankLLMEngine(prompt_builder=prompt, endpoint=ranker_policy.endpoint, api_key=provider_key or "disabled",
         model=ranker_policy.model_id, maximum_output_tokens=policy["maximum_output_tokens"],
         reasoning_token_allowance=policy["reasoning_token_allowance"],
@@ -194,7 +224,9 @@ def build_application(*, environ=None, policy_path: str | None = None):
         # composition value fails the boot rather than silently changing the mix.
         # Unsetting composition_policy is the documented rollback to the
         # pre-Phase-2 window; it is a config change, not a revert.
-        composition=composition)
+        composition=composition,
+        effective_policy_digest=effective_ranking_policy_digest(
+            policy, composition_path, prompt_path))
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,
         cursor_key=cursor_key)
     return RankingASGI(service=service, reader_origin=reader_origin,

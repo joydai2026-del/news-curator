@@ -25,7 +25,9 @@ import yaml
 from curator.recommendation.composition import (
     RETENTION_INPUTS_FILE, CompositionPolicyError, boot_retention_days)
 from curator.recommendation.modal_handlers import image_inputs
-from curator.recommendation.runtime import build_application, load_ranker_policy, policy_reference
+from curator.recommendation.runtime import (
+    build_application, effective_ranking_policy_digest, load_ranker_policy,
+    policy_reference)
 from scripts.prepare_ranker_image_context import (
     RETENTION_INPUTS, referenced_config_files, stage_config, stage_retention_inputs,
     validate_containerfile_sources)
@@ -292,3 +294,31 @@ def test_the_local_development_boot_still_uses_sources_yaml(monkeypatch):
     with pytest.raises(ValueError) as error:
         build_application(environ=_boot_env(), policy_path=POLICY.as_posix())
     assert "TIKTOKEN_CACHE_DIR" in str(error.value)
+
+
+def test_effective_policy_digest_binds_config_composition_prompt_and_shared_code(tmp_path, monkeypatch):
+    composition = tmp_path / "composition.yaml"
+    prompt = tmp_path / "prompt.yaml"
+    composition.write_text("schema_version: 1\npolicy_revision: 2\n", encoding="utf-8")
+    prompt.write_text("system: first\n", encoding="utf-8")
+    policy = {"schema_version": 1, "model": "gpt-5-mini"}
+
+    original = effective_ranking_policy_digest(policy, composition, prompt)
+    assert len(original) == 64
+    assert original != effective_ranking_policy_digest(
+        {**policy, "model": "another-model"}, composition, prompt)
+    composition.write_text("schema_version: 1\npolicy_revision: 3\n", encoding="utf-8")
+    assert original != effective_ranking_policy_digest(policy, composition, prompt)
+    composition.write_text("schema_version: 1\npolicy_revision: 2\n", encoding="utf-8")
+    prompt.write_text("system: second\n", encoding="utf-8")
+    assert original != effective_ranking_policy_digest(policy, composition, prompt)
+    prompt.write_text("system: first\n", encoding="utf-8")
+    read_bytes = Path.read_bytes
+    dedup = (REPO / "curator/dedup.py").resolve()
+
+    def changed_dedup(path):
+        value = read_bytes(path)
+        return value + b"\n# changed ranking dependency\n" if path.resolve() == dedup else value
+
+    monkeypatch.setattr(Path, "read_bytes", changed_dedup)
+    assert original != effective_ranking_policy_digest(policy, composition, prompt)
