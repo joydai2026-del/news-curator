@@ -123,6 +123,47 @@ def _client(timeout_seconds=None):
                         service_role_key="sb_secret_canary", **kwargs)
 
 
+def test_owner_state_read_retries_one_configured_timeout_then_returns_live_state():
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self):
+            return b'[{"story_id":"story:one","saved_at":"2026-09-22T00:00:00Z"}]'
+
+    class TimeoutThenSuccess:
+        def __init__(self): self.calls = 0
+        def open(self, request, timeout):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("transient owner-state timeout")
+            return Response()
+
+    client = SupabaseHTTP(origin="https://example.test", publishable_key="public",
+                          service_role_key="sb_secret_canary", timeout_retries=1)
+    opener = TimeoutThenSuccess()
+    client._opener = opener
+
+    assert client.owner_states("owner-token", ["story:one"])["story:one"]["saved_at"]
+    assert opener.calls == 2
+
+
+def test_owner_state_read_does_not_retry_an_http_failure():
+    class Reject:
+        def __init__(self): self.calls = 0
+        def open(self, request, timeout):
+            self.calls += 1
+            raise urllib.error.HTTPError(request.full_url, 500, "boom", {}, io.BytesIO())
+
+    client = SupabaseHTTP(origin="https://example.test", publishable_key="public",
+                          service_role_key="sb_secret_canary", timeout_retries=2)
+    opener = Reject()
+    client._opener = opener
+
+    with pytest.raises(SupabaseHTTPError):
+        client.owner_states("owner-token", ["story:one"])
+    assert opener.calls == 1
+
+
 class _Raise:
     """An opener that fails the way one specific network condition fails."""
 

@@ -36,6 +36,9 @@ import traceback
 # plain string constant (no f-string, no concatenation, no call). See
 # tests/test_diagnostics_known_messages.py for the exact scan.
 KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
+    'ranker policy must declare a `supabase` section with timeout_retries',
+    'ranker policy supabase section must declare timeout_retries',
+    'supabase.timeout_retries must be an integer',
     'NEWS_CURATOR_MODAL_MODE must be service or smoke',
     'NEWS_CURATOR_RANKER_CONTEXT_SHA256 must be lowercase SHA-256',
     'Supabase keys must be configured',

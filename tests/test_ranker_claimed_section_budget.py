@@ -25,8 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from curator.recommendation.composition import CompositionPolicyError, parse_composition_policy
 from curator.recommendation.service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS
 from curator.recommendation.runtime import claimed_transport_call_budget
+from curator.recommendation import runtime
 
-from test_m2_phase2_service import PaidStore, exclusive_corpus, liked_events, paid, rank
+from test_m2_phase2_service import (PaidStore, corpus_row, default_corpus,
+    exclusive_corpus, liked_events, paid, rank)
 
 CLAIM_METHOD = "claim_run_ranking"
 
@@ -34,9 +36,9 @@ CLAIM_METHOD = "claim_run_ranking"
 class CountingStore(PaidStore):
     """Counts every transport method called from the claim onward.
 
-    Wrapping the store rather than the HTTP layer is deliberate: one store
-    method is one Supabase round trip, and that is the unit Check 10 multiplies
-    by the per-call timeout.
+    Wrapping the store rather than the HTTP layer measures base calls. Each
+    owner-state read can add configured timeout retries, counted separately
+    by the runtime when it sizes the claim and full-request budgets.
     """
 
     def __init__(self, *args, **kwargs):
@@ -107,9 +109,29 @@ def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
 
 def test_the_claim_covers_the_measured_section_at_the_shipped_values():
     """The shipped numbers satisfy the rule they are validated by."""
-    calls = CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+    _, policy = runtime.load_ranker_policy({}, root=Path(__file__).resolve().parents[1])
+    calls = claimed_transport_call_budget(policy) + runtime.supabase_timeout_retries(policy)
     deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 160
     assert claim > deadline + settle + calls * timeout + margin
+
+
+def test_a_continuation_reads_owner_state_twice_but_ranking_reads_it_once():
+    store = CountingStore(default_corpus() + [
+        corpus_row(300 + index, hours=40 + index,
+                   source=f"older{index}", categories=[f"o{index % 7}"])
+        for index in range(60)], events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    assert first["result_mode"] == "model"
+    assert store.claimed_calls.count("owner_states") == 1
+    frozen = store.frozen["frozen-1"]
+    assert frozen["bindings"]["corpus_has_more"]
+    store.claimed_calls.clear()
+    response = subject.page(authorization="Bearer valid", cursor=subject._cursor(
+        "frozen-1", len(frozen["cards"]), int(frozen["expires_at"]), response_number=2))
+    assert response["cards"] and store.extensions
+    assert store.claimed_calls.count("owner_states") == 2
+    assert runtime.MAX_OWNER_STATE_READS_PER_REQUEST == 2
 
 
 def test_lowering_exclusive_scan_never_under_sizes_the_general_paid_path():

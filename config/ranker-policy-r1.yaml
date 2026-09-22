@@ -82,14 +82,16 @@ composition_policy: config/ranking-policy-r2.yaml
 #   run.ranking_claim_seconds
 #     > deadline_seconds (25)
 #     + settle_window_seconds (5)
-#     + CLAIMED_SECTION_MAX_TRANSPORT_CALLS (22) x timeout_seconds (5) = 110
+#     + (CLAIMED_SECTION_MAX_TRANSPORT_CALLS (22) + one owner-state retry)
+#       x timeout_seconds (5) = 115
 #     + run.ranking_claim_margin_seconds (10)
-#     = 150, so run.ranking_claim_seconds is 160.
+#     = 155, so run.ranking_claim_seconds is 160.
 #
 # The container check also includes six pre-claim calls (authentication,
-# history, run open, optional run replacement, and view): deadline (25) + settle (5) + transport
-# (28 x 5) = 170 must be strictly below
-# NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS (180), or the
+# history, run open, optional run replacement, and view), plus a retry for EACH
+# of the two owner-state reads on a continuation: deadline (25) + settle (5)
+# + transport ((22 + 6 + 2) x 5) = 180 must be strictly below
+# NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS (default 181), or the
 # platform kills the request and the reader gets a 500 instead of the typed
 # fallback the service already had ready.
 #
@@ -100,3 +102,5 @@ composition_policy: config/ranking-policy-r2.yaml
 # accommodate. See docs and PR #52: the fix for those is the query, not this.
 supabase:
   timeout_seconds: 5
+  # Additional timeout attempts per owner-state read, bounded from 0 to 2.
+  timeout_retries: 1

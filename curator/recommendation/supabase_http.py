@@ -31,6 +31,8 @@ class SupabaseAuthenticationError(SupabaseHTTPError):
 DEFAULT_TIMEOUT_SECONDS = 3.0
 MINIMUM_TIMEOUT_SECONDS = 1.0
 MAXIMUM_TIMEOUT_SECONDS = 30.0
+MINIMUM_TIMEOUT_RETRIES = 0
+MAXIMUM_TIMEOUT_RETRIES = 2
 
 
 def validate_timeout_seconds(value) -> float:
@@ -49,6 +51,16 @@ def validate_timeout_seconds(value) -> float:
         raise ValueError(
             f"supabase.timeout_seconds must be between {MINIMUM_TIMEOUT_SECONDS} "
             f"and {MAXIMUM_TIMEOUT_SECONDS} seconds")
+    return value
+
+
+def validate_timeout_retries(value) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("supabase.timeout_retries must be an integer")
+    if not MINIMUM_TIMEOUT_RETRIES <= value <= MAXIMUM_TIMEOUT_RETRIES:
+        raise ValueError(
+            f"supabase.timeout_retries must be between {MINIMUM_TIMEOUT_RETRIES} "
+            f"and {MAXIMUM_TIMEOUT_RETRIES}")
     return value
 
 
@@ -76,12 +88,14 @@ def validate_https_origin(origin: str) -> str:
 
 class SupabaseHTTP:
     def __init__(self, *, origin: str, publishable_key: str, service_role_key: str,
-                 timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+                 timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+                 timeout_retries: int = MINIMUM_TIMEOUT_RETRIES) -> None:
         validate_https_origin(origin)
         if not publishable_key or not service_role_key:
             raise ValueError("Supabase keys must be configured")
         self._origin, self._publishable, self._service = origin, publishable_key, service_role_key
         self._timeout = validate_timeout_seconds(timeout_seconds)
+        self._timeout_retries = validate_timeout_retries(timeout_retries)
         self._opener = urllib.request.build_opener(_NoRedirect)
 
     def _service_token(self) -> str:
@@ -186,8 +200,15 @@ class SupabaseHTTP:
         return result
 
     def owner_states(self, access_token: str, story_ids):
-        result = self._request("POST", "/rest/v1/rpc/m2_owner_story_states", token=access_token,
-            key=self._publishable, body={"p_story_ids": list(story_ids)})
+        attempts = self._timeout_retries + 1
+        for attempt in range(attempts):
+            try:
+                result = self._request("POST", "/rest/v1/rpc/m2_owner_story_states", token=access_token,
+                    key=self._publishable, body={"p_story_ids": list(story_ids)})
+                break
+            except SupabaseHTTPError as error:
+                if attempt + 1 >= attempts or _failure_reason(error.__cause__) != "timeout":
+                    raise
         if not isinstance(result, list):
             raise SupabaseHTTPError("owner state RPC returned a non-list")
         return {str(row["story_id"]): row for row in result}
