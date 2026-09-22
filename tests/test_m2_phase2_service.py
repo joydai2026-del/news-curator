@@ -1162,6 +1162,365 @@ def test_one_reading_run_buys_exactly_one_provider_call_across_every_page_turn()
     assert len(store.settlements) == 1, "provider usage must settle exactly once"
 
 
+def test_exact_four_page_corpus_does_not_skip_overfetch_tail():
+    rows = [corpus_row(index, hours=1 + index, source=f"source-{index}",
+                       categories=[f"topic-{index}"])
+            for index in range(100)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+
+    response = rank(subject, store)
+    pages = []
+    served = []
+    while True:
+        page_ids = [card["story_id"] for card in response["cards"]]
+        if page_ids:
+            pages.append(len(page_ids))
+            served.extend(page_ids)
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    expected = {row["story_id"] for row in rows}
+    assert pages == [25, 25, 25, 25]
+    assert len(served) == len(set(served)) == 100
+    assert set(served) == expected
+    assert subject._adapter.calls == 1
+    assert response["next_cursor"] is None
+
+
+@pytest.mark.parametrize(("count", "expected_pages"), [
+    (51, [25, 25, 1]),
+    (60, [25, 25, 10]),
+    (74, [25, 25, 24]),
+    (76, [25, 25, 25, 1]),
+    (99, [25, 25, 25, 24]),
+])
+def test_finite_corpus_keeps_every_partial_terminal_page(count, expected_pages):
+    rows = [corpus_row(index, hours=1 + index, source=f"finite-{index}",
+                       categories=[f"finite-topic-{index}"])
+            for index in range(count)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+
+    response = rank(subject, store)
+    pages = []
+    served = []
+    while True:
+        page_ids = [card["story_id"] for card in response["cards"]]
+        if page_ids:
+            pages.append(len(page_ids))
+            served.extend(page_ids)
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    assert pages == expected_pages
+    assert len(served) == len(set(served)) == count
+    assert set(served) == {row["story_id"] for row in rows}
+    assert subject._adapter.calls == 1
+
+
+def test_pending_tail_refills_a_filtered_second_page():
+    rows = [corpus_row(index, hours=1 + index, source=f"refill-{index}",
+                       categories=[f"refill-topic-{index}"])
+            for index in range(51)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    blocked = frozen["cards"][25]
+    store.events.append({"event_id": "refill-filter", "event_type": "less_like_this",
+        "event_revision": 9, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": blocked["story_id"], "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": blocked["source_id"]})
+
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+
+    assert len(second["cards"]) == 25
+    assert all(card["source_id"] != blocked["source_id"] for card in second["cards"])
+    assert subject._adapter.calls == 1
+
+
+def test_deferred_promoted_story_keeps_exclusive_label_on_continuation():
+    rows = [corpus_row(index, hours=1 + index, source=f"general-{index}",
+                       categories=[f"general-topic-{index}"])
+            for index in range(100)]
+    exclusive_rows = exclusive_corpus(8)
+    store = PaidStore(rows, events=liked_events(), exclusive=exclusive_rows)
+    subject = paid(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    exclusive_ids = {row["story_id"] for row in exclusive_rows}
+    deferred = {row["story_id"] for row in frozen["bindings"]["pending_candidates"]} & exclusive_ids
+    assert deferred, "the fixture must defer at least one promoted story"
+
+    continued = []
+    while response.get("next_cursor"):
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        continued.extend(response["cards"])
+
+    surfaced = [card for card in continued if card["story_id"] in deferred]
+    assert surfaced, "a deferred promoted story never reached a continuation"
+    assert all(card["exclusive_label"] == "only in Chinese press" for card in surfaced)
+
+
+def test_every_continuation_batch_respects_the_promotion_cap_without_losing_deferred_rows():
+    rows = [corpus_row(index, hours=1 + index, source=f"general-{index}",
+                       categories=[f"general-topic-{index}"])
+            for index in range(100)]
+    exclusive_rows = exclusive_corpus(8)
+    exclusive_ids = {row["story_id"] for row in exclusive_rows}
+    store = PaidStore(rows, events=liked_events(), exclusive=exclusive_rows)
+    subject = paid(store, promote=2, exclusive_category="only-other-language-press")
+
+    response = rank(subject, store)
+    served = []
+    continuation_exclusive_counts = []
+    while True:
+        page = response["cards"]
+        if served:
+            continuation_exclusive_counts.append(
+                sum(card["story_id"] in exclusive_ids for card in page))
+        served.extend(card["story_id"] for card in page)
+        exclusive_cards = [card for card in page if card["story_id"] in exclusive_ids]
+        assert all(card["exclusive_label"] == "only in Chinese press"
+                   for card in exclusive_cards)
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    pending = {row["story_id"] for row in
+               store.frozen["frozen-1"]["bindings"]["pending_candidates"]}
+    assert continuation_exclusive_counts
+    assert max(continuation_exclusive_counts) <= 2
+    assert len(served) == len(set(served))
+    assert (set(served) & exclusive_ids).isdisjoint(pending & exclusive_ids)
+    assert ((set(served) | pending) & exclusive_ids) == exclusive_ids
+    assert subject._adapter.calls == 1
+
+
+def test_pending_promotions_remain_reachable_without_an_older_corpus_cursor():
+    rows = [corpus_row(index, hours=1 + index, source=f"short-{index}",
+                       categories=[f"short-topic-{index}"])
+            for index in range(30)]
+    exclusive_rows = exclusive_corpus(8)
+    exclusive_ids = {row["story_id"] for row in exclusive_rows}
+    all_ids = {row["story_id"] for row in (*rows, *exclusive_rows)}
+    store = PaidStore(rows, events=liked_events(), exclusive=exclusive_rows)
+    subject = paid(store, promote=2, exclusive_category="only-other-language-press")
+
+    first = rank(subject, store)
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    frozen = store.frozen["frozen-1"]
+    initial_pending = {row["story_id"] for row in frozen["bindings"]["pending_candidates"]}
+    assert [len(first["cards"]), len(second["cards"])] == [25, 7]
+    assert initial_pending == exclusive_ids - {
+        card["story_id"] for card in (*first["cards"], *second["cards"])}
+    assert len(initial_pending) == 6
+    assert second["next_cursor"] is not None
+
+    pages = [first["cards"], second["cards"]]
+    response = second
+    while response.get("next_cursor"):
+        response = subject.page(authorization="Bearer valid", cursor=response["next_cursor"])
+        if response["cards"]:
+            pages.append(response["cards"])
+
+    served = [card for page in pages for card in page]
+    served_ids = {card["story_id"] for card in served}
+    pending_ids = {row["story_id"] for row in frozen["bindings"]["pending_candidates"]}
+    assert [len(page) for page in pages] == [25, 7, 2, 2]
+    assert len(served_ids) == len(served)
+    assert served_ids.isdisjoint(pending_ids)
+    assert served_ids | pending_ids == all_ids
+    assert all(card["exclusive_label"] == "only in Chinese press"
+               for card in served if card["story_id"] in exclusive_ids)
+    assert subject._adapter.calls == 1
+
+
+def test_filtered_page_prefix_consumes_the_visible_promotion_cap():
+    rows = [corpus_row(index, hours=1 + index, source=f"prefix-{index}",
+                       categories=[f"prefix-topic-{index}"])
+            for index in range(100)]
+    exclusive_rows = exclusive_corpus(8)
+    exclusive_ids = {row["story_id"] for row in exclusive_rows}
+    store = PaidStore(rows, events=liked_events(), exclusive=exclusive_rows)
+    subject = paid(store, promote=2, exclusive_category="only-other-language-press")
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    original_second_page = frozen["cards"][25:50]
+    assert sum(card["story_id"] in exclusive_ids for card in original_second_page) == 2
+    for index, card in enumerate(original_second_page):
+        if card["story_id"] in exclusive_ids:
+            continue
+        store.events.append({"event_id": f"prefix-filter-{index}",
+            "event_type": "less_like_this", "event_revision": 10 + index,
+            "occurred_at": NOW.isoformat(),
+            "payload": {"story_id": card["story_id"], "surface": "reader"},
+            "story_title": "", "story_summary": "", "source_id": card["source_id"]})
+
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+
+    surfaced_exclusive = [card for card in second["cards"]
+                          if card["story_id"] in exclusive_ids]
+    pending_exclusive = set(frozen["bindings"]["pending_exclusive_story_ids"])
+    assert len(second["cards"]) == 25
+    assert len(surfaced_exclusive) <= 2
+    assert all(card["exclusive_label"] == "only in Chinese press"
+               for card in surfaced_exclusive)
+    assert pending_exclusive == exclusive_ids - {
+        card["story_id"] for card in (*first["cards"], *second["cards"])}
+    assert len({card["story_id"] for card in (*first["cards"], *second["cards"])}) == 50
+    assert subject._adapter.calls == 1
+
+
+def test_finalizer_hard_duplicate_drop_is_not_resurrected_from_pending():
+    rows = [corpus_row(index, hours=1 + index, source=f"dedup-{index}",
+                       categories=[f"dedup-topic-{index}"])
+            for index in range(100)]
+    rows[1]["title"] = rows[0]["title"]
+    duplicate_ids = {rows[0]["story_id"], rows[1]["story_id"]}
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+
+    response = rank(subject, store)
+    served = []
+    while True:
+        served.extend(response["cards"])
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    served_ids = {card["story_id"] for card in served}
+    surfaced_duplicate_ids = served_ids & duplicate_ids
+    pending_ids = {row["story_id"] for row in
+                   store.frozen["frozen-1"]["bindings"]["pending_candidates"]}
+    assert len(surfaced_duplicate_ids) == 1
+    assert not (pending_ids & (duplicate_ids - surfaced_duplicate_ids))
+    assert len(served) == len(served_ids) == 99
+    assert {row["story_id"] for row in rows} - served_ids == duplicate_ids - surfaced_duplicate_ids
+    assert len({card["title"] for card in served}) == len(served)
+    assert subject._adapter.calls == 1
+
+
+@pytest.mark.parametrize("duplicate_key", ["title", "canonical_url", "event_group_id"])
+def test_semantic_duplicate_in_pending_never_crosses_a_continuation_boundary(duplicate_key):
+    rows = [corpus_row(index, hours=1 + index, source=f"boundary-{index}",
+                       categories=[f"boundary-topic-{index}"])
+            for index in range(100)]
+    if duplicate_key == "event_group_id":
+        rows[0][duplicate_key] = rows[60][duplicate_key] = "shared-event-group"
+    else:
+        rows[60][duplicate_key] = rows[0][duplicate_key]
+    winner_id, duplicate_id = rows[0]["story_id"], rows[60]["story_id"]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+
+    response = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    assert winner_id in {card["story_id"] for card in response["cards"]}
+    assert duplicate_id in {row["story_id"] for row in frozen["bindings"]["pending_candidates"]}
+    pages = []
+    while True:
+        if response["cards"]:
+            pages.append(response["cards"])
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    served = [card for page in pages for card in page]
+    served_ids = {card["story_id"] for card in served}
+    pending_ids = {row["story_id"] for row in frozen["bindings"]["pending_candidates"]}
+    assert served_ids == {row["story_id"] for row in rows} - {duplicate_id}
+    assert duplicate_id not in pending_ids
+    assert [len(page) for page in pages] == [25, 25, 25, 24]
+    assert len(served) == len(served_ids) == 99
+    assert all(card["lane_label"] for card in served)
+    if duplicate_key == "event_group_id":
+        groups = frozen["bindings"]["event_group_ids"]
+        assert groups[winner_id] == "shared-event-group"
+        assert duplicate_id not in groups
+    assert subject._adapter.calls == 1
+
+
+def test_same_continuation_window_duplicates_still_report_multi_outlet_coverage():
+    rows = [corpus_row(index, hours=1 + index, source=f"coverage-{index}",
+                       categories=[f"coverage-topic-{index}"])
+            for index in range(100)]
+    rows[60]["title"] = rows[61]["title"] = "Shared continuation report"
+    rows[60]["source_is_aggregator"] = True
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+
+    response = rank(subject, store)
+    served = []
+    while True:
+        served.extend(response["cards"])
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    shared = [card for card in served if card["title"] == "Shared continuation report"]
+    assert len(shared) == 1
+    assert shared[0]["story_id"] == rows[61]["story_id"]
+    assert shared[0]["also_covered_by"] == [rows[60]["source_name"]]
+    assert {card["story_id"] for card in served} == {
+        row["story_id"] for row in rows} - {rows[60]["story_id"]}
+    assert subject._adapter.calls == 1
+
+
+def test_shipped_policy_derived_pending_tail_cap_accepts_its_valid_boundary():
+    subject = build(Store(events=liked_events()))
+    composition = subject._policy.composition
+    cap = subject._pending_candidate_limit(composition)
+    rows = [corpus_row(10_000 + index, hours=1, source=f"cap-{index}",
+                       categories=[f"cap-topic-{index}"])
+            for index in range(cap)]
+
+    loaded = subject._load_pending_candidates({"pending_candidates": rows}, composition)
+
+    assert len(loaded) == cap
+    assert cap == subject._pending_candidate_limit(load_composition_policy(POLICY_PATH))
+
+
+def test_pending_tail_malformed_or_over_policy_cap_fails_closed():
+    subject = build(Store(events=liked_events()))
+    composition = subject._policy.composition
+    cap = subject._pending_candidate_limit(composition)
+    prototype = corpus_row(20_000, hours=1, source="cap", categories=["cap"])
+    over_cap = [{**prototype, "story_id": f"story:{20_000 + index:064x}"}
+                for index in range(cap + 1)]
+
+    with pytest.raises(RuntimeError, match="invalid_pending_candidates"):
+        subject._load_pending_candidates({"pending_candidates": {"not": "a list"}}, composition)
+    with pytest.raises(RuntimeError, match="invalid_pending_candidates"):
+        subject._load_pending_candidates({"pending_candidates": [prototype, prototype]}, composition)
+    with pytest.raises(RuntimeError, match="invalid_pending_candidates"):
+        subject._load_pending_candidates({"pending_candidates": over_cap}, composition)
+    with pytest.raises(RuntimeError, match="invalid_pending_exclusive_story_ids"):
+        subject._load_pending_exclusive_story_ids(
+            {"pending_exclusive_story_ids": {"not": "a list"}}, [prototype], composition)
+    with pytest.raises(RuntimeError, match="invalid_pending_exclusive_story_ids"):
+        subject._load_pending_exclusive_story_ids(
+            {"pending_exclusive_story_ids": [prototype["story_id"], prototype["story_id"]]},
+            [prototype], composition)
+    with pytest.raises(RuntimeError, match="invalid_pending_exclusive_story_ids"):
+        subject._load_pending_exclusive_story_ids(
+            {"pending_exclusive_story_ids": ["story:" + "f" * 64]}, [prototype], composition)
+    with pytest.raises(RuntimeError, match="invalid_pending_exclusive_story_ids"):
+        subject._load_pending_exclusive_story_ids(
+            {"pending_exclusive_story_ids": [f"story:{30_000 + index:064x}"
+                                              for index in range(cap + 1)]},
+            [prototype], composition)
+
+
 def test_the_visible_page_honours_the_configured_lane_mix():
     store = PaidStore(events=liked_events())
     response = rank(paid(store), store)
