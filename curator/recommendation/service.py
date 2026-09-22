@@ -813,12 +813,13 @@ class RankingService:
                 fetched_more = len(fetched) > self._policy.candidate_limit
             used_pending = bool(pending)
         event_groups = dict(bindings.get("event_group_ids") or {})
-        rows = [row for row in pooled
-                if str(row.get("story_id")) not in (seen | original_exclusions)]
+        eligible_rows = [row for row in pooled
+                         if str(row.get("story_id")) not in (seen | original_exclusions)]
         rows = self._exclude_frozen_duplicates(
-            rows, frozen.get("cards", ()), event_groups)
-        if not exclusive and not rows:
-            return (), False
+            eligible_rows, frozen.get("cards", ()), event_groups)
+        retained_ids = {str(row.get("story_id")) for row in rows}
+        semantic_drop_ids = {str(row.get("story_id")) for row in eligible_rows
+                             if str(row.get("story_id")) not in retained_ids}
         laned = build_window(rows, profile=profile, policy=composition, now=self._now(),
                              size=composition.candidate_window_size) if rows else ()
         if laned and not exclusive and pending_exclusive_story_ids:
@@ -855,7 +856,7 @@ class RankingService:
         if exclusive:
             safe_rows = self._exclusive_safe_cursor_rows(
                 cursor_rows, {item.story_id for item in laned},
-                seen | original_exclusions)
+                seen | original_exclusions | semantic_drop_ids)
             next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
             remaining_pending = []
         elif used_pending:

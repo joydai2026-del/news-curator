@@ -1476,6 +1476,72 @@ def test_same_continuation_window_duplicates_still_report_multi_outlet_coverage(
     assert subject._adapter.calls == 1
 
 
+def test_general_semantic_drop_only_batch_advances_to_older_unique_rows():
+    rows = [corpus_row(index, hours=1 + index, source=f"progress-{index}",
+                       categories=[f"progress-topic-{index}"])
+            for index in range(175)]
+    for row in rows[50:150]:
+        row["title"] = rows[0]["title"]
+    expected_ids = ({row["story_id"] for row in rows[:50]}
+                    | {row["story_id"] for row in rows[150:]})
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+
+    response = rank(subject, store)
+    pages, empty_responses, attempts = [], 0, 0
+    while True:
+        if response["cards"]:
+            pages.append(response["cards"])
+        else:
+            empty_responses += 1
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        assert subject._decode_cursor(cursor)["frozen_order_id"] == "frozen-1"
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        attempts += 1
+        assert attempts < 10, "semantic-only general scans did not terminate"
+
+    served = [card for page in pages for card in page]
+    assert [len(page) for page in pages] == [25, 25, 25]
+    assert {card["story_id"] for card in served} == expected_ids
+    assert len(served) == len({card["story_id"] for card in served}) == 75
+    assert empty_responses >= 1
+    assert all(card["lane_label"] for card in served)
+    assert subject._adapter.calls == 1
+
+
+def test_exclusive_semantic_drop_only_scans_advance_without_an_empty_loop():
+    rows = exclusive_corpus(175)
+    for row in rows[50:150]:
+        row["title"] = rows[0]["title"]
+    expected_ids = ({row["story_id"] for row in rows[:50]}
+                    | {row["story_id"] for row in rows[150:]})
+    store = PaidStore(events=liked_events(), exclusive=rows)
+    subject = paid(store, exclusive_category="only-other-language-press")
+
+    response = rank(subject, store, eligibility={
+        "category": "only-other-language-press", "query": None})
+    cards, empty_responses, attempts = [], 0, 0
+    while True:
+        cards.extend(response["cards"])
+        if not response["cards"]:
+            empty_responses += 1
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        assert subject._decode_cursor(cursor)["frozen_order_id"] == "frozen-1"
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        attempts += 1
+        assert attempts < 10, "semantic-only exclusive scans did not terminate"
+
+    assert {card["story_id"] for card in cards} == expected_ids
+    assert len(cards) == len({card["story_id"] for card in cards}) == 75
+    assert empty_responses >= 1
+    assert all(card["exclusive_label"] == "only in Chinese press" for card in cards)
+    assert subject._adapter.calls == 1
+
+
 def test_shipped_policy_derived_pending_tail_cap_accepts_its_valid_boundary():
     subject = build(Store(events=liked_events()))
     composition = subject._policy.composition
