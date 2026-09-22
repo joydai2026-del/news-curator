@@ -498,6 +498,152 @@ def test_less_like_this_takes_effect_inside_the_run_without_moving_an_offset():
     assert store.reservations == []
 
 
+def test_filtered_short_page_uses_continuation_lookahead_to_stay_full():
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    assert len(frozen["cards"]) == 50
+    blocked = frozen["cards"][25]["source_id"]
+    store.events.append({"event_id": "dislike", "event_type": "less_like_this",
+        "event_revision": 9, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": frozen["cards"][25]["story_id"], "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": blocked})
+
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    replay = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+
+    assert len(second["cards"]) == 25
+    assert all(card["source_id"] != blocked for card in second["cards"])
+    assert store.extensions, "the short final slice did not fetch an older replacement"
+    assert replay["cards"] == second["cards"]
+    assert replay["next_cursor"] == second["next_cursor"]
+
+
+def test_unfiltered_short_tail_rechecks_the_continuation_boundary():
+    rows = [corpus_row(index, hours=1 + index, source=f"s{index}",
+                       categories=[f"t{index % 9}"]) for index in range(300)]
+    rows[1]["title"] = rows[0]["title"]
+    rows[75]["source_id"] = "s49"
+    rows[75]["source_name"] = "S49"
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    assert len(store.frozen["frozen-1"]["cards"]) == 49
+
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+
+    assert len(second["cards"]) == 25
+    assert second["cards"][-2]["source_id"] != second["cards"][-1]["source_id"]
+    assert second["cards"][-1]["story_id"] != rows[75]["story_id"]
+
+
+def test_refresh_replays_the_same_continuation_boundary_rules():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    prototype = frozen["cards"][0]
+    raw_cards = [
+        {**prototype, "story_id": f"story:{1000 + index:064x}",
+         "source_id": "same" if index in (23, 24) else f"unique-{index}",
+         "title": f"Unique {index}", "url": f"https://example.test/unique-{index}"}
+        for index in range(26)
+    ]
+    frozen["cards"] = raw_cards[:24] + subject._align_continuation(
+        raw_cards[:24], raw_cards[24:], 25, subject._policy.composition)
+    frozen["bindings"]["continuation_offsets"] = [24]
+
+    refreshed = rank(subject, store)
+
+    sources = [card["source_id"] for card in refreshed["cards"]]
+    assert len(refreshed["cards"]) == 25
+    assert all(left != right for left, right in zip(sources, sources[1:]))
+    assert refreshed["cards"][-1]["story_id"] == raw_cards[25]["story_id"]
+
+
+def test_later_continuation_pages_keep_the_same_hard_invariants():
+    subject = paid(PaidStore(events=liked_events()))
+    policy = subject._policy.composition
+    cards = [
+        {"story_id": f"story:{2000 + index:064x}",
+         "source_id": "same" if index in (20, 21) else f"unique-{index}",
+         "title": f"Unique {index}", "url": f"https://example.test/later-{index}",
+         "category_ids": []}
+        for index in range(36)
+    ]
+    existing, added = cards[:5], cards[5:]
+    aligned = subject._align_continuation(existing, added, 25, policy)
+
+    visible, next_offset, _removed = subject._slice(
+        existing + aligned, 10, 25,
+        PaidStore(events=liked_events()).history_snapshot("valid"),
+        continuation_offsets=[5])
+
+    sources = [card["source_id"] for card in visible]
+    assert len(visible) == 25
+    assert next_offset == 35
+    assert all(left != right for left, right in zip(sources, sources[1:]))
+    assert {card["story_id"] for card in aligned} == {card["story_id"] for card in added}
+
+
+def test_filtered_prefix_chooses_a_legal_replacement_before_a_collision():
+    subject = paid(PaidStore(events=liked_events()))
+    policy = subject._policy.composition
+    cards = [
+        {"story_id": f"story:{3000 + index:064x}", "source_id": f"s{index}",
+         "title": f"Title {index}", "url": f"https://example.test/filter-{index}",
+         "category_ids": []}
+        for index in range(50)
+    ]
+    snapshot = PaidStore(events=liked_events()).history_snapshot("valid")
+    snapshot["events"].append({"event_id": "filter", "event_type": "less_like_this",
+        "event_revision": 9, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": cards[25]["story_id"], "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": "s25"})
+    prefix, end, _removed = subject._slice(cards, 25, 25, snapshot)
+    assert len(prefix) == 24 and end == 50
+    collision = {"story_id": "story:" + "a" * 64, "source_id": "s49",
+                 "title": "Collision", "url": "https://example.test/collision",
+                 "category_ids": []}
+    legal = {"story_id": "story:" + "b" * 64, "source_id": "legal",
+             "title": "Legal", "url": "https://example.test/legal", "category_ids": []}
+    aligned = subject._align_continuation(
+        cards, [collision, legal], 25, policy, page_prefix=prefix)
+
+    visible, next_offset, _removed = subject._slice(
+        cards + aligned, 25, 25, snapshot, continuation_offsets=[50])
+
+    assert len(visible) == 25 and next_offset == 51
+    assert visible[-1]["story_id"] == legal["story_id"]
+
+
+def test_filtered_stitch_rechecks_hard_page_invariants():
+    subject = paid(PaidStore(events=liked_events()))
+    policy = subject._policy.composition
+    first = {"story_id": "story:" + "1" * 64, "source_id": "same", "title": "First",
+             "url": "https://example.test/first"}
+    second_id = "story:" + "2" * 64
+    groups = {first["story_id"]: "group:" + "a" * 32,
+              second_id: "group:" + "a" * 32}
+
+    assert subject._violates_page_invariants(
+        [first], {"story_id": second_id, "source_id": "same", "title": "Different",
+                  "url": "https://example.test/source"}, policy, groups)
+    assert subject._violates_page_invariants(
+        [first], {"story_id": second_id, "source_id": "other", "title": "First",
+                  "url": "https://example.test/title"}, policy, groups)
+    assert subject._violates_page_invariants(
+        [first], {"story_id": second_id, "source_id": "other", "title": "Different",
+                  "url": "https://example.test/group"}, policy, groups)
+    assert not subject._violates_page_invariants(
+        [first], {"story_id": second_id, "source_id": "other", "title": "Second",
+                  "url": "https://example.test/second"}, policy,
+        {**groups, second_id: "group:" + "b" * 32})
+
+
 def test_an_empty_filtered_slice_keeps_its_response_ordinal_for_older_cards():
     store = PaidStore(events=liked_events())
     subject = paid(store)
@@ -603,6 +749,20 @@ def test_the_legacy_window_still_works_when_the_recipe_is_unset():
     response = rank(build(store, composition=False), store)
     assert response["cards"] and "lane" not in response["cards"][0]
     assert response["cards"][0]["card_schema_version"] == 2
+
+
+def test_the_legacy_window_serves_its_short_tail_before_reranking():
+    rows = [corpus_row(index, hours=1 + index, source=f"legacy{index}",
+                       categories=[f"t{index % 9}"]) for index in range(100)]
+    store = Store(rows, events=liked_events())
+    subject = build(store, composition=False)
+    rank(subject, store, page_size=24)
+    frozen = store.frozen["frozen-1"]
+    tail = subject.page(authorization="Bearer valid",
+        cursor=subject._cursor("frozen-1", 48, int(frozen["expires_at"])))
+
+    assert [card["story_id"] for card in tail["cards"]] == [
+        card["story_id"] for card in frozen["cards"][48:50]]
 
 
 # --- capped promotion into All --------------------------------------------
