@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Mapping, Protocol, Sequence
 
+from curator.dedup import normalize_title
 from curator.contracts.enums import ActorKind, EventType, M2HistoryEventType
 from curator.contracts.ranking_request import (
     AuthenticatedOwner,
@@ -497,6 +498,12 @@ class RankingService:
                 # reporting 7/4/11/3 was hiding where the other card came from.
                 "lane_counts": {lane: sum(1 for item in finalization.cards if item.lane == lane)
                                 for lane in (*composition.lane_priority, BACKFILL_LANE)}})
+            event_groups = {item.story_id: str(item.row["event_group_id"])
+                            for item in finalization.cards
+                            if isinstance(item.row.get("event_group_id"), str)
+                            and item.row.get("event_group_id")}
+            if event_groups:
+                bindings["event_group_ids"] = event_groups
         bindings.update({"eligibility": {"category": category_id, "query": query},
             "eligibility_key": eligibility_key,
             # Count responses the owner can actually read, not offset/page-size
@@ -610,7 +617,16 @@ class RankingService:
                 return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
                         "cards": [], "next_cursor": None, "end_of_run": True}
         continuation_pending = False
-        if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
+        continuation_offsets = (frozen.get("bindings") or {}).get("continuation_offsets")
+        event_group_ids = (frozen.get("bindings") or {}).get("event_group_ids")
+        preview, preview_end, _preview_removed = self._slice(
+            cards, offset, size, current,
+            continuation_offsets=continuation_offsets,
+            event_group_ids=event_group_ids)
+        continuation_needed = (offset >= len(cards)
+            or (composition is not None and len(preview) < size
+                and preview_end >= len(cards)))
+        if continuation_needed and frozen["bindings"].get("corpus_has_more"):
             # F7, the branch that used to re-rank. Inside a reading run there is
             # never a second provider call: load more browses OLDER news, in the
             # same deterministic recipe order, with the same pools and labels and
@@ -633,9 +649,19 @@ class RankingService:
                         raise StaleRankingError("cursor_expired")
                     frozen = locked
                     cards = list(frozen["cards"])
-                    if offset >= len(cards) and frozen["bindings"].get("corpus_has_more"):
+                    locked_bindings = frozen.get("bindings") or {}
+                    locked_preview, locked_end, _locked_removed = self._slice(
+                        cards, offset, size, current,
+                        continuation_offsets=locked_bindings.get("continuation_offsets"),
+                        event_group_ids=locked_bindings.get("event_group_ids"))
+                    locked_needs_continuation = (offset >= len(cards)
+                        or (composition is not None and len(locked_preview) < size
+                            and locked_end >= len(cards)))
+                    if (locked_needs_continuation
+                            and frozen["bindings"].get("corpus_has_more")):
                         added, continuation_pending = self._continue_frozen_order(
-                            token, owner, frozen, str(payload["frozen_order_id"]), size)
+                            token, owner, frozen, str(payload["frozen_order_id"]), size,
+                            page_prefix=locked_preview)
                     else:
                         added = ()
                         continuation_pending = bool(frozen["bindings"].get("corpus_has_more"))
@@ -654,7 +680,10 @@ class RankingService:
                     "history_revision": current.get("included_history_revision", 0),
                     "eligibility": frozen["bindings"].get("eligibility", {}), "exclude_story_ids": [],
                     "corpus_cursor": frozen["bindings"].get("corpus_cursor"), "page_size": size})
-        visible, next_offset, removed = self._slice(cards, offset, size, current)
+        visible, next_offset, removed = self._slice(
+            cards, offset, size, current,
+            continuation_offsets=(frozen.get("bindings") or {}).get("continuation_offsets"),
+            event_group_ids=(frozen.get("bindings") or {}).get("event_group_ids"))
         visible = self._overlay_owner_states(token, visible)
         self._record_filtered(owner, frozen, removed)
         next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
@@ -709,7 +738,8 @@ class RankingService:
                                        "last_served_next_offset": next_offset})
         return {"schema_version": 1, **self._public_bindings(frozen["bindings"]), "cards": visible, "next_cursor": next_cursor}
 
-    def _continue_frozen_order(self, token, owner, frozen, frozen_order_id, size):
+    def _continue_frozen_order(self, token, owner, frozen, frozen_order_id, size,
+                               *, page_prefix=()):
         """Older news, composed by the recipe alone. No provider call, ever.
 
         Returns the cards appended and whether another bounded continuation may
@@ -760,6 +790,16 @@ class RankingService:
                             composition=composition, exclusive=exclusive,
                             also_covered_by=finalization.also_covered_by.get(item.story_id, ()))
                  for item in (finalization.cards if finalization else ())]
+        event_groups = dict(bindings.get("event_group_ids") or {})
+        for item in (finalization.cards if finalization else ()):
+            group = item.row.get("event_group_id")
+            if isinstance(group, str) and group:
+                event_groups[item.story_id] = group
+        added = self._align_continuation(
+            frozen.get("cards", ()), added, size, composition, event_groups,
+            page_prefix=page_prefix)
+        if event_groups:
+            bindings["event_group_ids"] = event_groups
         if exclusive:
             safe_rows = self._exclusive_safe_cursor_rows(
                 cursor_rows, {item.story_id for item in laned},
@@ -768,6 +808,20 @@ class RankingService:
         else:
             next_corpus = self._next_corpus_cursor(cursor_rows, hot_story_ids)
         more = fetched_more or len(rows) > len(added)
+        previous_total = len(frozen.get("cards", ()))
+        continuation_offsets = list(bindings.get("continuation_offsets") or ())
+        if added and previous_total not in continuation_offsets:
+            continuation_offsets.append(previous_total)
+            bindings["continuation_offsets"] = continuation_offsets
+        continuation_bindings = {
+            "corpus_cursor": next_corpus,
+            "corpus_has_more": more,
+            "continuation_mode": "recipe_only",
+        }
+        if event_groups:
+            continuation_bindings["event_group_ids"] = event_groups
+        if continuation_offsets:
+            continuation_bindings["continuation_offsets"] = continuation_offsets
         # The return is the whole point: the RPC refuses to grow an order past
         # its cap and returns 0, and a transport failure raises. Serving cards
         # this store did not accept would show her the same stories again on the
@@ -775,14 +829,11 @@ class RankingService:
         try:
             total = self._store.extend_frozen_order(user_id=owner.user_id,
                 frozen_order_id=frozen_order_id, cards=added,
-                bindings={"corpus_cursor": next_corpus,
-                          "corpus_has_more": more,
-                          "continuation_mode": "recipe_only"})
+                bindings=continuation_bindings)
         except Exception as error:
             log_suppressed_exception("m2_continuation_failed", error, stream=sys.stderr,
                 reason="store_unavailable", frozen_order_id=frozen_order_id)
             return (), False
-        previous_total = len(frozen.get("cards", ()))
         if (not isinstance(total, int) or total < previous_total
                 or (added and total <= previous_total)):
             # The order did not grow: it has reached its cap, or the row was not
@@ -915,7 +966,8 @@ class RankingService:
                              "before_story_id": last["story_id"]}
         return cursor
 
-    def _slice(self, cards, offset, size, snapshot):
+    def _slice(self, cards, offset, size, snapshot, *, continuation_offsets=None,
+               event_group_ids=None):
         """One page of the frozen order, with "less like this" applied at RENDER.
 
         The frozen array itself is never mutated, so the HMAC-signed cursor stays
@@ -925,23 +977,91 @@ class RankingService:
         offset is the position actually reached.
         """
         composition = self._policy.composition
-        if composition is None or not composition.immediate_negative_filter:
+        if composition is None:
             return cards[offset:offset + size], offset + size, []
-        profile = build_profile(snapshot, policy=composition, now=self._now())
-        if not profile.suppressed_sources and not profile.suppressed_topics:
+        if not composition.immediate_negative_filter:
+            profile = None
+        else:
+            profile = build_profile(snapshot, policy=composition, now=self._now())
+        boundaries = {value for value in (continuation_offsets or ())
+                      if isinstance(value, int) and not isinstance(value, bool) and value >= 0}
+        if ((profile is None
+                or (not profile.suppressed_sources and not profile.suppressed_topics))
+                and not any(boundary < offset + size for boundary in boundaries)):
             return cards[offset:offset + size], offset + size, []
         visible, removed, position = [], [], offset
         limit = min(len(cards), offset + size * 2)
         while position < limit and len(visible) < size:
             card = cards[position]
+            stitched = any(boundary <= position for boundary in boundaries)
             position += 1
             categories = card.get("category_ids") or []
-            if (card.get("source_id") in profile.suppressed_sources
-                    or any(category in profile.suppressed_topics for category in categories)):
+            if (profile is not None
+                    and (card.get("source_id") in profile.suppressed_sources
+                        or any(category in profile.suppressed_topics for category in categories))):
                 removed.append(str(card.get("story_id")))
                 continue
+            if (stitched and self._violates_page_invariants(
+                        visible, card, composition, event_group_ids)):
+                # Keep the colliding card for the next response instead of
+                # silently losing it behind the cursor. Normal continuations
+                # are reflowed before persistence, so this is the bounded
+                # fallback for an impossible partial page (for example, only
+                # one source remains at the end of the corpus).
+                position -= 1
+                break
             visible.append(card)
         return visible, position, removed
+
+    @staticmethod
+    def _violates_page_invariants(visible, candidate, composition, event_group_ids=None):
+        """Keep hard page rules intact when filtering stitches two slices."""
+        groups = event_group_ids if isinstance(event_group_ids, Mapping) else {}
+        source_id = str(candidate.get("source_id", ""))
+        group = groups.get(str(candidate.get("story_id", "")))
+        for previous in visible[-composition.same_source_window:]:
+            if source_id and str(previous.get("source_id", "")) == source_id:
+                return True
+            if (isinstance(group, str) and group
+                    and groups.get(str(previous.get("story_id", ""))) == group):
+                return True
+        title = normalize_title(str(candidate.get("title", "")))
+        url = candidate.get("url") or candidate.get("canonical_url")
+        for previous in visible:
+            if title and normalize_title(str(previous.get("title", ""))) == title:
+                return True
+            previous_url = previous.get("url") or previous.get("canonical_url")
+            if isinstance(url, str) and url and previous_url == url:
+                return True
+            if (isinstance(group, str) and group
+                    and groups.get(str(previous.get("story_id", ""))) == group):
+                return True
+        return False
+
+    def _align_continuation(self, existing, added, size, composition, event_group_ids=None,
+                            *, page_prefix=None):
+        """Reflow appended cards onto the frozen order's actual page boundaries."""
+        if not added or composition is None or size <= 0:
+            return list(added)
+        tail_size = len(existing) % size
+        page = (list(page_prefix) if page_prefix is not None
+                else list(existing[-tail_size:]) if tail_size else [])
+        remaining = list(added)
+        aligned = []
+        while remaining:
+            if len(page) >= size:
+                page = []
+            chosen = next((index for index, candidate in enumerate(remaining)
+                           if not self._violates_page_invariants(
+                               page, candidate, composition, event_group_ids)), None)
+            # The final runtime slice still fails closed on a collision. This
+            # fallback merely keeps the reorder bounded when no legal candidate
+            # remains for the current partial page.
+            chosen = 0 if chosen is None else chosen
+            candidate = remaining.pop(chosen)
+            aligned.append(candidate)
+            page.append(candidate)
+        return aligned
 
     def _authenticate(self, authorization: str) -> tuple[str, AuthenticatedOwner]:
         if not authorization.startswith("Bearer ") or not authorization[7:].strip():
@@ -1385,7 +1505,10 @@ class RankingService:
             view_pages = bound_pages
         size = int(frozen.get("page_size", page_size))
         cards = list(frozen["cards"])
-        visible, next_offset, removed = self._slice(cards, 0, size, snapshot)
+        visible, next_offset, removed = self._slice(
+            cards, 0, size, snapshot,
+            continuation_offsets=bindings.get("continuation_offsets"),
+            event_group_ids=bindings.get("event_group_ids"))
         visible = self._overlay_owner_states(token, visible)
         self._record_filtered(owner, frozen, removed)
         pages_served = view_pages
