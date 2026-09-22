@@ -529,6 +529,26 @@
     }
   }
 
+  function mergeM2CardState(incoming, current, sameHistoryContext) {
+    if (!isObject(current) || current.story_id !== incoming.story_id) return incoming;
+    // Local card state is safe to carry across a frozen refresh only while the
+    // history generation and consent revision are unchanged. A clear-history
+    // or consent change makes the incoming server state authoritative.
+    if (!sameHistoryContext) return incoming;
+    const merged = { ...incoming };
+    if (Number.isSafeInteger(current.state_revision) &&
+        current.state_revision > incoming.state_revision) {
+      ["read_at", "saved_at", "state_revision"].forEach((field) => { merged[field] = current[field]; });
+    }
+    const interests = new Map((incoming.interests || []).map((interest) => [interest.topic_id, interest]));
+    (current.interests || []).forEach((interest) => {
+      const existing = interests.get(interest.topic_id);
+      if (!existing || interest.revision > existing.revision) interests.set(interest.topic_id, interest);
+    });
+    merged.interests = [...interests.values()].sort((left, right) => left.topic_id.localeCompare(right.topic_id));
+    return merged;
+  }
+
   function setStoryStateControlsDisabled(card, disabled) {
     const readButton = card.querySelector(".read-action");
     const saveButton = card.querySelector(".save-action");
@@ -778,10 +798,16 @@
       endOfRun = value.end_of_run;
       delete value.end_of_run;
     }
+    const revisionsMatch = expected.allow_frozen_revisions === true
+      ? Number.isSafeInteger(value.history_revision) && value.history_revision >= 0 &&
+        Number.isSafeInteger(value.server_commit_revision) &&
+        value.server_commit_revision >= value.history_revision &&
+        value.history_revision <= expected.history_revision
+      : value.history_revision === expected.history_revision &&
+        value.server_commit_revision === expected.server_commit_revision;
     if (!exactFields(value, M2_RESPONSE_FIELDS) || value.schema_version !== 1 ||
         value.policy_version !== expected.policy_version || value.model_version !== expected.model_version ||
-        value.history_revision !== expected.history_revision ||
-        value.server_commit_revision !== expected.server_commit_revision ||
+        !revisionsMatch ||
         value.history_generation !== expected.history_generation ||
         value.consent_revision !== expected.consent_revision ||
         !["model", "fallback"].includes(value.result_mode) || typeof value.fallback_reason !== "string" ||
@@ -911,7 +937,7 @@
         page_size: config.page_size, eligibility, exclude_story_ids: excludeStoryIds,
       }, { ...history, policy_version: config.policy_version, model_version: config.model_version,
         page_size: config.page_size, server_commit_revision: history.history_revision,
-        history_revision: history.included_history_revision }),
+        history_revision: history.included_history_revision, allow_frozen_revisions: true }),
       page: (cursor, binding) => request(`/page?cursor=${encodeURIComponent(cursor)}`, "GET", null,
         { ...binding, policy_version: config.policy_version, model_version: config.model_version,
           page_size: config.page_size }),
@@ -919,7 +945,7 @@
   }
 
   const contract = {
-    actionTopic, applyInterestTopic, applyServerRank, applyServerState, beginStateMutation, createApi, createM2Service, createStoryCard, drainUpdates, effectiveTopic, finishStateMutation, loadedStatus, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
+    actionTopic, applyInterestTopic, applyServerRank, applyServerState, beginStateMutation, createApi, createM2Service, createStoryCard, drainUpdates, effectiveTopic, finishStateMutation, loadedStatus, mergeM2CardState, mergeTopicMembership, nextFeedCursor, nextSavedCursor,
     rankingReason, run, safeDestination,
     validateDiscovery, validateFeedPage, validateM2Config, validateM2Response, validateSavedPage, validateLatestPublication, validateUpdates,
   };
@@ -998,6 +1024,8 @@
     const searchBox = document.getElementById("q");
     document.querySelectorAll(".state-action:not(.read-action)").forEach((button) => { button.hidden = false; });
     const cards = new Map();
+    const pendingStateMutations = new Map();
+    const pendingInterestMutations = new Map();
     document.querySelectorAll(".card[data-story-id]").forEach((card) => {
       card.newsCuratorStaticCard = true;
       card.newsCuratorPublicAttributes = {
@@ -1247,6 +1275,13 @@
       behaviorWrites = pending;
       return pending;
     }
+    async function drainBehaviorWrites() {
+      while (true) {
+        const pending = behaviorWrites;
+        await pending.catch(() => {});
+        if (behaviorWrites === pending) return;
+      }
+    }
     async function behaviorIdentity(snapshot) {
       const bytes = await crypto.subtle.digest("SHA-256", encoder.encode(idempotencyKey()));
       return { p_event_id: "event:" + [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join(""),
@@ -1366,9 +1401,46 @@
         if (Object.prototype.hasOwnProperty.call(state, field)) entry[field] = state[field];
       });
     }
+    function restorePendingMutations(card) {
+      const storyId = card.dataset.storyId;
+      const state = pendingStateMutations.get(storyId);
+      if (state) {
+        const renderedRevision = Number(card.dataset.stateRevision || 0);
+        if (Number.isSafeInteger(renderedRevision) && renderedRevision > Number(state.baseline?.state_revision || 0)) {
+          state.baseline = {
+            token: state.token,
+            read_at: card.classList.contains("is-read") ? "local" : null,
+            saved_at: card.classList.contains("is-saved") ? "local" : null,
+            state_revision: renderedRevision,
+          };
+        }
+        card.newsCuratorStateMutationToken = state.token;
+        card.newsCuratorStateMutationBaseline = state.baseline;
+        card.newsCuratorStateMutationPresentation = state.presentation;
+        if (state.pendingRead) card.newsCuratorPendingReadIntent = state.pendingRead;
+        applyServerState(card, {
+          read_at: (state.pendingRead?.read ?? state.presentation.read) ? "local" : null,
+          saved_at: state.presentation.saved ? "local" : null,
+        });
+      }
+      const interest = pendingInterestMutations.get(storyId);
+      if (interest) card.newsCuratorInterestMutation = interest;
+    }
     function rerenderM2Cards() {
       if (!m2Active || !m2Binding) return;
       const entries = m2Entries.slice();
+      const pendingMutations = new Map();
+      cards.forEach((card, storyId) => {
+        if (card.dataset.m2Card !== "true") return;
+        const pending = {
+          stateToken: card.newsCuratorStateMutationToken,
+          stateBaseline: card.newsCuratorStateMutationBaseline,
+          statePresentation: card.newsCuratorStateMutationPresentation,
+          pendingRead: card.newsCuratorPendingReadIntent,
+          interest: card.newsCuratorInterestMutation,
+        };
+        if (pending.stateToken || pending.pendingRead || pending.interest) pendingMutations.set(storyId, pending);
+      });
       const reason = m2Binding.result_mode === "model"
         ? "Ranked using your current query and permitted reading history."
         : "Freshness order. Model ranking was not used.";
@@ -1393,6 +1465,15 @@
           const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
           interest.after(less);
         }
+        const pending = pendingMutations.get(entry.story_id);
+        if (pending?.stateToken) {
+          card.newsCuratorStateMutationToken = pending.stateToken;
+          card.newsCuratorStateMutationBaseline = pending.stateBaseline;
+          card.newsCuratorStateMutationPresentation = pending.statePresentation;
+        }
+        if (pending?.pendingRead) card.newsCuratorPendingReadIntent = pending.pendingRead;
+        if (pending?.interest) card.newsCuratorInterestMutation = pending.interest;
+        restorePendingMutations(card);
         cards.set(entry.story_id, card); hydratedTopics(card).add(selectedTopic());
         m2Section.querySelector(".grid").append(card); view.addCard(card);
       });
@@ -1423,6 +1504,10 @@
       announce(strings().toggleLabel);
     }
     function applyM2Page(response, append, eligibility) {
+      const currentEntries = new Map(m2Entries.map((entry) => [entry.story_id, entry]));
+      const sameHistoryContext = Boolean(m2Binding &&
+        m2Binding.history_generation === response.history_generation &&
+        m2Binding.consent_revision === response.consent_revision);
       if (!m2Active) {
         leaveDiscovery(true);
         m2PublicCards = [...cards.values()].map((card) => ({ card, parent: card.parentNode }));
@@ -1442,7 +1527,8 @@
         m2Section.append(element("div", "grid")); document.getElementById("sections").append(m2Section);
       }
       const reason = response.result_mode === "model" ? "Ranked using your current query and permitted reading history." : "Freshness order. Model ranking was not used.";
-      response.cards.forEach((entry) => {
+      response.cards.forEach((incoming) => {
+        const entry = mergeM2CardState(incoming, currentEntries.get(incoming.story_id), sameHistoryContext);
         if (cards.has(entry.story_id)) return;
         m2Entries.push(entry);
         const row = displayRow(entry, reason);
@@ -1454,6 +1540,7 @@
           const less = element("button", "state-action less-interest-action", "Less like this"); less.type = "button";
           interest.after(less);
         }
+        restorePendingMutations(card);
         markUntranslated(card, row);
         markElementLabels(card, row);
         markAlsoCovered(card, row);
@@ -1536,7 +1623,7 @@
       const transportDeadline = setTimeout(terminalFallback, m2Config.transport_timeout_ms);
       try {
         if (searchEvent && eligibility.query) await recordBehavior("search_query", { query: eligibility.query });
-        await behaviorWrites.catch(() => {});
+        await drainBehaviorWrites();
         const history = await api.historySnapshot();
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         syncM2Consent(history);
@@ -1554,8 +1641,15 @@
           ? await m2.page(m2Cursor, { ...m2Binding })
           : await m2.rank(history, eligibility);
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
+        // A read, save or interest click may have started after this request
+        // took its server snapshot. Let that write finish before replacing the
+        // old card, so its confirmed state reaches m2Entries and can be merged
+        // into this frozen response instead of being lost with a detached node.
+        await drainBehaviorWrites();
+        if (epoch !== authEpoch || request !== m2Sequence || !usesM2() ||
+            JSON.stringify(m2Eligibility()) !== key) return;
         if (baselineShown) {
-          await behaviorWrites.catch(() => {});
+          await drainBehaviorWrites();
           const latest = await api.historySnapshot();
           // Scoped the same way the server scopes its own staleness check. The
           // behavior revisions move on every read and every save, and treating
@@ -1742,7 +1836,10 @@
             return;
           }
           const stateWrite = button.classList.contains("read-action") || button.classList.contains("save-action");
-          button.disabled = !ready || (stateWrite && Boolean(card.newsCuratorStateMutationToken));
+          const interestWrite = button.classList.contains("interest-action") ||
+            button.classList.contains("less-interest-action");
+          button.disabled = !ready || (stateWrite && Boolean(card.newsCuratorStateMutationToken)) ||
+            (interestWrite && Boolean(card.newsCuratorInterestMutation));
         });
       });
     }
@@ -1765,6 +1862,7 @@
       delete card.newsCuratorStateMutationToken;
       delete card.newsCuratorStateMutationPresentation;
       delete card.newsCuratorStateMutationBaseline;
+      delete card.newsCuratorInterestMutation;
       card.classList.remove("is-read", "is-saved", "is-more-like", "is-less-like");
       interestStates(card).clear();
       hydratedTopics(card).clear();
@@ -1803,6 +1901,7 @@
       sessionWasPresent = false;
       abortOwnerExport();
       authEpoch += 1;
+      pendingStateMutations.clear(); pendingInterestMutations.clear();
       leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
@@ -1847,6 +1946,7 @@
     function invalidateHydrationForSession() {
       abortOwnerExport();
       authEpoch += 1;
+      pendingStateMutations.clear(); pendingInterestMutations.clear();
       leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
@@ -1987,6 +2087,8 @@
       }
       if (card.newsCuratorStateMutationToken) {
         card.newsCuratorPendingReadIntent = intent;
+        const pending = pendingStateMutations.get(card.dataset.storyId);
+        if (pending?.token === card.newsCuratorStateMutationToken) pending.pendingRead = intent;
         return;
       }
       if (!stateReady(card)) {
@@ -2116,6 +2218,8 @@
     async function mutateState(card, read, saved, previousRead = card.classList.contains("is-read"), eventType = "read_more") {
       const focusedAction = document.activeElement;
       const restoreFocusOnRollback = Boolean(focusedAction && card.contains(focusedAction));
+      const storyId = card.dataset.storyId;
+      if (pendingStateMutations.has(storyId)) return;
       const mutationToken = beginStateMutation(card);
       if (!mutationToken) return;
       const requestEpoch = authEpoch;
@@ -2127,6 +2231,12 @@
         state_revision: Number(card.dataset.stateRevision || 0),
       };
       card.newsCuratorStateMutationBaseline = { token: mutationToken, ...previous };
+      pendingStateMutations.set(storyId, {
+        token: mutationToken,
+        baseline: card.newsCuratorStateMutationBaseline,
+        presentation: card.newsCuratorStateMutationPresentation,
+        pendingRead: null,
+      });
       applyServerState(card, { ...previous, read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       rememberM2State(card, { read_at: read ? "local" : null, saved_at: saved ? "local" : null });
       try {
@@ -2135,37 +2245,61 @@
           ? await enqueueBehavior(async (snapshot) => api.setStoryStateWithEvent(card.dataset.storyId, read, saved,
               previous.state_revision, key, { ...await behaviorIdentity(snapshot), p_event_type: eventType, p_surface: "reader" }))
           : await api.setStoryState(card.dataset.storyId, read, saved, previous.state_revision, key);
-        if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
+        if (requestEpoch !== authEpoch) return;
         if (result.status === "conflict") fail("Story state changed in another session.");
-        const baseline = card.newsCuratorStateMutationBaseline || previous;
+        const pending = pendingStateMutations.get(storyId);
+        if (pending?.token !== mutationToken) return;
+        const baseline = pending.baseline || previous;
         const confirmed = Number(result.state_revision) >= Number(baseline.state_revision)
           ? { ...baseline, ...result }
           : baseline;
-        applyServerState(card, confirmed);
-        rememberM2State(card, confirmed);
-        reconcilePendingRead(card, Boolean(confirmed.read_at));
-        reapplyCurrentMembership(card, restoreFocusOnRollback ? focusedAction : null);
+        const entry = m2Entries.find((candidate) => candidate.story_id === storyId);
+        if (entry) ["read_at", "saved_at", "state_revision"].forEach((field) => { entry[field] = confirmed[field]; });
+        const currentCard = cards.get(storyId);
+        if (currentCard) restorePendingMutations(currentCard);
+        const presentationCard = card.isConnected && card.newsCuratorStateMutationToken === mutationToken
+          ? card : currentCard?.newsCuratorStateMutationToken === mutationToken ? currentCard : null;
+        if (!presentationCard) return;
+        applyServerState(presentationCard, confirmed);
+        rememberM2State(presentationCard, confirmed);
+        reconcilePendingRead(presentationCard, Boolean(confirmed.read_at));
+        reapplyCurrentMembership(presentationCard,
+          presentationCard === card && restoreFocusOnRollback ? focusedAction : null);
         announce("Reading state saved.");
       } catch (_) {
-        if (requestEpoch !== authEpoch || card.newsCuratorStateMutationToken !== mutationToken) return;
-        const baseline = card.newsCuratorStateMutationBaseline || previous;
-        applyServerState(card, baseline);
-        reconcilePendingRead(card, Boolean(baseline.read_at));
-        reapplyCurrentMembership(card);
+        const pending = pendingStateMutations.get(storyId);
+        if (requestEpoch !== authEpoch || pending?.token !== mutationToken) return;
+        const baseline = pending.baseline || previous;
+        const entry = m2Entries.find((candidate) => candidate.story_id === storyId);
+        if (entry) ["read_at", "saved_at", "state_revision"].forEach((field) => { entry[field] = baseline[field]; });
+        const currentCard = cards.get(storyId);
+        if (currentCard) restorePendingMutations(currentCard);
+        const presentationCard = card.isConnected && card.newsCuratorStateMutationToken === mutationToken
+          ? card : currentCard?.newsCuratorStateMutationToken === mutationToken ? currentCard : null;
+        if (!presentationCard) return;
+        applyServerState(presentationCard, baseline);
+        reconcilePendingRead(presentationCard, Boolean(baseline.read_at));
+        reapplyCurrentMembership(presentationCard);
         rolledBack = true;
         announce("Reading state could not be saved. Try again.");
       } finally {
-        if (card.newsCuratorStateMutationPresentation?.token === mutationToken) {
-          delete card.newsCuratorStateMutationPresentation;
+        const pending = pendingStateMutations.get(storyId);
+        if (pending?.token === mutationToken) pendingStateMutations.delete(storyId);
+        const currentCard = cards.get(storyId);
+        const presentationCard = card.isConnected && card.newsCuratorStateMutationToken === mutationToken
+          ? card : currentCard?.newsCuratorStateMutationToken === mutationToken ? currentCard : null;
+        if (presentationCard?.newsCuratorStateMutationPresentation?.token === mutationToken) {
+          delete presentationCard.newsCuratorStateMutationPresentation;
         }
-        if (card.newsCuratorStateMutationBaseline?.token === mutationToken) {
-          delete card.newsCuratorStateMutationBaseline;
+        if (presentationCard?.newsCuratorStateMutationBaseline?.token === mutationToken) {
+          delete presentationCard.newsCuratorStateMutationBaseline;
         }
-        const unlocked = finishStateMutation(card, mutationToken, stateReady(card));
-        if (unlocked && card.newsCuratorPendingReadIntent) {
-          syncReadIntent(card, card.newsCuratorPendingReadIntent);
+        const unlocked = Boolean(presentationCard &&
+          finishStateMutation(presentationCard, mutationToken, stateReady(presentationCard)));
+        if (unlocked && presentationCard.newsCuratorPendingReadIntent) {
+          syncReadIntent(presentationCard, presentationCard.newsCuratorPendingReadIntent);
         }
-        if (unlocked && rolledBack && restoreFocusOnRollback && focusedAction.isConnected && !card.hidden) {
+        if (unlocked && rolledBack && restoreFocusOnRollback && focusedAction.isConnected && !presentationCard.hidden) {
           focusedAction.focus({ preventScroll: true });
         }
       }
@@ -2217,8 +2351,13 @@
         const signal = target.classList.contains("less-interest-action") ? "less_like" : "more_like";
         if (signal === "more_like" && card.classList.contains("is-more-like")) return;
         const revision = Number(card.dataset.interestRevision || 0);
+        const storyId = card.dataset.storyId;
+        if (pendingInterestMutations.has(storyId)) return;
         const requestEpoch = authEpoch;
-        target.disabled = true;
+        const interestToken = {};
+        card.newsCuratorInterestMutation = { token: interestToken };
+        pendingInterestMutations.set(storyId, card.newsCuratorInterestMutation);
+        refreshStateControls();
         const key = idempotencyKey();
         const operation = m2?.enabled
           ? enqueueBehavior(async (snapshot) => api.setStoryInterestWithEvent(card.dataset.storyId, topicId,
@@ -2228,13 +2367,27 @@
           .then((result) => {
             if (requestEpoch !== authEpoch) return;
             if (result.status === "conflict") fail("Story interest changed in another session.");
-            applyServerState(card, result, topicId);
+            const presentationCard = card.isConnected ? card : cards.get(storyId);
+            if (presentationCard) restorePendingMutations(presentationCard);
+            if (!presentationCard || presentationCard.newsCuratorInterestMutation?.token !== interestToken) return;
+            applyServerState(presentationCard, result, topicId);
+            rememberM2State(presentationCard, { interests: [...interestStates(presentationCard)].map(([savedTopicId, state]) => ({
+              topic_id: savedTopicId, signal: state.signal, revision: state.revision,
+            })) });
             announce(`${signal === "less_like" ? "Less" : "More"} like this was saved for future rankings.`);
           })
           .catch(() => {
             if (requestEpoch === authEpoch) announce("More like this could not be saved. Try again.");
           })
-          .finally(() => { target.disabled = !stateReady(card); });
+          .finally(() => {
+            const pending = pendingInterestMutations.get(storyId);
+            if (pending?.token === interestToken) pendingInterestMutations.delete(storyId);
+            const presentationCard = card.isConnected ? card : cards.get(storyId);
+            if (presentationCard?.newsCuratorInterestMutation?.token === interestToken) {
+              delete presentationCard.newsCuratorInterestMutation;
+              refreshStateControls();
+            }
+          });
       }
     });
     document.querySelectorAll(".chip").forEach((chip) => {

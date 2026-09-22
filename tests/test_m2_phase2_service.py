@@ -1459,6 +1459,24 @@ def test_a_refresh_inside_a_run_returns_the_ranking_it_already_paid_for():
     assert subject._adapter.calls == 1, "a refresh bought a second provider call"
 
 
+def test_a_frozen_refresh_overlays_current_owner_state_without_mutating_the_order():
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    story_id = first["cards"][0]["story_id"]
+    store.owner_states = lambda token, story_ids: ({story_id: {
+        "read_at": NOW.isoformat(), "saved_at": NOW.isoformat(), "state_revision": 8,
+        "interests": [{"topic_id": "world", "signal": "less_like", "revision": 3}],
+    }} if story_id in story_ids else {})
+
+    refreshed = rank(subject, store)
+    card = next(item for item in refreshed["cards"] if item["story_id"] == story_id)
+    assert card["read_at"] == NOW.isoformat() and card["saved_at"] == NOW.isoformat()
+    assert card["state_revision"] == 8 and card["interests"][0]["signal"] == "less_like"
+    persisted = next(item for item in store.frozen["frozen-1"]["cards"] if item["story_id"] == story_id)
+    assert persisted["state_revision"] != 8, "a render-time overlay mutated the frozen order"
+
+
 def test_a_refresh_after_page_two_resumes_at_page_three():
     rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
                        categories=[f"d{index % 9}"]) for index in range(300)]
