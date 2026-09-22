@@ -46,7 +46,7 @@ def owner(monkeypatch, payload):
         "_session",
         lambda value, email, *, minimum_validity: Session(),
     )
-    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda: Transport([(200, payload)]))
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", lambda **_kwargs: Transport([(200, payload)]))
 
 
 def big_payload(byte_target: int) -> dict:
@@ -138,6 +138,26 @@ def test_an_invalid_cap_is_refused_before_any_remote_request(tmp_path, monkeypat
 ])
 def test_each_failure_class_gets_its_own_label(error, expected):
     assert m2_cli._failure_class(error) == expected
+
+
+def test_transport_cap_failure_names_size_not_auth_and_prints_no_payload(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(m2_cli, "_auth_config", config)
+    monkeypatch.setattr(m2_cli, "_session", lambda *_args, **_kwargs: Session())
+
+    class OversizedTransport:
+        def __init__(self, *, max_response_bytes):
+            self.limit = max_response_bytes
+
+        def request(self, *_args, **_kwargs):
+            raise m2_cli.ResponseTooLarge(self.limit)
+
+    monkeypatch.setattr(m2_cli, "JsonRestTransport", OversizedTransport)
+    output = tmp_path / "receipt.json"
+    assert m2_cli.main(["history", "--output", str(output), "--max-output-bytes", "65536"]) == 1
+    error = capsys.readouterr().err
+    assert "response exceeded cap 65536 bytes" in error
+    assert "auth" not in error and "secret" not in error
+    assert not output.exists()
 
 
 def test_an_auth_failure_reads_differently_from_an_oversized_success(tmp_path, monkeypatch, capsys):

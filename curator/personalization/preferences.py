@@ -16,6 +16,14 @@ MAX_RESPONSE_BYTES = 64 * 1024
 MAX_INPUT_BYTES = 16 * 1024
 
 
+class ResponseTooLarge(AuthError):
+    """A response crossed its configured bound; the error contains no response data."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__("The preference response was invalid.")
+        self.limit = limit
+
+
 class RestTransport(Protocol):
     def request(
         self,
@@ -35,7 +43,11 @@ class JsonRestTransport:
         def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
             return None
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_response_bytes: int = MAX_RESPONSE_BYTES) -> None:
+        if (type(max_response_bytes) is not int or
+                not 1 <= max_response_bytes <= 16 * 1024 * 1024):
+            raise ValueError("response byte limit is invalid")
+        self._max_response_bytes = max_response_bytes
         self._proxy_handler = urllib.request.ProxyHandler({})
         self._opener = urllib.request.build_opener(
             self._proxy_handler,
@@ -57,9 +69,10 @@ class JsonRestTransport:
             with self._opener.open(request, timeout=timeout) as response:
                 if response.geturl() != url:
                     raise AuthError("The preference endpoint redirected unexpectedly.")
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-                if len(raw) > MAX_RESPONSE_BYTES:
-                    raise AuthError("The preference response was invalid.")
+                raw = response.read(self._max_response_bytes + 1)
+                if len(raw) > self._max_response_bytes:
+                    raw = b""
+                    raise ResponseTooLarge(self._max_response_bytes)
                 if not raw:
                     return response.status, None
                 payload = _parse_json_without_retaining_input(raw)

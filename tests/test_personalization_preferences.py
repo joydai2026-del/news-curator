@@ -114,6 +114,40 @@ def test_malformed_preference_json_has_no_token_in_exception_graph() -> None:
     assert "PREF_REFRESH_SENTINEL" not in graph
 
 
+def test_json_transport_keeps_preference_default_but_accepts_owner_cli_bound() -> None:
+    url = "https://example.supabase.co/rest/v1/rpc/m2_history_snapshot"
+    response_bytes = json.dumps({"history": "x" * 70_000}).encode("utf-8")
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return url
+
+        def read(self, limit):
+            return response_bytes[:limit]
+
+    class FakeOpener:
+        def open(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    default_transport = JsonRestTransport()
+    default_transport._opener = FakeOpener()
+    with pytest.raises(AuthError, match="response was invalid") as caught:
+        default_transport.request("POST", url, headers={})
+    assert caught.value.__traceback__.tb_next.tb_frame.f_locals["raw"] == b""
+
+    owner_transport = JsonRestTransport(max_response_bytes=1024 * 1024)
+    owner_transport._opener = FakeOpener()
+    assert owner_transport.request("POST", url, headers={}) == (200, {"history": "x" * 70_000})
+
+
 def test_get_reads_only_rls_visible_caller_row_with_public_credentials(capsys) -> None:
     transport = FakeRestTransport([(200, [record()])])
     preference = PreferenceClient(CONFIG, transport=transport).get(session())

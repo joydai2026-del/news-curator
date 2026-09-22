@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from curator.personalization import AgentAuth, AuthConfig, AuthError, MacOSKeychainStorage  # noqa: E402
-from curator.personalization.preferences import JsonRestTransport  # noqa: E402
+from curator.personalization.preferences import JsonRestTransport, ResponseTooLarge  # noqa: E402
 
 MAX_INPUT_BYTES = 16 * 1024
 # The private-output ceiling is an operational value, not a security boundary:
@@ -197,10 +197,11 @@ def _session_minimum_validity(command: str, timeout: float) -> float:
     return timeout * remote_legs + SESSION_REFRESH_MARGIN_SECONDS
 
 
-def _rpc(config: AuthConfig, session, name: str, body: Mapping[str, Any], timeout: float) -> Any:
+def _rpc(config: AuthConfig, session, name: str, body: Mapping[str, Any], timeout: float,
+         max_response_bytes: int = DEFAULT_MAX_OUTPUT_BYTES) -> Any:
     if name not in _RPC_NAMES:
         raise ValueError("unsupported RPC")
-    status, payload = JsonRestTransport().request("POST", f"{config.supabase_url}/rest/v1/rpc/{name}", headers=_headers(config, session), body=body, timeout=timeout)
+    status, payload = JsonRestTransport(max_response_bytes=max_response_bytes).request("POST", f"{config.supabase_url}/rest/v1/rpc/{name}", headers=_headers(config, session), body=body, timeout=timeout)
     if status != 200:
         raise AuthError("The M2 request was denied or unavailable.")
     return payload
@@ -210,7 +211,8 @@ def _ranker_origin(args: argparse.Namespace) -> str:
     return _origin(args.ranker_origin or os.environ.get("NEWS_CURATOR_M2_RANKER_ORIGIN", ""))
 
 
-def _rank(config: AuthConfig, session, args: argparse.Namespace) -> Any:
+def _rank(config: AuthConfig, session, args: argparse.Namespace,
+          max_response_bytes: int = DEFAULT_MAX_OUTPUT_BYTES) -> Any:
     origin = _ranker_origin(args)
     policy = args.policy_version or os.environ.get("NEWS_CURATOR_M2_POLICY_VERSION", "")
     model = args.model_version or os.environ.get("NEWS_CURATOR_M2_MODEL_VERSION", "")
@@ -218,7 +220,8 @@ def _rank(config: AuthConfig, session, args: argparse.Namespace) -> Any:
         raise ValueError("rank policy and model versions are required")
     if not 1 <= args.page_size <= 50 or (args.category is not None and len(args.category) > 80) or (args.query is not None and len(args.query) > 600):
         raise ValueError("rank input is invalid")
-    history = _rpc(config, session, "m2_history_snapshot", {"p_limit": None}, args.timeout)
+    history = _rpc(config, session, "m2_history_snapshot", {"p_limit": None}, args.timeout,
+                   max_response_bytes)
     required = ("included_history_revision", "history_revision", "history_generation", "consent_revision")
     if not isinstance(history, dict) or any(isinstance(history.get(field), bool) or not isinstance(history.get(field), int) or history[field] < 0 for field in required):
         raise AuthError("The M2 history response was invalid.")
@@ -227,18 +230,19 @@ def _rank(config: AuthConfig, session, args: argparse.Namespace) -> Any:
             "history_generation": history["history_generation"], "consent_revision": history["consent_revision"],
             "page_size": args.page_size, "eligibility": {"category": args.category, "query": args.query},
             "exclude_story_ids": args.exclude_story_id}
-    status, payload = JsonRestTransport().request("POST", f"{origin}/rank", headers={"authorization": f"Bearer {session.access_token}", "accept": "application/json", "content-type": "application/json"}, body=body, timeout=args.timeout)
+    status, payload = JsonRestTransport(max_response_bytes=max_response_bytes).request("POST", f"{origin}/rank", headers={"authorization": f"Bearer {session.access_token}", "accept": "application/json", "content-type": "application/json"}, body=body, timeout=args.timeout)
     if status != 200:
         raise AuthError("The M2 rank request was denied or unavailable.")
     return {"history": history, "ranking": payload}
 
 
-def _page(config: AuthConfig, session, args: argparse.Namespace) -> Any:
+def _page(config: AuthConfig, session, args: argparse.Namespace,
+          max_response_bytes: int = DEFAULT_MAX_OUTPUT_BYTES) -> Any:
     cursor = _input_object(args.input).get("cursor")
     if not isinstance(cursor, str) or not cursor or len(cursor.encode("utf-8")) > 4096:
         raise ValueError("page input is invalid")
     query = urllib.parse.urlencode({"cursor": cursor})
-    status, payload = JsonRestTransport().request("GET", f"{_ranker_origin(args)}/page?{query}", headers={"authorization": f"Bearer {session.access_token}", "accept": "application/json"}, timeout=args.timeout)
+    status, payload = JsonRestTransport(max_response_bytes=max_response_bytes).request("GET", f"{_ranker_origin(args)}/page?{query}", headers={"authorization": f"Bearer {session.access_token}", "accept": "application/json"}, timeout=args.timeout)
     if status != 200:
         raise AuthError("The M2 page request was denied or unavailable.")
     return payload
@@ -304,6 +308,8 @@ def _failure_class(error: BaseException) -> str:
     """
     if isinstance(error, OutputTooLarge):
         return str(error)
+    if isinstance(error, ResponseTooLarge):
+        return f"response exceeded cap {error.limit} bytes"
     if isinstance(error, AuthError):
         # The shared transport turns an unreachable endpoint into AuthError too,
         # so this label names both rather than overclaiming a denied token.
@@ -331,12 +337,12 @@ def main(argv: list[str] | None = None) -> int:
             minimum_validity=_session_minimum_validity(args.command, args.timeout),
         )
         if args.command == "rank":
-            payload = _rank(config, session, args)
+            payload = _rank(config, session, args, limit)
         elif args.command == "page":
-            payload = _page(config, session, args)
+            payload = _page(config, session, args, limit)
         else:
             name, build = _RPC_BUILDERS[args.command]
-            payload = _rpc(config, session, name, build(args), args.timeout)
+            payload = _rpc(config, session, name, build(args), args.timeout, limit)
         _private_output(args.output, payload, limit)
         print(f"M2 {args.command} completed. Private output written.")
         return 0
