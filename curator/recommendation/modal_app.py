@@ -83,6 +83,7 @@ if deployment_mode not in {"service", "smoke"}:
 # rather than drifting apart across a deploy.
 function_timeout = function_timeout_seconds(os.environ)
 max_containers = _bounded_int("NEWS_CURATOR_MODAL_MAX_CONTAINERS", 4, 1, 20)
+min_containers = _bounded_int("NEWS_CURATOR_MODAL_MIN_CONTAINERS", 0, 0, max_containers)
 max_inputs = _bounded_int("NEWS_CURATOR_MODAL_MAX_INPUTS_PER_CONTAINER", 8, 1, 32)
 # Modal SDK 1.4.2 only rejects non-positive values. The observed server
 # enforces 2..3600; the cold-start guide also documents a two-second minimum.
@@ -92,7 +93,7 @@ scaledown_window = _bounded_int("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", 60, 2, 3
 if deployment_mode == "service":
     runtime_secret = modal.Secret.from_name(os.environ["NEWS_CURATOR_RANKER_SECRET_NAME"])
     endpoint = app.function(image=image, secrets=[runtime_secret], timeout=function_timeout,
-        max_containers=max_containers, scaledown_window=scaledown_window,
+        max_containers=max_containers, min_containers=min_containers, scaledown_window=scaledown_window,
         enable_memory_snapshot=_enabled("NEWS_CURATOR_MODAL_MEMORY_SNAPSHOT_ENABLED", default=True),
         restrict_modal_access=True)(modal.concurrent(max_inputs=max_inputs)(modal.asgi_app()(_endpoint)))
 
