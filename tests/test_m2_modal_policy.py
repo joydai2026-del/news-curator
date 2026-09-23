@@ -95,6 +95,7 @@ def test_remote_handlers_import_without_deployment_environment(monkeypatch):
 
 
 def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(monkeypatch, tmp_path):
+    monkeypatch.delenv("NEWS_CURATOR_MODAL_MIN_CONTAINERS", raising=False)
     _, captured = _load(monkeypatch, **_required(tmp_path))
     assert captured["app_name"] == "news-curator-m2-ranker"
     # 240: the container must outlive the service's own worst case (provider
@@ -102,6 +103,7 @@ def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(mon
     # which curator.recommendation.runtime refuses to boot without.
     assert captured["functions"][0]["timeout"] == 240
     assert captured["functions"][0]["max_containers"] == 4
+    assert captured["functions"][0]["min_containers"] == 0
     assert captured["functions"][0]["scaledown_window"] == 60
     assert captured["functions"][0]["enable_memory_snapshot"] is True
     assert captured["functions"][0]["restrict_modal_access"] is True
@@ -126,6 +128,25 @@ def test_modal_policy_uses_validated_overrides(monkeypatch, tmp_path):
     assert captured["concurrent"]["max_inputs"] == 12
 
 
+@pytest.mark.parametrize("minimum", ["0", "1", "7"])
+def test_modal_min_containers_accepts_zero_through_configured_maximum(monkeypatch, tmp_path, minimum):
+    _, captured = _load(monkeypatch, **(_required(tmp_path) | {
+        "NEWS_CURATOR_MODAL_MIN_CONTAINERS": minimum,
+        "NEWS_CURATOR_MODAL_MAX_CONTAINERS": "7",
+    }))
+    assert captured["functions"][0]["min_containers"] == int(minimum)
+    assert captured["functions"][0]["max_containers"] == 7
+
+
+@pytest.mark.parametrize("minimum", ["-1", "3", "1.5", "many", ""])
+def test_modal_min_containers_rejects_invalid_or_above_configured_maximum(monkeypatch, tmp_path, minimum):
+    with pytest.raises(ValueError, match="NEWS_CURATOR_MODAL_MIN_CONTAINERS"):
+        _load(monkeypatch, **(_required(tmp_path) | {
+            "NEWS_CURATOR_MODAL_MIN_CONTAINERS": minimum,
+            "NEWS_CURATOR_MODAL_MAX_CONTAINERS": "2",
+        }))
+
+
 def test_smoke_mode_does_not_require_or_resolve_a_secret(monkeypatch, tmp_path):
     values = _required(tmp_path) | {"NEWS_CURATOR_MODAL_MODE": "smoke"}
     values.pop("NEWS_CURATOR_RANKER_SECRET_NAME")
@@ -135,6 +156,7 @@ def test_smoke_mode_does_not_require_or_resolve_a_secret(monkeypatch, tmp_path):
     assert captured["functions"][0]["block_network"] is True
     assert captured["functions"][0]["include_source"] is False
     assert "enable_memory_snapshot" not in captured["functions"][0]
+    assert "min_containers" not in captured["functions"][0]
     assert all(call[0] != "secret" for call in captured.values() if isinstance(call, tuple))
 
 
