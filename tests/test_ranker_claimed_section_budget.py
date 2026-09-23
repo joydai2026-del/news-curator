@@ -203,7 +203,7 @@ def test_the_claim_covers_the_measured_section_at_the_shipped_values():
     """The shipped numbers satisfy the rule they are validated by."""
     _, policy = runtime.load_ranker_policy({}, root=Path(__file__).resolve().parents[1])
     calls = claimed_transport_call_budget(policy) + runtime.supabase_timeout_retries(policy)
-    deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 210
+    deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 220
     assert claim > deadline + settle + calls * timeout + margin
 
 

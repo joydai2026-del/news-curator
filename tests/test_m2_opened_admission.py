@@ -95,7 +95,7 @@ def test_opened_lookup_claim_budget_includes_two_extra_continuation_calls():
     root = Path(__file__).resolve().parents[1]
     _, policy = runtime.load_ranker_policy({}, root=root)
     # Config gate: two non-retried pre-admission reads add two calls to the
-    # existing accepted-policy envelope. This stays red until approved.
+    # existing accepted-policy envelope. The approved claim is220 seconds.
     assert runtime.claimed_transport_call_budget(policy) >= 33
     composition = harness.load_composition_policy(harness.POLICY_PATH)
     required = (policy["deadline_seconds"] + policy["settle_window_seconds"]
@@ -271,9 +271,106 @@ def test_opened_hot_fetch_head_does_not_hide_unread_hot_beyond_pool_limit():
         return rows
     store.retained_candidates_v2 = capture
     result = harness.rank(subject, store)
-    assert calls == [(12, 12)]
+    assert calls == [(12, 1)]
     later = subject.page(authorization="Bearer valid", cursor=result["next_cursor"])
     assert hot[-1]["story_id"] in {card["story_id"] for card in later["cards"]}
     assert subject._adapter.calls == len(store.reservations) == 1
-    # The preserved Hot keyset recovers it on continuation, but not page one.
+    # Opened rows must not consume the unchanged 12-row SQL budget.
     assert hot[-1]["story_id"] in {card["story_id"] for card in result["cards"]}
+
+
+def test_candidate_owner_is_bound_to_verified_auth_not_client_body():
+    store = OpenedStore(harness.default_corpus(), ())
+    subject = harness.paid(store)
+    received = []
+    original = store.retained_candidates_v2
+    def capture(**kwargs):
+        received.append((kwargs.get("owner_id"), kwargs.get("hide_already_opened")))
+        return original(**kwargs)
+    store.retained_candidates_v2 = capture
+    harness.rank(subject, store, owner_id="22222222-2222-2222-2222-222222222222",
+                 user_id="22222222-2222-2222-2222-222222222222",
+                 hide_already_opened=False,
+                 eligibility={"category": None, "query": None,
+                              "owner_id": "22222222-2222-2222-2222-222222222222"})
+    assert received and set(received) == {(harness.OWNER_ID, True)}
+
+
+def test_continuation_candidate_owner_comes_from_authentication():
+    rows = harness.default_corpus() + [harness.corpus_row(
+        3000 + index, hours=50 + index, source=f"owner-tail-{index}",
+        categories=[f"owner-tail-{index}"]) for index in range(70)]
+    store = OpenedStore(rows, ())
+    subject = harness.paid(store)
+    harness.rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    received = []
+    original = store.retained_candidates_v2
+    def capture(**kwargs):
+        received.append((kwargs.get("owner_id"), kwargs.get("hide_already_opened")))
+        return original(**kwargs)
+    store.retained_candidates_v2 = capture
+    cursor = subject._cursor("frozen-1", len(frozen["cards"]),
+                             int(frozen["expires_at"]), response_number=2)
+    subject.page(authorization="Bearer valid", cursor=cursor)
+    assert received and set(received) == {(harness.OWNER_ID, True)}
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_two_verified_owners_share_one_service_without_pool_identity_bleed():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    other = "22222222-2222-2222-2222-222222222222"
+    store = OpenedStore(harness.default_corpus(), ())
+    subject = harness.paid(store)
+    subject._policy = replace(subject._policy, preview_owner_ids=(harness.OWNER_ID, other))
+    class TwoOwnerAuth:
+        def get_user(self, token):
+            return {"id": {"owner-a": harness.OWNER_ID, "owner-b": other}[token]}
+    subject._auth = TwoOwnerAuth()
+    barrier = Barrier(2, timeout=2)
+    received = []
+    def capture(**kwargs):
+        if kwargs["lane"] is None:
+            barrier.wait()
+        received.append((kwargs["query"], kwargs.get("owner_id")))
+        return []
+    store.retained_candidates_v2 = capture
+    def request(token):
+        _, owner = subject._authenticate("Bearer " + token)
+        return subject._pool_rows(None, token, harness.BehaviorProfile(),
+            subject._policy.composition, None, None, owner=owner)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(request, ("owner-a", "owner-b")))
+    assert set(received) == {("owner-a", harness.OWNER_ID), ("owner-b", other)}
+    assert subject._adapter.calls == 0 and store.reservations == []
+
+
+def test_missing_verified_pool_owner_fails_before_any_acquisition():
+    from curator.recommendation.service import AuthenticationError
+    store = OpenedStore(harness.default_corpus(), ())
+    subject = harness.paid(store)
+    calls = []
+    store.retained_candidates_v2 = lambda **kwargs: calls.append(kwargs) or []
+    with pytest.raises((TypeError, AuthenticationError)):
+        subject._pool_rows(None, None, harness.BehaviorProfile(),
+                           subject._policy.composition, None, None)
+    assert calls == [] and store.reservations == []
+
+
+def test_forged_cursor_owner_cannot_trigger_acquisition():
+    import base64
+    import json
+    store = OpenedStore(harness.default_corpus(), ())
+    subject = harness.paid(store)
+    result = harness.rank(subject, store)
+    cursor = result["next_cursor"]
+    decoded = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+    payload = json.loads(decoded[:-32])
+    payload["owner_id"] = "22222222-2222-2222-2222-222222222222"
+    forged = base64.urlsafe_b64encode(json.dumps(payload).encode() + decoded[-32:]).decode()
+    calls = []
+    store.retained_candidates_v2 = lambda **kwargs: calls.append(kwargs) or []
+    with pytest.raises(harness.StaleRankingError, match="invalid_cursor"):
+        subject.page(authorization="Bearer valid", cursor=forged)
+    assert calls == [] and subject._adapter.calls == len(store.reservations) == 1

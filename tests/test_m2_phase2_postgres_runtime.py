@@ -62,6 +62,7 @@ MIGRATIONS = (
     'supabase/migrations/202609230001_m2_retained_candidates_v2_bulk_general.sql',
     'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
     'supabase/migrations/202609230003_m2_opened_candidate_ids.sql',
+    'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -72,9 +73,13 @@ def _run(*args, input_text=None, check=True):
                           timeout=120, check=check)
 
 
+def _psql_command(container):
+    return ['docker', 'exec', '-i', container, 'psql', '-X', '-At', '-U', 'postgres',
+            '-v', 'ON_ERROR_STOP=1']
+
+
 def _sql(container, sql, check=True):
-    return _run('docker', 'exec', '-i', container, 'psql', '-X', '-At', '-U', 'postgres',
-                '-v', 'ON_ERROR_STOP=1', input_text=sql, check=check)
+    return _run(*_psql_command(container), input_text=sql, check=check)
 
 
 def _quote(value):
@@ -756,7 +761,7 @@ def test_concurrent_first_ranks_join_one_run_with_one_profile(db):
                  "'{\"schema_version\":1,\"event_count\":7,"
                  "\"_history_generation\":1,\"_consent_revision\":0}'::jsonb);")
     processes = [subprocess.Popen(
-        ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        _psql_command(db),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(8)]
     outputs = [process.communicate(statement)[0] for process in processes]
     assert all(process.returncode == 0 for process in processes)
@@ -972,7 +977,7 @@ def test_the_ranking_claim_is_atomic_under_two_sessions(db):
                  f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
                  "gen_random_uuid(), 60);")
     processes = [subprocess.Popen(
-        ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        _psql_command(db),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         for _ in range(8)]
     outputs = [process.communicate(statement)[0] for process in processes]
@@ -1075,7 +1080,7 @@ def test_a_claim_and_a_claimed_reserve_cannot_interleave(db):
                 f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
                 "gen_random_uuid(), 60);")
     processes = [subprocess.Popen(
-        ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        _psql_command(db),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         for _ in range(2)]
     outputs = [processes[0].communicate(slow)[0], processes[1].communicate(takeover)[0]]
@@ -1099,7 +1104,7 @@ def test_eight_sessions_racing_the_claim_then_the_reserve(db):
                  f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
                  "gen_random_uuid(), 60);")
     processes = [subprocess.Popen(
-        ['docker', 'exec', '-i', db, 'psql', '-X', '-At', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        _psql_command(db),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         for _ in range(8)]
     answers = [json.loads(process.communicate(statement)[0].strip().splitlines()[-1])
@@ -1398,3 +1403,87 @@ def test_filtered_rpc_refuses_public_roles_and_oversized_filters(db):
     oversized = _service(db, 'select count(*) from public.m2_retained_candidates_filtered('
                          "p_excluded_story_ids => array_fill('x'::text, array[1201]));", check=False)
     assert oversized.returncode != 0 and 'invalid filter size' in oversized.stderr
+
+
+def _owner_candidates(db, owner, *, category, hide=True, limit=12, lane=None, before=None):
+    args = [f'p_owner_id => {_quote(owner)}::uuid',
+            f'p_hide_already_opened => {str(hide).lower()}',
+            f'p_category_id => {_quote(category)}', f'p_limit => {limit}']
+    if lane:
+        args.append(f'p_lane => {_quote(lane)}')
+    if before:
+        args += [f'p_before_source_count => {before["independent_source_count"]}',
+                 f'p_before_published_at => {_quote(before["published_at"])}',
+                 f'p_before_story_id => {_quote(before["story_id"])}']
+    return json.loads(_last(_service(db, "select coalesce(jsonb_agg(value),'[]'::jsonb) "
+        f"from public.m2_retained_candidates_for_owner({','.join(args)}) rows(value);")))
+
+
+def test_owner_candidates_security_and_disabled_policy(db):
+    label = 'owner-opened-scope'
+    rows = [_row(f'https://example.test/{label}-{index}', title=f'Owner scope distinct {index}',
+                 category_ids=[label], published_at=_iso(BASE - timedelta(minutes=index)))
+            for index in range(4)]
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+    _sql(db, f"insert into public.user_story_state(user_id,story_id,read_at) values "
+        f"('{OWNER}','{rows[0]['story_id']}',now()),('{OTHER}','{rows[1]['story_id']}',now());")
+    assert _owner_candidates(db, OWNER, category=label, limit=1)[0]['story_id'] == rows[1]['story_id']
+    assert _owner_candidates(db, OTHER, category=label, limit=1)[0]['story_id'] == rows[0]['story_id']
+    assert _owner_candidates(db, OWNER, category=label, hide=False) == _filtered(db, category_id=label, limit=12)
+    query = f"select public.m2_retained_candidates_for_owner('{OWNER}',true);"
+    assert _sql(db, 'set role anon;' + query, check=False).returncode != 0
+    assert _as_owner(db, OWNER, query, check=False).returncode != 0
+    assert _as_owner(db, OTHER, query, check=False).returncode != 0
+    for args in ('', 'null,true', f"'{OWNER}',null", "'invalid',true",
+                 "'00000000-0000-0000-0000-000000000000',true"):
+        assert _service(db, f'select public.m2_retained_candidates_for_owner({args});',
+                        check=False).returncode != 0
+
+
+def test_owner_candidates_opened_filter_stays_after_dedupe(db):
+    label = 'owner-opened-dedupe'
+    title = 'Opened winner keeps older twin hidden'
+    older = _row('https://example.test/opened-dedupe-older', title=title,
+                 category_ids=[label], published_at=_iso(BASE - timedelta(minutes=10)))
+    newer = _row('https://example.test/opened-dedupe-newer', title=title,
+                 category_ids=[label], published_at=_iso(BASE))
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps([older,newer]))}::jsonb);")
+    _sql(db, f"insert into public.user_story_state(user_id,story_id,read_at) "
+             f"values ('{OWNER}','{newer['story_id']}',now());")
+    assert _owner_candidates(db, OWNER, category=label) == []
+    assert [row['story_id'] for row in _owner_candidates(db, OTHER, category=label)] == [newer['story_id']]
+
+
+def benchmark_owner_candidates_long_opened_head(db):
+    label = 'owner-long-opened-head'
+    rows = [_row(f'https://example.test/{label}-{index}', title=f'Long head distinct story {index}',
+                 category_ids=[label], published_at=_iso(NOW - timedelta(hours=12, seconds=index)))
+            for index in range(1000)]
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+    coverage = [{'story_id': row['story_id'], 'publisher_id': publisher,
+                 'is_independent': True, 'first_seen_at': _iso(BASE)}
+                for row in rows for publisher in ('fixture-wire-one', 'fixture-wire-two')]
+    _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
+    quoted = ','.join(_quote(row['story_id']) for row in rows[:900])
+    _sql(db, f"insert into public.user_story_state(user_id,story_id,read_at) "
+        f"select '{OWNER}'::uuid,id,now() from unnest(array[{quoted}]) ids(id) "
+        "on conflict(user_id,story_id) do update set read_at=excluded.read_at; "
+        "analyze public.user_story_state; analyze public.retained_corpus_observations;")
+    elapsed = []
+    for _ in range(5):
+        started = time.perf_counter()
+        found = _owner_candidates(db, OWNER, category=label, lane='hot', limit=12)
+        elapsed.append(round((time.perf_counter() - started) * 1000, 3))
+        assert [row['story_id'] for row in found] == [row['story_id'] for row in rows[900:912]]
+    tail = _owner_candidates(db, OWNER, category=label, lane='hot', limit=12, before=found[-1])
+    assert [row['story_id'] for row in tail] == [row['story_id'] for row in rows[912:924]]
+    assert _owner_candidates(db, OTHER, category=label, lane='hot', limit=12)[0]['story_id'] == rows[0]['story_id']
+    return {'fixture': 'controlled retained corpus, not a production distribution',
+            'retained_rows': 1000, 'opened_head': 900, 'unread_tail': 100,
+            'fetch_limit': 12, 'returned_rows': len(found), 'elapsed_ms': elapsed,
+            'response_json_bytes': len(json.dumps(found,separators=(',',':')).encode()),
+            'timing_scope': 'local psql, Unix socket, SQL and returned rows; not HTTPS/PostgREST'}
+
+
+def test_owner_candidates_refill_past_long_opened_head(db):
+    assert benchmark_owner_candidates_long_opened_head(db)['returned_rows'] == 12

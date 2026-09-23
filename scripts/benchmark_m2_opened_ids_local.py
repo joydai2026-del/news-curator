@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +15,10 @@ from tests import test_m2_phase2_postgres_runtime as suite
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--owner-candidates', action='store_true')
+    parser.add_argument('--runtime-suite', action='store_true')
+    args = parser.parse_args()
     binaries = {name: shutil.which(name) for name in ('postgres', 'initdb', 'pg_ctl', 'psql')}
     if not all(binaries.values()):
         raise RuntimeError('installed local PostgreSQL tools required; nothing will be installed')
@@ -43,7 +48,7 @@ def main():
     run('initdb', '-D', str(cluster / 'data'), '-A', 'trust')
     try:
         run('pg_ctl', '-D', str(cluster / 'data'), '-l', str(cluster / 'server.log'),
-            '-o', f"-k {cluster} -p {port} -c listen_addresses='' -c unix_socket_permissions=0700",
+            '-o', f"-k {cluster} -p {port} -c listen_addresses='' -c unix_socket_permissions=0700 -c timezone=UTC",
             '-w', 'start')
         sql(None, """
           create role anon nologin;
@@ -63,7 +68,23 @@ def main():
         for migration in suite.MIGRATIONS:
             sql(None, (ROOT / migration).read_text())
         sql(None, f"insert into auth.users(id) values ('{suite.OWNER}'), ('{suite.OTHER}');")
-        receipt = suite.benchmark_distinct_opened_candidate_ids(None)
+        if args.runtime_suite:
+            import pytest
+            suite._seed_corpus(None)
+            suite._psql_command = lambda _db: [binaries['psql'], '-X', '-At',
+                '-v', 'ON_ERROR_STOP=1', '-h', str(cluster), '-p', port, '-d', 'postgres']
+            suite.db = pytest.fixture(scope='module')(lambda: None)
+            status = pytest.main(['-o', 'addopts=', '-q', '-p', 'no:cacheprovider',
+                                 str(ROOT / 'tests/test_m2_phase2_postgres_runtime.py'), '--tb=short'])
+            if status:
+                raise RuntimeError(f'local PostgreSQL runtime suite exit {status}')
+            return
+        if args.owner_candidates:
+            suite.test_owner_candidates_security_and_disabled_policy(None)
+            suite.test_owner_candidates_opened_filter_stays_after_dedupe(None)
+            receipt = suite.benchmark_owner_candidates_long_opened_head(None)
+        else:
+            receipt = suite.benchmark_distinct_opened_candidate_ids(None)
         receipt.update(postgres=version, cluster=str(cluster), evidence_grade='B')
         print(json.dumps(receipt, sort_keys=True))
     finally:

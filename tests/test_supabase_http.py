@@ -145,6 +145,38 @@ def _client(timeout_seconds=None):
                         service_role_key="sb_secret_canary", **kwargs)
 
 
+def _candidate_args():
+    return dict(category_id=None, query=None, lane="hot", profile_categories=(),
+                profile_sources=(), trend_window_hours=48, trend_min_sources=2,
+                max_age_hours=None, min_age_hours=None, limit=12)
+
+
+@pytest.mark.parametrize("owner", [None, "", "malformed", 123])
+def test_owner_candidate_rpc_rejects_invalid_owner_before_transport(owner):
+    client = _client()
+    calls = []
+    client._request = lambda *args, **kwargs: calls.append((args, kwargs)) or []
+    with pytest.raises((ValueError, SupabaseHTTPError)):
+        client.retained_candidates_v2(**_candidate_args(), owner_id=owner,
+                                      hide_already_opened=True)
+    assert calls == []
+
+
+def test_owner_candidate_rpc_has_no_unfiltered_fallback_on_failure():
+    client = _client()
+    paths = []
+    def unavailable(_method, path, **kwargs):
+        paths.append(path)
+        assert kwargs["body"]["p_owner_id"] == "11111111-1111-1111-1111-111111111111"
+        assert kwargs["body"]["p_hide_already_opened"] is True
+        raise SupabaseHTTPError("supabase request failed")
+    client._request = unavailable
+    with pytest.raises(SupabaseHTTPError, match="supabase request failed"):
+        client.retained_candidates_v2(**_candidate_args(),
+            owner_id="11111111-1111-1111-1111-111111111111", hide_already_opened=True)
+    assert paths == ["/rest/v1/rpc/m2_retained_candidates_for_owner"]
+
+
 def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypatch):
     client = _client()
     built = []

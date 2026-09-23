@@ -41,16 +41,17 @@ from .supabase_http import SupabaseAuthenticationError
 # tests/test_ranker_claimed_section_budget.py, which walks the longest path with
 # a counting transport and refuses a count above this number.
 #
-# The initial paid path now measures 21 calls after SQL-side filtering, but
+# The initial paid path now measures 22 calls after SQL-side filtering, but
 # the same claim must also protect two bounded continuation scans. Keep the
-# 31-call floor for the accepted continuation policy range, including its
+# 33-call floor for the accepted continuation policy range, including its
 # owner-state retries; reducing it based on the first-page trace alone would
 # permit the claim to expire while a valid page turn is still working.
-CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 31
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 33
 # Two bounded continuation scans can run under one claim. Each scan is capped
 # at two general and eight lane RPCs when a refill is allowed; the remaining
-# calls cover claim, frozen-order reloads, owner states, appends and release.
-CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS = 31
+# calls cover claim, frozen-order reloads, owner states, appends and release,
+# plus one non-retried opened-ID lookup per pass.
+CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS = 33
 
 # Private control result from `_existing_run_page`: a bound order that was
 # deleted by a consent/history invalidation may be replaced, while an expired

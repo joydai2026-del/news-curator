@@ -130,10 +130,10 @@ run:
   # it over. It is a crash guard, not a timeout: the claim is released as soon as
   # the ranking binds or fails. Too short and two requests pay twice; too long
   # and a died-mid-flight request locks its own reader out for that long.
-  # The exclusion-heavy paid path permits 31 claimed transport calls, plus one
-  # owner-state retry. 25 (deadline) + 5 (settle) + 32 x 5 (transport) + 10
-  # (margin) = 200. The claim must exceed that, so use 210 seconds.
-  ranking_claim_seconds: 210
+  # The claimed path permits 33 transport calls, plus one owner-state retry.
+  # 25 (deadline) + 5 (settle) + 34 x 5 (transport) + 10 (margin) = 210.
+  # The claim must exceed that, so use 220 seconds.
+  ranking_claim_seconds: 220
   # The margin in the rule above. Boot fails unless
   # ranking_claim_seconds > provider deadline + settle window + this, so a claim
   # can never expire while its holder is still allowed to be calling the
