@@ -1886,6 +1886,10 @@ class RankingService:
             general_boundary = (before_published, before_story)
             general_has_more = False
             general_batches = 0
+            batch_limits = []
+            batch_sizes = []
+            excluded_rows = 0
+            suppressed_rows = 0
             # Explicit story exclusions have their own validated 1,000-id bound.
             # Keep that proven scan depth; add at most the configured extra head
             # batch for broad source/topic suppression.
@@ -1906,12 +1910,20 @@ class RankingService:
                     limit=limit, before_published_at=general_boundary[0],
                     before_story_id=general_boundary[1], before_source_count=None)
                 general_batches += 1
+                batch_limits.append(limit)
+                batch_sizes.append(len(batch))
                 for row in batch:
                     story_id = row.get("story_id")
-                    if (isinstance(story_id, str) and story_id not in excluded
-                            and not self._suppressed_by_profile(row, profile, composition)):
-                        general_rows.setdefault(story_id, row)
-                        eligible_general += 1
+                    if not isinstance(story_id, str):
+                        continue
+                    if story_id in excluded:
+                        excluded_rows += 1
+                        continue
+                    if self._suppressed_by_profile(row, profile, composition):
+                        suppressed_rows += 1
+                        continue
+                    general_rows.setdefault(story_id, row)
+                    eligible_general += 1
                 if batch:
                     general_boundary = (batch[-1]["published_at"], batch[-1]["story_id"])
                 # A full batch might have more rows behind it. An exact-end batch
@@ -1921,7 +1933,10 @@ class RankingService:
                     break
             sys.stderr.write(json.dumps({"event": "m2_pool_timing", "lane": "general",
                 "duration_ms": round((time.perf_counter() - scan_start) * 1000),
-                "rpc_count": general_batches, "rows": len(general_rows)},
+                "rpc_count": general_batches, "rows": len(general_rows),
+                "target": target, "excluded_count": len(excluded),
+                "batch_limits": batch_limits, "batch_sizes": batch_sizes,
+                "excluded_rows": excluded_rows, "suppressed_rows": suppressed_rows},
                 separators=(",", ":")) + "\n")
             sys.stderr.flush()
             return general_rows, general_boundary, general_has_more
