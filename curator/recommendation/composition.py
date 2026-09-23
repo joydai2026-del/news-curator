@@ -49,6 +49,7 @@ class CompositionPolicy:
     page_size: int
     candidate_window_size: int
     pool_scan_max_batches: int
+    general_pool_batch_limit: int
     pool_parallel_workers: int
     continuation_refill_max_passes: int
     per_source_cap_per_window: int
@@ -104,6 +105,7 @@ _NUMERIC_RANGES = {
     "composition.page_size": (int, 1, 25),
     "composition.candidate_window_size": (int, 10, 100),
     "composition.pool_scan_max_batches": (int, 1, 2),
+    "composition.general_pool_batch_limit": (int, 100, 200),
     "composition.pool_parallel_workers": (int, 1, 4),
     "composition.continuation_refill_max_passes": (int, 1, 2),
     "composition.per_source_cap_per_window": (int, 1, 10),
@@ -264,14 +266,13 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
         raise CompositionPolicyError(
             "run.max_pages_per_run must be at least candidate_window_size // page_size "
             f"({window // page_size}); the window already holds that many pages")
-    # Check 9: the general pool is always one page wider than the window, and a
-    # single RPC call returns at most 100 rows. Refuse a pair that cannot be
-    # served rather than silently clamping it, which is how "wider" quietly
-    # became "the same size" for a window of 100.
+    # Check 9: the general pool targets one page beyond the window. Keep that
+    # target within 100 candidates; the larger general RPC batch is only for
+    # stepping past excluded heads, not for silently widening the recipe.
     if window + page_size > 100:
         raise CompositionPolicyError(
             "composition.candidate_window_size + composition.page_size must not exceed 100: "
-            "the general pool is fetched one page wider than the window in a single call")
+            "the general pool targets one page beyond the window")
     # Check 8: the corpus must still hold the window the feed reads.
     #
     # The prune deletes by published_at, and trend.window_hours may be set as
@@ -321,6 +322,7 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
         lane_ratios=ratios, lane_priority=tuple(priority), page_size=page_size,
         candidate_window_size=window,
         pool_scan_max_batches=int(numbers["composition.pool_scan_max_batches"]),
+        general_pool_batch_limit=int(numbers["composition.general_pool_batch_limit"]),
         pool_parallel_workers=int(numbers["composition.pool_parallel_workers"]),
         continuation_refill_max_passes=int(numbers["composition.continuation_refill_max_passes"]),
         per_source_cap_per_window=int(numbers["composition.per_source_cap_per_window"]),

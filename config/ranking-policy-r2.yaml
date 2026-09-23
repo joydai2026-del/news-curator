@@ -32,6 +32,9 @@ composition:
   # Bound suppression-aware keyset scans within the paid claim's transport
   # budget. Two batches find eligible stories past a disliked pool head.
   pool_scan_max_batches: 2
+  # One general read can step over a frozen page without a second full-corpus
+  # query. Set back to 100 to restore the previous request shape if needed.
+  general_pool_batch_limit: 200
   # Read independent recipe lanes concurrently. One keeps the older serial
   # path for rollback; four overlaps all four bounded lane RPC streams.
   pool_parallel_workers: 4

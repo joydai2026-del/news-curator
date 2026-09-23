@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -106,11 +107,22 @@ def _longest_path_calls(capsys):
     result = rank(combined_subject, combined_store,
                   exclude_story_ids=[row["story_id"] for row in rows[:1000]])
     assert result["result_mode"] == "model" and len(result["cards"]) == 25
-    assert combined_store.claimed_calls.count("retained_candidates_v2") == 19
-    assert len(combined_store.claimed_calls) == 30
+    assert combined_store.claimed_calls.count("retained_candidates_v2") == 14
+    assert len(combined_store.claimed_calls) == 25
+    rollback_store = CountingStore(rows, events=liked_events(), exclusive=exclusive)
+    rollback_subject = paid(rollback_store, exclusive_category="only-other-language-press")
+    rollback_subject._policy = replace(rollback_subject._policy,
+        composition=replace(rollback_subject._policy.composition,
+                            general_pool_batch_limit=100))
+    result = rank(rollback_subject, rollback_store,
+                  exclude_story_ids=[row["story_id"] for row in rows[:1000]])
+    assert result["result_mode"] == "model" and len(result["cards"]) == 25
+    assert rollback_store.claimed_calls.count("retained_candidates_v2") == 19
+    assert len(rollback_store.claimed_calls) == 30
     return max((general, list(exclusive_store.claimed_calls),
                 list(excluded_store.claimed_calls),
-                list(combined_store.claimed_calls)), key=len)
+                list(combined_store.claimed_calls),
+                list(rollback_store.claimed_calls)), key=len)
 
 
 def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
