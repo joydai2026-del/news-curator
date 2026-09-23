@@ -63,6 +63,7 @@ MIGRATIONS = (
     'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
     'supabase/migrations/202609230003_m2_opened_candidate_ids.sql',
     'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
+    'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -1419,6 +1420,46 @@ def _owner_candidates(db, owner, *, category, hide=True, limit=12, lane=None, be
                  f'p_before_story_id => {_quote(before["story_id"])}']
     return json.loads(_last(_service(db, "select coalesce(jsonb_agg(value),'[]'::jsonb) "
         f"from public.m2_retained_candidates_for_owner({','.join(args)}) rows(value);")))
+
+
+def test_owner_narrow_general_exact_parity_and_security(db):
+    def payload(function, owner=OWNER, hide=True, **options):
+        args = [f'p_owner_id => {_quote(owner)}::uuid',
+                f'p_hide_already_opened => {str(hide).lower()}']
+        for name, value in options.items():
+            args.append(f'p_{name} => {value}')
+        return json.loads(_last(_service(db, "select coalesce(jsonb_agg(value),'[]'::jsonb) "
+            f"from public.{function}({','.join(args)}) rows(value);")))
+
+    old = 'm2_retained_candidates_for_owner'
+    narrow = 'm2_retained_candidates_general_narrow_for_owner'
+    for owner in (OWNER, OTHER):
+        for hide in (True, False):
+            for limit in (1, 12, 100, 200):
+                options = {'limit': str(limit)}
+                expected = payload(old, owner, hide, **options)
+                assert payload(narrow, owner, hide, **options) == expected
+                if expected:
+                    tail = options | {'before_published_at': _quote(expected[0]['published_at']),
+                                      'before_story_id': _quote(expected[0]['story_id'])}
+                    assert payload(narrow, owner, hide, **tail) == payload(old, owner, hide, **tail)
+    excluded = _quote(_story_id(AGGREGATOR_ONLY))
+    for options in (
+        {'excluded_story_ids': f'array[{excluded}]::text[]'},
+        {'suppressed_sources': "array['fixture-wire-one']::text[]"},
+        {'suppressed_topics': "array['ai']::text[]"},
+        {'dedupe_window_hours': '0'},
+    ):
+        assert payload(narrow, **options) == payload(old, **options)
+    statement = f"select count(*) from public.{narrow}('{OWNER}',true);"
+    assert _sql(db, 'set role anon;' + statement, check=False).returncode != 0
+    assert _as_owner(db, OWNER, statement, check=False).returncode != 0
+    for arguments in ('', 'null,true', f"'{OWNER}',null",
+                      "'00000000-0000-0000-0000-000000000000',true"):
+        assert _service(db, f'select public.{narrow}({arguments});', check=False).returncode != 0
+    oversized = f"select count(*) from public.{narrow}('{OWNER}',true, "
+    assert _service(db, oversized + "p_excluded_story_ids => array_fill('x'::text,array[1201]));",
+                    check=False).returncode != 0
 
 
 def test_owner_candidates_security_and_disabled_policy(db):
