@@ -90,13 +90,17 @@ def validate_https_origin(origin: str) -> str:
 class SupabaseHTTP:
     def __init__(self, *, origin: str, publishable_key: str, service_role_key: str,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-                 timeout_retries: int = MINIMUM_TIMEOUT_RETRIES) -> None:
+                 timeout_retries: int = MINIMUM_TIMEOUT_RETRIES,
+                 general_candidate_query: str = "owner") -> None:
         validate_https_origin(origin)
         if not publishable_key or not service_role_key:
             raise ValueError("Supabase keys must be configured")
         self._origin, self._publishable, self._service = origin, publishable_key, service_role_key
         self._timeout = validate_timeout_seconds(timeout_seconds)
         self._timeout_retries = validate_timeout_retries(timeout_retries)
+        if general_candidate_query not in ("owner", "owner_narrow"):
+            raise ValueError("invalid general candidate query")
+        self._general_candidate_query = general_candidate_query
         self._opener = urllib.request.build_opener(_NoRedirect)
 
     def _service_token(self) -> str:
@@ -169,22 +173,30 @@ class SupabaseHTTP:
         # (independent_source_count, published_at, story_id), because its
         # ordering leads with the count and a published_at-only keyset would skip
         # or repeat rows at the page boundary.
-        page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_for_owner", token=self._service_token(),
+        narrow_general = (self._general_candidate_query == "owner_narrow" and lane is None
+            and category_id is None and not query and max_age_hours is None
+            and min_age_hours is None and before_source_count is None)
+        path = ("/rest/v1/rpc/m2_retained_candidates_general_narrow_for_owner" if narrow_general
+                else "/rest/v1/rpc/m2_retained_candidates_for_owner")
+        body = {"p_owner_id": owner_id, "p_hide_already_opened": hide_already_opened,
+            "p_trend_window_hours": trend_window_hours,
+            "p_before_published_at": before_published_at,
+            "p_before_story_id": before_story_id,
+            "p_excluded_story_ids": list(excluded_story_ids),
+            "p_suppressed_sources": list(suppressed_sources),
+            "p_suppressed_topics": list(suppressed_topics),
+            "p_limit": min(200 if lane is None else 100, max(1, limit))}
+        if not narrow_general:
+            body.update({"p_category_id": category_id, "p_query": query, "p_lane": lane,
+                "p_profile_categories": list(profile_categories), "p_profile_sources": list(profile_sources),
+                "p_trend_min_sources": trend_min_sources,
+                "p_max_age_hours": max_age_hours, "p_min_age_hours": min_age_hours,
+                "p_before_source_count": before_source_count})
+        page = self._request("POST", path, token=self._service_token(),
             # Lane reads may overlap. Keep each no-redirect opener private to
             # its call rather than sharing a handler chain across threads.
             key=self._service, opener=urllib.request.build_opener(_NoRedirect),
-            body={"p_owner_id": owner_id, "p_hide_already_opened": hide_already_opened,
-                "p_category_id": category_id, "p_query": query, "p_lane": lane,
-                "p_profile_categories": list(profile_categories), "p_profile_sources": list(profile_sources),
-                "p_trend_window_hours": trend_window_hours, "p_trend_min_sources": trend_min_sources,
-                "p_max_age_hours": max_age_hours, "p_min_age_hours": min_age_hours,
-                "p_before_published_at": before_published_at,
-                "p_before_story_id": before_story_id,
-                "p_before_source_count": before_source_count,
-                "p_excluded_story_ids": list(excluded_story_ids),
-                "p_suppressed_sources": list(suppressed_sources),
-                "p_suppressed_topics": list(suppressed_topics),
-                "p_limit": min(200 if lane is None else 100, max(1, limit))})
+            body=body)
         if not isinstance(page, list):
             raise SupabaseHTTPError("candidate RPC returned a non-list")
         return page

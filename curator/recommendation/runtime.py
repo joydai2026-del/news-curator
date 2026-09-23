@@ -227,7 +227,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
         client_factory=lambda: httpx.AsyncClient(timeout=None, follow_redirects=False))
     adapter = RankLLMAdapter(policy=ranker_policy, engine=engine)
     transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key,
-        timeout_seconds=supabase_timeout, timeout_retries=supabase_retries)
+        timeout_seconds=supabase_timeout, timeout_retries=supabase_retries,
+        general_candidate_query=supabase_general_candidate_query(policy))
     service_policy = ServicePolicy(policy_version=_required(policy, "prompt_revision"),
         model_version=_required(policy, "model"), provider_policy_id=_required(policy, "prompt_revision"),
         tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
@@ -361,7 +362,7 @@ def supabase_timeout_seconds(policy) -> float:
     section = policy["supabase"]
     if not isinstance(section, dict):
         raise ValueError("ranker policy `supabase` must be a mapping")
-    unknown = set(section) - {"timeout_seconds", "timeout_retries"}
+    unknown = set(section) - {"timeout_seconds", "timeout_retries", "general_candidate_query"}
     if unknown:
         raise ValueError(f"unknown ranker policy supabase keys: {sorted(unknown)}")
     if "timeout_seconds" not in section:
@@ -378,6 +379,16 @@ def supabase_timeout_retries(policy) -> int:
     if "timeout_retries" not in section:
         raise ValueError("ranker policy supabase section must declare timeout_retries")
     return validate_timeout_retries(section["timeout_retries"])
+
+
+def supabase_general_candidate_query(policy) -> str:
+    section = policy.get("supabase", {})
+    if not isinstance(section, dict):
+        raise ValueError("ranker policy `supabase` must be a mapping")
+    value = section.get("general_candidate_query", "owner")
+    if value not in ("owner", "owner_narrow"):
+        raise ValueError("invalid supabase.general_candidate_query")
+    return value
 
 
 def preview_owner_allowlist(env, *, enabled: bool) -> tuple[str, ...]:

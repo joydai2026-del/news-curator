@@ -104,3 +104,5 @@ supabase:
   timeout_seconds: 5
   # Additional timeout attempts per owner-state read, bounded from 0 to 2.
   timeout_retries: 1
+  # Switch back to owner if the narrow All/general SQL misses live parity.
+  general_candidate_query: owner_narrow
