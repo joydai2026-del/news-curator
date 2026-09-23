@@ -39,6 +39,7 @@ lifted from tests/test_m2_phase2_postgres_runtime.py unchanged.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import statistics
@@ -70,6 +71,10 @@ MIGRATIONS = (
     'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
     'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
     'supabase/migrations/202609230001_m2_retained_candidates_v2_bulk_general.sql',
+    'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
+    'supabase/migrations/202609230003_m2_opened_candidate_ids.sql',
+    'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
+    'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
 )
 
 # Seeded corpus size. The live retained corpus was about 6,500 rows when the
@@ -188,6 +193,8 @@ def db():
         """)
         for migration in MIGRATIONS:
             _sql(container, (ROOT / migration).read_text())
+        _sql(container, "insert into auth.users(id) values "
+            "('11111111-1111-1111-1111-111111111111');")
         _seed_corpus_at_scale(container)
         yield container
     finally:
@@ -413,6 +420,38 @@ def _dominant(plan_text):
 
 
 # --- the measurements -------------------------------------------------------
+
+def test_owner_narrow_general_matches_old_owner_rpc_at_scale(db):
+    owner = '11111111-1111-1111-1111-111111111111'
+    rows = int(_last(_sql(db, 'select count(*) from public.retained_corpus_observations;')))
+    assert rows == CORPUS_ROWS
+    # A long opened head must be skipped before LIMIT, not returned as a short page.
+    _sql(db, "insert into public.user_story_state(user_id,story_id,read_at) "
+        f"select '{owner}'::uuid, story_id, now() from ("
+        "select story_id from public.retained_corpus_observations "
+        "order by published_at desc, story_id desc limit 100) head "
+        "on conflict(user_id,story_id) do update set read_at=excluded.read_at;")
+    for limit in (75, 200):
+        for filters in ('', ", p_suppressed_sources => array['source-3','source-7']::text[], "
+                       "p_suppressed_topics => array['ai']::text[]"):
+            args = f"p_owner_id => '{owner}', p_hide_already_opened => true, p_limit => {limit}{filters}"
+            def payload(name, arguments):
+                value = _last(_service(db, "select coalesce(jsonb_agg(value),'[]'::jsonb) "
+                    f"from public.{name}({arguments}) rows(value);"))
+                return json.loads(value)
+            old = payload('m2_retained_candidates_for_owner', args)
+            new = payload('m2_retained_candidates_general_narrow_for_owner', args)
+            assert new == old and len(new) == limit
+            cursor = (f", p_before_published_at => {_quote(old[0]['published_at'])}, "
+                      f"p_before_story_id => {_quote(old[0]['story_id'])}")
+            assert payload('m2_retained_candidates_general_narrow_for_owner', args + cursor) == (
+                payload('m2_retained_candidates_for_owner', args + cursor))
+            samples = _timed(db, 'select count(*) from '
+                f'public.m2_retained_candidates_general_narrow_for_owner({args});')
+            median = statistics.median(samples)
+            print(f'owner narrow general {limit} rows: {median:.1f} ms median of {REPEATS}')
+            assert median < LANE_BUDGET_MS, f'owner narrow general read took {median:.1f} ms'
+
 
 def test_general_pool_accepts_two_hundred_but_refuses_unbounded_reads(db):
     elapsed = []
