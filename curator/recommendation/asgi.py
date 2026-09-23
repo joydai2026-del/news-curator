@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import traceback
 
 from .service import (AuthenticationError, ProviderConsentRequiredError,
@@ -35,7 +36,11 @@ class RankingASGI:
                     "policy_version": self._service._policy.policy_version, "model_version": self._service._policy.model_version}
             elif method == "POST" and path == "/rank":
                 body = await self._body(receive)
+                started_at = time.perf_counter()
                 result = await asyncio.to_thread(self._service.rank, authorization=headers.get("authorization", ""), body=body)
+                print(json.dumps({"event": "m2_api_timing", "route": "rank",
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000)},
+                    separators=(",", ":")), file=sys.stderr, flush=True)
             elif method == "GET" and path == "/page":
                 from urllib.parse import parse_qs
                 cursor = parse_qs(scope.get("query_string", b"").decode()).get("cursor", [""])[0]

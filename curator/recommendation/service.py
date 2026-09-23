@@ -1505,9 +1505,13 @@ class RankingService:
         cap = composition.exclusive_promote_to_all_max
         if not (self._policy.other_lane_enabled and self._policy.exclusive_category_id and cap > 0):
             return []
+        started_at = time.perf_counter()
         ready, _boundary, _has_more = self._exclusive_display_rows(
             query=query, before_published=before_published, before_story=before_story,
             target_count=max(cap * 4, cap), excluded_story_ids=(), max_batches=2)
+        print(json.dumps({"event": "m2_promotion_timing",
+            "duration_ms": round((time.perf_counter() - started_at) * 1000), "rows": len(ready)},
+            separators=(",", ":")), file=sys.stderr, flush=True)
         return ready
 
     def _exclusive_display_rows(self, *, query, before_published, before_story,
