@@ -1191,6 +1191,88 @@ def test_exact_four_page_corpus_does_not_skip_overfetch_tail():
     assert response["next_cursor"] is None
 
 
+def test_one_readable_continuation_refills_a_short_backend_batch_before_spending_page_slot():
+    """A 20-card append is not a 25-card response when older cards remain."""
+    rows = [corpus_row(index, hours=1 + index, source=f"initial-{index}",
+                       categories=[f"topic-{index}"])
+            for index in range(150)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    assert len(first["cards"]) == 25
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    assert len(second["cards"]) == 25
+    store.frozen["frozen-1"]["bindings"]["corpus_has_more"] = True
+    calls = []
+
+    def append_sparse_batch(token, owner, frozen, frozen_order_id, size, *, page_prefix=()):
+        calls.append(len(page_prefix))
+        start = 500 + 20 * (len(calls) - 1)
+        added = []
+        for index in range(start, start + 20):
+            card = dict(frozen["cards"][0], story_id=f"story:{index:064x}",
+                        source_id=f"backfill-{index}", source_name=f"Backfill {index}",
+                        title=f"Older distinct headline {index}",
+                        title_en=f"Older distinct headline {index}",
+                        url=f"https://example.test/older/{index}")
+            added.append(card)
+        more = len(calls) < 3
+        store.extend_frozen_order(user_id=owner.user_id,
+            frozen_order_id=frozen_order_id, cards=added,
+            bindings={"corpus_has_more": more,
+                      "continuation_offsets": list(frozen["bindings"].get("continuation_offsets") or [])
+                          + [len(frozen["cards"])]})
+        return tuple(added), more
+
+    subject._continue_frozen_order = append_sparse_batch
+    third = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
+
+    assert len(third["cards"]) == 25
+    assert len(calls) == 2
+    fourth = subject.page(authorization="Bearer valid", cursor=third["next_cursor"])
+    assert len(fourth["cards"]) == 25
+    ids = [card["story_id"] for response in (first, second, third, fourth)
+           for card in response["cards"]]
+    assert len(ids) == len(set(ids)) == 100
+    assert len(calls) == 3
+    end = subject.page(authorization="Bearer valid", cursor=fourth["next_cursor"])
+    assert end["cards"] == [] and end["end_of_run"] is True
+    assert subject._adapter.calls == 1
+
+
+def test_still_older_corpus_does_not_spend_a_partial_page_slot():
+    rows = [corpus_row(index, hours=1 + index, source=f"initial-{index}",
+                       categories=[f"topic-{index}"])
+            for index in range(150)]
+    store = PaidStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    calls = 0
+
+    def sparse_batch(token, owner, frozen, frozen_order_id, size, *, page_prefix=()):
+        nonlocal calls
+        calls += 1
+        start = 600 + (calls - 1) * 10
+        added = [dict(frozen["cards"][0], story_id=f"story:{index:064x}",
+                      source_id=f"older-{index}", title=f"Older headline {index}")
+                 for index in range(start, start + 10)]
+        store.extend_frozen_order(user_id=owner.user_id,
+            frozen_order_id=frozen_order_id, cards=added,
+            bindings={"corpus_has_more": True, "corpus_scan_has_more": True})
+        return tuple(added), True
+
+    subject._continue_frozen_order = sparse_batch
+    pending = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
+    assert pending["cards"] == [] and pending["next_cursor"] == second["next_cursor"]
+    assert next(iter(store.views.values()))["pages_served"] == 2
+    assert len(store.frozen["frozen-1"]["cards"]) == 70
+    third = subject.page(authorization="Bearer valid", cursor=pending["next_cursor"])
+    assert len(third["cards"]) == 25 and calls == 3
+    assert next(iter(store.views.values()))["pages_served"] == 3
+    assert subject._adapter.calls == 1
+
+
 @pytest.mark.parametrize("excluded_head", [28, 100])
 def test_excluded_head_still_refills_four_pages_from_older_corpus(excluded_head):
     rows = [corpus_row(index, hours=1 + index, source=f"excluded-{index}",
@@ -1936,6 +2018,35 @@ def test_general_cursor_stays_on_general_keyset_when_hot_lane_reaches_older():
         general_boundary=(general["published_at"], general["story_id"]))
     assert cursor["before_story_id"] == general["story_id"]
     assert cursor["hot"]["before_story_id"] == hot["story_id"]
+
+
+def test_empty_suppressed_scan_keeps_its_advanced_corpus_boundary():
+    subject = paid(PaidStore(events=liked_events()))
+    boundary = ("2026-09-18T01:00:00+00:00", "story:" + "a" * 64)
+    assert subject._next_corpus_cursor([], general_boundary=boundary) == {
+        "before_published_at": boundary[0], "before_story_id": boundary[1]}
+
+
+def test_an_all_hidden_head_can_reach_older_visible_stories_without_repaying():
+    rows = [corpus_row(index, hours=1 + index,
+                       source=f"blocked-{index}" if index < 200 else f"tail-{index}",
+                       categories=["blocked-topic"] if index < 200 else [f"tail-{index}"])
+            for index in range(300)]
+    feedback = {"event_id": "broad-feedback", "event_type": "less_like_this",
+                "event_revision": 10, "occurred_at": NOW.isoformat(),
+                "payload": {"story_id": rows[0]["story_id"],
+                            "topic_id": "blocked-topic", "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
+    store = PaidStore(rows, events=liked_events() + [feedback])
+    subject = paid(store)
+    first = rank(subject, store)
+    assert first["cards"] == [] and first["next_cursor"]
+    assert store.frozen["frozen-1"]["bindings"]["corpus_cursor"]["before_story_id"] == rows[149]["story_id"]
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    assert len(second["cards"]) == 25
+    assert all(card["source_id"].startswith("tail-") for card in second["cards"])
+    assert next(iter(store.views.values()))["pages_served"] == 1
+    assert subject._adapter.calls == 0
 
 
 def test_general_scan_reports_saturation_independently_of_candidate_limit():

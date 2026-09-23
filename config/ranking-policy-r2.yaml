@@ -32,6 +32,10 @@ composition:
   # Bound suppression-aware keyset scans within the paid claim's transport
   # budget. Two batches find eligible stories past a disliked pool head.
   pool_scan_max_batches: 2
+  # A page turn may need another older candidate window when caps, dedupe or
+  # immediate negative feedback leave the first continuation below 25 cards.
+  # Both passes happen under one claim and reserve only one readable page.
+  continuation_refill_max_passes: 2
   # How new a story has to be to count as the "fresh" pool rather than falling
   # through to the pool that describes it more specifically.
   #
