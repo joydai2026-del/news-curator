@@ -1250,6 +1250,100 @@ def test_post_rank_less_like_feedback_refills_four_pages_from_older_corpus():
     assert subject._adapter.calls == 1
 
 
+@pytest.mark.parametrize("suppression", ["source", "topic"])
+def test_preexisting_less_like_feedback_does_not_spend_page_slots_on_hidden_stories(suppression):
+    rows = [corpus_row(index, hours=1 + index, source=f"source-{index}",
+                       categories=["blocked-topic" if suppression == "topic" and index < 28
+                                   else f"topic-{index}"])
+            for index in range(150)]
+    blocked = rows[:28]
+    feedback = [
+        {"event_id": f"earlier-feedback-{index}", "event_type": "less_like_this",
+         "event_revision": 10 + index, "occurred_at": NOW.isoformat(),
+         "payload": {"story_id": row["story_id"], "surface": "reader",
+                     **({"topic_id": "blocked-topic"} if suppression == "topic" else {})},
+         "story_title": "", "story_summary": "", "source_id": row["source_id"]}
+        for index, row in enumerate(blocked if suppression == "source" else blocked[:1])]
+    events = liked_events() + feedback
+    store = PaidStore(rows, events=events)
+    subject = paid(store)
+
+    response = rank(subject, store)
+    pages = []
+    served = []
+    while True:
+        if response["cards"]:
+            pages.append(len(response["cards"]))
+            served.extend(card["story_id"] for card in response["cards"])
+        cursor = response.get("next_cursor")
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    assert pages == [25, 25, 25, 25]
+    assert len(served) == len(set(served)) == 100
+    assert not ({row["story_id"] for row in blocked} & set(served))
+    assert subject._adapter.calls == 1
+
+
+@pytest.mark.parametrize(("lane", "expected"), [("hot", 4), ("surprise", 3)])
+def test_suppressed_lane_head_does_not_hide_qualified_cards_beyond_it(lane, expected):
+    fresh = [corpus_row(index, hours=1, source=f"fresh-{index}",
+                        categories=[f"fresh-topic-{index}"])
+             for index in range(100)]
+    older = [corpus_row(100 + index, hours=12 if index < 28 else 20,
+                        source=f"older-{index}", categories=[f"older-topic-{index}"],
+                        independent=4 if lane == "hot" else 1)
+             for index in range(48)]
+    blocked = older[:28]
+    events = liked_events() + [
+        {"event_id": f"lane-feedback-{index}", "event_type": "less_like_this",
+         "event_revision": 10 + index, "occurred_at": NOW.isoformat(),
+         "payload": {"story_id": row["story_id"], "surface": "reader"},
+         "story_title": "", "story_summary": "", "source_id": row["source_id"]}
+        for index, row in enumerate(blocked)]
+    store = PaidStore(fresh + older, events=events)
+    subject = paid(store)
+
+    response = rank(subject, store)
+
+    assert len(response["cards"]) == 25
+    assert sum(card["lane"] == lane for card in response["cards"]) == expected
+    assert not ({row["story_id"] for row in blocked}
+                & {card["story_id"] for card in response["cards"]})
+    assert subject._adapter.calls == 1
+
+
+def test_broad_negative_topic_has_bounded_candidate_scan():
+    class CountingStore(PaidStore):
+        def __init__(self, rows, events):
+            super().__init__(rows, events=events)
+            self.candidate_fetches = 0
+
+        def retained_candidates_v2(self, **kwargs):
+            self.candidate_fetches += 1
+            return super().retained_candidates_v2(**kwargs)
+
+    rows = [corpus_row(index, hours=1 + index, source=f"blocked-{index}",
+                       categories=["blocked-topic"])
+            for index in range(500)]
+    feedback = {"event_id": "broad-feedback", "event_type": "less_like_this",
+                "event_revision": 10, "occurred_at": NOW.isoformat(),
+                "payload": {"story_id": rows[0]["story_id"],
+                            "topic_id": "blocked-topic", "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
+    store = CountingStore(rows, liked_events() + [feedback])
+    subject = paid(store)
+
+    response = rank(subject, store)
+
+    assert response["cards"] == []
+    assert response["fallback_reason"] == "no_candidates"
+    composition = subject._policy.composition
+    assert store.candidate_fetches <= (len(composition.lane_priority) + 1) * composition.pool_scan_max_batches
+    assert subject._adapter.calls == 0
+
+
 @pytest.mark.parametrize(("count", "expected_pages"), [
     (51, [25, 25, 1]),
     (60, [25, 25, 10]),

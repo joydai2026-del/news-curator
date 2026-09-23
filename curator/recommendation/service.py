@@ -39,12 +39,10 @@ from .supabase_http import SupabaseAuthenticationError
 # tests/test_ranker_claimed_section_budget.py, which walks the longest path with
 # a counting transport and refuses a count above this number.
 #
-# The longest measured path is 20: an exclusive request scanning eleven raw
-# 100-row batches before finding complete display copy, plus the claim, budget,
-# history, state, frozen-order and binding calls. Two more are allowed for the
-# branches that harness cannot reach in one pass (record_run_page, and the
-# release_run_ranking_claim on the failure path).
-CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 22
+# The longest measured path is 30: a paid view with 1,000 exclusions, all
+# four lane scans, and exclusive-story promotion. One extra covers a
+# conditional failure-path call absent from the successful measurement.
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 31
 
 # Private control result from `_existing_run_page`: a bound order that was
 # deleted by a consent/history invalidation may be replaced, while an expired
@@ -341,7 +339,9 @@ class RankingService:
             # carried get to compete for a place in All, on merit. They do NOT
             # get extra slots; they enter the same pool and take their own
             # lane's quota like any other candidate.
-            promotion = self._promotion_rows(query, composition, before_published, before_story)
+            promotion = [row for row in self._promotion_rows(
+                query, composition, before_published, before_story)
+                if not self._suppressed_by_profile(row, profile, composition)]
             known = {row.get("story_id") for row in rows}
             rows = rows + [row for row in promotion if row.get("story_id") not in known]
         else:
@@ -1205,10 +1205,7 @@ class RankingService:
             card = cards[position]
             stitched = any(boundary <= position for boundary in boundaries)
             position += 1
-            categories = card.get("category_ids") or []
-            if (profile is not None
-                    and (card.get("source_id") in profile.suppressed_sources
-                        or any(category in profile.suppressed_topics for category in categories))):
+            if self._suppressed_by_profile(card, profile, composition):
                 removed.append(str(card.get("story_id")))
                 continue
             if (stitched and self._violates_page_invariants(
@@ -1798,7 +1795,13 @@ class RankingService:
         eligible_general = 0
         general_boundary = (before_published, before_story)
         general_has_more = False
-        while eligible_general < target:
+        general_batches = 0
+        # Explicit story exclusions have their own validated 1,000-id bound.
+        # Keep that proven scan depth; add at most the configured extra head
+        # batch for broad source/topic suppression.
+        general_budget = max(composition.pool_scan_max_batches,
+                             (len(excluded) + target + 99) // 100)
+        while eligible_general < target and general_batches < general_budget:
             limit = min(100, target - eligible_general + len(excluded))
             batch = self._store.retained_candidates_v2(
                 category_id=category_id, query=query, lane=None,
@@ -1808,11 +1811,13 @@ class RankingService:
                 max_age_hours=None, min_age_hours=None,
                 limit=limit, before_published_at=general_boundary[0],
                 before_story_id=general_boundary[1], before_source_count=None)
+            general_batches += 1
             for row in batch:
                 story_id = row.get("story_id")
-                if isinstance(story_id, str):
+                if (isinstance(story_id, str) and story_id not in excluded
+                        and not self._suppressed_by_profile(row, profile, composition)):
                     merged.setdefault(story_id, row)
-                    eligible_general += story_id not in excluded
+                    eligible_general += 1
             if batch:
                 general_boundary = (batch[-1]["published_at"], batch[-1]["story_id"])
             # A full batch might have more rows behind it. An exact-end batch
@@ -1840,29 +1845,48 @@ class RankingService:
                 lane_cursor = tuple(hot_cursor) if hot_cursor else (None, None, None)
             else:
                 lane_cursor = (before_published, before_story, None)
-            rows = self._store.retained_candidates_v2(
-                category_id=category_id, query=query, lane=lane,
-                profile_categories=categories, profile_sources=sources,
-                trend_window_hours=composition.trend_window_hours,
-                trend_min_sources=composition.trend_min_independent_sources,
-                max_age_hours=(composition.updates_max_age_hours if lane == "updates" else
-                               composition.trend_window_hours if lane == "hot" else
-                               composition.exploration_max_age_hours if lane == "surprise" else None),
-                # Lane priority means a story fresh enough to be "fresh" IS fresh.
-                # The other three lanes therefore ask for stories past the
-                # freshness window, instead of spending their fetch budget on
-                # rows the updates lane will claim.
-                min_age_hours=None if lane == "updates" else composition.updates_max_age_hours,
-                limit=limit, before_published_at=lane_cursor[0], before_story_id=lane_cursor[1],
-                before_source_count=lane_cursor[2])
-            for row in rows:
-                story_id = row.get("story_id")
-                if not isinstance(story_id, str):
-                    continue
-                if lane == "hot":
-                    hot_story_ids.add(story_id)
-                merged.setdefault(story_id, row)
+            eligible_lane = 0
+            for _ in range(composition.pool_scan_max_batches):
+                batch_limit = min(100, limit - eligible_lane)
+                if batch_limit <= 0:
+                    break
+                rows = self._store.retained_candidates_v2(
+                    category_id=category_id, query=query, lane=lane,
+                    profile_categories=categories, profile_sources=sources,
+                    trend_window_hours=composition.trend_window_hours,
+                    trend_min_sources=composition.trend_min_independent_sources,
+                    max_age_hours=(composition.updates_max_age_hours if lane == "updates" else
+                                   composition.trend_window_hours if lane == "hot" else
+                                   composition.exploration_max_age_hours if lane == "surprise" else None),
+                    # Fresh stories own the updates lane. Other lanes begin
+                    # beyond it so their fetch budgets do not repeat its head.
+                    min_age_hours=None if lane == "updates" else composition.updates_max_age_hours,
+                    limit=batch_limit, before_published_at=lane_cursor[0],
+                    before_story_id=lane_cursor[1], before_source_count=lane_cursor[2])
+                for row in rows:
+                    story_id = row.get("story_id")
+                    if (not isinstance(story_id, str) or story_id in excluded
+                            or self._suppressed_by_profile(row, profile, composition)):
+                        continue
+                    eligible_lane += 1
+                    if lane == "hot":
+                        hot_story_ids.add(story_id)
+                    merged.setdefault(story_id, row)
+                if rows:
+                    last = rows[-1]
+                    lane_cursor = (last["published_at"], last["story_id"],
+                                   last["independent_source_count"] if lane == "hot" else None)
+                if len(rows) < batch_limit:
+                    break
         return list(merged.values()), hot_story_ids, general_boundary, general_has_more
+
+    @staticmethod
+    def _suppressed_by_profile(row, profile, composition):
+        if profile is None or not composition.immediate_negative_filter:
+            return False
+        return (row.get("source_id") in profile.suppressed_sources
+                or any(category in profile.suppressed_topics
+                       for category in (row.get("category_ids") or ())))
 
     def _card(self, row, owner_state, *, lane=None, composition=None, exclusive=False, also_covered_by=()):
         language = str(row["language"])

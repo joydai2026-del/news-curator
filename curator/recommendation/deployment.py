@@ -13,11 +13,11 @@ from __future__ import annotations
 import re
 
 FUNCTION_TIMEOUT_ENV = "NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS"
-# The shipped request budget is 180s including retries for both owner-state
-# reads on a continuation. 181 is the smallest integer strictly above it;
+# The shipped request budget is 225s including the exclusion-heavy paid path
+# and retries for both owner-state reads. 240 leaves fifteen seconds of room;
 # deploy host and runtime both honor FUNCTION_TIMEOUT_ENV for larger budgets.
 # The maximum stays below Modal's own web-endpoint ceiling.
-FUNCTION_TIMEOUT_DEFAULT = 181
+FUNCTION_TIMEOUT_DEFAULT = 240
 FUNCTION_TIMEOUT_MINIMUM = 7
 FUNCTION_TIMEOUT_MAXIMUM = 300
 

@@ -62,7 +62,7 @@ class CountingStore(PaidStore):
 
 
 def _longest_path_calls(capsys):
-    """The longer of the general paid path and the bounded exclusive scan."""
+    """The longest measured paid path, including the accepted exclusion limit."""
     store = CountingStore(events=liked_events())
     store.exclusive = list(store.rows[:5])
     subject = paid(store, exclusive_category="only-other-language-press", promote=5)
@@ -79,7 +79,37 @@ def _longest_path_calls(capsys):
     result = rank(exclusive_subject, exclusive_store,
                   eligibility={"category": "only-other-language-press", "query": None})
     assert result["result_mode"] == "model"
-    return max((general, list(exclusive_store.claimed_calls)), key=len)
+
+    rows = [corpus_row(index, hours=1 + index / 100,
+                       source=f"excluded-{index}", categories=[f"topic-{index}"])
+            for index in range(1125)]
+    excluded_store = CountingStore(rows, events=liked_events())
+    excluded_subject = paid(excluded_store)
+    result = rank(excluded_subject, excluded_store,
+                  exclude_story_ids=[row["story_id"] for row in rows[:1000]])
+    assert result["result_mode"] == "model" and len(result["cards"]) == 25
+
+    rows = [corpus_row(index, hours=1 + index / 100,
+                       source=f"src-{index}",
+                       categories=["world"] if 700 <= index < 800 else [f"topic-{index}"],
+                       independent=4 if 600 <= index < 700 else 1)
+            for index in range(1125)]
+    exclusive = exclusive_corpus(115)
+    for index, row in enumerate(exclusive):
+        row["story_id"] = f"story:{2000 + index:064x}"
+    for row in exclusive[:100]:
+        row["title_translations"] = {}
+        row["summary_translations"] = {}
+    combined_store = CountingStore(rows, events=liked_events(), exclusive=exclusive)
+    combined_subject = paid(combined_store, exclusive_category="only-other-language-press")
+    result = rank(combined_subject, combined_store,
+                  exclude_story_ids=[row["story_id"] for row in rows[:1000]])
+    assert result["result_mode"] == "model" and len(result["cards"]) == 25
+    assert combined_store.claimed_calls.count("retained_candidates_v2") == 19
+    assert len(combined_store.claimed_calls) == 30
+    return max((general, list(exclusive_store.claimed_calls),
+                list(excluded_store.claimed_calls),
+                list(combined_store.claimed_calls)), key=len)
 
 
 def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
@@ -107,11 +137,63 @@ def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
     assert calls[0] == CLAIM_METHOD, "the count must start at the claim itself"
 
 
+def test_broad_negative_scan_stays_inside_claim_window():
+    rows = [corpus_row(index, hours=1 + index, source=f"blocked-{index}",
+                       categories=["blocked-topic"])
+            for index in range(500)]
+    feedback = {"event_id": "broad-feedback", "event_type": "less_like_this",
+                "event_revision": 10, "occurred_at": rows[0]["published_at"],
+                "payload": {"story_id": rows[0]["story_id"],
+                            "topic_id": "blocked-topic", "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
+    store = CountingStore(rows, events=liked_events() + [feedback])
+    subject = paid(store)
+
+    response = rank(subject, store)
+
+    assert response["cards"] == []
+    assert len(store.claimed_calls) <= CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+
+
+def test_paid_rank_with_suppressed_heads_stays_inside_claim_window():
+    rows = []
+    for lane, count, hour, independent, categories in (
+        ("fresh", 42, 1, 1, []),
+        ("hot", 24, 12, 4, []),
+        ("interested", 66, 20, 1, ["world"]),
+        ("surprise", 18, 30, 1, []),
+    ):
+        for hidden in (True, False):
+            for ordinal in range(count):
+                index = len(rows)
+                row = corpus_row(index, hours=hour + int(not hidden),
+                                 source=f"{lane}-{hidden}-{ordinal}",
+                                 categories=categories + (["blocked-topic"] if hidden else [f"topic-{index}"]),
+                                 independent=independent)
+                rows.append(row)
+    feedback = {"event_id": "broad-feedback", "event_type": "less_like_this",
+                "event_revision": 10, "occurred_at": rows[0]["published_at"],
+                "payload": {"story_id": rows[0]["story_id"],
+                            "topic_id": "blocked-topic", "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
+    store = CountingStore(rows, events=liked_events() + [feedback])
+    subject = paid(store)
+
+    response = rank(subject, store)
+
+    assert response["result_mode"] == "model"
+    assert len(response["cards"]) == 25
+    assert store.claimed_calls.count("retained_candidates_v2") >= 9
+    # The fixture hits nine of ten possible pool batches. Leave the unhit
+    # batch one call of room inside the same claim ceiling.
+    assert len(store.claimed_calls) <= CLAIMED_SECTION_MAX_TRANSPORT_CALLS - 1
+
+
 def test_the_claim_covers_the_measured_section_at_the_shipped_values():
     """The shipped numbers satisfy the rule they are validated by."""
     _, policy = runtime.load_ranker_policy({}, root=Path(__file__).resolve().parents[1])
     calls = claimed_transport_call_budget(policy) + runtime.supabase_timeout_retries(policy)
-    deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 160
+    deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 210
     assert claim > deadline + settle + calls * timeout + margin
 
 
@@ -139,7 +221,7 @@ def test_lowering_exclusive_scan_never_under_sizes_the_general_paid_path():
               "exclusive_continuation_max_batches": 1}
     assert claimed_transport_call_budget(policy) == CLAIMED_SECTION_MAX_TRANSPORT_CALLS
     policy["exclusive_scan_max_batches"] = 20
-    assert claimed_transport_call_budget(policy) == 30
+    assert claimed_transport_call_budget(policy) == CLAIMED_SECTION_MAX_TRANSPORT_CALLS
 
 
 def _document(**overrides):
