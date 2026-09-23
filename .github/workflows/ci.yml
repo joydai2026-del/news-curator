@@ -151,34 +151,23 @@ jobs:
           python - <<'PYTHON'
           import xml.etree.ElementTree as ET
 
-          # The ONE expected failure this job tolerates, named exactly. Anything
-          # else that does not execute is the failure this guard exists to catch.
-          # Issue #48: the reader empties the tab you switch to after leaving the
-          # personalized feed. Delete this pair together with the xfail marker
-          # when that is fixed.
-          ALLOWED_XFAIL = ("tests.test_m2_reader_playwright",
-                           "test_reader_surfaces_after_leaving_the_personalized_feed")
+          REQUIRED = ("tests.test_m2_reader_playwright",
+                      "test_reader_surfaces_after_leaving_the_personalized_feed")
 
           root = ET.parse("/tmp/reader-browser.xml").getroot()
           cases = root.findall(".//testcase")
           assert cases, "M2 reader browser evidence is missing."
 
-          allowed = 0
           hidden = []
+          found_required = False
           for case in cases:
               identity = (case.get("classname"), case.get("name"))
+              found_required = found_required or identity == REQUIRED
               for node in case.findall("skipped"):
-                  if node.get("type") == "pytest.xfail" and identity == ALLOWED_XFAIL:
-                      allowed += 1
-                  else:
-                      hidden.append(f"{identity[0]}::{identity[1]} "
-                                    f"[{node.get('type')}] {node.get('message')}")
+                  hidden.append(f"{identity[0]}::{identity[1]} "
+                                f"[{node.get('type')}] {node.get('message')}")
+          assert found_required, f"required M2 issue test was not collected: {REQUIRED[0]}::{REQUIRED[1]}"
           assert not hidden, ("M2 reader browser tests must execute, not skip: " + "; ".join(hidden))
-          # Exactly one, so removing the marker after the reader fix breaks this
-          # step (delete ALLOWED_XFAIL with it), and so does adding a second one.
-          assert allowed == 1, (
-              f"expected exactly 1 approved xfail ({ALLOWED_XFAIL[0]}::{ALLOWED_XFAIL[1]}), found {allowed}. "
-              "If the reader bug (issue #48) is fixed, remove the marker AND this allowance.")
           PYTHON
 
   discovery-database:

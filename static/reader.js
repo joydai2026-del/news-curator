@@ -1053,6 +1053,7 @@
     const cursors = new Map();
     const exhausted = new Set();
     const hydrated = new Set();
+    let savedHydrationGeneration = 0;
     const pageRequests = new Set();
     let publicationSeq = 0;
     let latest = null;
@@ -1519,6 +1520,10 @@
         m2Binding.consent_revision === response.consent_revision);
       if (!m2Active) {
         leaveDiscovery(true);
+        savedHydrationGeneration += 1;
+        hydrated.delete("__saved__");
+        cursors.delete("__saved__");
+        exhausted.delete("__saved__");
         m2PublicCards = [...cards.values()].map((card) => ({ card, parent: card.parentNode }));
         m2PublicCards.forEach(({ card }) => { clearPrivateCardState(card); view.removeCard(card); card.remove(); });
         cards.clear(); m2Active = true;
@@ -1578,9 +1583,9 @@
       const pageRequest = { topic: selectedTopic(), epoch };
       pageRequests.add(pageRequest); refreshLoadButton();
       let baselineShown = false;
-      const showBaseline = () => {
+      const showBaseline = (markFreshness = true) => {
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
-        baselineShown = true;
+        if (markFreshness) baselineShown = true;
         if (!append || !m2Active) leaveM2(false);
         if (m2Controls) m2Controls.hidden = false;
         const mode = document.getElementById("m2-mode");
@@ -1627,7 +1632,8 @@
           announce("Showing the captured edition. Personalized ranking did not finish.");
         }
       };
-      const deadline = setTimeout(showBaseline, m2Config.request_timeout_ms);
+      const deadline = setTimeout(() => showBaseline(true), m2Config.request_timeout_ms);
+      if (append) showBaseline(false);
       // This deadline starts before queued behavior writes and history retrieval.
       // It bounds the reader request, while an aborted browser request cannot prove
       // that upstream work stopped.
@@ -2164,6 +2170,7 @@
       }
       const wasHydrated = hydrated.has(topic);
       const requestEpoch = authEpoch;
+      const requestGeneration = topic === "__saved__" ? ++savedHydrationGeneration : savedHydrationGeneration;
       const request = { topic, epoch: requestEpoch };
       pageRequests.add(request);
       refreshLoadButton();
@@ -2172,7 +2179,8 @@
         const rows = topic === "__saved__"
           ? await api.savedPage(null, latest.page_size)
           : await api.feedPage(topicIdForSlug(topic), initialCursor, latest.page_size);
-        if (requestEpoch !== authEpoch || discoveryActive) return;
+        if (requestEpoch !== authEpoch || discoveryActive ||
+            (topic === "__saved__" && (requestGeneration !== savedHydrationGeneration || usesM2()))) return;
         mergeRows(rows, true, topic);
         const cursor = topic === "__saved__"
           ? nextSavedCursor(rows, latest.page_size)
@@ -2185,6 +2193,7 @@
       } finally {
         pageRequests.delete(request);
         refreshLoadButton();
+        if (topic === "__saved__") window.dispatchEvent(new Event("news-curator:saved-request-finished"));
       }
     }
     async function loadMore() {
@@ -2193,6 +2202,7 @@
       if (!latest || initializing || loadButton.disabled || exhausted.has(topic)) return;
       if (topic === "__saved__" && !requireSignIn()) return;
       const requestEpoch = authEpoch;
+      const requestGeneration = topic === "__saved__" ? savedHydrationGeneration : null;
       const request = { topic, epoch: requestEpoch };
       pageRequests.add(request);
       refreshLoadButton();
@@ -2206,7 +2216,8 @@
         const currentCursor = cursors.get(topic) || null;
         if (topic === "__saved__") {
           rows = await api.savedPage(currentCursor, latest.page_size);
-          if (requestEpoch !== authEpoch || discoveryActive) return;
+          if (requestEpoch !== authEpoch || discoveryActive || requestGeneration !== savedHydrationGeneration ||
+              usesM2() || selectedTopic() !== topic) return;
           const cursor = nextSavedCursor(rows, latest.page_size);
           if (cursor) cursors.set(topic, cursor);
         } else {
@@ -2226,6 +2237,7 @@
       } finally {
         pageRequests.delete(request);
         refreshLoadButton();
+        if (topic === "__saved__") window.dispatchEvent(new Event("news-curator:saved-request-finished"));
       }
     }
     function reapplyCurrentMembership(card, priorFocusedAction = null) {

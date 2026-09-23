@@ -9,7 +9,7 @@ import copy
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 from curator.models import Item
@@ -23,7 +23,6 @@ from scripts.build_auth_callback import activate_personalization_link
 # requirements file and installed by no workflow, so every assertion below
 # reported SKIPPED and proved nothing. A hard import is the point: a missing
 # browser stack must fail the run, never quietly pass it.
-import pytest
 from playwright import sync_api as playwright
 ROOT=Path(__file__).resolve().parents[1]
 READER='https://reader.example'
@@ -98,7 +97,9 @@ def asgi_request(app, request):
 def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surprise=False,
                       inject_slow_valid_fallback=False, inject_empty_continuation=False,
                       inject_empty_owner_switch=False, inject_empty_expired_deadline=False,
-                      inject_empty_pointerdown=False):
+                      inject_empty_pointerdown=False, inject_saved_race=False,
+                      inject_saved_page_race=False, inject_saved_auth_race=False,
+                      inject_fast_page_history_failure=False):
     """The whole reader drive. `include_the_tail` selects everything from the
     saved-navigation step onward, which is the part issue #48 breaks."""
     artifact_dir = Path(os.environ.get('NEWS_CURATOR_QA_OUTPUT_DIR', str(tmp_path)))
@@ -125,7 +126,8 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
         policy=RankerPolicy('test-provider','test-model','https://provider.example','test-prompt'),engine=NoProvider()),
         policy=ServicePolicy('test-policy','test-model','test-policy','test-tenant',enabled=True,preview_owner_ids=(OWNER,)),cursor_key=b'k'*32)
     app=RankingASGI(service=service,reader_origin=READER)
-    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}
+    requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]
+    history_mode={'fail':False, 'fail_after_page':False}
     cursor_mode={'reject_once':False,'rejections':0}
     empty_mode={'remaining':int(inject_empty_continuation or inject_empty_owner_switch
                                 or inject_empty_expired_deadline or inject_empty_pointerdown),
@@ -155,6 +157,8 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                 return route.fulfill(status=409,content_type='application/json',
                     body=json.dumps({'error':'cursor_version'}))
             status,payload=asgi_request(app,request)
+            if parsed.path=='/page' and history_mode['fail_after_page']:
+                history_mode['fail']=True
             if parsed.path=='/rank' and status==200:
                 empty_mode['rank_response']=json.loads(payload)
             # M2 is the source of truth for a ranked response.  A category
@@ -172,7 +176,8 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
             name=parsed.path.rsplit('/',1)[-1]
             if name=='latest_publication':
                 payload={'publication_seq':1,'finalized_at':capture['generated_at'],'initial_history_cursor':None,
-                    'page_size':20,'poll_seconds':60,'topics':[{'topic_id':c,'name':c} for c in categories]}
+                    'page_size':1 if inject_saved_page_race else 20,'poll_seconds':60,
+                    'topics':[{'topic_id':c,'name':c} for c in categories]}
             elif name=='m2_history_snapshot':
                 if history_mode['fail']:
                     return route.fulfill(status=500,content_type='application/json',body='{}')
@@ -225,11 +230,11 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                     'rows':export_rows[offset:offset+1],
                     'next_cursor':f'cursor-{offset+1}' if offset+1<len(export_rows) else None}
             elif name=='saved_page':
-                payload=[]
+                saved_rows=[]
                 for row in rows:
                     state=store.states.get(row['story_id'])
                     if not state or not state['saved_at']:continue
-                    payload.append({'story_id':row['story_id'],'canonical_url':row['canonical_url'],
+                    saved_rows.append({'story_id':row['story_id'],'canonical_url':row['canonical_url'],
                         'title':row['title'],'summary':row['summary'],'language':row['language'],
                         'published_at':row['published_at'],'publication_seq':0,'position':0,
                         'ordering_mode':'preference_then_freshness','ordering_key':{},'page_order_mode':'saved_at',
@@ -237,6 +242,13 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                         'score_components':{},'topic_ids':row['category_ids'],'topic_ranks':{},
                         'source_kind':row['source_kind'],'source_name':row['source_name'],
                         'ranking_explanation':'Saved story','coverage_mentions':[],**copy.deepcopy(state)})
+                before_saved_at=body.get('p_before_saved_at')
+                before_story_id=body.get('p_before_story_id')
+                if before_saved_at:
+                    saved_rows=[row for row in saved_rows
+                                if (row['saved_at'],row['story_id']) < (before_saved_at,before_story_id)]
+                saved_rows.sort(key=lambda row: (row['saved_at'], row['story_id']), reverse=True)
+                payload=saved_rows[:int(body['p_limit'])]
             elif name=='feed_page':payload=[]
             elif name=='discovery_edition':payload={'schema_version':1,'status':'unavailable','reason_code':'no_private_edition','edition':None}
             else:raise AssertionError(name)
@@ -246,12 +258,20 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
         browser=runtime.chromium.launch(headless=True,channel='chrome',args=['--mute-audio'])
         context=browser.new_context(viewport={'width':390,'height':844})
         context.add_init_script('''(() => {
+            if (window.speechSynthesis) window.speechSynthesis.speak = () => {};
+            if (window.HTMLMediaElement) window.HTMLMediaElement.prototype.play = () => Promise.resolve();
+            window.__savedAppSettled = 0;
+            window.addEventListener("news-curator:saved-request-finished", () => { window.__savedAppSettled += 1; });
+        })();''')
+        context.add_init_script('''(() => {
             const originalFetch=window.fetch.bind(window);
             window.fetch=(url,options)=>{
               if(window.__stallExport && String(url).endsWith("/m2_owner_export_page"))
                 return new Promise((resolve,reject)=>{window.__releaseExport=()=>originalFetch(url,options).then(resolve,reject);});
               if(window.__stallHistory && String(url).endsWith("/m2_history_snapshot"))
                 return new Promise((resolve,reject)=>setTimeout(()=>originalFetch(url,options).then(resolve,reject),400));
+              if(window.__stallSaved && String(url).endsWith("/saved_page"))
+                return new Promise((resolve,reject)=>{window.__releaseSaved=()=>originalFetch(url,options).then(resolve,reject);});
               if(window.__stallState && (String(url).endsWith("/set_story_state_with_event") ||
                   String(url).endsWith("/set_story_state")))
                 return new Promise((resolve,reject)=>{
@@ -275,9 +295,105 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
         context.route('**/*',route_handler)
         page=context.new_page();page.on('pageerror',lambda error:page_errors.append(str(error)))
         try:
-            page.goto(READER,wait_until='networkidle')
+            page.goto(READER + '?silent=1',wait_until='networkidle')
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
             assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
+            if inject_saved_race:
+                saved_only = rows[-1]['story_id']
+                replacement_saved = rows[-2]['story_id']
+                for story_id in (saved_only, replacement_saved):
+                    store.states.setdefault(story_id, {
+                        'read_at': None, 'saved_at': None, 'state_revision': 0, 'interests': []})
+                store.states[saved_only]['saved_at'] = capture['generated_at']
+                page.evaluate('window.__stallSaved=true')
+                page.locator('.chip[data-filter="__saved__"]:visible').click()
+                page.wait_for_function('() => typeof window.__releaseSaved === "function"')
+                page.locator('.chip[data-filter="__all__"]:visible').click()
+                page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"]').count()==0
+                settled_before = page.evaluate('window.__savedAppSettled')
+                page.evaluate('window.__stallSaved=false;window.__releaseSaved()')
+                page.wait_for_function('(before) => window.__savedAppSettled > before', arg=settled_before)
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"]').count()==0
+                store.states[saved_only]['saved_at'] = None
+                store.states[replacement_saved]['saved_at'] = capture['generated_at']
+                saved_requests = requests.count('/rest/v1/rpc/saved_page')
+                page.locator('.chip[data-filter="__saved__"]:visible').click()
+                page.wait_for_function('() => document.querySelector(".chip[data-filter=\'__saved__\']").getAttribute("aria-pressed")==="true"')
+                page.locator(f'.card:not([hidden])[data-story-id="{replacement_saved}"]').wait_for(state='visible')
+                assert page.locator(f'.card:not([hidden])[data-story-id="{replacement_saved}"]').count()==1
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"]').count()==0
+                assert requests.count('/rest/v1/rpc/saved_page') > saved_requests
+                assert not page_errors, page_errors
+                return
+            if inject_saved_page_race:
+                saved_only, saved_second, saved_third = (row['story_id'] for row in rows[-3:])
+                saved_times = {
+                    saved_only: (datetime.fromisoformat(capture['generated_at'])).isoformat(),
+                    saved_second: (datetime.fromisoformat(capture['generated_at']) - timedelta(seconds=1)).isoformat(),
+                    saved_third: (datetime.fromisoformat(capture['generated_at']) - timedelta(seconds=2)).isoformat(),
+                }
+                for story_id in (saved_only, saved_second, saved_third):
+                    store.states.setdefault(story_id, {
+                        'read_at': None, 'saved_at': saved_times[story_id],
+                        'state_revision': 0, 'interests': []})
+                page.locator('.chip[data-filter="__saved__"]:visible').click()
+                page.wait_for_function('() => document.querySelectorAll(".card:not([hidden])").length===1')
+                page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"]').wait_for(state='visible')
+                page.locator('#load-more').click()
+                page.locator(f'.card:not([hidden])[data-story-id="{saved_second}"]').wait_for(state='visible')
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"]').count()==1
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_second}"]').count()==1
+                assert requests.count('/rest/v1/rpc/saved_page')==2
+                page.locator('.chip[data-filter="__all__"]:visible').click()
+                page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+                page.locator('.chip[data-filter="__saved__"]:visible').click()
+                page.wait_for_function('() => document.querySelectorAll(".card:not([hidden])").length===1')
+                page.evaluate('window.__stallSaved=true')
+                page.locator('#load-more').click()
+                page.wait_for_function('() => typeof window.__releaseSaved === "function"')
+                page.locator('.chip[data-filter="__all__"]:visible').click()
+                page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===25')
+                settled_before = page.evaluate('window.__savedAppSettled')
+                page.evaluate('window.__stallSaved=false;window.__releaseSaved()')
+                page.wait_for_function('(before) => window.__savedAppSettled > before', arg=settled_before)
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"]').count()==0
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_second}"]').count()==0
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_third}"]').count()==0
+                assert page.locator('[data-m2-card=true]').count()==25
+                saved_requests = requests.count('/rest/v1/rpc/saved_page')
+                page.locator('.chip[data-filter="__saved__"]:visible').click()
+                page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"]').wait_for(state='visible')
+                assert requests.count('/rest/v1/rpc/saved_page') > saved_requests
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_second}"]').count()==0
+                assert not page_errors, page_errors
+                return
+            if inject_saved_auth_race:
+                saved_only = rows[-1]['story_id']
+                store.states.setdefault(saved_only, {
+                    'read_at': None, 'saved_at': capture['generated_at'],
+                    'state_revision': 0, 'interests': []})
+                page.evaluate('window.__stallSaved=true')
+                page.locator('.chip[data-filter="__saved__"]:visible').click()
+                page.wait_for_function('() => typeof window.__releaseSaved === "function"')
+                page.evaluate('window.__localSession=null;window.dispatchEvent(new Event("news-curator:auth-changed"))')
+                page.wait_for_function('() => document.querySelector("#m2-controls").hidden')
+                settled_before = page.evaluate('window.__savedAppSettled')
+                page.evaluate('window.__stallSaved=false;window.__releaseSaved()')
+                page.wait_for_function('(before) => window.__savedAppSettled > before', arg=settled_before)
+                assert page.locator(f'.card:not([hidden])[data-story-id="{saved_only}"].is-saved').count()==0
+                assert not page_errors, page_errors
+                return
+            if inject_fast_page_history_failure:
+                preceding_ids=page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')
+                history_mode['fail_after_page']=True
+                page.locator('#load-more').click()
+                page.wait_for_function('() => document.querySelector("#reader-status").textContent.includes("Personalized feed is still loading")')
+                page.wait_for_function('() => document.querySelectorAll("[data-m2-card=true]").length===50')
+                assert page.locator('[data-m2-card=true]').evaluate_all('(cards)=>cards.map(card=>card.dataset.storyId)')[:25] == preceding_ids
+                assert 'Could not load more' not in page.locator('#m2-mode').inner_text()
+                assert not page_errors, page_errors
+                return
             if inject_empty_owner_switch or inject_empty_expired_deadline or inject_empty_pointerdown:
                 page.evaluate('''(delay) => {
                     window.__stallM2=true;window.__stallM2Delay=delay;
@@ -581,7 +697,7 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
             page.evaluate('window.__visibleDeadline=0;window.__transportDeadline=0;window.__stallM2=false;window.__stallM2Delay=0')
             # ---- the tail, from here on, depends on leaving the personalized
             # feed. Issue #48. Split out so the 46 assertions above stay
-            # gating instead of riding under one file-wide expected failure.
+            # gating independently within the full reader drive.
             if not include_the_tail:
                 return
             # Saved navigation makes M2 ineligible while this original request is
@@ -697,13 +813,21 @@ def test_empty_continuation_keeps_loading_after_unrelated_pointerdown(tmp_path):
     _drive_the_reader(tmp_path, include_the_tail=False, inject_empty_pointerdown=True)
 
 
-# The ONE expected failure this suite carries, and the CI guard names exactly
-# this test. TWO assertions in the tail are known to fail, both in issue #48:
-# the saved tab renders empty after leaving the personalized feed (line 376 in
-# the pre-split file), and the intermediate "still loading" state after a
-# load-more whose stall was just switched off (line 394). strict=True means the
-# job goes RED the moment BOTH are fixed, so the marker and the CI allowance
-# have to come out with the fix rather than quietly outliving it.
-@pytest.mark.xfail(strict=True, reason="two reader failures after leaving M2, see issue #48")
+def test_saved_response_arriving_after_m2_activation_is_discarded(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=True, inject_saved_race=True)
+
+
+def test_saved_page_two_response_after_m2_activation_is_discarded(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=True, inject_saved_page_race=True)
+
+
+def test_saved_response_after_auth_epoch_change_is_discarded(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=True, inject_saved_auth_race=True)
+
+
+def test_fast_continuation_does_not_require_a_second_history_snapshot(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=True, inject_fast_page_history_failure=True)
+
+
 def test_reader_surfaces_after_leaving_the_personalized_feed(tmp_path):
     _drive_the_reader(tmp_path, include_the_tail=True)
