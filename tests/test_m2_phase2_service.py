@@ -590,6 +590,51 @@ def test_later_continuation_pages_keep_the_same_hard_invariants():
     assert {card["story_id"] for card in aligned} == {card["story_id"] for card in added}
 
 
+@pytest.mark.parametrize("first_batch_sources", [("same", "other"), ("same", "same")])
+def test_colliding_continuation_card_waits_for_a_legal_older_replacement(first_batch_sources):
+    """A card deferred at a stitched boundary must not strand page four."""
+    store = PaidStore(events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    prototype = first["cards"][0]
+    frozen["cards"] = [dict(prototype, story_id=f"story:{index + 3000:064x}",
+                            source_id="same" if index == 97 else f"prefix-{index}",
+                            title=f"Prefix {index}", url=f"https://example.test/prefix-{index}")
+                       for index in range(98)]
+    frozen["bindings"]["corpus_has_more"] = True
+    frozen["bindings"]["pending_candidates"] = []
+    frozen["bindings"]["pending_exclusive_story_ids"] = []
+    frozen["bindings"]["corpus_cursor"] = {
+        "before_published_at": (NOW - timedelta(hours=49)).isoformat(),
+        "before_story_id": frozen["cards"][-1]["story_id"]}
+    next(iter(store.views.values()))["pages_served"] = 3
+    batches = [
+        [corpus_row(4000, hours=50, source=first_batch_sources[0], categories=["topic"]),
+         corpus_row(4001, hours=50, source=first_batch_sources[1], categories=["topic"])],
+        [corpus_row(4002, hours=51, source="replacement", categories=["topic"]),
+         corpus_row(4003, hours=51, source="another", categories=["topic"])],
+    ]
+
+    def pool(*args, **kwargs):
+        rows = batches.pop(0)
+        return rows, set(), (rows[-1]["published_at"], rows[-1]["story_id"]), bool(batches)
+
+    subject._pool_rows = pool
+    cursor = subject._cursor("frozen-1", 75, int(frozen["expires_at"]), response_number=4)
+    fourth = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    assert len(fourth["cards"]) == 25
+    assert len(store.extensions) == 2
+    assert next(iter(store.views.values()))["pages_served"] == 4
+    assert not batches
+    assert len({card["story_id"] for card in frozen["cards"]}) == len(frozen["cards"])
+    assert [card["story_id"] for card in subject.page(
+        authorization="Bearer valid", cursor=cursor)["cards"]] == [
+        card["story_id"] for card in fourth["cards"]]
+    assert subject._adapter.calls == 1
+
+
 def test_filtered_prefix_chooses_a_legal_replacement_before_a_collision():
     subject = paid(PaidStore(events=liked_events()))
     policy = subject._policy.composition

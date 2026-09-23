@@ -708,6 +708,23 @@ class RankingService:
                         # ordinal for the caller to retry. Do not turn it into
                         # an unbounded search inside this one request.
                         if not added:
+                            if (continuation_pending
+                                    and not self._is_exclusive_category(
+                                        (locked_bindings.get("eligibility") or {}).get("category"))
+                                    and attempt + 1 < composition.continuation_refill_max_passes
+                                    and general_budget <= composition.pool_scan_max_batches):
+                                advanced = self._store.load_frozen_order(
+                                    user_id=owner.user_id,
+                                    frozen_order_id=str(payload["frozen_order_id"]))
+                                advanced_bindings = ((advanced or {}).get("bindings") or {})
+                                if (advanced_bindings.get("corpus_cursor")
+                                        != locked_bindings.get("corpus_cursor")
+                                        or advanced_bindings.get("pending_candidates")
+                                        != locked_bindings.get("pending_candidates")):
+                                    # Zero admitted cards can still retire a
+                                    # blocked corpus head. A second bounded
+                                    # scan may find its legal replacement.
+                                    continue
                             terminal_pending = continuation_pending
                             break
                     frozen = self._store.load_frozen_order(user_id=owner.user_id,
@@ -889,15 +906,26 @@ class RankingService:
             group = item.row.get("event_group_id")
             if isinstance(group, str) and group:
                 event_groups[item.story_id] = group
+        unreflowed = added
         added = self._align_continuation(
             frozen.get("cards", ()), added, size, composition, event_groups,
-            page_prefix=page_prefix)
+            page_prefix=page_prefix, defer_on_collision=not exclusive)
+        alignment_deferred_ids = ({str(card.get("story_id")) for card in unreflowed}
+                                  - {str(card.get("story_id")) for card in added})
         if event_groups:
             bindings["event_group_ids"] = event_groups
         if finalization is not None:
             deferred_pending = self._pending_after_finalization(
                 rows, laned, finalization,
                 {str(card.get("story_id")) for card in added}, composition)
+            if alignment_deferred_ids:
+                # A candidate the finalizer admitted but the stitched page
+                # could not legally place is pending, not hard-dropped. The
+                # next older scan can supply a separating story.
+                deferred_pending = self._pending_candidates(
+                    list(deferred_pending) + [row for row in rows
+                        if str(row.get("story_id")) in alignment_deferred_ids],
+                    {str(card.get("story_id")) for card in added}, composition)
         else:
             deferred_pending = self._pending_candidates(
                 rows, {str(card.get("story_id")) for card in added}, composition)
@@ -1286,7 +1314,7 @@ class RankingService:
         return False
 
     def _align_continuation(self, existing, added, size, composition, event_group_ids=None,
-                            *, page_prefix=None):
+                            *, page_prefix=None, defer_on_collision=False):
         """Reflow appended cards onto the frozen order's actual page boundaries."""
         if not added or composition is None or size <= 0:
             return list(added)
@@ -1304,6 +1332,8 @@ class RankingService:
             # The final runtime slice still fails closed on a collision. This
             # fallback merely keeps the reorder bounded when no legal candidate
             # remains for the current partial page.
+            if chosen is None and defer_on_collision:
+                break
             chosen = 0 if chosen is None else chosen
             candidate = remaining.pop(chosen)
             aligned.append(candidate)
