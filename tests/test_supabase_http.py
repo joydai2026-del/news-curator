@@ -117,6 +117,28 @@ def test_response_reservation_uses_the_atomic_rpc_with_exact_progress():
         "p_response_number": 2, "p_offset": 25, "p_next_offset": 50}
 
 
+def test_successful_rpc_timing_log_omits_query_and_credentials(capsys):
+    client = _client()
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return b"[]"
+
+    class Capture:
+        def open(self, request, timeout): return Response()
+
+    client._opener = Capture()
+    assert client._request("GET", "/rest/v1/m2_frozen_rankings?user_id=private-owner",
+                           token="private-token", key="private-key") == []
+    event = json.loads(capsys.readouterr().err)
+    assert set(event) == {"event", "path", "method", "elapsed_ms"}
+    assert event["event"] == "m2_supabase_request_timing"
+    assert event["path"] == "/rest/v1/m2_frozen_rankings"
+    assert event["method"] == "GET"
+    assert event["elapsed_ms"] >= 0
+
+
 def _client(timeout_seconds=None):
     kwargs = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
     return SupabaseHTTP(origin="https://example.test", publishable_key="public",
