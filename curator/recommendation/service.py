@@ -77,6 +77,22 @@ def _page_stage(stages: dict[str, float], label: str):
         stages[label] = round(stages.get(label, 0) +
                               (time.perf_counter() - started) * 1000, 3)
 
+
+def _page_diagnostic(payload: Mapping[str, object]) -> None:
+    """Keep page-path telemetry from changing the page or its original error."""
+    try:
+        sys.stderr.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def _page_suppressed_exception(event: str, error: Exception, **fields) -> None:
+    try:
+        log_suppressed_exception(event, error, stream=sys.stderr, **fields)
+    except Exception:
+        pass
+
 # The request accepts at most 1,000 exclusions. Eleven batches can step past all
 # of them and fill the 51-row candidate-plus-lookahead window; one additional
 # batch absorbs a full page of incomplete translations without making the
@@ -642,13 +658,9 @@ class RankingService:
             # One record per request keeps concurrent page turns separable
             # without logging a user, cursor, story, query or request id.
             # Diagnostic failure must not change a page result or mask its error.
-            try:
-                sys.stderr.write(json.dumps({"event": "m2_page_stage_timing", "route": "/page",
-                    "total_ms": round((time.perf_counter() - started) * 1000, 3),
-                    "stages_ms": stages}, separators=(",", ":")) + "\n")
-                sys.stderr.flush()
-            except Exception:
-                pass
+            _page_diagnostic({"event": "m2_page_stage_timing", "route": "/page",
+                "total_ms": round((time.perf_counter() - started) * 1000, 3),
+                "stages_ms": stages})
 
     def _page_with_timing(self, *, authorization: str, cursor: str,
                           stages: dict[str, float]) -> dict[str, object]:
@@ -1097,24 +1109,21 @@ class RankingService:
                 frozen_order_id=frozen_order_id, cards=added,
                 bindings=continuation_bindings)
         except Exception as error:
-            log_suppressed_exception("m2_continuation_failed", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_continuation_failed", error,
                 reason="store_unavailable", frozen_order_id=frozen_order_id)
             return (), False
-        sys.stderr.write(json.dumps({"event": "m2_continuation_pass_timing",
+        _page_diagnostic({"event": "m2_continuation_pass_timing",
             "pass_total_ms": round((time.perf_counter() - started_at) * 1000),
             "pool_ms": pool_ms,
             "owner_states_ms": owner_states_ms,
             "extend_ms": round((time.perf_counter() - extend_started_at) * 1000),
-            "pool_rows": len(pooled), "added_cards": len(added)},
-            separators=(",", ":")) + "\n")
-        sys.stderr.flush()
+            "pool_rows": len(pooled), "added_cards": len(added)})
         if (not isinstance(total, int) or total < previous_total
                 or (added and total <= previous_total)):
             # The order did not grow: it has reached its cap, or the row was not
             # matched. Either way this run is over, and saying so is better than
             # silently repeating the page she just read.
-            print(json.dumps({"event": "m2_continuation_exhausted", "reason": "order_at_capacity"},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+            _page_diagnostic({"event": "m2_continuation_exhausted", "reason": "order_at_capacity"})
             return (), False
         return tuple(added), more
 
@@ -1143,7 +1152,7 @@ class RankingService:
                 eligibility_key=eligibility_key, frozen_order_id=frozen_order_id,
                 response_number=response_number, offset=offset, next_offset=next_offset)
         except Exception as error:
-            log_suppressed_exception("m2_page_budget_unavailable", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_page_budget_unavailable", error,
                 run_id=run_id)
             raise RuntimeError("page_budget_unavailable") from error
         if not isinstance(result, Mapping) or not isinstance(result.get("reserved"), bool):
@@ -1189,12 +1198,11 @@ class RankingService:
             recorded = self._store.record_reading_run_filter(user_id=owner.user_id,
                 run_id=str(run_id), story_ids=sorted(removed))
             if not isinstance(recorded, int) or recorded <= 0:
-                print(json.dumps({"event": "m2_filter_not_recorded", "run_id": str(run_id)},
-                                 separators=(",", ":")), file=sys.stderr, flush=True)
+                _page_diagnostic({"event": "m2_filter_not_recorded", "run_id": str(run_id)})
         except Exception as error:
             # A page must render even when the audit write fails. The filter
             # itself already happened; this only records it.
-            log_suppressed_exception("m2_filter_record_failed", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_filter_record_failed", error,
                 run_id=str(run_id))
 
     def _opened_candidate_ids(self, token, rows, composition, profile, diagnostics):
@@ -1743,7 +1751,7 @@ class RankingService:
             self._store.release_run_ranking_claim(user_id=owner.user_id,
                 run_id=str(run["run_id"]), eligibility_key=eligibility_key, token=str(claim_token))
         except Exception as error:
-            log_suppressed_exception("m2_claim_release_failed", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_claim_release_failed", error,
                 run_id=str(run["run_id"]))
 
     def _reserve(self, owner, request_id, estimate, run, eligibility_key, claim_token):
@@ -1825,7 +1833,7 @@ class RankingService:
             view = self._store.open_run_view(user_id=owner.user_id, run_id=str(run["run_id"]),
                                              eligibility_key=eligibility_key)
         except Exception as error:
-            log_suppressed_exception("m2_view_unavailable", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_view_unavailable", error,
                 run_id=str(run["run_id"]))
             return None
         return view if isinstance(view, Mapping) else None
@@ -1861,7 +1869,7 @@ class RankingService:
                 eligibility_key=eligibility_key, token=token,
                 ttl_seconds=composition.ranking_claim_seconds)
         except Exception as error:
-            log_suppressed_exception("m2_claim_unavailable", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_claim_unavailable", error,
                 run_id=run_id)
             raise RuntimeError("page_budget_unavailable") from error
         if not isinstance(claim, Mapping) or not claim.get("granted"):
@@ -2076,14 +2084,12 @@ class RankingService:
                 general_has_more = len(batch) == limit
                 if len(batch) < limit:
                     break
-            sys.stderr.write(json.dumps({"event": "m2_pool_timing", "lane": "general",
+            _page_diagnostic({"event": "m2_pool_timing", "lane": "general",
                 "duration_ms": round((time.perf_counter() - scan_start) * 1000),
                 "rpc_count": general_batches, "rows": len(general_rows),
                 "target": target, "excluded_count": len(excluded),
                 "batch_limits": batch_limits, "batch_sizes": batch_sizes,
-                "excluded_rows": excluded_rows, "suppressed_rows": suppressed_rows},
-                separators=(",", ":")) + "\n")
-            sys.stderr.flush()
+                "excluded_rows": excluded_rows, "suppressed_rows": suppressed_rows})
             return general_rows, general_boundary, general_has_more
         # Each lane has its own keyset and reads the same immutable request
         # inputs. Overlap all I/O, then merge results in policy priority order
@@ -2150,11 +2156,9 @@ class RankingService:
                                    last["independent_source_count"] if lane == "hot" else None)
                 if len(rows) < batch_limit:
                     break
-            sys.stderr.write(json.dumps({"event": "m2_pool_timing", "lane": lane,
+            _page_diagnostic({"event": "m2_pool_timing", "lane": lane,
                 "duration_ms": round((time.perf_counter() - scan_start) * 1000),
-                "rpc_count": rpc_count, "rows": len(lane_rows)},
-                separators=(",", ":")) + "\n")
-            sys.stderr.flush()
+                "rpc_count": rpc_count, "rows": len(lane_rows)})
             return lane_rows, lane_hot_story_ids
 
         if composition.pool_parallel_workers == 1 or not lanes:

@@ -1,6 +1,10 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
+import pytest
+
+from curator.recommendation import asgi as asgi_module
 from curator.recommendation.asgi import RankingASGI
 
 
@@ -88,6 +92,44 @@ def test_successful_page_logs_only_route_and_duration(capsys):
     assert event["event"] == "m2_api_timing"
     assert event["route"] == "page"
     assert event["duration_ms"] >= 0
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_page_success_does_not_become_error_when_timing_sink_fails(monkeypatch, failed_operation):
+    class PagingService(Service):
+        def page(self, *, authorization, cursor):
+            return {"schema_version": 1, "cards": [], "end_of_run": True}
+
+    class FailingSink:
+        def write(self, value):
+            if failed_operation == "write": raise OSError("sink_down")
+            return len(value)
+
+        def flush(self):
+            if failed_operation == "flush": raise OSError("sink_down")
+
+    monkeypatch.setattr(asgi_module, "sys", SimpleNamespace(stderr=FailingSink()))
+    sent = request(RankingASGI(service=PagingService(), reader_origin="https://reader.example"),
+        method="GET", path="/page", query=b"cursor=private-cursor",
+        headers=((b"authorization", b"Bearer valid"),))
+    assert sent[0]["status"] == 200
+    assert json.loads(sent[1]["body"]) == {"schema_version": 1, "cards": [], "end_of_run": True}
+
+
+def test_page_invalid_request_keeps_400_when_diagnostic_sink_fails(monkeypatch):
+    class InvalidPagingService(Service):
+        def page(self, *, authorization, cursor):
+            raise ValueError("private input must not be logged")
+
+    class FailingSink:
+        def write(self, value): raise OSError("sink_down")
+        def flush(self): raise OSError("sink_down")
+
+    monkeypatch.setattr(asgi_module, "sys", SimpleNamespace(stderr=FailingSink()))
+    sent = request(RankingASGI(service=InvalidPagingService(), reader_origin="https://reader.example"),
+        method="GET", path="/page", query=b"cursor=private-cursor")
+    assert sent[0]["status"] == 400
+    assert json.loads(sent[1]["body"]) == {"error": "invalid_request"}
 
 
 def test_rank_route_maps_bad_jwt_to_401():

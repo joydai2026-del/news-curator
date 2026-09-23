@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import copy
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +24,7 @@ from curator.recommendation import service as service_module
 from curator.recommendation.profile import BehaviorProfile
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.service import (
+    AuthenticationError,
     ProviderConsentRequiredError,
     RankingInProgressError,
     RankingService,
@@ -2517,6 +2519,82 @@ def failing_timing_sink(failed_operation):
     return FailingTimingSink()
 
 
+def failing_page_sink(failed_operation):
+    class FailingPageSink:
+        def write(self, value):
+            if failed_operation == "write":
+                raise OSError("sink_down")
+            return len(value)
+
+        def flush(self):
+            if failed_operation == "flush":
+                raise OSError("sink_down")
+
+    return FailingPageSink()
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_entire_page_timing_sink_failure_keeps_a_valid_continuation(
+        complete_continuation_page, monkeypatch, failed_operation):
+    store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink(failed_operation)))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_entire_page_sink_failure_does_not_mask_authentication_error(
+        complete_continuation_page, monkeypatch):
+    _store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    with pytest.raises(AuthenticationError):
+        subject.page(authorization="", cursor=cursor)
+
+
+def test_entire_page_sink_failure_does_not_mask_claim_failure(
+        complete_continuation_page, monkeypatch):
+    store, subject, cursor, _offset = complete_continuation_page
+
+    def fail_claim(**_kwargs):
+        raise RuntimeError("claim_down")
+
+    store.claim_run_ranking = fail_claim
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    with pytest.raises(RuntimeError, match="page_budget_unavailable"):
+        subject.page(authorization="Bearer valid", cursor=cursor)
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_entire_page_sink_failure_does_not_mask_claim_release_failure(
+        complete_continuation_page, monkeypatch):
+    store, subject, cursor, _offset = complete_continuation_page
+
+    def fail_release(**_kwargs):
+        raise RuntimeError("release_down")
+
+    store.release_run_ranking_claim = fail_release
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_entire_page_sink_failure_keeps_privacy_deleted_response(
+        complete_continuation_page, monkeypatch):
+    store, subject, cursor, _offset = complete_continuation_page
+    store.after_read = lambda number, _snapshot: store.frozen.clear() if number == 3 else None
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert response["cards"] == [] and response["end_of_run"] is True
+    assert store.response_reservations == 1
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
 @pytest.mark.parametrize("failed_operation", ["write", "flush"])
 def test_timing_sink_failure_cannot_replace_a_valid_page(
         complete_continuation_page, monkeypatch, failed_operation):
@@ -2565,6 +2643,26 @@ def test_page_stage_timing_stays_private_on_replay_and_error(
         for private_value in (OWNER_ID, "frozen-1", cursor, invalid_cursor,
                               "valid", "story:", "https://example.test"):
             assert private_value not in serialized
+
+
+def test_page_stage_total_exposes_single_request_unmeasured_work(
+        complete_continuation_page, capsys):
+    _store, subject, cursor, _offset = complete_continuation_page
+    original_slice = subject._slice
+    delayed_once = False
+
+    def delayed_slice(*args, **kwargs):
+        nonlocal delayed_once
+        if not delayed_once:
+            delayed_once = True
+            time.sleep(0.03)
+        return original_slice(*args, **kwargs)
+
+    subject._slice = delayed_slice
+    subject.page(authorization="Bearer valid", cursor=cursor)
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timing = next(event for event in events if event.get("event") == "m2_page_stage_timing")
+    assert timing["total_ms"] - sum(timing["stages_ms"].values()) >= 20
 
 
 def test_reused_page_cannot_survive_privacy_deletion(complete_continuation_page):
@@ -2640,7 +2738,7 @@ def test_last_allowed_append_still_loads_its_persisted_result(complete_continuat
 
 @pytest.mark.parametrize("remaining", [0, 1])
 def test_empty_or_partial_persisted_page_keeps_final_reread(
-        complete_continuation_page, remaining):
+        complete_continuation_page, remaining, capsys):
     store, subject, cursor, _offset = complete_continuation_page
     original_extend = store.extend_frozen_order
 
@@ -2666,6 +2764,10 @@ def test_empty_or_partial_persisted_page_keeps_final_reread(
         assert store.page_reads == 3
     assert store.response_reservations == 0
     assert all(view["claim_token"] is None for view in store.views.values())
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timing = next(event for event in events if event.get("event") == "m2_page_stage_timing")
+    assert "final_load" in timing["stages_ms"]
+    assert "claim_release" in timing["stages_ms"]
 
 
 @pytest.mark.parametrize("response_number,offset", [(1, 50), (2, 0), (1, 0)])
