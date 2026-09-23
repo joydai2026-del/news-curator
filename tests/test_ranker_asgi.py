@@ -62,6 +62,17 @@ def test_rank_route_forwards_bearer_and_json_through_full_asgi_dispatch():
     assert json.loads(sent[1]["body"])["request_id"] == "request"
 
 
+def test_successful_rank_logs_only_route_and_duration(capsys):
+    request(RankingASGI(service=Service(), reader_origin="https://reader.example"),
+        method="POST", path="/rank", body=b'{"query":"private search text"}',
+        headers=((b"authorization", b"Bearer valid"),))
+    event = json.loads(capsys.readouterr().err)
+    assert set(event) == {"event", "route", "duration_ms"}
+    assert event["event"] == "m2_api_timing"
+    assert event["route"] == "rank"
+    assert event["duration_ms"] >= 0
+
+
 def test_rank_route_maps_bad_jwt_to_401():
     sent = request(RankingASGI(service=Service(), reader_origin="https://reader.example"),
         method="POST", path="/rank", body=b'{}')

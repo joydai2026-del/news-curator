@@ -847,6 +847,17 @@ def test_a_cap_of_zero_turns_promotion_off():
     assert store.exclusive_calls == 0, "a cap of zero must not even ask"
 
 
+def test_promotion_timing_log_contains_no_query_or_story_data(capsys):
+    store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
+    rank(build(store, exclusive_category="only-other-language-press"), store,
+         eligibility={"category": None, "query": "private search text"})
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timing = next(event for event in events if event.get("event") == "m2_promotion_timing")
+    assert set(timing) == {"event", "duration_ms", "rows"}
+    assert timing["duration_ms"] >= 0
+    assert timing["rows"] >= 0
+
+
 def test_promotion_never_adds_slots():
     store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
     with_promotion = rank(build(store, exclusive_category="only-other-language-press"), store)
