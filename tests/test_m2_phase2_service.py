@@ -95,6 +95,7 @@ class Store:
         self.filtered = {}
         self.claims = []
         self.views = {}
+        self.opened = set()
 
     # --- history -----------------------------------------------------------
     @property
@@ -124,7 +125,8 @@ class Store:
 
     def retained_candidates_v2(self, *, category_id, query, lane, profile_categories, profile_sources,
                                trend_window_hours, trend_min_sources, max_age_hours, min_age_hours,
-                               limit, before_published_at=None, before_story_id=None,
+                               limit, owner_id, hide_already_opened,
+                               before_published_at=None, before_story_id=None,
                                before_source_count=None, excluded_story_ids=(),
                                suppressed_sources=(), suppressed_topics=()):
         # THE SAME ARGUMENT CONTRACT THE SQL ENFORCES. A fake that ignores the
@@ -163,6 +165,8 @@ class Store:
                 continue
             if (row["story_id"] in excluded_story_ids or row["source_id"] in suppressed_sources
                     or any(category in suppressed_topics for category in row["category_ids"])):
+                continue
+            if hide_already_opened and row["story_id"] in self.opened:
                 continue
             selected.append(row)
         if lane == "hot":
@@ -1384,10 +1388,11 @@ def test_general_pool_sql_filter_refills_past_one_hundred_excluded_heads_in_one_
     excluded = {row["story_id"] for row in rows[:100]}
     target = (subject._policy.composition.candidate_window_size
               + subject._policy.composition.page_size)
+    owner = subject._authenticate("Bearer valid")[1]
 
     pooled, _, _, _ = subject._pool_rows(
         None, None, BehaviorProfile(), subject._policy.composition,
-        None, None, None, excluded_story_ids=excluded)
+        None, None, None, excluded_story_ids=excluded, owner=owner)
 
     assert store.general_limits == [target]
     assert len(pooled) == target
@@ -1396,7 +1401,7 @@ def test_general_pool_sql_filter_refills_past_one_hundred_excluded_heads_in_one_
     rolled_back, _, _, _ = subject._pool_rows(
         None, None, BehaviorProfile(),
         replace(subject._policy.composition, general_pool_batch_limit=100),
-        None, None, None, excluded_story_ids=excluded)
+        None, None, None, excluded_story_ids=excluded, owner=owner)
     assert store.general_limits == [target]
     assert [row["story_id"] for row in rolled_back[:target]] == [row["story_id"] for row in pooled]
 
@@ -1422,7 +1427,8 @@ def test_live_shape_ninety_seven_suppressed_stories_refills_or_ends_honestly(
     subject = paid(store)
     profile = BehaviorProfile(suppressed_topics=frozenset({"suppressed-topic"}))
     pooled, _, _, general_has_more = subject._pool_rows(
-        None, None, profile, subject._policy.composition, None, None)
+        None, None, profile, subject._policy.composition, None, None,
+        owner=subject._authenticate("Bearer valid")[1])
 
     assert store.general_limits == [75]
     assert general_has_more is has_more
@@ -2190,15 +2196,16 @@ def test_general_scan_reports_saturation_independently_of_candidate_limit():
     subject = paid(store)
     composition = subject._policy.composition
     profile = BehaviorProfile()
+    owner = subject._authenticate("Bearer valid")[1]
     first, _, boundary, more = subject._pool_rows(
-        None, None, profile, composition, None, None)
+        None, None, profile, composition, None, None, owner=owner)
     assert len(first) == 75 and more
     assert boundary[1] == rows[74]["story_id"]
     second, _, boundary, more = subject._pool_rows(
-        None, None, profile, composition, *boundary)
+        None, None, profile, composition, *boundary, owner=owner)
     assert len(second) == 75 and more  # Exact end permits one safe empty probe.
     third, _, _, more = subject._pool_rows(
-        None, None, profile, composition, *boundary)
+        None, None, profile, composition, *boundary, owner=owner)
     assert third == [] and not more
 
 
@@ -2224,11 +2231,13 @@ def test_independent_candidate_lanes_overlap_without_changing_the_recipe():
     concurrent_subject = paid(concurrent_store)
     policy = concurrent_subject._policy.composition
     profile = BehaviorProfile(topic_affinity={"world": 1.0})
+    owner = concurrent_subject._authenticate("Bearer valid")[1]
     concurrent = concurrent_subject._pool_rows(
-        None, None, profile, policy, None, None)
+        None, None, profile, policy, None, None, owner=owner)
     serial_subject = paid(PaidStore(events=liked_events()))
     serial = serial_subject._pool_rows(
-        None, None, profile, replace(policy, pool_parallel_workers=1), None, None)
+        None, None, profile, replace(policy, pool_parallel_workers=1), None, None,
+        owner=owner)
 
     assert concurrent_store.waited == set(policy.lane_priority)
     assert [row["story_id"] for row in concurrent[0]] == [row["story_id"] for row in serial[0]]
@@ -2256,9 +2265,12 @@ def test_general_candidate_scan_overlaps_lane_reads_without_changing_order():
     concurrent_store = GeneralOverlapStore()
     subject = paid(concurrent_store)
     policy = subject._policy.composition
-    concurrent = subject._pool_rows(None, None, BehaviorProfile(), policy, None, None)
+    owner = subject._authenticate("Bearer valid")[1]
+    concurrent = subject._pool_rows(None, None, BehaviorProfile(), policy, None, None,
+                                    owner=owner)
     serial = paid(PaidStore(events=liked_events()))._pool_rows(
-        None, None, BehaviorProfile(), replace(policy, pool_parallel_workers=1), None, None)
+        None, None, BehaviorProfile(), replace(policy, pool_parallel_workers=1), None, None,
+        owner=owner)
     assert concurrent_store.waited == {None, "updates"}
     assert [row["story_id"] for row in concurrent[0]] == [row["story_id"] for row in serial[0]]
     assert concurrent[1:] == serial[1:]

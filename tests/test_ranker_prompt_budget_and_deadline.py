@@ -237,14 +237,14 @@ def _shipping_worst_case():
 def test_boot_refuses_when_one_request_can_outlive_its_own_container():
     """15 is what was deployed, and it is what turned a fallback into a 500."""
     worst_case = _shipping_worst_case()
-    assert worst_case == 225.0
+    assert worst_case == 235.0
     with pytest.raises(ValueError, match=FUNCTION_TIMEOUT_ENV):
         assert_request_fits_function_timeout(RANKER_POLICY,
             RANKER_POLICY['supabase']['timeout_seconds'], {FUNCTION_TIMEOUT_ENV: '15'})
     # Equal is not enough: the request must finish strictly inside the container.
     with pytest.raises(ValueError, match='not below the function timeout'):
         assert_request_fits_function_timeout(RANKER_POLICY,
-            RANKER_POLICY['supabase']['timeout_seconds'], {FUNCTION_TIMEOUT_ENV: '225'})
+            RANKER_POLICY['supabase']['timeout_seconds'], {FUNCTION_TIMEOUT_ENV: '235'})
 
 
 def test_the_shipping_policy_fits_the_default_function_timeout():
@@ -259,19 +259,19 @@ def test_function_timeout_remains_programmable_above_the_retry_budget():
     environment = {FUNCTION_TIMEOUT_ENV: '250'}
     assert function_timeout_seconds(environment) == 250
     assert assert_request_fits_function_timeout(RANKER_POLICY,
-        RANKER_POLICY['supabase']['timeout_seconds'], environment) == 225.0
+        RANKER_POLICY['supabase']['timeout_seconds'], environment) == 235.0
 
 
 def test_the_claim_window_covers_the_raised_deadline():
-    """The claim covers one retry: 25 + 5 + 32 x 5 + 10 = 200, below 210."""
+    """The claim covers one retry: 25 + 5 + 34 x 5 + 10 = 210, below 220."""
     terms = dict(provider_deadline_seconds=RANKER_POLICY['deadline_seconds'],
                  settle_window_seconds=RANKER_POLICY['settle_window_seconds'],
                  supabase_timeout_seconds=RANKER_POLICY['supabase']['timeout_seconds'],
                  claimed_section_transport_calls=(CLAIMED_SECTION_MAX_TRANSPORT_CALLS
                      + RANKER_POLICY['supabase']['timeout_retries']))
-    assert COMPOSITION_POLICY['run']['ranking_claim_seconds'] == 210
+    assert COMPOSITION_POLICY['run']['ranking_claim_seconds'] == 220
     parse_composition_policy(COMPOSITION_POLICY, **terms)
     stale = json.loads(json.dumps(COMPOSITION_POLICY))
-    stale['run']['ranking_claim_seconds'] = 200
+    stale['run']['ranking_claim_seconds'] = 210
     with pytest.raises(CompositionPolicyError, match='must exceed the provider deadline'):
         parse_composition_policy(stale, **terms)

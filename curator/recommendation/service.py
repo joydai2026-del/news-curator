@@ -116,7 +116,8 @@ class RankingStore(Protocol):
     def retained_candidates_v2(self, *, category_id: str | None, query: str | None, lane: str | None,
                             profile_categories: Sequence[str], profile_sources: Sequence[str],
                             trend_window_hours: int, trend_min_sources: int, max_age_hours: int | None,
-                            min_age_hours: int | None, limit: int, before_published_at: str | None = None,
+                            min_age_hours: int | None, limit: int, owner_id: str,
+                            hide_already_opened: bool, before_published_at: str | None = None,
                             before_story_id: str | None = None,
                             before_source_count: int | None = None,
                             excluded_story_ids: Sequence[str] = (),
@@ -351,7 +352,7 @@ class RankingService:
         elif composition is not None:
             rows, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                 category_id, query, profile, composition, before_published, before_story,
-                excluded_story_ids=excluded_set)
+                excluded_story_ids=excluded_set, owner=owner)
             # Capped promotion: a few stories only the other language's press
             # carried get to compete for a place in All, on merit. They do NOT
             # get extra slots; they enter the same pool and take their own
@@ -912,7 +913,8 @@ class RankingService:
                 fetched, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                     category_id, query, profile, composition,
                     cursor.get("before_published_at"), cursor.get("before_story_id"),
-                    self._hot_cursor(cursor), excluded_story_ids=seen | original_exclusions)
+                    self._hot_cursor(cursor), excluded_story_ids=seen | original_exclusions,
+                    owner=owner)
                 pool_ms = round((time.perf_counter() - pool_started_at) * 1000)
                 known = {str(row.get("story_id")) for row in pending}
                 pooled = pending + [row for row in fetched
@@ -1923,7 +1925,7 @@ class RankingService:
         return rendered
 
     def _pool_rows(self, category_id, query, profile, composition, before_published, before_story,
-                   hot_cursor=None, *, excluded_story_ids=()):
+                   hot_cursor=None, *, excluded_story_ids=(), owner: AuthenticatedOwner):
         """Ask the corpus for each lane, then merge.
 
         Returns ``(rows, hot_story_ids, general_boundary, general_has_more)``.
@@ -1937,6 +1939,16 @@ class RankingService:
         today's feed is the newest 50 rows. Each lane orders by its own criterion,
         so each is asked for separately and the recipe merges what comes back.
         """
+        if not isinstance(owner, AuthenticatedOwner) or not isinstance(owner.user_id, str):
+            raise AuthenticationError("verified owner required for candidate retrieval")
+        try:
+            valid_owner_id = str(uuid.UUID(owner.user_id)) == owner.user_id
+        except ValueError:
+            valid_owner_id = False
+        if not valid_owner_id or owner.actor_kind is not ActorKind.HUMAN:
+            raise AuthenticationError("verified owner required for candidate retrieval")
+        owner_id = owner.user_id
+        hide_already_opened = composition.hide_already_opened
         categories = sorted({topic for topic, weight in profile.topic_affinity.items() if weight > 0})
         sources = sorted({source for source, weight in profile.source_affinity.items() if weight > 0})
         quotas = lane_window_quotas(composition, composition.candidate_window_size)
@@ -1976,6 +1988,7 @@ class RankingService:
                             target - eligible_general)
                 batch = self._store.retained_candidates_v2(
                     category_id=category_id, query=query, lane=None,
+                    owner_id=owner_id, hide_already_opened=hide_already_opened,
                     profile_categories=(), profile_sources=(),
                     trend_window_hours=composition.trend_window_hours,
                     trend_min_sources=composition.trend_min_independent_sources,
@@ -2050,6 +2063,7 @@ class RankingService:
                     break
                 rows = self._store.retained_candidates_v2(
                     category_id=category_id, query=query, lane=lane,
+                    owner_id=owner_id, hide_already_opened=hide_already_opened,
                     profile_categories=categories, profile_sources=sources,
                     trend_window_hours=composition.trend_window_hours,
                     trend_min_sources=composition.trend_min_independent_sources,

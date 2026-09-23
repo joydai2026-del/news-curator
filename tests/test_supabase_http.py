@@ -162,6 +162,17 @@ def test_owner_candidate_rpc_rejects_invalid_owner_before_transport(owner):
     assert calls == []
 
 
+@pytest.mark.parametrize("hide", [None, 0, 1, "false"])
+def test_owner_candidate_rpc_rejects_invalid_opened_policy_before_transport(hide):
+    client = _client()
+    calls = []
+    client._request = lambda *args, **kwargs: calls.append((args, kwargs)) or []
+    with pytest.raises(ValueError, match="verified owner required"):
+        client.retained_candidates_v2(**_candidate_args(),
+            owner_id="11111111-1111-1111-1111-111111111111", hide_already_opened=hide)
+    assert calls == []
+
+
 def test_owner_candidate_rpc_has_no_unfiltered_fallback_on_failure():
     client = _client()
     paths = []
@@ -198,10 +209,11 @@ def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypat
         assert client.retained_candidates_v2(
             category_id=None, query=None, lane=lane, profile_categories=(), profile_sources=(),
             trend_window_hours=48, trend_min_sources=2, max_age_hours=None, min_age_hours=None,
-            limit=1) == []
+            limit=1, owner_id="11111111-1111-1111-1111-111111111111",
+            hide_already_opened=True) == []
     assert len(built) == 2 and built[0] is not built[1]
     assert [opener for opener, _ in opened] == built
-    assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_filtered") for _, url in opened)
+    assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_for_owner") for _, url in opened)
 
 
 def test_general_candidate_rpc_can_read_two_hundred_while_lanes_stay_at_one_hundred():
@@ -222,7 +234,8 @@ def test_general_candidate_rpc_can_read_two_hundred_while_lanes_stay_at_one_hund
             category_id=None, query=None, lane=lane, profile_categories=(), profile_sources=(),
             trend_window_hours=48, trend_min_sources=2, max_age_hours=None, min_age_hours=None,
             limit=250, excluded_story_ids=("story:seen",),
-            suppressed_sources=("blocked-wire",), suppressed_topics=("blocked-topic",)) == []
+            suppressed_sources=("blocked-wire",), suppressed_topics=("blocked-topic",),
+            owner_id="11111111-1111-1111-1111-111111111111", hide_already_opened=True) == []
     assert limits == [200, 100]
     assert filters == [(["story:seen"], ["blocked-wire"], ["blocked-topic"])] * 2
 

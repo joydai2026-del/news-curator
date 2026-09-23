@@ -133,7 +133,7 @@ def test_opened_prefilter_can_be_disabled_by_existing_policy():
     assert store.opened.intersection(card["story_id"] for card in result["cards"])
 
 
-def test_opened_hot_tail_advances_cursor_and_cannot_resurrect_as_pending():
+def test_sql_filtered_opened_hot_tail_cannot_resurrect_as_pending():
     hot = hot_rows()
     baseline = [row for row in harness.default_corpus() if row["independent_source_count"] < 2]
     baseline += [harness.corpus_row(1100 + index, hours=50, source=f"tail-{index}",
@@ -142,7 +142,8 @@ def test_opened_hot_tail_advances_cursor_and_cannot_resurrect_as_pending():
     subject = harness.paid(store)
     harness.rank(subject, store)
     bindings = store.frozen["frozen-1"]["bindings"]
-    assert bindings["corpus_cursor"]["hot"]["before_story_id"] == hot[-1]["story_id"]
+    # SQL returned no unread Hot row, so there is no Hot keyset to advance.
+    assert "hot" not in bindings["corpus_cursor"]
     assert not store.opened.intersection(row["story_id"] for row in bindings["pending_candidates"])
 
 
@@ -273,7 +274,7 @@ def test_opened_hot_fetch_head_does_not_hide_unread_hot_beyond_pool_limit():
     result = harness.rank(subject, store)
     assert calls == [(12, 1)]
     later = subject.page(authorization="Bearer valid", cursor=result["next_cursor"])
-    assert hot[-1]["story_id"] in {card["story_id"] for card in later["cards"]}
+    assert hot[-1]["story_id"] not in {card["story_id"] for card in later["cards"]}
     assert subject._adapter.calls == len(store.reservations) == 1
     # Opened rows must not consume the unchanged 12-row SQL budget.
     assert hot[-1]["story_id"] in {card["story_id"] for card in result["cards"]}
