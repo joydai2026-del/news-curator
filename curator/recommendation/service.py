@@ -27,9 +27,10 @@ from curator.contracts.ranking_request import (
 from .composition import BACKFILL_LANE, CompositionPolicy
 from .diagnostics import log_suppressed_exception
 from .finalize import _duplicate_keys, finalize_order
+from .lane_diagnostics import LaneDiagnostics
 from .profile import BehaviorProfile, build_profile
 from .rankllm_adapter import BudgetState, RankLLMAdapter
-from .recipe import LanedCandidate, build_window, lane_window_quotas
+from .recipe import LanedCandidate, assign_lane, build_window, lane_window_quotas
 from .supabase_http import SupabaseAuthenticationError
 
 
@@ -377,11 +378,13 @@ class RankingService:
         has_more = has_more or len(filtered) > self._policy.candidate_limit
         rows = filtered[:self._policy.candidate_limit]
         laned: tuple[LanedCandidate, ...] = ()
+        lane_diagnostics = LaneDiagnostics() if composition is not None else None
         if composition is not None:
             # THIS is the product: four labeled pools with quotas and caps. The
             # model only reorders what the recipe hands it.
             laned = build_window(filtered, profile=profile, policy=composition,
-                                 now=self._now(), size=composition.candidate_window_size)
+                                 now=self._now(), size=composition.candidate_window_size,
+                                 diagnostics=lane_diagnostics)
             rows = [item.row for item in laned]
             has_more = has_more or len(filtered) > len(rows)
         next_corpus = None
@@ -480,7 +483,9 @@ class RankingService:
             # 14/7/1/3. One number, used everywhere.
             page_size = min(page_size, composition.page_size)
             finalization = finalize_order(ordered, policy=composition, owner_states=owner_states,
-                page_size=page_size, pages=composition.max_pages_per_run, profile=profile)
+                page_size=page_size, pages=composition.max_pages_per_run, profile=profile,
+                diagnostics=lane_diagnostics)
+            lane_diagnostics.emit("rank")
             if finalization.short_lane_reasons:
                 # The operator signal for JJ's hourly review: which lane came up
                 # short on which page, and which rung of the ladder was used.
@@ -855,6 +860,7 @@ class RankingService:
         cursor = bindings.get("corpus_cursor") or {}
         if composition is None or not isinstance(cursor, Mapping):
             return (), False
+        lane_diagnostics = LaneDiagnostics()
         eligibility = bindings.get("eligibility") or {}
         category_id = eligibility.get("category") if isinstance(eligibility, Mapping) else None
         query = eligibility.get("query") if isinstance(eligibility, Mapping) else None
@@ -909,8 +915,14 @@ class RankingService:
         retained_ids = {str(row.get("story_id")) for row in rows}
         semantic_drop_ids = {str(row.get("story_id")) for row in eligible_rows
                              if str(row.get("story_id")) not in retained_ids}
-        laned = build_window(rows, profile=profile, policy=composition, now=self._now(),
-                             size=composition.candidate_window_size) if rows else ()
+        if rows or semantic_drop_ids:
+            composition_now = self._now()
+            lane_diagnostics.record("frozen_duplicate_removed", (
+                assign_lane(row, profile=profile, policy=composition, now=composition_now)[0]
+                for row in eligible_rows if str(row.get("story_id")) in semantic_drop_ids))
+        laned = build_window(rows, profile=profile, policy=composition, now=composition_now,
+                             size=composition.candidate_window_size,
+                             diagnostics=lane_diagnostics) if rows else ()
         if laned and not exclusive and pending_exclusive_story_ids:
             prefix_promotions = sum(
                 1 for card in page_prefix if card.get("exclusive_label"))
@@ -922,7 +934,7 @@ class RankingService:
         owner_states_ms = round((time.perf_counter() - owner_states_started_at) * 1000)
         finalization = finalize_order(laned, policy=composition, owner_states=owner_states,
             page_size=min(size, composition.page_size), pages=composition.max_pages_per_run,
-            profile=profile) if laned else None
+            profile=profile, diagnostics=lane_diagnostics) if laned else None
         added = [self._card(item.row, owner_states.get(item.story_id, {}), lane=item.lane,
                             composition=composition,
                             exclusive=exclusive or item.story_id in pending_exclusive_story_ids,
@@ -936,6 +948,8 @@ class RankingService:
         added = self._align_continuation(
             frozen.get("cards", ()), added, size, composition, event_groups,
             page_prefix=page_prefix, defer_on_collision=not exclusive)
+        lane_diagnostics.record("append_selected", (card["lane"] for card in added))
+        lane_diagnostics.emit("continuation")
         alignment_deferred_ids = ({str(card.get("story_id")) for card in unreflowed}
                                   - {str(card.get("story_id")) for card in added})
         if event_groups:
