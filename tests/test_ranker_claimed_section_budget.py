@@ -107,8 +107,8 @@ def _longest_path_calls(capsys):
     result = rank(combined_subject, combined_store,
                   exclude_story_ids=[row["story_id"] for row in rows[:1000]])
     assert result["result_mode"] == "model" and len(result["cards"]) == 25
-    assert combined_store.claimed_calls.count("retained_candidates_v2") == 14
-    assert len(combined_store.claimed_calls) == 25
+    assert combined_store.claimed_calls.count("retained_candidates_v2") == 5
+    assert len(combined_store.claimed_calls) == 16
     rollback_store = CountingStore(rows, events=liked_events(), exclusive=exclusive)
     rollback_subject = paid(rollback_store, exclusive_category="only-other-language-press")
     rollback_subject._policy = replace(rollback_subject._policy,
@@ -117,8 +117,8 @@ def _longest_path_calls(capsys):
     result = rank(rollback_subject, rollback_store,
                   exclude_story_ids=[row["story_id"] for row in rows[:1000]])
     assert result["result_mode"] == "model" and len(result["cards"]) == 25
-    assert rollback_store.claimed_calls.count("retained_candidates_v2") == 19
-    assert len(rollback_store.claimed_calls) == 30
+    assert rollback_store.claimed_calls.count("retained_candidates_v2") == 5
+    assert len(rollback_store.claimed_calls) == 16
     return max((general, list(exclusive_store.claimed_calls),
                 list(excluded_store.claimed_calls),
                 list(combined_store.claimed_calls),
@@ -140,13 +140,9 @@ def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
         "that sizes run.ranking_claim_seconds. Raise the constant AND the claim "
         "together (composition.py Check 10 will refuse the boot otherwise), or "
         "take the call back out of the claimed section.")
-    # The constant may not drift arbitrarily above what anyone has measured: an
-    # inflated constant forces a longer claim, and a long claim is how long a
-    # crashed request blocks the feed.
-    assert CLAIMED_SECTION_MAX_TRANSPORT_CALLS - len(calls) <= 2, (
-        f"the constant ({CLAIMED_SECTION_MAX_TRANSPORT_CALLS}) sits more than two "
-        f"above the measured longest path ({len(calls)}). Lower it, and lower the "
-        "claim with it.")
+    # This first-page path is no longer the maximum claim holder. The same
+    # floor must cover a valid high-continuation setting and its retries.
+    assert CLAIMED_SECTION_MAX_TRANSPORT_CALLS == CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS
     assert calls[0] == CLAIM_METHOD, "the count must start at the claim itself"
 
 
@@ -196,10 +192,10 @@ def test_paid_rank_with_suppressed_heads_stays_inside_claim_window():
 
     assert response["result_mode"] == "model"
     assert len(response["cards"]) == 25
-    assert store.claimed_calls.count("retained_candidates_v2") >= 9
-    # The fixture hits nine of ten possible pool batches. Leave the unhit
-    # batch one call of room inside the same claim ceiling.
-    assert len(store.claimed_calls) <= CLAIMED_SECTION_MAX_TRANSPORT_CALLS - 1
+    assert store.claimed_calls.count("retained_candidates_v2") == 5
+    # SQL now removes suppressed heads before each lane's LIMIT, so each pool
+    # fills in one call on this fixture without weakening the claim ceiling.
+    assert len(store.claimed_calls) <= CLAIMED_SECTION_MAX_TRANSPORT_CALLS
 
 
 def test_the_claim_covers_the_measured_section_at_the_shipped_values():
@@ -285,7 +281,7 @@ def test_empty_high_exclusion_scan_does_not_add_a_claimed_progress_read():
 
 def test_lowering_exclusive_scan_never_under_sizes_the_general_paid_path():
     policy = {"exclusive_scan_max_batches": 1,
-              "exclusive_continuation_max_batches": 1}
+              "exclusive_continuation_max_batches": 10}
     assert claimed_transport_call_budget(policy) == CLAIMED_SECTION_MAX_TRANSPORT_CALLS
     policy["exclusive_scan_max_batches"] = 20
     assert claimed_transport_call_budget(policy) == CLAIMED_SECTION_MAX_TRANSPORT_CALLS

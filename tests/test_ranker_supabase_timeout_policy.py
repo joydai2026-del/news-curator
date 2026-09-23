@@ -27,7 +27,7 @@ def test_shipped_policy_declares_a_timeout_the_heavy_query_can_finish_in():
     assert value == 5.0
     assert supabase_timeout_retries(policy) == 1
     # 5, not 10: this value multiplies CLAIMED_SECTION_MAX_TRANSPORT_CALLS inside
-    # composition.py Check 10, so every second here costs sixteen seconds of
+    # composition.py Check 10, so every second here lengthens the validated
     # reading-run claim, and a long claim is how long a crashed request blocks
     # the feed. The two known-broken candidate lanes (15s and 102s at 7,000
     # corpus rows) cannot be rescued by ANY legal value of this key; their fix is

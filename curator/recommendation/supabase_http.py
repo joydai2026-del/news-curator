@@ -153,12 +153,13 @@ class SupabaseHTTP:
                             profile_categories, profile_sources, trend_window_hours: int,
                             trend_min_sources: int, max_age_hours: int | None, min_age_hours: int | None,
                             limit: int, before_published_at: str | None = None,
-                            before_story_id: str | None = None, before_source_count: int | None = None):
+                            before_story_id: str | None = None, before_source_count: int | None = None,
+                            excluded_story_ids=(), suppressed_sources=(), suppressed_topics=()):
         # One request per lane. The hot lane pages on its FULL sort key
         # (independent_source_count, published_at, story_id), because its
         # ordering leads with the count and a published_at-only keyset would skip
         # or repeat rows at the page boundary.
-        page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_v2", token=self._service_token(),
+        page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_filtered", token=self._service_token(),
             # Lane reads may overlap. Keep each no-redirect opener private to
             # its call rather than sharing a handler chain across threads.
             key=self._service, opener=urllib.request.build_opener(_NoRedirect),
@@ -169,6 +170,9 @@ class SupabaseHTTP:
                 "p_before_published_at": before_published_at,
                 "p_before_story_id": before_story_id,
                 "p_before_source_count": before_source_count,
+                "p_excluded_story_ids": list(excluded_story_ids),
+                "p_suppressed_sources": list(suppressed_sources),
+                "p_suppressed_topics": list(suppressed_topics),
                 "p_limit": min(200 if lane is None else 100, max(1, limit))})
         if not isinstance(page, list):
             raise SupabaseHTTPError("candidate RPC returned a non-list")
