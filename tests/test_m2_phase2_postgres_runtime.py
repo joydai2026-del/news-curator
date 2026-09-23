@@ -169,6 +169,55 @@ def test_opened_candidate_ids_are_owner_scoped_bounded_and_authenticated(db):
         check=False).returncode != 0
 
 
+def benchmark_distinct_opened_candidate_ids(db):
+    """Controlled load fixture, not a claim about the live owner's history."""
+    count = 10000
+    ids = [_story_id(f'https://example.test/opened-benchmark/{50000 + index}')
+           for index in range(count)]
+    assert len(set(ids)) == count
+    #20,000 rows per owner: half requested, half outside the request. A second
+    # owner's equally sized history exercises the owner-keyed access boundary.
+    _sql(db, f"""
+      insert into public.canonical_stories(story_id, canonical_url, title, summary,
+          language, source_kind, source_name, published_at)
+      select 'story:' || encode(extensions.digest('https://example.test/opened-benchmark/' || n,'sha256'),'hex'),
+          'https://example.test/opened-benchmark/' || n, 'Benchmark fixture', '',
+          'en', 'outlet', 'Fixture source', now()
+      from generate_series(50000,69999) n on conflict(story_id) do nothing;
+      insert into public.user_story_state(user_id,story_id,read_at)
+      select owner_id::uuid, 'story:' || encode(extensions.digest(
+          'https://example.test/opened-benchmark/' || n,'sha256'),'hex'), now()
+      from generate_series(50000,69999) n
+      cross join (values ('{OWNER}'), ('{OTHER}')) owners(owner_id)
+      on conflict(user_id,story_id) do update set read_at=excluded.read_at;
+      analyze public.user_story_state;
+    """)
+    request = json.dumps({"p_story_ids": ids}, separators=(',', ':'))
+    statement = ("select coalesce(json_agg(id),'[]'::json) from "
+        "public.m2_opened_candidate_ids(array(select jsonb_array_elements_text("
+        + _quote(request) + "::jsonb->'p_story_ids'))) as id;")
+    elapsed, result_size = [], None
+    for _ in range(5):
+        started = time.perf_counter()
+        result = _last(_as_owner(db, OWNER, statement))
+        elapsed.append(round((time.perf_counter() - started) * 1000, 3))
+        returned = json.loads(result)
+        assert len(returned) == count, 'maximum-size RPC returned the wrong count'
+        assert set(returned) == set(ids), 'maximum-size RPC returned the wrong intersection'
+        result_size = len(result.encode())
+    return {"fixture": "controlled, not live owner history", "distinct_request_ids": count,
+        "owner_opened_rows": 20000, "other_owner_opened_rows": 20000,
+        "returned_ids": count, "request_json_bytes": len(request.encode()),
+        "response_json_bytes": len(json.dumps(returned, separators=(',', ':')).encode()),
+        "postgres_json_bytes": result_size, "elapsed_ms": elapsed,
+        "timing_scope": "local psql process, Unix socket, SQL JSON parse, RPC, result transfer; not HTTPS/PostgREST"}
+
+
+def test_opened_candidate_ids_accept_ten_thousand_distinct_ids(db):
+    receipt = benchmark_distinct_opened_candidate_ids(db)
+    assert receipt['distinct_request_ids'] == receipt['returned_ids'] == 10000
+
+
 def _row(url, **extra):
     payload = {
         'story_id': _story_id(url), 'origin_class': 'public_outlet', 'source_kind': 'outlet',

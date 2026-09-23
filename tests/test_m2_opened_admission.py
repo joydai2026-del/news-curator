@@ -202,3 +202,78 @@ def test_continuation_late_open_still_uses_authoritative_owner_states():
         "frozen-1", len(frozen["cards"]), int(frozen["expires_at"]), response_number=2))
     assert response["cards"] == []
     assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_continuation_opened_lookup_timeout_releases_claim_and_retries_same_cursor():
+    import copy
+    from curator.recommendation.supabase_http import SupabaseHTTPError
+
+    store = OpenedStore(harness.default_corpus(), ())
+    subject = harness.paid(store)
+    harness.rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    pending = [harness.corpus_row(1500 + index, hours=30, source=f"retry-{index}",
+                                 categories=[f"retry-{index}"]) for index in range(25)]
+    frozen["bindings"].update(pending_candidates=pending,
+                              corpus_cursor={"pending_only": True}, corpus_has_more=True)
+    cursor = subject._cursor("frozen-1", len(frozen["cards"]),
+                             int(frozen["expires_at"]), response_number=2)
+    view = next(iter(store.views.values()))
+    before_order, before_view = copy.deepcopy(frozen), copy.deepcopy(view)
+    original = store.opened_candidate_ids
+    attempts = []
+    def timeout(token, story_ids):
+        assert view["claim_token"] is not None
+        attempts.append(len(story_ids))
+        raise SupabaseHTTPError("Supabase request failed") from TimeoutError("injected timeout")
+    store.opened_candidate_ids = timeout
+
+    with pytest.raises(SupabaseHTTPError) as caught:
+        subject.page(authorization="Bearer valid", cursor=cursor)
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert attempts == [25]
+    assert view["claim_token"] is None
+    assert view["pages_served"] == before_view["pages_served"]
+    assert frozen == before_order
+    assert store.extensions == []
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+    store.opened_candidate_ids = original
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert view["pages_served"] == 2 and view["claim_token"] is None
+    assert subject._decode_cursor(cursor)["response_number"] == 2
+    replay = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert replay["cards"] == response["cards"]
+    assert view["pages_served"] == 2
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_opened_hot_fetch_head_does_not_hide_unread_hot_beyond_pool_limit():
+    # Residual discovery gate: 25-window policy fetches12 Hot rows. The
+    # general pool fills with newer Updates, so the13th Hot has no other path.
+    updates = [harness.corpus_row(2000 + index, hours=1, source=f"fresh-{index}",
+                                  categories=[f"fresh-{index}"]) for index in range(50)]
+    hot = [harness.corpus_row(2100 + index, hours=12, source=f"boundary-hot-{index}",
+                              categories=[f"boundary-hot-{index}"], independent=26 - index,
+                              aggregator=True)
+           for index in range(13)]
+    store = OpenedStore(updates + hot, [row["story_id"] for row in hot[:12]])
+    subject = harness.paid(store)
+    subject._policy = replace(subject._policy, composition=replace(
+        subject._policy.composition, candidate_window_size=25))
+    calls = []
+    original = store.retained_candidates_v2
+    def capture(**kwargs):
+        rows = original(**kwargs)
+        if kwargs["lane"] == "hot":
+            calls.append((kwargs["limit"], len(rows)))
+        return rows
+    store.retained_candidates_v2 = capture
+    result = harness.rank(subject, store)
+    assert calls == [(12, 12)]
+    later = subject.page(authorization="Bearer valid", cursor=result["next_cursor"])
+    assert hot[-1]["story_id"] in {card["story_id"] for card in later["cards"]}
+    assert subject._adapter.calls == len(store.reservations) == 1
+    # The preserved Hot keyset recovers it on continuation, but not page one.
+    assert hot[-1]["story_id"] in {card["story_id"] for card in result["cards"]}
