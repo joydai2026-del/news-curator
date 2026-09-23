@@ -206,6 +206,19 @@ class SupabaseHTTP:
             raise SupabaseHTTPError("claimed reservation RPC returned a non-object")
         return result
 
+    def opened_candidate_ids(self, access_token: str, story_ids):
+        ids = list(story_ids)
+        if len(ids) > 10000:
+            raise ValueError("opened candidate lookup exceeds protocol limit")
+        # No retry: exactly one extra bounded read per composition pass. Use the
+        # reader's token, never the service role, and return no story content.
+        result = self._request("POST", "/rest/v1/rpc/m2_opened_candidate_ids",
+            token=access_token, key=self._publishable, body={"p_story_ids": ids})
+        if (not isinstance(result, list) or any(not isinstance(item, str) for item in result)
+                or not set(result).issubset(ids)):
+            raise SupabaseHTTPError("opened candidate RPC returned invalid IDs")
+        return set(result)
+
     def owner_states(self, access_token: str, story_ids):
         attempts = self._timeout_retries + 1
         for attempt in range(attempts):

@@ -277,6 +277,11 @@ class Store:
         return {"reserved": True, "previous": previous}
 
     # --- owner state and budget -------------------------------------------
+    def opened_candidate_ids(self, token, story_ids):
+        # Independent snapshots: an owner_states override can model an open
+        # racing with the provider without retroactively changing admission.
+        return set()
+
     def owner_states(self, token, story_ids):
         return {}
 

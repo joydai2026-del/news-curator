@@ -236,6 +236,43 @@ def test_owner_state_read_does_not_retry_an_http_failure():
     assert opener.calls == 1
 
 
+def test_opened_lookup_is_one_authenticated_ids_only_call_above_old_limit():
+    client = _client()
+    ids = [f"story:{index:064x}" for index in range(233)]
+    calls = []
+    def capture(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return [ids[0]]
+    client._request = capture
+    assert client.opened_candidate_ids("reader-token", ids + [ids[0]]) == {ids[0]}
+    assert calls == [("POST", "/rest/v1/rpc/m2_opened_candidate_ids", {
+        "token": "reader-token", "key": client._publishable,
+        "body": {"p_story_ids": ids + [ids[0]]}})]
+
+
+@pytest.mark.parametrize("response", [None, {}, [None], [{"story_id": "private"}], ["unknown"]])
+def test_opened_lookup_rejects_malformed_or_unrequested_response(response):
+    client = _client()
+    client._request = lambda *_args, **_kwargs: response
+    with pytest.raises(SupabaseHTTPError, match="invalid IDs"):
+        client.opened_candidate_ids("reader-token", [f"story:{1:064x}"])
+
+
+def test_opened_lookup_bound_and_failure_never_retry():
+    client = _client()
+    calls = []
+    def timeout(*_args, **_kwargs):
+        calls.append(1)
+        raise SupabaseHTTPError("timeout")
+    client._request = timeout
+    with pytest.raises(ValueError, match="protocol limit"):
+        client.opened_candidate_ids("reader-token", [f"story:{1:064x}"] * 10001)
+    assert calls == []
+    with pytest.raises(SupabaseHTTPError):
+        client.opened_candidate_ids("reader-token", [f"story:{1:064x}"] * 10000)
+    assert calls == [1]
+
+
 class _Raise:
     """An opener that fails the way one specific network condition fails."""
 

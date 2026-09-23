@@ -139,6 +139,7 @@ class RankingStore(Protocol):
                              frozen_order_id: str, response_number: int,
                              offset: int, next_offset: int) -> Mapping[str, object]: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
+    def opened_candidate_ids(self, access_token: str, story_ids: Sequence[str]) -> set[str]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def reserve_budget_claimed(self, *, user_id: str, request_id: str, amount_usd: float,
                                daily_limit_usd: float, run_id: str, eligibility_key: str,
@@ -376,9 +377,13 @@ class RankingService:
                     general_has_more if composition is not None else
                     len(filtered) > self._policy.candidate_limit)
         has_more = has_more or len(filtered) > self._policy.candidate_limit
+        lane_diagnostics = LaneDiagnostics() if composition is not None else None
+        opened_ids = (self._opened_candidate_ids(token, filtered, composition, profile, lane_diagnostics)
+                      if composition is not None else set())
+        opened_rows = [row for row in filtered if str(row["story_id"]) in opened_ids]
+        filtered = [row for row in filtered if str(row["story_id"]) not in opened_ids]
         rows = filtered[:self._policy.candidate_limit]
         laned: tuple[LanedCandidate, ...] = ()
-        lane_diagnostics = LaneDiagnostics() if composition is not None else None
         if composition is not None:
             # THIS is the product: four labeled pools with quotas and caps. The
             # model only reorders what the recipe hands it.
@@ -395,14 +400,14 @@ class RankingService:
             if exclusive:
                 cursor_rows = self._exclusive_safe_cursor_rows(
                     exclusive_consumed_rows, {str(row.get("story_id")) for row in rows},
-                    excluded_set, suppressed_sources=exclusive_suppressed_sources)
+                    excluded_set | opened_ids, suppressed_sources=exclusive_suppressed_sources)
                 if has_more:
                     next_corpus = (self._exclusive_corpus_cursor(cursor_rows) if cursor_rows else
                                    {"before_published_at": before_published,
                                     "before_story_id": before_story})
             elif has_more:
                 next_corpus = self._next_corpus_cursor(
-                    rows, hot_story_ids, general_boundary=general_boundary)
+                    rows + opened_rows, hot_story_ids, general_boundary=general_boundary)
         elif has_more and rows:
             boundary = rows[-1]
             next_corpus = {"before_published_at": boundary["published_at"],
@@ -924,6 +929,8 @@ class RankingService:
         retained_ids = {str(row.get("story_id")) for row in rows}
         semantic_drop_ids = {str(row.get("story_id")) for row in eligible_rows
                              if str(row.get("story_id")) not in retained_ids}
+        opened_ids = self._opened_candidate_ids(token, rows, composition, profile, lane_diagnostics)
+        rows = [row for row in rows if str(row["story_id"]) not in opened_ids]
         if rows or semantic_drop_ids:
             composition_now = self._now()
             lane_diagnostics.record("frozen_duplicate_removed", (
@@ -981,7 +988,7 @@ class RankingService:
         if exclusive:
             safe_rows = self._exclusive_safe_cursor_rows(
                 cursor_rows, {item.story_id for item in laned},
-                seen | original_exclusions | semantic_drop_ids,
+                seen | original_exclusions | semantic_drop_ids | opened_ids,
                 suppressed_sources=exclusive_suppressed_sources)
             next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
             remaining_pending = []
@@ -1131,6 +1138,18 @@ class RankingService:
             # itself already happened; this only records it.
             log_suppressed_exception("m2_filter_record_failed", error, stream=sys.stderr,
                 run_id=str(run_id))
+
+    def _opened_candidate_ids(self, token, rows, composition, profile, diagnostics):
+        if not composition.hide_already_opened or not rows:
+            return set()
+        # This snapshot only protects admission capacity. The authoritative
+        # post-provider state/freshness reads remain mandatory for races.
+        opened = self._store.opened_candidate_ids(token, [str(row["story_id"]) for row in rows])
+        now = self._now()
+        diagnostics.record("admission_opened_removed", (
+            assign_lane(row, profile=profile, policy=composition, now=now)[0]
+            for row in rows if str(row["story_id"]) in opened))
+        return opened
 
     @staticmethod
     def _hot_cursor(cursor):

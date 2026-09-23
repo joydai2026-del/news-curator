@@ -61,6 +61,7 @@ MIGRATIONS = (
     'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql',
     'supabase/migrations/202609230001_m2_retained_candidates_v2_bulk_general.sql',
     'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
+    'supabase/migrations/202609230003_m2_opened_candidate_ids.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -144,6 +145,28 @@ def db():
 
 def _story_id(url):
     return 'story:' + hashlib.sha256(url.encode('utf-8')).hexdigest()
+
+
+def test_opened_candidate_ids_are_owner_scoped_bounded_and_authenticated(db):
+    first, second = _story_id(AGGREGATOR_ONLY), _story_id(MIXED)
+    _sql(db, f"insert into public.user_story_state(user_id, story_id, read_at) values "
+        f"('{OWNER}', '{first}', now()), ('{OTHER}', '{second}', now()) "
+        "on conflict(user_id,story_id) do update set read_at=excluded.read_at;")
+    query = f"select public.m2_opened_candidate_ids(array['{first}','{second}','{first}']);"
+    assert _last(_as_owner(db, OWNER, query)) == first
+    assert _last(_as_owner(db, OTHER, query)) == second
+    assert _service(db, query, check=False).returncode != 0
+    assert _sql(db, "set role anon;" + query, check=False).returncode != 0
+    assert _as_owner(db, '', query, check=False).returncode != 0
+    for expression in ("null", "array[null]::text[]", "array['bad']", "array_fill('" + first + "'::text,array[10001])"):
+        assert _as_owner(db, OWNER, f"select public.m2_opened_candidate_ids({expression});",
+                         check=False).returncode != 0
+    assert _last(_as_owner(db, OWNER,
+        f"select count(*) from public.m2_opened_candidate_ids(array_fill('{first}'::text,array[10000]));")) == '1'
+    # The old rich-state endpoint cannot safely carry the pooled input.
+    assert _as_owner(db, OWNER,
+        f"select public.m2_owner_story_states(array_fill('{first}'::text,array[233]));",
+        check=False).returncode != 0
 
 
 def _row(url, **extra):
