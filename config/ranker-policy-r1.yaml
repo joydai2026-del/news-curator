@@ -82,16 +82,16 @@ composition_policy: config/ranking-policy-r2.yaml
 #   run.ranking_claim_seconds
 #     > deadline_seconds (25)
 #     + settle_window_seconds (5)
-#     + (CLAIMED_SECTION_MAX_TRANSPORT_CALLS (22) + one owner-state retry)
-#       x timeout_seconds (5) = 115
+#     + (CLAIMED_SECTION_MAX_TRANSPORT_CALLS (31) + one owner-state retry)
+#       x timeout_seconds (5) = 160
 #     + run.ranking_claim_margin_seconds (10)
-#     = 155, so run.ranking_claim_seconds is 160.
+#     = 200, so run.ranking_claim_seconds is 210.
 #
 # The container check also includes six pre-claim calls (authentication,
 # history, run open, optional run replacement, and view), plus a retry for EACH
 # of the two owner-state reads on a continuation: deadline (25) + settle (5)
-# + transport ((22 + 6 + 2) x 5) = 180 must be strictly below
-# NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS (default 181), or the
+# + transport ((31 + 6 + 2) x 5) = 225 must be strictly below
+# NEWS_CURATOR_MODAL_FUNCTION_TIMEOUT_SECONDS (default 240), or the
 # platform kills the request and the reader gets a 500 instead of the typed
 # fallback the service already had ready.
 #
