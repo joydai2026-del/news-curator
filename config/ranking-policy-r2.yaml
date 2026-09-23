@@ -32,6 +32,9 @@ composition:
   # Bound suppression-aware keyset scans within the paid claim's transport
   # budget. Two batches find eligible stories past a disliked pool head.
   pool_scan_max_batches: 2
+  # Read independent recipe lanes concurrently. One keeps the older serial
+  # path for rollback; four overlaps all four bounded lane RPC streams.
+  pool_parallel_workers: 4
   # A page turn may need another older candidate window when caps, dedupe or
   # immediate negative feedback leave the first continuation below 25 cards.
   # Both passes happen under one claim and reserve only one readable page.

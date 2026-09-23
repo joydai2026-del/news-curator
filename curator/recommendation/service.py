@@ -10,6 +10,7 @@ import re
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Mapping, Protocol, Sequence
@@ -1895,12 +1896,14 @@ class RankingService:
             general_has_more = len(batch) == limit
             if len(batch) < limit:
                 break
-        hot_story_ids: set[str] = set()
-        for lane in composition.lane_priority:
-            if lane in ("interested", "surprise") and not (categories or sources):
-                # No profile: the aligned pool degrades to fresh and nothing is
-                # "off profile", so neither lane is worth a round trip.
-                continue
+        # Each lane has its own keyset and reads the same immutable request
+        # inputs. Overlap their I/O, then merge results in policy priority order
+        # so the recipe remains byte-for-byte deterministic. A policy value of
+        # one keeps the previous serial path available for rollback.
+        lanes = tuple(lane for lane in composition.lane_priority
+            if lane not in ("interested", "surprise") or categories or sources)
+
+        def fetch_lane(lane):
             # Over-fetch so caps and spacing have something to choose from, and
             # so a lane whose head is all one source is not silently short.
             limit = self._lane_fetch_limit(quotas[lane])
@@ -1916,6 +1919,8 @@ class RankingService:
             else:
                 lane_cursor = (before_published, before_story, None)
             eligible_lane = 0
+            lane_rows = []
+            lane_hot_story_ids = set()
             for _ in range(composition.pool_scan_max_batches):
                 batch_limit = min(100, limit - eligible_lane)
                 if batch_limit <= 0:
@@ -1939,15 +1944,27 @@ class RankingService:
                             or self._suppressed_by_profile(row, profile, composition)):
                         continue
                     eligible_lane += 1
+                    lane_rows.append(row)
                     if lane == "hot":
-                        hot_story_ids.add(story_id)
-                    merged.setdefault(story_id, row)
+                        lane_hot_story_ids.add(story_id)
                 if rows:
                     last = rows[-1]
                     lane_cursor = (last["published_at"], last["story_id"],
                                    last["independent_source_count"] if lane == "hot" else None)
                 if len(rows) < batch_limit:
                     break
+            return lane_rows, lane_hot_story_ids
+
+        if composition.pool_parallel_workers == 1 or len(lanes) <= 1:
+            lane_results = [fetch_lane(lane) for lane in lanes]
+        else:
+            with ThreadPoolExecutor(max_workers=min(composition.pool_parallel_workers, len(lanes))) as pool:
+                lane_results = list(pool.map(fetch_lane, lanes))
+        hot_story_ids: set[str] = set()
+        for lane_rows, lane_hot_story_ids in lane_results:
+            hot_story_ids.update(lane_hot_story_ids)
+            for row in lane_rows:
+                merged.setdefault(row["story_id"], row)
         return list(merged.values()), hot_story_ids, general_boundary, general_has_more
 
     @staticmethod

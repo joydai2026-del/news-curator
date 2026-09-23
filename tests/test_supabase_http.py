@@ -123,6 +123,33 @@ def _client(timeout_seconds=None):
                         service_role_key="sb_secret_canary", **kwargs)
 
 
+def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypatch):
+    client = _client()
+    built = []
+    opened = []
+
+    class CandidateOpener:
+        def open(self, request, timeout):
+            opened.append((self, request.full_url))
+            return io.BytesIO(b"[]")
+
+    def build_opener(handler):
+        assert handler is _NoRedirect
+        opener = CandidateOpener()
+        built.append(opener)
+        return opener
+
+    monkeypatch.setattr(urllib.request, "build_opener", build_opener)
+    for lane in ("updates", "hot"):
+        assert client.retained_candidates_v2(
+            category_id=None, query=None, lane=lane, profile_categories=(), profile_sources=(),
+            trend_window_hours=48, trend_min_sources=2, max_age_hours=None, min_age_hours=None,
+            limit=1) == []
+    assert len(built) == 2 and built[0] is not built[1]
+    assert [opener for opener, _ in opened] == built
+    assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_v2") for _, url in opened)
+
+
 def test_owner_state_read_retries_one_configured_timeout_then_returns_live_state():
     class Response:
         def __enter__(self): return self

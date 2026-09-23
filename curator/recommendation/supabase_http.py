@@ -159,7 +159,10 @@ class SupabaseHTTP:
         # ordering leads with the count and a published_at-only keyset would skip
         # or repeat rows at the page boundary.
         page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_v2", token=self._service_token(),
-            key=self._service, body={"p_category_id": category_id, "p_query": query, "p_lane": lane,
+            # Lane reads may overlap. Keep each no-redirect opener private to
+            # its call rather than sharing a handler chain across threads.
+            key=self._service, opener=urllib.request.build_opener(_NoRedirect),
+            body={"p_category_id": category_id, "p_query": query, "p_lane": lane,
                 "p_profile_categories": list(profile_categories), "p_profile_sources": list(profile_sources),
                 "p_trend_window_hours": trend_window_hours, "p_trend_min_sources": trend_min_sources,
                 "p_max_age_hours": max_age_hours, "p_min_age_hours": min_age_hours,
@@ -308,7 +311,7 @@ class SupabaseHTTP:
                 "p_cards": list(cards), "p_bindings": dict(bindings)})
         return result if isinstance(result, int) else 0
 
-    def _request(self, method, path, *, token, key, body=None, prefer=None):
+    def _request(self, method, path, *, token, key, body=None, prefer=None, opener=None):
         headers = {"apikey": key, "Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -323,7 +326,7 @@ class SupabaseHTTP:
         route = path.split("?", 1)[0]
         started = time.monotonic()
         try:
-            with self._opener.open(request, timeout=self._timeout) as response:
+            with (opener or self._opener).open(request, timeout=self._timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             raise self._failure(route, method, started, reason="http", status_code=exc.code) from exc

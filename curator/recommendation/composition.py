@@ -49,6 +49,7 @@ class CompositionPolicy:
     page_size: int
     candidate_window_size: int
     pool_scan_max_batches: int
+    pool_parallel_workers: int
     continuation_refill_max_passes: int
     per_source_cap_per_window: int
     per_aggregator_cap_per_window: int
@@ -103,6 +104,7 @@ _NUMERIC_RANGES = {
     "composition.page_size": (int, 1, 25),
     "composition.candidate_window_size": (int, 10, 100),
     "composition.pool_scan_max_batches": (int, 1, 2),
+    "composition.pool_parallel_workers": (int, 1, 4),
     "composition.continuation_refill_max_passes": (int, 1, 2),
     "composition.per_source_cap_per_window": (int, 1, 10),
     "composition.per_aggregator_cap_per_window": (int, 1, 10),
@@ -319,6 +321,7 @@ def parse_composition_policy(document: object, *, retention_days: int | None = N
         lane_ratios=ratios, lane_priority=tuple(priority), page_size=page_size,
         candidate_window_size=window,
         pool_scan_max_batches=int(numbers["composition.pool_scan_max_batches"]),
+        pool_parallel_workers=int(numbers["composition.pool_parallel_workers"]),
         continuation_refill_max_passes=int(numbers["composition.continuation_refill_max_passes"]),
         per_source_cap_per_window=int(numbers["composition.per_source_cap_per_window"]),
         per_aggregator_cap_per_window=int(numbers["composition.per_aggregator_cap_per_window"]),
