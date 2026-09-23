@@ -2400,6 +2400,174 @@ def test_short_exclusive_pages_cannot_bypass_the_response_budget():
     assert attempts < 100, "the bounded continuation never terminated"
 
 
+@pytest.fixture
+def complete_continuation_page():
+    class SnapshotStore(PaidStore):
+        page_reads = 0
+        after_read = None
+        response_reservations = 0
+
+        def load_frozen_order(self, **kwargs):
+            self.page_reads += 1
+            value = (copy.deepcopy(super().load_frozen_order(**kwargs))
+                     if kwargs["frozen_order_id"] in self.frozen else None)
+            if self.after_read is not None:
+                self.after_read(self.page_reads, value)
+            return value
+
+        def reserve_run_response(self, **kwargs):
+            self.response_reservations += 1
+            return super().reserve_run_response(**kwargs)
+
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = SnapshotStore(rows, events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    offset = len(frozen["cards"])
+    cursor = subject._cursor("frozen-1", offset,
+        int(frozen["expires_at"]), response_number=2)
+    store.page_reads = 0
+    store.response_reservations = 0
+    return store, subject, cursor, offset
+
+
+def test_complete_later_page_reuses_the_persisted_refill_snapshot(complete_continuation_page):
+    store, subject, cursor, offset = complete_continuation_page
+    frozen = store.frozen["frozen-1"]
+
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    assert len(response["cards"]) == 25
+    assert [card["story_id"] for card in response["cards"]] == [
+        card["story_id"] for card in frozen["cards"][offset:offset + 25]]
+    decoded = subject._decode_cursor(response["next_cursor"])
+    assert decoded["offset"] == offset + 25 and decoded["response_number"] == 3
+    assert next(iter(store.views.values()))["pages_served"] == 2
+    assert len(store.extensions) == 1
+    assert subject._adapter.calls == len(store.reservations) == 1
+    assert store.page_reads == 3, "a complete persisted page was fetched twice"
+
+
+def test_reused_page_cannot_survive_privacy_deletion(complete_continuation_page):
+    store, subject, cursor, _offset = complete_continuation_page
+
+    def delete_after_persisted_read(number, snapshot):
+        if number == 3:
+            assert snapshot["cards"]
+            # Consent revocation/history clearing delete this row under the
+            # same database lock used by the response reservation.
+            store.frozen.clear()
+
+    store.after_read = delete_after_persisted_read
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert response["cards"] == [] and response["end_of_run"] is True
+    assert store.response_reservations == 1
+    assert next(iter(store.views.values()))["pages_served"] == 1
+    assert all(view["claim_token"] is None for view in store.views.values())
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_reused_page_rechecks_expiry_and_releases_claim(complete_continuation_page):
+    store, subject, cursor, _offset = complete_continuation_page
+    expires_at = int(store.frozen["frozen-1"]["expires_at"])
+    checks_after_read = 0
+
+    def advancing_clock():
+        nonlocal checks_after_read
+        if store.page_reads == 3:
+            checks_after_read += 1
+            # The loop check passes; the final check must still reject expiry.
+            if checks_after_read > 1:
+                return expires_at + 1
+        return CLOCK
+
+    subject._clock = advancing_clock
+    with pytest.raises(StaleRankingError, match="cursor_expired"):
+        subject.page(authorization="Bearer valid", cursor=cursor)
+    assert store.response_reservations == 0
+    assert all(view["claim_token"] is None for view in store.views.values())
+
+
+def test_reused_page_keeps_fresh_owner_state_overlay(complete_continuation_page):
+    store, subject, cursor, offset = complete_continuation_page
+    updated = {}
+
+    def save_after_persisted_read(number, snapshot):
+        if number == 3:
+            updated[snapshot["cards"][offset]["story_id"]] = {
+                "saved_at": NOW.isoformat(), "state_revision": 99}
+
+    store.after_read = save_after_persisted_read
+    store.owner_states = lambda token, story_ids: {
+        key: value for key, value in updated.items() if key in story_ids}
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert response["cards"][0]["saved_at"] == NOW.isoformat()
+    assert response["cards"][0]["state_revision"] == 99
+    assert store.frozen["frozen-1"]["cards"][offset]["state_revision"] != 99
+    assert store.page_reads == 3
+
+
+def test_last_allowed_append_still_loads_its_persisted_result(complete_continuation_page):
+    store, subject, cursor, offset = complete_continuation_page
+    subject._policy = replace(subject._policy, composition=replace(
+        subject._policy.composition, continuation_refill_max_passes=1))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert [card["story_id"] for card in response["cards"]] == [
+        card["story_id"] for card in store.frozen["frozen-1"]["cards"][offset:offset + 25]]
+    assert store.page_reads == 3
+    assert store.response_reservations == 1
+
+
+@pytest.mark.parametrize("remaining", [0, 1])
+def test_empty_or_partial_persisted_page_keeps_final_reread(
+        complete_continuation_page, remaining):
+    store, subject, cursor, _offset = complete_continuation_page
+    original_extend = store.extend_frozen_order
+
+    def finish_with_short_batch(**kwargs):
+        # Model an exhausted corpus at the persistence boundary, not a
+        # fabricated complete return value inside the page service.
+        original_extend(**{**kwargs, "cards": kwargs["cards"][:remaining]})
+        frozen = store.frozen["frozen-1"]
+        frozen["bindings"].update(corpus_has_more=False, corpus_scan_has_more=False)
+        return len(frozen["cards"])
+
+    store.extend_frozen_order = finish_with_short_batch
+    if remaining:
+        store.after_read = lambda number, snapshot: store.frozen.clear() if number == 3 else None
+        with pytest.raises(StaleRankingError, match="cursor_expired"):
+            subject.page(authorization="Bearer valid", cursor=cursor)
+        assert store.page_reads == 4
+    else:
+        # No successful append means no second loop read. The third read is
+        # still required to observe the persisted end, never attempted cards.
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        assert response["cards"] == [] and response["end_of_run"] is True
+        assert store.page_reads == 3
+    assert store.response_reservations == 0
+    assert all(view["claim_token"] is None for view in store.views.values())
+
+
+@pytest.mark.parametrize("response_number,offset", [(1, 50), (2, 0), (1, 0)])
+def test_first_ordinal_or_zero_offset_keeps_final_reread(
+        complete_continuation_page, response_number, offset):
+    store, subject, _cursor, _offset = complete_continuation_page
+    frozen = store.frozen["frozen-1"]
+    if offset == 0:
+        frozen["cards"] = []
+    cursor = subject._cursor("frozen-1", offset,
+        int(frozen["expires_at"]), response_number=response_number)
+    store.after_read = lambda number, snapshot: store.frozen.clear() if number == 3 else None
+    with pytest.raises(StaleRankingError, match="cursor_expired"):
+        subject.page(authorization="Bearer valid", cursor=cursor)
+    assert store.page_reads == 4
+    assert store.response_reservations == 0
+    assert all(view["claim_token"] is None for view in store.views.values())
+
+
 def test_concurrent_valid_cursors_share_one_atomic_response_slot():
     """Two signed cursors racing at count three may serve only one response."""
     class AtomicPageStore(PaidStore):

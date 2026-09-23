@@ -687,6 +687,7 @@ class RankingService:
                     # Re-read the persisted order after each append so the
                     # second pass sees its cursor, pending rows and boundaries.
                     terminal_pending = None
+                    complete_snapshot = None
                     for attempt in range(composition.continuation_refill_max_passes):
                         locked = self._store.load_frozen_order(user_id=owner.user_id,
                             frozen_order_id=str(payload["frozen_order_id"]))
@@ -702,6 +703,13 @@ class RankingService:
                         needs_more = (offset >= len(locked_cards)
                             or (len(locked_preview) < size and locked_end >= len(locked_cards)))
                         if not needs_more or not locked_bindings.get("corpus_has_more"):
+                            # Reuse only a complete persisted later page. Its
+                            # atomic response reservation still rejects an order
+                            # deleted by a concurrent privacy change. The first
+                            # response can bypass that gate, so keep its reread.
+                            if (not needs_more and len(locked_preview) == size
+                                    and response_number > 1 and offset > 0):
+                                complete_snapshot = locked
                             break
                         # Explicit exclusions plus already-frozen cards can
                         # require far more than two general-pool RPCs. A second
@@ -741,8 +749,9 @@ class RankingService:
                                     continue
                             terminal_pending = continuation_pending
                             break
-                    frozen = self._store.load_frozen_order(user_id=owner.user_id,
-                        frozen_order_id=str(payload["frozen_order_id"]))
+                    frozen = (complete_snapshot if complete_snapshot is not None else
+                        self._store.load_frozen_order(user_id=owner.user_id,
+                            frozen_order_id=str(payload["frozen_order_id"])))
                     if not frozen or int(frozen["expires_at"]) < int(self._clock()):
                         raise StaleRankingError("cursor_expired")
                     cards = list(frozen["cards"])
