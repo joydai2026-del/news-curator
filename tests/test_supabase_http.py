@@ -147,15 +147,19 @@ def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypat
             limit=1) == []
     assert len(built) == 2 and built[0] is not built[1]
     assert [opener for opener, _ in opened] == built
-    assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_v2") for _, url in opened)
+    assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_filtered") for _, url in opened)
 
 
 def test_general_candidate_rpc_can_read_two_hundred_while_lanes_stay_at_one_hundred():
     client = _client()
     limits = []
+    filters = []
 
     def capture(_method, _path, **kwargs):
         limits.append(kwargs["body"]["p_limit"])
+        filters.append((kwargs["body"]["p_excluded_story_ids"],
+                        kwargs["body"]["p_suppressed_sources"],
+                        kwargs["body"]["p_suppressed_topics"]))
         return []
 
     client._request = capture
@@ -163,8 +167,10 @@ def test_general_candidate_rpc_can_read_two_hundred_while_lanes_stay_at_one_hund
         assert client.retained_candidates_v2(
             category_id=None, query=None, lane=lane, profile_categories=(), profile_sources=(),
             trend_window_hours=48, trend_min_sources=2, max_age_hours=None, min_age_hours=None,
-            limit=250) == []
+            limit=250, excluded_story_ids=("story:seen",),
+            suppressed_sources=("blocked-wire",), suppressed_topics=("blocked-topic",)) == []
     assert limits == [200, 100]
+    assert filters == [(["story:seen"], ["blocked-wire"], ["blocked-topic"])] * 2
 
 
 def test_owner_state_read_retries_one_configured_timeout_then_returns_live_state():

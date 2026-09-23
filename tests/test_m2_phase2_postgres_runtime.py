@@ -59,6 +59,8 @@ MIGRATIONS = (
     # the definition production actually runs, not the one it replaced.
     'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
     'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql',
+    'supabase/migrations/202609230001_m2_retained_candidates_v2_bulk_general.sql',
+    'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -217,8 +219,9 @@ def _lane(container, lane=None, *, categories=None, sources=None, limit=50, min_
     ]
     if before is not None:
         count, published, story = before
-        arguments += [f'p_before_source_count => {count}',
-                      f'p_before_published_at => {_quote(published)}::timestamptz',
+        if count is not None:
+            arguments.append(f'p_before_source_count => {count}')
+        arguments += [f'p_before_published_at => {_quote(published)}::timestamptz',
                       f'p_before_story_id => {_quote(story)}']
     result = _service(container, "select coalesce(jsonb_agg(value), '[]'::jsonb) from "
                       f"public.m2_retained_candidates_v2({', '.join(arguments)}) as rows(value);",
@@ -230,6 +233,29 @@ def _lane(container, lane=None, *, categories=None, sources=None, limit=50, min_
 
 def _by_story(rows):
     return {row['story_id']: row for row in rows}
+
+
+def _filtered(container, *, category_id=None, lane=None, categories=(), profile_sources=(), limit=50,
+              before=None, excluded=(), sources=(), topics=()):
+    def array(values):
+        return 'array[' + ','.join(_quote(value) for value in values) + ']::text[]'
+    arguments = [f'p_category_id => {_quote(category_id) if category_id else "null"}',
+                 f'p_lane => {_quote(lane) if lane else "null"}',
+                 f'p_profile_categories => {array(categories)}',
+                 f'p_profile_sources => {array(profile_sources)}',
+                 f'p_limit => {limit}',
+                 f'p_excluded_story_ids => {array(excluded)}',
+                 f'p_suppressed_sources => {array(sources)}',
+                 f'p_suppressed_topics => {array(topics)}']
+    if before is not None:
+        count, published, story = before
+        if count is not None:
+            arguments.append(f'p_before_source_count => {count}')
+        arguments += [f'p_before_published_at => {_quote(published)}::timestamptz',
+                      f'p_before_story_id => {_quote(story)}']
+    result = _service(container, "select coalesce(jsonb_agg(value), '[]'::jsonb) from "
+        f'public.m2_retained_candidates_filtered({", ".join(arguments)}) as rows(value);')
+    return json.loads(_last(result))
 
 
 # --- coverage and hot ------------------------------------------------------
@@ -245,6 +271,7 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
                       'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
                       'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
                       'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
+                      'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
                       'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)
         assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
@@ -1221,3 +1248,76 @@ def test_one_owner_cannot_review_another_owners_pages(db):
     result = _as_owner(db, OTHER, "select count(*) from "
                        "public.m2_owner_reading_pages('2026-09-18T08:00:00Z'::timestamptz) as rows(value);")
     assert _last(result) == '0'
+
+
+def test_filtered_rpc_refills_limit_after_owner_filters(db):
+    baseline = _lane(db, limit=200)
+    blocked_source = baseline[0]['source_id']
+    expected_source = next(row for row in baseline if row['source_id'] != blocked_source)
+    assert _filtered(db, limit=1, sources=(blocked_source,))[0]['story_id'] == expected_source['story_id']
+    assert _filtered(db, limit=1, excluded=(baseline[0]['story_id'],))[0]['story_id'] == baseline[1]['story_id']
+    blocked_topic = baseline[0]['category_ids'][0]
+    expected_topic = next(row for row in baseline if blocked_topic not in row['category_ids'])
+    assert _filtered(db, limit=1, topics=(blocked_topic,))[0]['story_id'] == expected_topic['story_id']
+
+
+def test_filtered_rpc_refills_seventy_five_or_reports_finite_corpus(db):
+    for label, total in [('long-head', 230), ('finite-head', 130)]:
+        rows = [_row(f'https://example.test/{label}-{index}',
+                     title=f'{label} unique title {index}',
+                     source_id='blocked-wire' if index < 97 else f'eligible-{index}',
+                     category_ids=[label, 'blocked-topic' if index < 97 else 'other-topic'],
+                     published_at=_iso(NOW - timedelta(minutes=index + 10)))
+                for index in range(total)]
+        _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+        found = _filtered(db, category_id=label, limit=75, topics=('blocked-topic',))
+        assert len(found) == (75 if label == 'long-head' else 33)
+        assert all('blocked-topic' not in row['category_ids'] for row in found)
+
+
+def test_filtered_rpc_does_not_reveal_older_twin_of_suppressed_winner(db):
+    title = 'Owner filter after dedupe proof ' + uuid.uuid4().hex
+    older = _row('https://example.test/filtered-older-' + uuid.uuid4().hex,
+                 title=title, source_id='allowed-wire',
+                 published_at=_iso(NOW - timedelta(minutes=20)))
+    newer = _row('https://example.test/filtered-newer-' + uuid.uuid4().hex,
+                 title=title, source_id='blocked-wire',
+                 published_at=_iso(NOW - timedelta(minutes=10)))
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps([older, newer]))}::jsonb);")
+    baseline = [row for row in _lane(db, limit=200) if row['title'] == title]
+    assert [row['story_id'] for row in baseline] == [newer['story_id']]
+    filtered = [row for row in _filtered(db, limit=200, sources=('blocked-wire',))
+                if row['title'] == title]
+    assert filtered == []
+
+
+@pytest.mark.parametrize('lane, categories, sources', [
+    (None, (), ()), ('hot', (), ()),
+    ('interested', ('science',), ('quanta',)),
+    ('surprise', ('science',), ('quanta',)),
+])
+def test_filtered_rpc_without_owner_filters_matches_v2_in_every_lane_and_cursor(
+        db, lane, categories, sources):
+    kwargs = {'categories': categories, 'sources': sources, 'limit': 50}
+    original = _lane(db, lane, **kwargs)
+    filtered = _filtered(db, lane=lane, categories=categories, profile_sources=sources)
+    assert [row['story_id'] for row in filtered] == [row['story_id'] for row in original]
+    if len(original) > 1:
+        head = original[0]
+        before = (head['independent_source_count'] if lane == 'hot' else None,
+                  head['published_at'], head['story_id'])
+        old_tail = _lane(db, lane, before=before, **kwargs)
+        new_tail = _filtered(db, lane=lane, categories=categories,
+                             profile_sources=sources, before=before)
+        assert [row['story_id'] for row in new_tail] == [row['story_id'] for row in old_tail]
+
+
+def test_filtered_rpc_refuses_public_roles_and_oversized_filters(db):
+    statement = 'select count(*) from public.m2_retained_candidates_filtered();'
+    anon = _sql(db, 'set role anon;' + statement, check=False)
+    owner = _as_owner(db, OWNER, statement, check=False)
+    assert anon.returncode != 0 and 'permission denied' in anon.stderr
+    assert owner.returncode != 0 and 'permission denied' in owner.stderr
+    oversized = _service(db, 'select count(*) from public.m2_retained_candidates_filtered('
+                         "p_excluded_story_ids => array_fill('x'::text, array[1201]));", check=False)
+    assert oversized.returncode != 0 and 'invalid filter size' in oversized.stderr

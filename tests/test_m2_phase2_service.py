@@ -125,7 +125,8 @@ class Store:
     def retained_candidates_v2(self, *, category_id, query, lane, profile_categories, profile_sources,
                                trend_window_hours, trend_min_sources, max_age_hours, min_age_hours,
                                limit, before_published_at=None, before_story_id=None,
-                               before_source_count=None):
+                               before_source_count=None, excluded_story_ids=(),
+                               suppressed_sources=(), suppressed_topics=()):
         # THE SAME ARGUMENT CONTRACT THE SQL ENFORCES. A fake that ignores the
         # cursor cannot catch a caller that sends half a keyset, which is exactly
         # what the hot-lane continuation did: the SQL refused it and no test saw.
@@ -159,6 +160,9 @@ class Store:
                     continue
             elif before_published_at is not None and not (
                     (row["published_at"], row["story_id"]) < (before_published_at, before_story_id)):
+                continue
+            if (row["story_id"] in excluded_story_ids or row["source_id"] in suppressed_sources
+                    or any(category in suppressed_topics for category in row["category_ids"])):
                 continue
             selected.append(row)
         if lane == "hot":
@@ -1346,7 +1350,7 @@ def test_excluded_head_still_refills_four_pages_from_older_corpus(excluded_head)
     assert subject._adapter.calls == 1
 
 
-def test_general_pool_reads_past_one_hundred_excluded_heads_in_one_rpc():
+def test_general_pool_sql_filter_refills_past_one_hundred_excluded_heads_in_one_rpc():
     class CountingStore(Store):
         def __init__(self, rows):
             super().__init__(rows)
@@ -1369,7 +1373,7 @@ def test_general_pool_reads_past_one_hundred_excluded_heads_in_one_rpc():
         None, None, BehaviorProfile(), subject._policy.composition,
         None, None, None, excluded_story_ids=excluded)
 
-    assert store.general_limits == [100 + target]
+    assert store.general_limits == [target]
     assert len(pooled) == target
     assert not ({row["story_id"] for row in pooled} & excluded)
     store.general_limits.clear()
@@ -1377,8 +1381,39 @@ def test_general_pool_reads_past_one_hundred_excluded_heads_in_one_rpc():
         None, None, BehaviorProfile(),
         replace(subject._policy.composition, general_pool_batch_limit=100),
         None, None, None, excluded_story_ids=excluded)
-    assert store.general_limits == [100, 100]
+    assert store.general_limits == [target]
     assert [row["story_id"] for row in rolled_back[:target]] == [row["story_id"] for row in pooled]
+
+
+@pytest.mark.parametrize("total, expected_general, has_more", [(130, 33, False), (230, 75, True)])
+def test_live_shape_ninety_seven_suppressed_stories_refills_or_ends_honestly(
+        total, expected_general, has_more):
+    class CountingStore(Store):
+        def __init__(self, rows):
+            super().__init__(rows)
+            self.general_limits = []
+
+        def retained_candidates_v2(self, **kwargs):
+            if kwargs["lane"] is None:
+                self.general_limits.append(kwargs["limit"])
+            return super().retained_candidates_v2(**kwargs)
+
+    rows = [corpus_row(index, hours=1 + index / 100,
+                       source=f"live-shape-{index}",
+                       categories=["suppressed-topic"] if index < 97 else [f"topic-{index}"])
+            for index in range(total)]
+    store = CountingStore(rows)
+    subject = paid(store)
+    profile = BehaviorProfile(suppressed_topics=frozenset({"suppressed-topic"}))
+    pooled, _, _, general_has_more = subject._pool_rows(
+        None, None, profile, subject._policy.composition, None, None)
+
+    assert store.general_limits == [75]
+    assert general_has_more is has_more
+    assert len(pooled) >= expected_general
+    if not has_more:
+        assert len(pooled) == 33
+    assert all("suppressed-topic" not in row["category_ids"] for row in pooled)
 
 
 def test_post_rank_less_like_feedback_refills_four_pages_from_older_corpus():
@@ -2122,13 +2157,13 @@ def test_an_all_hidden_head_can_reach_older_visible_stories_without_repaying():
     store = PaidStore(rows, events=liked_events() + [feedback])
     subject = paid(store)
     first = rank(subject, store)
-    assert first["cards"] == [] and first["next_cursor"]
-    assert store.frozen["frozen-1"]["bindings"]["corpus_cursor"]["before_story_id"] == rows[149]["story_id"]
+    assert len(first["cards"]) == 25 and first["next_cursor"]
+    assert all(card["source_id"].startswith("tail-") for card in first["cards"])
     second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
     assert len(second["cards"]) == 25
     assert all(card["source_id"].startswith("tail-") for card in second["cards"])
-    assert next(iter(store.views.values()))["pages_served"] == 1
-    assert subject._adapter.calls == 0
+    assert next(iter(store.views.values()))["pages_served"] == 2
+    assert subject._adapter.calls == 1, "only the initial visible rank may call the provider"
 
 
 def test_general_scan_reports_saturation_independently_of_candidate_limit():

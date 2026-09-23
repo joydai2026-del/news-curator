@@ -40,12 +40,11 @@ from .supabase_http import SupabaseAuthenticationError
 # tests/test_ranker_claimed_section_budget.py, which walks the longest path with
 # a counting transport and refuses a count above this number.
 #
-# The longest measured path is 30 with the validated 100-row general-pool
-# rollback setting: a paid view with 1,000 exclusions, all four lanes, and
-# exclusive-story promotion. The shipped 200-row setting uses 25 calls, but
-# the claim must remain safe across the WHOLE programmable policy range.
-# One extra covers a conditional failure-path call absent from that success.
-CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 31
+# The longest measured path is 21 calls on the exclusive section. SQL-side
+# filtering means a candidate lane either fills in one call or returns short;
+# it no longer needs a second serial call to skip suppressed rows. Two calls
+# of room cover conditional failure-path work absent from that success.
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 23
 # Two bounded continuation scans can run under one claim. Each scan is capped
 # at two general and eight lane RPCs when a refill is allowed; the remaining
 # calls cover claim, frozen-order reloads, owner states, appends and release.
@@ -116,7 +115,10 @@ class RankingStore(Protocol):
                             trend_window_hours: int, trend_min_sources: int, max_age_hours: int | None,
                             min_age_hours: int | None, limit: int, before_published_at: str | None = None,
                             before_story_id: str | None = None,
-                            before_source_count: int | None = None) -> Sequence[Mapping[str, object]]: ...
+                            before_source_count: int | None = None,
+                            excluded_story_ids: Sequence[str] = (),
+                            suppressed_sources: Sequence[str] = (),
+                            suppressed_topics: Sequence[str] = ()) -> Sequence[Mapping[str, object]]: ...
     def open_reading_run(self, *, user_id: str, idle_minutes: int, max_minutes: int,
                          profile: Mapping[str, object]) -> Mapping[str, object]: ...
     def record_reading_run_filter(self, *, user_id: str, run_id: str,
@@ -1873,11 +1875,14 @@ class RankingService:
         # last few hours alone and the page comes back short with hundreds of
         # candidates unread. Python assigns the lanes; this just makes sure the
         # recipe has a corpus to work from.
-        # The SQL RPC caps each batch at 100. A head full of excluded stories
-        # must not consume the whole fetch budget and hide older eligible rows.
-        # Walk its own keyset until the window plus one page is usable or the
-        # corpus ends. The exclusion count is bounded by ServicePolicy.
+        # The filtered SQL RPC applies frozen exclusions and profile suppression
+        # after dedupe but before LIMIT. Continue on its keyset only when the
+        # selected lane cannot fill the window or the corpus is exhausted.
         excluded = set(excluded_story_ids)
+        suppressed_sources = (tuple(sorted(profile.suppressed_sources))
+                              if composition.immediate_negative_filter else ())
+        suppressed_topics = (tuple(sorted(profile.suppressed_topics))
+                             if composition.immediate_negative_filter else ())
         def fetch_general():
             scan_start = time.perf_counter()
             target = composition.candidate_window_size + composition.page_size
@@ -1896,11 +1901,8 @@ class RankingService:
             general_budget = max(composition.pool_scan_max_batches,
                                  (len(excluded) + target + 99) // 100)
             while eligible_general < target and general_batches < general_budget:
-                # The SQL guard permits 200 for this broad pool. A single
-                # read can pass a frozen 100-story head without rerunning the
-                # full-corpus dedupe on a second serial RPC.
                 limit = min(composition.general_pool_batch_limit,
-                            target - eligible_general + len(excluded))
+                            target - eligible_general)
                 batch = self._store.retained_candidates_v2(
                     category_id=category_id, query=query, lane=None,
                     profile_categories=(), profile_sources=(),
@@ -1908,7 +1910,10 @@ class RankingService:
                     trend_min_sources=composition.trend_min_independent_sources,
                     max_age_hours=None, min_age_hours=None,
                     limit=limit, before_published_at=general_boundary[0],
-                    before_story_id=general_boundary[1], before_source_count=None)
+                    before_story_id=general_boundary[1], before_source_count=None,
+                    excluded_story_ids=tuple(sorted(excluded)),
+                    suppressed_sources=suppressed_sources,
+                    suppressed_topics=suppressed_topics)
                 general_batches += 1
                 batch_limits.append(limit)
                 batch_sizes.append(len(batch))
@@ -1983,7 +1988,10 @@ class RankingService:
                     # beyond it so their fetch budgets do not repeat its head.
                     min_age_hours=None if lane == "updates" else composition.updates_max_age_hours,
                     limit=batch_limit, before_published_at=lane_cursor[0],
-                    before_story_id=lane_cursor[1], before_source_count=lane_cursor[2])
+                    before_story_id=lane_cursor[1], before_source_count=lane_cursor[2],
+                    excluded_story_ids=tuple(sorted(excluded)),
+                    suppressed_sources=suppressed_sources,
+                    suppressed_topics=suppressed_topics)
                 rpc_count += 1
                 for row in rows:
                     story_id = row.get("story_id")
