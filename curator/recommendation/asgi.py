@@ -44,7 +44,11 @@ class RankingASGI:
             elif method == "GET" and path == "/page":
                 from urllib.parse import parse_qs
                 cursor = parse_qs(scope.get("query_string", b"").decode()).get("cursor", [""])[0]
+                started_at = time.perf_counter()
                 result = await asyncio.to_thread(self._service.page, authorization=headers.get("authorization", ""), cursor=cursor)
+                print(json.dumps({"event": "m2_api_timing", "route": "page",
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000)},
+                    separators=(",", ":")), file=sys.stderr, flush=True)
             else:
                 return await self._reply(send, 404, {"error": "not_found"})
             await self._reply(send, 200, result)

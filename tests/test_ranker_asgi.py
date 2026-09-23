@@ -20,7 +20,7 @@ class Service:
         return {"schema_version": 1, "request_id": "request", "cards": [], "next_cursor": None}
 
 
-def request(app, *, method="GET", path="/config", origin="https://reader.example", body=b"", headers=()):
+def request(app, *, method="GET", path="/config", origin="https://reader.example", body=b"", headers=(), query=b""):
     async def run():
         sent = []
         received = False
@@ -32,7 +32,7 @@ def request(app, *, method="GET", path="/config", origin="https://reader.example
         async def send(event):
             sent.append(event)
         all_headers = [(b"origin", origin.encode()), *headers]
-        await app({"type": "http", "method": method, "path": path, "query_string": b"", "headers": all_headers}, receive, send)
+        await app({"type": "http", "method": method, "path": path, "query_string": query, "headers": all_headers}, receive, send)
         return sent
     return asyncio.run(run())
 
@@ -70,6 +70,23 @@ def test_successful_rank_logs_only_route_and_duration(capsys):
     assert set(event) == {"event", "route", "duration_ms"}
     assert event["event"] == "m2_api_timing"
     assert event["route"] == "rank"
+    assert event["duration_ms"] >= 0
+
+
+def test_successful_page_logs_only_route_and_duration(capsys):
+    class PagingService(Service):
+        def page(self, *, authorization, cursor):
+            assert authorization == "Bearer valid" and cursor == "private-cursor"
+            return {"schema_version": 1, "cards": [], "end_of_run": True}
+
+    sent = request(RankingASGI(service=PagingService(), reader_origin="https://reader.example"),
+        method="GET", path="/page", query=b"cursor=private-cursor",
+        headers=((b"authorization", b"Bearer valid"),))
+    assert sent[0]["status"] == 200
+    event = json.loads(capsys.readouterr().err)
+    assert set(event) == {"event", "route", "duration_ms"}
+    assert event["event"] == "m2_api_timing"
+    assert event["route"] == "page"
     assert event["duration_ms"] >= 0
 
 

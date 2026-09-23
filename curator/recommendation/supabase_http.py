@@ -336,7 +336,11 @@ class SupabaseHTTP:
             raise self._failure(route, method, started, reason="http", status_code=exc.code) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise self._failure(route, method, started, reason=_failure_reason(exc)) from exc
-        return None if not raw else json.loads(raw)
+        result = None if not raw else json.loads(raw)
+        print(json.dumps({"event": "m2_supabase_request_timing", "path": route,
+            "method": method, "elapsed_ms": int((time.monotonic() - started) * 1000)},
+            separators=(",", ":")), file=sys.stderr, flush=True)
+        return result
 
     def _failure(self, route, method, started, *, reason, status_code=None):
         """One structured line, then the exception that carries the same facts.
