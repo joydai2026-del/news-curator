@@ -9,18 +9,22 @@ from __future__ import annotations
 import json
 import copy
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from dataclasses import replace
 
 from curator.recommendation.composition import load_composition_policy, parse_composition_policy
+from curator.recommendation import service as service_module
 from curator.recommendation.profile import BehaviorProfile
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.service import (
+    AuthenticationError,
     ProviderConsentRequiredError,
     RankingInProgressError,
     RankingService,
@@ -2467,6 +2471,200 @@ def test_complete_later_page_reuses_the_persisted_refill_snapshot(complete_conti
     assert store.page_reads == 3, "a complete persisted page was fetched twice"
 
 
+def test_page_stage_timing_has_only_fixed_labels_and_durations(
+        complete_continuation_page, capsys):
+    store, subject, cursor, _offset = complete_continuation_page
+    store.frozen["frozen-1"]["bindings"]["eligibility"]["query"] = "private search text"
+    subject.page(authorization="Bearer valid", cursor=cursor)
+
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timings = [event for event in events if event.get("event") == "m2_page_stage_timing"]
+    assert len(timings) == 1
+    timing = timings[0]
+    assert set(timing) == {"event", "route", "total_ms", "stages_ms"}
+    assert timing["route"] == "/page"
+    fixed_labels = {
+        "authenticate", "cursor_decode", "frozen_load", "history_load",
+        "claim", "locked_load", "continuation_pass", "final_load",
+        "claim_release", "owner_overlay", "filtered_record", "response_reserve",
+    }
+    assert set(timing["stages_ms"]).issubset(fixed_labels)
+    assert fixed_labels - {"final_load"} == set(timing["stages_ms"])
+    assert isinstance(timing["total_ms"], (int, float))
+    assert timing["total_ms"] >= 0
+    assert all(isinstance(value, (int, float)) and value >= 0
+               for value in timing["stages_ms"].values())
+    serialized = json.dumps(timing)
+    for private_value in (OWNER_ID, "frozen-1", cursor, "valid", "story:",
+                          "https://example.test", "private search text"):
+        assert private_value not in serialized
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def failing_timing_sink(failed_operation):
+    class FailingTimingSink:
+        timing_written = False
+
+        def write(self, value):
+            if "m2_page_stage_timing" in value:
+                if failed_operation == "write":
+                    raise OSError("timing_sink_unavailable")
+                self.timing_written = True
+            return len(value)
+
+        def flush(self):
+            if self.timing_written and failed_operation == "flush":
+                raise OSError("timing_sink_unavailable")
+
+    return FailingTimingSink()
+
+
+def failing_page_sink(failed_operation):
+    class FailingPageSink:
+        def write(self, value):
+            if failed_operation == "write":
+                raise OSError("sink_down")
+            return len(value)
+
+        def flush(self):
+            if failed_operation == "flush":
+                raise OSError("sink_down")
+
+    return FailingPageSink()
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_entire_page_timing_sink_failure_keeps_a_valid_continuation(
+        complete_continuation_page, monkeypatch, failed_operation):
+    store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink(failed_operation)))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_entire_page_sink_failure_does_not_mask_authentication_error(
+        complete_continuation_page, monkeypatch):
+    _store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    with pytest.raises(AuthenticationError):
+        subject.page(authorization="", cursor=cursor)
+
+
+def test_entire_page_sink_failure_does_not_mask_claim_failure(
+        complete_continuation_page, monkeypatch):
+    store, subject, cursor, _offset = complete_continuation_page
+
+    def fail_claim(**_kwargs):
+        raise RuntimeError("claim_down")
+
+    store.claim_run_ranking = fail_claim
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    with pytest.raises(RuntimeError, match="page_budget_unavailable"):
+        subject.page(authorization="Bearer valid", cursor=cursor)
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_entire_page_sink_failure_does_not_mask_claim_release_failure(
+        complete_continuation_page, monkeypatch):
+    store, subject, cursor, _offset = complete_continuation_page
+
+    def fail_release(**_kwargs):
+        raise RuntimeError("release_down")
+
+    store.release_run_ranking_claim = fail_release
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_entire_page_sink_failure_keeps_privacy_deleted_response(
+        complete_continuation_page, monkeypatch):
+    store, subject, cursor, _offset = complete_continuation_page
+    store.after_read = lambda number, _snapshot: store.frozen.clear() if number == 3 else None
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_page_sink("write")))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert response["cards"] == [] and response["end_of_run"] is True
+    assert store.response_reservations == 1
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_timing_sink_failure_cannot_replace_a_valid_page(
+        complete_continuation_page, monkeypatch, failed_operation):
+    store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_timing_sink(failed_operation)))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_timing_sink_failure_cannot_mask_a_stale_cursor(
+        complete_continuation_page, monkeypatch, failed_operation):
+    _store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_timing_sink(failed_operation)))
+    invalid_cursor = ("A" if cursor[0] != "A" else "B") + cursor[1:]
+    with pytest.raises(StaleRankingError, match="invalid_cursor"):
+        subject.page(authorization="Bearer valid", cursor=invalid_cursor)
+
+
+def test_page_stage_timing_stays_private_on_replay_and_error(
+        complete_continuation_page, capsys):
+    store, subject, cursor, _offset = complete_continuation_page
+    first = subject.page(authorization="Bearer valid", cursor=cursor)
+    replay = subject.page(authorization="Bearer valid", cursor=cursor)
+    invalid_cursor = ("A" if cursor[0] != "A" else "B") + cursor[1:]
+    with pytest.raises(StaleRankingError, match="invalid_cursor"):
+        subject.page(authorization="Bearer valid", cursor=invalid_cursor)
+
+    assert replay == first
+    assert subject._adapter.calls == len(store.reservations) == 1
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timings = [event for event in events if event.get("event") == "m2_page_stage_timing"]
+    assert len(timings) == 3
+    assert "continuation_pass" in timings[0]["stages_ms"]
+    assert "continuation_pass" not in timings[1]["stages_ms"]
+    for timing in timings:
+        assert set(timing) == {"event", "route", "total_ms", "stages_ms"}
+        assert timing["route"] == "/page"
+        assert set(timing["stages_ms"]).issubset(service_module._PAGE_STAGE_LABELS)
+        assert all(type(duration) in (int, float) and duration >= 0
+                   for duration in timing["stages_ms"].values())
+        serialized = json.dumps(timing)
+        for private_value in (OWNER_ID, "frozen-1", cursor, invalid_cursor,
+                              "valid", "story:", "https://example.test"):
+            assert private_value not in serialized
+
+
+def test_page_stage_total_exposes_single_request_unmeasured_work(
+        complete_continuation_page, capsys):
+    _store, subject, cursor, _offset = complete_continuation_page
+    original_slice = subject._slice
+    delayed_once = False
+
+    def delayed_slice(*args, **kwargs):
+        nonlocal delayed_once
+        if not delayed_once:
+            delayed_once = True
+            time.sleep(0.03)
+        return original_slice(*args, **kwargs)
+
+    subject._slice = delayed_slice
+    subject.page(authorization="Bearer valid", cursor=cursor)
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timing = next(event for event in events if event.get("event") == "m2_page_stage_timing")
+    assert timing["total_ms"] - sum(timing["stages_ms"].values()) >= 20
+
+
 def test_reused_page_cannot_survive_privacy_deletion(complete_continuation_page):
     store, subject, cursor, _offset = complete_continuation_page
 
@@ -2540,7 +2738,7 @@ def test_last_allowed_append_still_loads_its_persisted_result(complete_continuat
 
 @pytest.mark.parametrize("remaining", [0, 1])
 def test_empty_or_partial_persisted_page_keeps_final_reread(
-        complete_continuation_page, remaining):
+        complete_continuation_page, remaining, capsys):
     store, subject, cursor, _offset = complete_continuation_page
     original_extend = store.extend_frozen_order
 
@@ -2566,6 +2764,10 @@ def test_empty_or_partial_persisted_page_keeps_final_reread(
         assert store.page_reads == 3
     assert store.response_reservations == 0
     assert all(view["claim_token"] is None for view in store.views.values())
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timing = next(event for event in events if event.get("event") == "m2_page_stage_timing")
+    assert "final_load" in timing["stages_ms"]
+    assert "claim_release" in timing["stages_ms"]
 
 
 @pytest.mark.parametrize("response_number,offset", [(1, 50), (2, 0), (1, 0)])

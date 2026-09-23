@@ -361,9 +361,13 @@ class SupabaseHTTP:
         except (urllib.error.URLError, TimeoutError) as exc:
             raise self._failure(route, method, started, reason=_failure_reason(exc)) from exc
         result = None if not raw else json.loads(raw)
-        print(json.dumps({"event": "m2_supabase_request_timing", "path": route,
-            "method": method, "elapsed_ms": int((time.monotonic() - started) * 1000)},
-            separators=(",", ":")), file=sys.stderr, flush=True)
+        try:
+            print(json.dumps({"event": "m2_supabase_request_timing", "path": route,
+                "method": method, "elapsed_ms": int((time.monotonic() - started) * 1000)},
+                separators=(",", ":")), file=sys.stderr, flush=True)
+        except Exception:
+            # Observability must not turn a completed database read into a retry.
+            pass
         return result
 
     def _failure(self, route, method, started, *, reason, status_code=None):
@@ -372,10 +376,14 @@ class SupabaseHTTP:
         Never the body, the headers, the key or the token: a Supabase error body
         can echo the statement, and the headers hold the service-role bearer.
         """
-        print(json.dumps({"event": "m2_supabase_request_failed", "path": route,
-            "method": method, "status_code": status_code,
-            "elapsed_ms": int((time.monotonic() - started) * 1000), "reason": reason},
-            separators=(",", ":")), file=sys.stdout, flush=True)
+        try:
+            print(json.dumps({"event": "m2_supabase_request_failed", "path": route,
+                "method": method, "status_code": status_code,
+                "elapsed_ms": int((time.monotonic() - started) * 1000), "reason": reason},
+                separators=(",", ":")), file=sys.stdout, flush=True)
+        except Exception:
+            # Keep the original transport failure when the diagnostic sink fails.
+            pass
         return SupabaseHTTPError("Supabase request failed", status_code=status_code, path=route)
 
     @staticmethod

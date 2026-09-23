@@ -11,6 +11,7 @@ import sys
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Mapping, Protocol, Sequence
@@ -57,6 +58,40 @@ CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS = 33
 # deleted by a consent/history invalidation may be replaced, while an expired
 # order that still exists must not buy a second ranking in the same view.
 _MISSING_FROZEN_ORDER = object()
+
+_PAGE_STAGE_LABELS = frozenset({
+    "authenticate", "cursor_decode", "frozen_load", "history_load", "claim",
+    "locked_load", "continuation_pass", "final_load", "claim_release",
+    "owner_overlay", "filtered_record", "response_reserve",
+})
+
+
+@contextmanager
+def _page_stage(stages: dict[str, float], label: str):
+    if label not in _PAGE_STAGE_LABELS:
+        raise ValueError("invalid_page_stage")
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        stages[label] = round(stages.get(label, 0) +
+                              (time.perf_counter() - started) * 1000, 3)
+
+
+def _page_diagnostic(payload: Mapping[str, object]) -> None:
+    """Keep page-path telemetry from changing the page or its original error."""
+    try:
+        sys.stderr.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def _page_suppressed_exception(event: str, error: Exception, **fields) -> None:
+    try:
+        log_suppressed_exception(event, error, stream=sys.stderr, **fields)
+    except Exception:
+        pass
 
 # The request accepts at most 1,000 exclusions. Eleven batches can step past all
 # of them and fill the 51-row candidate-plus-lookahead window; one additional
@@ -614,14 +649,33 @@ class RankingService:
         return self._page_response(bindings, cards[:page_size], next_cursor, receipt)
 
     def page(self, *, authorization: str, cursor: str) -> dict[str, object]:
+        started = time.perf_counter()
+        stages: dict[str, float] = {}
+        try:
+            return self._page_with_timing(authorization=authorization, cursor=cursor,
+                                          stages=stages)
+        finally:
+            # One record per request keeps concurrent page turns separable
+            # without logging a user, cursor, story, query or request id.
+            # Diagnostic failure must not change a page result or mask its error.
+            _page_diagnostic({"event": "m2_page_stage_timing", "route": "/page",
+                "total_ms": round((time.perf_counter() - started) * 1000, 3),
+                "stages_ms": stages})
+
+    def _page_with_timing(self, *, authorization: str, cursor: str,
+                          stages: dict[str, float]) -> dict[str, object]:
         if not self._policy.enabled:
             raise RuntimeError("ranking_disabled")
-        token, owner = self._authenticate(authorization)
-        payload = self._decode_cursor(cursor)
-        frozen = self._store.load_frozen_order(user_id=owner.user_id, frozen_order_id=str(payload["frozen_order_id"]))
+        with _page_stage(stages, "authenticate"):
+            token, owner = self._authenticate(authorization)
+        with _page_stage(stages, "cursor_decode"):
+            payload = self._decode_cursor(cursor)
+        with _page_stage(stages, "frozen_load"):
+            frozen = self._store.load_frozen_order(user_id=owner.user_id, frozen_order_id=str(payload["frozen_order_id"]))
         if not frozen or int(frozen["expires_at"]) < int(self._clock()):
             raise StaleRankingError("cursor_expired")
-        current = self._store.history_snapshot(token)
+        with _page_stage(stages, "history_load"):
+            current = self._store.history_snapshot(token)
         current_bindings = {"history_generation": current.get("history_generation"),
             "consent_revision": current.get("consent_revision"),
             "server_commit_revision": current.get("history_revision")}
@@ -686,8 +740,9 @@ class RankingService:
                 if (not run_id or not isinstance(eligibility_key, str)
                         or re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is None):
                     raise RuntimeError("page_budget_unavailable")
-                continuation_token = self._claim_continuation(
-                    owner, str(run_id), eligibility_key, composition)
+                with _page_stage(stages, "claim"):
+                    continuation_token = self._claim_continuation(
+                        owner, str(run_id), eligibility_key, composition)
                 try:
                     # The first snapshot was loaded before the lock. Reload
                     # inside it: a caller that waited for another continuation
@@ -701,8 +756,9 @@ class RankingService:
                     terminal_pending = None
                     complete_snapshot = None
                     for attempt in range(composition.continuation_refill_max_passes):
-                        locked = self._store.load_frozen_order(user_id=owner.user_id,
-                            frozen_order_id=str(payload["frozen_order_id"]))
+                        with _page_stage(stages, "locked_load"):
+                            locked = self._store.load_frozen_order(user_id=owner.user_id,
+                                frozen_order_id=str(payload["frozen_order_id"]))
                         if not locked or int(locked["expires_at"]) < int(self._clock()):
                             raise StaleRankingError("cursor_expired")
                         locked_cards = list(locked["cards"])
@@ -735,9 +791,10 @@ class RankingService:
                              + composition.page_size + 99) // 100)
                         if attempt and general_budget > composition.pool_scan_max_batches:
                             break
-                        added, continuation_pending = self._continue_frozen_order(
-                            token, owner, locked, str(payload["frozen_order_id"]), size,
-                            page_prefix=locked_preview)
+                        with _page_stage(stages, "continuation_pass"):
+                            added, continuation_pending = self._continue_frozen_order(
+                                token, owner, locked, str(payload["frozen_order_id"]), size,
+                                page_prefix=locked_preview)
                         # An empty bounded scan preserves the same response
                         # ordinal for the caller to retry. Do not turn it into
                         # an unbounded search inside this one request.
@@ -747,9 +804,10 @@ class RankingService:
                                         (locked_bindings.get("eligibility") or {}).get("category"))
                                     and attempt + 1 < composition.continuation_refill_max_passes
                                     and general_budget <= composition.pool_scan_max_batches):
-                                advanced = self._store.load_frozen_order(
-                                    user_id=owner.user_id,
-                                    frozen_order_id=str(payload["frozen_order_id"]))
+                                with _page_stage(stages, "locked_load"):
+                                    advanced = self._store.load_frozen_order(
+                                        user_id=owner.user_id,
+                                        frozen_order_id=str(payload["frozen_order_id"]))
                                 advanced_bindings = ((advanced or {}).get("bindings") or {})
                                 if (advanced_bindings.get("corpus_cursor")
                                         != locked_bindings.get("corpus_cursor")
@@ -761,17 +819,21 @@ class RankingService:
                                     continue
                             terminal_pending = continuation_pending
                             break
-                    frozen = (complete_snapshot if complete_snapshot is not None else
-                        self._store.load_frozen_order(user_id=owner.user_id,
-                            frozen_order_id=str(payload["frozen_order_id"])))
+                    if complete_snapshot is not None:
+                        frozen = complete_snapshot
+                    else:
+                        with _page_stage(stages, "final_load"):
+                            frozen = self._store.load_frozen_order(user_id=owner.user_id,
+                                frozen_order_id=str(payload["frozen_order_id"]))
                     if not frozen or int(frozen["expires_at"]) < int(self._clock()):
                         raise StaleRankingError("cursor_expired")
                     cards = list(frozen["cards"])
                     continuation_pending = (bool(frozen["bindings"].get("corpus_has_more"))
                                             if terminal_pending is None else terminal_pending)
                 finally:
-                    self._release_claim(owner, {"run_id": str(run_id)}, eligibility_key,
-                                        continuation_token)
+                    with _page_stage(stages, "claim_release"):
+                        self._release_claim(owner, {"run_id": str(run_id)}, eligibility_key,
+                                            continuation_token)
                 frozen["bindings"]["corpus_has_more"] = continuation_pending
             else:
                 # The documented rollback: with no recipe configured there is no
@@ -795,8 +857,10 @@ class RankingService:
                     "cards": [], "next_cursor": self._cursor(
                         str(payload["frozen_order_id"]), offset, int(frozen["expires_at"]),
                         response_number=response_number)}
-        visible = self._overlay_owner_states(token, visible)
-        self._record_filtered(owner, frozen, removed)
+        with _page_stage(stages, "owner_overlay"):
+            visible = self._overlay_owner_states(token, visible)
+        with _page_stage(stages, "filtered_record"):
+            self._record_filtered(owner, frozen, removed)
         next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
         if offset >= len(cards) and continuation_pending:
             return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
@@ -845,12 +909,15 @@ class RankingService:
                                           and bindings.get("last_served_offset") == 0
                                           and bindings.get("last_served_next_offset") == next_offset)))
         if visible and composition is not None and not first_response_replay:
-            if (not run_id or not isinstance(eligibility_key, str)
-                    or re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is None
-                    or self._reserve_response_slot(
+            reservation = None
+            if (run_id and isinstance(eligibility_key, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is not None):
+                with _page_stage(stages, "response_reserve"):
+                    reservation = self._reserve_response_slot(
                         owner, str(run_id), eligibility_key,
                         str(payload["frozen_order_id"]), response_number,
-                        offset, next_offset) is None):
+                        offset, next_offset)
+            if reservation is None:
                 # The row-locked RPC is the authority. A concurrent cursor that
                 # lost this slot cannot serve another readable response even if
                 # it loaded the frozen bindings before the winner committed.
@@ -1042,24 +1109,21 @@ class RankingService:
                 frozen_order_id=frozen_order_id, cards=added,
                 bindings=continuation_bindings)
         except Exception as error:
-            log_suppressed_exception("m2_continuation_failed", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_continuation_failed", error,
                 reason="store_unavailable", frozen_order_id=frozen_order_id)
             return (), False
-        sys.stderr.write(json.dumps({"event": "m2_continuation_pass_timing",
+        _page_diagnostic({"event": "m2_continuation_pass_timing",
             "pass_total_ms": round((time.perf_counter() - started_at) * 1000),
             "pool_ms": pool_ms,
             "owner_states_ms": owner_states_ms,
             "extend_ms": round((time.perf_counter() - extend_started_at) * 1000),
-            "pool_rows": len(pooled), "added_cards": len(added)},
-            separators=(",", ":")) + "\n")
-        sys.stderr.flush()
+            "pool_rows": len(pooled), "added_cards": len(added)})
         if (not isinstance(total, int) or total < previous_total
                 or (added and total <= previous_total)):
             # The order did not grow: it has reached its cap, or the row was not
             # matched. Either way this run is over, and saying so is better than
             # silently repeating the page she just read.
-            print(json.dumps({"event": "m2_continuation_exhausted", "reason": "order_at_capacity"},
-                             separators=(",", ":")), file=sys.stderr, flush=True)
+            _page_diagnostic({"event": "m2_continuation_exhausted", "reason": "order_at_capacity"})
             return (), False
         return tuple(added), more
 
@@ -1088,7 +1152,7 @@ class RankingService:
                 eligibility_key=eligibility_key, frozen_order_id=frozen_order_id,
                 response_number=response_number, offset=offset, next_offset=next_offset)
         except Exception as error:
-            log_suppressed_exception("m2_page_budget_unavailable", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_page_budget_unavailable", error,
                 run_id=run_id)
             raise RuntimeError("page_budget_unavailable") from error
         if not isinstance(result, Mapping) or not isinstance(result.get("reserved"), bool):
@@ -1134,12 +1198,11 @@ class RankingService:
             recorded = self._store.record_reading_run_filter(user_id=owner.user_id,
                 run_id=str(run_id), story_ids=sorted(removed))
             if not isinstance(recorded, int) or recorded <= 0:
-                print(json.dumps({"event": "m2_filter_not_recorded", "run_id": str(run_id)},
-                                 separators=(",", ":")), file=sys.stderr, flush=True)
+                _page_diagnostic({"event": "m2_filter_not_recorded", "run_id": str(run_id)})
         except Exception as error:
             # A page must render even when the audit write fails. The filter
             # itself already happened; this only records it.
-            log_suppressed_exception("m2_filter_record_failed", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_filter_record_failed", error,
                 run_id=str(run_id))
 
     def _opened_candidate_ids(self, token, rows, composition, profile, diagnostics):
@@ -1688,7 +1751,7 @@ class RankingService:
             self._store.release_run_ranking_claim(user_id=owner.user_id,
                 run_id=str(run["run_id"]), eligibility_key=eligibility_key, token=str(claim_token))
         except Exception as error:
-            log_suppressed_exception("m2_claim_release_failed", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_claim_release_failed", error,
                 run_id=str(run["run_id"]))
 
     def _reserve(self, owner, request_id, estimate, run, eligibility_key, claim_token):
@@ -1770,7 +1833,7 @@ class RankingService:
             view = self._store.open_run_view(user_id=owner.user_id, run_id=str(run["run_id"]),
                                              eligibility_key=eligibility_key)
         except Exception as error:
-            log_suppressed_exception("m2_view_unavailable", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_view_unavailable", error,
                 run_id=str(run["run_id"]))
             return None
         return view if isinstance(view, Mapping) else None
@@ -1806,7 +1869,7 @@ class RankingService:
                 eligibility_key=eligibility_key, token=token,
                 ttl_seconds=composition.ranking_claim_seconds)
         except Exception as error:
-            log_suppressed_exception("m2_claim_unavailable", error, stream=sys.stderr,
+            _page_suppressed_exception("m2_claim_unavailable", error,
                 run_id=run_id)
             raise RuntimeError("page_budget_unavailable") from error
         if not isinstance(claim, Mapping) or not claim.get("granted"):
@@ -2021,14 +2084,12 @@ class RankingService:
                 general_has_more = len(batch) == limit
                 if len(batch) < limit:
                     break
-            sys.stderr.write(json.dumps({"event": "m2_pool_timing", "lane": "general",
+            _page_diagnostic({"event": "m2_pool_timing", "lane": "general",
                 "duration_ms": round((time.perf_counter() - scan_start) * 1000),
                 "rpc_count": general_batches, "rows": len(general_rows),
                 "target": target, "excluded_count": len(excluded),
                 "batch_limits": batch_limits, "batch_sizes": batch_sizes,
-                "excluded_rows": excluded_rows, "suppressed_rows": suppressed_rows},
-                separators=(",", ":")) + "\n")
-            sys.stderr.flush()
+                "excluded_rows": excluded_rows, "suppressed_rows": suppressed_rows})
             return general_rows, general_boundary, general_has_more
         # Each lane has its own keyset and reads the same immutable request
         # inputs. Overlap all I/O, then merge results in policy priority order
@@ -2095,11 +2156,9 @@ class RankingService:
                                    last["independent_source_count"] if lane == "hot" else None)
                 if len(rows) < batch_limit:
                     break
-            sys.stderr.write(json.dumps({"event": "m2_pool_timing", "lane": lane,
+            _page_diagnostic({"event": "m2_pool_timing", "lane": lane,
                 "duration_ms": round((time.perf_counter() - scan_start) * 1000),
-                "rpc_count": rpc_count, "rows": len(lane_rows)},
-                separators=(",", ":")) + "\n")
-            sys.stderr.flush()
+                "rpc_count": rpc_count, "rows": len(lane_rows)})
             return lane_rows, lane_hot_story_ids
 
         if composition.pool_parallel_workers == 1 or not lanes:

@@ -82,6 +82,7 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'invalid_exclude_story_ids',
     'invalid_independent_source_count',
     'invalid_optional_string',
+    'invalid_page_stage',
     'invalid_page_size',
     'invalid_translation_overlay',
     'model results cannot carry a fallback reason',

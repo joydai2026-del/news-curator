@@ -46,9 +46,13 @@ class RankingASGI:
                 cursor = parse_qs(scope.get("query_string", b"").decode()).get("cursor", [""])[0]
                 started_at = time.perf_counter()
                 result = await asyncio.to_thread(self._service.page, authorization=headers.get("authorization", ""), cursor=cursor)
-                print(json.dumps({"event": "m2_api_timing", "route": "page",
-                    "duration_ms": round((time.perf_counter() - started_at) * 1000)},
-                    separators=(",", ":")), file=sys.stderr, flush=True)
+                try:
+                    print(json.dumps({"event": "m2_api_timing", "route": "page",
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000)},
+                        separators=(",", ":")), file=sys.stderr, flush=True)
+                except Exception:
+                    # A broken timing sink cannot replace a completed page.
+                    pass
             else:
                 return await self._reply(send, 404, {"error": "not_found"})
             await self._reply(send, 200, result)
@@ -68,10 +72,13 @@ class RankingASGI:
             await self._reply(send, 409, {"error": str(exc)})
         except (ValueError, json.JSONDecodeError) as exc:
             frame = traceback.extract_tb(exc.__traceback__)[-1]
-            print(json.dumps({"event": "ranker_invalid_request",
-                "exception_class": type(exc).__name__,
-                "source_basename": os.path.basename(frame.filename),
-                "source_line": frame.lineno}, separators=(",", ":")), file=sys.stderr, flush=True)
+            try:
+                print(json.dumps({"event": "ranker_invalid_request",
+                    "exception_class": type(exc).__name__,
+                    "source_basename": os.path.basename(frame.filename),
+                    "source_line": frame.lineno}, separators=(",", ":")), file=sys.stderr, flush=True)
+            except Exception:
+                pass
             await self._reply(send, 400, {"error": "invalid_request"})
         except SupabaseHTTPError as exc:
             # Which call failed, and whether the database answered at all. The

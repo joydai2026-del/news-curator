@@ -4,9 +4,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 
 import pytest
 
+from curator.recommendation import supabase_http as supabase_module
 from curator.recommendation.supabase_http import (
     DEFAULT_TIMEOUT_SECONDS,
     SupabaseAuthenticationError,
@@ -137,6 +139,50 @@ def test_successful_rpc_timing_log_omits_query_and_credentials(capsys):
     assert event["path"] == "/rest/v1/m2_frozen_rankings"
     assert event["method"] == "GET"
     assert event["elapsed_ms"] >= 0
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_successful_rpc_survives_a_broken_timing_sink(monkeypatch, failed_operation):
+    client = _client()
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return b"[]"
+
+    class Capture:
+        def open(self, request, timeout): return Response()
+
+    class BrokenSink:
+        def write(self, value):
+            if failed_operation == "write": raise OSError("sink_down")
+            return len(value)
+
+        def flush(self):
+            if failed_operation == "flush": raise OSError("sink_down")
+
+    client._opener = Capture()
+    monkeypatch.setattr(supabase_module, "sys", SimpleNamespace(stderr=BrokenSink()))
+    assert client._request("GET", "/rest/v1/m2_frozen_rankings?user_id=private-owner",
+                           token="private-token", key="private-key") == []
+
+
+def test_failed_rpc_keeps_its_original_error_when_log_sink_fails(monkeypatch):
+    client = _client()
+
+    class Reject:
+        def open(self, request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 500, "failed", {}, io.BytesIO())
+
+    class BrokenSink:
+        def write(self, value): raise OSError("sink_down")
+        def flush(self): raise OSError("sink_down")
+
+    client._opener = Reject()
+    monkeypatch.setattr(supabase_module, "sys", SimpleNamespace(stdout=BrokenSink()))
+    with pytest.raises(SupabaseHTTPError):
+        client._request("GET", "/rest/v1/m2_frozen_rankings?user_id=private-owner",
+                        token="private-token", key="private-key")
 
 
 def _client(timeout_seconds=None):
