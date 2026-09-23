@@ -12,12 +12,14 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from dataclasses import replace
 
 from curator.recommendation.composition import load_composition_policy, parse_composition_policy
+from curator.recommendation import service as service_module
 from curator.recommendation.profile import BehaviorProfile
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.service import (
@@ -2495,6 +2497,74 @@ def test_page_stage_timing_has_only_fixed_labels_and_durations(
                           "https://example.test", "private search text"):
         assert private_value not in serialized
     assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def failing_timing_sink(failed_operation):
+    class FailingTimingSink:
+        timing_written = False
+
+        def write(self, value):
+            if "m2_page_stage_timing" in value:
+                if failed_operation == "write":
+                    raise OSError("timing_sink_unavailable")
+                self.timing_written = True
+            return len(value)
+
+        def flush(self):
+            if self.timing_written and failed_operation == "flush":
+                raise OSError("timing_sink_unavailable")
+
+    return FailingTimingSink()
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_timing_sink_failure_cannot_replace_a_valid_page(
+        complete_continuation_page, monkeypatch, failed_operation):
+    store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_timing_sink(failed_operation)))
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+@pytest.mark.parametrize("failed_operation", ["write", "flush"])
+def test_timing_sink_failure_cannot_mask_a_stale_cursor(
+        complete_continuation_page, monkeypatch, failed_operation):
+    _store, subject, cursor, _offset = complete_continuation_page
+    monkeypatch.setattr(service_module, "sys",
+                        SimpleNamespace(stderr=failing_timing_sink(failed_operation)))
+    invalid_cursor = ("A" if cursor[0] != "A" else "B") + cursor[1:]
+    with pytest.raises(StaleRankingError, match="invalid_cursor"):
+        subject.page(authorization="Bearer valid", cursor=invalid_cursor)
+
+
+def test_page_stage_timing_stays_private_on_replay_and_error(
+        complete_continuation_page, capsys):
+    store, subject, cursor, _offset = complete_continuation_page
+    first = subject.page(authorization="Bearer valid", cursor=cursor)
+    replay = subject.page(authorization="Bearer valid", cursor=cursor)
+    invalid_cursor = ("A" if cursor[0] != "A" else "B") + cursor[1:]
+    with pytest.raises(StaleRankingError, match="invalid_cursor"):
+        subject.page(authorization="Bearer valid", cursor=invalid_cursor)
+
+    assert replay == first
+    assert subject._adapter.calls == len(store.reservations) == 1
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timings = [event for event in events if event.get("event") == "m2_page_stage_timing"]
+    assert len(timings) == 3
+    assert "continuation_pass" in timings[0]["stages_ms"]
+    assert "continuation_pass" not in timings[1]["stages_ms"]
+    for timing in timings:
+        assert set(timing) == {"event", "route", "total_ms", "stages_ms"}
+        assert timing["route"] == "/page"
+        assert set(timing["stages_ms"]).issubset(service_module._PAGE_STAGE_LABELS)
+        assert all(type(duration) in (int, float) and duration >= 0
+                   for duration in timing["stages_ms"].values())
+        serialized = json.dumps(timing)
+        for private_value in (OWNER_ID, "frozen-1", cursor, invalid_cursor,
+                              "valid", "story:", "https://example.test"):
+            assert private_value not in serialized
 
 
 def test_reused_page_cannot_survive_privacy_deletion(complete_continuation_page):

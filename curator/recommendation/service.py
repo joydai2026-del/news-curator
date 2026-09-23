@@ -641,10 +641,14 @@ class RankingService:
         finally:
             # One record per request keeps concurrent page turns separable
             # without logging a user, cursor, story, query or request id.
-            sys.stderr.write(json.dumps({"event": "m2_page_stage_timing", "route": "/page",
-                "total_ms": round((time.perf_counter() - started) * 1000, 3),
-                "stages_ms": stages}, separators=(",", ":")) + "\n")
-            sys.stderr.flush()
+            # Diagnostic failure must not change a page result or mask its error.
+            try:
+                sys.stderr.write(json.dumps({"event": "m2_page_stage_timing", "route": "/page",
+                    "total_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "stages_ms": stages}, separators=(",", ":")) + "\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
 
     def _page_with_timing(self, *, authorization: str, cursor: str,
                           stages: dict[str, float]) -> dict[str, object]:
