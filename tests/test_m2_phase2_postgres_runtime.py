@@ -270,7 +270,9 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
                       'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
                       'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
                       'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
-                      'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
+                      # Superseded v2 definitions must not be replayed after
+                      # the later bulk-general migration: that would rewrite
+                      # the live limit guard back to 100 for this shared db.
                       'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
                       'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)

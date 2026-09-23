@@ -27,7 +27,7 @@ def test_shipped_policy_declares_a_timeout_the_heavy_query_can_finish_in():
     assert value == 5.0
     assert supabase_timeout_retries(policy) == 1
     # 5, not 10: this value multiplies CLAIMED_SECTION_MAX_TRANSPORT_CALLS inside
-    # composition.py Check 10, so every second here costs sixteen seconds of
+    # composition.py Check 10, so every second here lengthens the validated
     # reading-run claim, and a long claim is how long a crashed request blocks
     # the feed. The two known-broken candidate lanes (15s and 102s at 7,000
     # corpus rows) cannot be rescued by ANY legal value of this key; their fix is
@@ -97,7 +97,7 @@ def _boot_env():
     }
 
 
-@pytest.mark.parametrize(("retries", "worst_case"), [(0, 215), (1, 225), (2, 235)])
+@pytest.mark.parametrize(("retries", "worst_case"), [(0, 175), (1, 185), (2, 195)])
 def test_boot_requires_room_for_both_continuation_owner_state_reads(monkeypatch, retries, worst_case):
     path, policy = load_ranker_policy({}, RANKER_POLICY_DEFAULT, root=ROOT)
     policy["supabase"]["timeout_retries"] = retries
@@ -122,4 +122,4 @@ def test_boot_keeps_the_claim_budget_to_one_owner_state_read(monkeypatch):
     monkeypatch.setattr(runtime, "configured_token_counter", stop_at_tokenizer)
     with pytest.raises(RuntimeError, match="reached tokenizer"):
         runtime.build_application(environ={**_boot_env(), FUNCTION_TIMEOUT_ENV: "240"})
-    assert claim_counts == [32]
+    assert claim_counts == [24]
