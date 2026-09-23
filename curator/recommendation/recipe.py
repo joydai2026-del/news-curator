@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
 from .composition import BACKFILL_LANE, CompositionPolicy
+from .lane_diagnostics import LaneDiagnostics
 from .profile import BehaviorProfile
 
 
@@ -108,7 +109,8 @@ def lane_window_quotas(policy: CompositionPolicy, size: int) -> dict[str, int]:
 
 
 def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfile,
-                 policy: CompositionPolicy, now: datetime, size: int | None = None
+                 policy: CompositionPolicy, now: datetime, size: int | None = None,
+                 diagnostics: LaneDiagnostics | None = None
                  ) -> tuple[LanedCandidate, ...]:
     """Assemble the candidate window the ranker will reorder.
 
@@ -120,6 +122,8 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
     window_size = policy.candidate_window_size if size is None else size
     laned = [LanedCandidate(str(row["story_id"]), *assign_lane(row, profile=profile, policy=policy, now=now), row)
              for row in rows if row.get("story_id")]
+    if diagnostics is not None:
+        diagnostics.record("window_input", (item.lane for item in laned))
     pools: dict[str, list[LanedCandidate]] = {lane: [] for lane in (*policy.lane_priority, BACKFILL_LANE)}
     for candidate in laned:
         pools[candidate.lane].append(candidate)
@@ -130,6 +134,7 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
     per_source: dict[str, int] = {}
     chosen: list[LanedCandidate] = []
     seen: set[str] = set()
+    cap_rejected: dict[str, str] = {}
 
     def admit(candidate: LanedCandidate) -> bool:
         if candidate.story_id in seen or len(chosen) >= window_size:
@@ -138,6 +143,8 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
         cap = (policy.per_aggregator_cap_per_window if candidate.row.get("source_is_aggregator")
                else policy.per_source_cap_per_window)
         if per_source.get(source_id, 0) >= cap:
+            if diagnostics is not None:
+                cap_rejected[candidate.story_id] = candidate.lane
             return False
         per_source[source_id] = per_source.get(source_id, 0) + 1
         seen.add(candidate.story_id)
@@ -179,4 +186,7 @@ def build_window(rows: Sequence[Mapping[str, object]], *, profile: BehaviorProfi
             admit(candidate)
     priority = {lane: index for index, lane in enumerate((*policy.lane_priority, BACKFILL_LANE))}
     chosen.sort(key=lambda item: (priority[item.lane], -item.lane_score, item.story_id))
+    if diagnostics is not None:
+        diagnostics.record("window_selected", (item.lane for item in chosen))
+        diagnostics.record("source_cap_rejected", cap_rejected.values())
     return tuple(chosen)

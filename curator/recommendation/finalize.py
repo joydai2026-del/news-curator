@@ -16,6 +16,7 @@ from typing import Mapping, Sequence
 from curator.dedup import normalize_title
 
 from .composition import BACKFILL_LANE, CompositionPolicy
+from .lane_diagnostics import LaneDiagnostics
 from .profile import BehaviorProfile
 from .recipe import BACKFILL_ORDER, LanedCandidate
 
@@ -94,11 +95,14 @@ def _spacing_legal(emitted: Sequence[LanedCandidate], candidate: LanedCandidate,
 
 def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolicy,
                   owner_states: Mapping[str, Mapping[str, object]], page_size: int,
-                  profile: BehaviorProfile | None = None) -> FinalizedPage:
+                  profile: BehaviorProfile | None = None,
+                  diagnostics: LaneDiagnostics | None = None) -> FinalizedPage:
     # 1. Drop already-opened. Hard removal, never a demotion.
     survivors: list[LanedCandidate] = []
     for candidate in ordered:
         if policy.hide_already_opened and owner_states.get(candidate.story_id, {}).get("read_at"):
+            if diagnostics is not None:
+                diagnostics.add("opened_removed", (candidate.lane,))
             continue
         survivors.append(candidate)
 
@@ -124,6 +128,8 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
                 winners[key] = candidate
             also[candidate.story_id] = also.pop(clash.story_id, [])
             loser, winner = clash, candidate
+        if diagnostics is not None:
+            diagnostics.add("duplicate_removed", (loser.lane,))
         name = str(loser.row.get("source_name") or loser.row.get("source_id") or "")
         if name and name not in also.setdefault(winner.story_id, []):
             also[winner.story_id].append(name)
@@ -224,7 +230,8 @@ def finalize_page(ordered: Sequence[LanedCandidate], *, policy: CompositionPolic
 
 def finalize_order(ordered: Sequence[LanedCandidate], *, policy: CompositionPolicy,
                    owner_states: Mapping[str, Mapping[str, object]], page_size: int, pages: int,
-                   profile: BehaviorProfile | None = None) -> FinalizedPage:
+                   profile: BehaviorProfile | None = None,
+                   diagnostics: LaneDiagnostics | None = None) -> FinalizedPage:
     """Finalize the whole frozen order, one page at a time.
 
     Every page inside the order satisfies the invariants on its own, which is
@@ -237,9 +244,14 @@ def finalize_order(ordered: Sequence[LanedCandidate], *, policy: CompositionPoli
     short: list[Mapping[str, object]] = []
     remaining = list(ordered)
     first: FinalizedPage | None = None
+    if diagnostics is not None:
+        diagnostics.record("pre_finalize", (item.lane for item in ordered))
     for index in range(max(1, pages)):
         page = finalize_page(remaining, policy=policy, owner_states=owner_states,
-                             page_size=page_size, profile=profile)
+                             page_size=page_size, profile=profile, diagnostics=diagnostics)
+        if diagnostics is not None:
+            diagnostics.add("finalized", (item.lane for item in page.cards))
+            diagnostics.record("finalize_remaining", (item.lane for item in page.remaining))
         if not page.cards:
             break
         first = first or page
