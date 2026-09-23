@@ -1088,6 +1088,7 @@ def render_html(
 <meta name="news-curator-m2-page-size" content="">
 <meta name="news-curator-m2-request-timeout-ms" content="">
 <meta name="news-curator-m2-transport-timeout-ms" content="">
+<meta name="news-curator-m2-empty-page-max-attempts" content="">
 <style>{CSS}</style>
 </head>
 <body>
@@ -1170,8 +1171,10 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
     # outlive every legal server configuration, not silently inherit the 8s
     # baseline-display timer and abort a healthy ranking.
     config = {"transport_timeout_ms": 310000, **config}
+    config = {"empty_page_max_attempts": 3, **config}
     fields = {"enabled", "url", "policy_version", "model_version", "provider_policy_id",
-              "provider_retention_url", "page_size", "request_timeout_ms", "transport_timeout_ms"}
+              "provider_retention_url", "page_size", "request_timeout_ms", "transport_timeout_ms",
+              "empty_page_max_attempts"}
     if set(config) != fields or config["enabled"] is not True:
         raise ValueError("invalid M2 reader configuration")
     if type(config["page_size"]) is not int or not 1 <= config["page_size"] <= 25:
@@ -1180,7 +1183,10 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
         raise ValueError("invalid M2 request deadline")
     if type(config["transport_timeout_ms"]) is not int or not 310000 <= config["transport_timeout_ms"] <= 600000:
         raise ValueError("invalid M2 transport deadline")
-    for key in fields - {"enabled", "page_size", "request_timeout_ms", "transport_timeout_ms"}:
+    if type(config["empty_page_max_attempts"]) is not int or not 1 <= config["empty_page_max_attempts"] <= 5:
+        raise ValueError("invalid M2 empty-page retry count")
+    for key in fields - {"enabled", "page_size", "request_timeout_ms", "transport_timeout_ms",
+                         "empty_page_max_attempts"}:
         value = config[key]
         if not isinstance(value, str) or not value or value != value.strip() or len(value) > 2048:
             raise ValueError("invalid M2 configuration value")
@@ -1196,7 +1202,8 @@ def configure_m2_reader(path: Path, config: dict[str, object]) -> None:
               "model-version": config["model_version"], "provider-policy-id": config["provider_policy_id"],
               "provider-retention-url": config["provider_retention_url"], "page-size": str(config["page_size"]),
               "request-timeout-ms": str(config["request_timeout_ms"]),
-              "transport-timeout-ms": str(config["transport_timeout_ms"])}
+              "transport-timeout-ms": str(config["transport_timeout_ms"]),
+              "empty-page-max-attempts": str(config["empty_page_max_attempts"])}
     for name, value in values.items():
         payload, count = re.subn(r'(<meta name="news-curator-m2-' + re.escape(name) + r'" content=")[^"]*(">)',
                                 lambda match: match[1] + html.escape(value, quote=True) + match[2], payload)

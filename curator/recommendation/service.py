@@ -1850,8 +1850,7 @@ class RankingService:
         categories = sorted({topic for topic, weight in profile.topic_affinity.items() if weight > 0})
         sources = sorted({source for source, weight in profile.source_affinity.items() if weight > 0})
         quotas = lane_window_quotas(composition, composition.candidate_window_size)
-        merged: dict[str, Mapping[str, object]] = {}
-        # The general pool first, unbounded by any lane's age window. Every lane
+        # The general pool is unbounded by any lane's age window. Every lane
         # query carries an age bound (that is what keeps the pools distinct), so
         # asking only for lanes means a reader with no profile is served from the
         # last few hours alone and the page comes back short with hundreds of
@@ -1862,42 +1861,45 @@ class RankingService:
         # Walk its own keyset until the window plus one page is usable or the
         # corpus ends. The exclusion count is bounded by ServicePolicy.
         excluded = set(excluded_story_ids)
-        target = composition.candidate_window_size + composition.page_size
-        eligible_general = 0
-        general_boundary = (before_published, before_story)
-        general_has_more = False
-        general_batches = 0
-        # Explicit story exclusions have their own validated 1,000-id bound.
-        # Keep that proven scan depth; add at most the configured extra head
-        # batch for broad source/topic suppression.
-        general_budget = max(composition.pool_scan_max_batches,
-                             (len(excluded) + target + 99) // 100)
-        while eligible_general < target and general_batches < general_budget:
-            limit = min(100, target - eligible_general + len(excluded))
-            batch = self._store.retained_candidates_v2(
-                category_id=category_id, query=query, lane=None,
-                profile_categories=(), profile_sources=(),
-                trend_window_hours=composition.trend_window_hours,
-                trend_min_sources=composition.trend_min_independent_sources,
-                max_age_hours=None, min_age_hours=None,
-                limit=limit, before_published_at=general_boundary[0],
-                before_story_id=general_boundary[1], before_source_count=None)
-            general_batches += 1
-            for row in batch:
-                story_id = row.get("story_id")
-                if (isinstance(story_id, str) and story_id not in excluded
-                        and not self._suppressed_by_profile(row, profile, composition)):
-                    merged.setdefault(story_id, row)
-                    eligible_general += 1
-            if batch:
-                general_boundary = (batch[-1]["published_at"], batch[-1]["story_id"])
-            # A full batch might have more rows behind it. An exact-end batch
-            # permits one harmless empty continuation instead of losing news.
-            general_has_more = len(batch) == limit
-            if len(batch) < limit:
-                break
+        def fetch_general():
+            target = composition.candidate_window_size + composition.page_size
+            general_rows: dict[str, Mapping[str, object]] = {}
+            eligible_general = 0
+            general_boundary = (before_published, before_story)
+            general_has_more = False
+            general_batches = 0
+            # Explicit story exclusions have their own validated 1,000-id bound.
+            # Keep that proven scan depth; add at most the configured extra head
+            # batch for broad source/topic suppression.
+            general_budget = max(composition.pool_scan_max_batches,
+                                 (len(excluded) + target + 99) // 100)
+            while eligible_general < target and general_batches < general_budget:
+                limit = min(100, target - eligible_general + len(excluded))
+                batch = self._store.retained_candidates_v2(
+                    category_id=category_id, query=query, lane=None,
+                    profile_categories=(), profile_sources=(),
+                    trend_window_hours=composition.trend_window_hours,
+                    trend_min_sources=composition.trend_min_independent_sources,
+                    max_age_hours=None, min_age_hours=None,
+                    limit=limit, before_published_at=general_boundary[0],
+                    before_story_id=general_boundary[1], before_source_count=None)
+                general_batches += 1
+                for row in batch:
+                    story_id = row.get("story_id")
+                    if (isinstance(story_id, str) and story_id not in excluded
+                            and not self._suppressed_by_profile(row, profile, composition)):
+                        general_rows.setdefault(story_id, row)
+                        eligible_general += 1
+                if batch:
+                    general_boundary = (batch[-1]["published_at"], batch[-1]["story_id"])
+                # A full batch might have more rows behind it. An exact-end batch
+                # permits one harmless empty continuation instead of losing news.
+                general_has_more = len(batch) == limit
+                if len(batch) < limit:
+                    break
+            return general_rows, general_boundary, general_has_more
         # Each lane has its own keyset and reads the same immutable request
-        # inputs. Overlap their I/O, then merge results in policy priority order
+        # inputs. Overlap all I/O, then merge results in policy priority order
         # so the recipe remains byte-for-byte deterministic. A policy value of
         # one keeps the previous serial path available for rollback.
         lanes = tuple(lane for lane in composition.lane_priority
@@ -1955,11 +1957,14 @@ class RankingService:
                     break
             return lane_rows, lane_hot_story_ids
 
-        if composition.pool_parallel_workers == 1 or len(lanes) <= 1:
+        if composition.pool_parallel_workers == 1 or not lanes:
+            merged, general_boundary, general_has_more = fetch_general()
             lane_results = [fetch_lane(lane) for lane in lanes]
         else:
-            with ThreadPoolExecutor(max_workers=min(composition.pool_parallel_workers, len(lanes))) as pool:
+            with ThreadPoolExecutor(max_workers=min(composition.pool_parallel_workers, len(lanes) + 1)) as pool:
+                general_future = pool.submit(fetch_general)
                 lane_results = list(pool.map(fetch_lane, lanes))
+                merged, general_boundary, general_has_more = general_future.result()
         hot_story_ids: set[str] = set()
         for lane_rows, lane_hot_story_ids in lane_results:
             hot_story_ids.update(lane_hot_story_ids)

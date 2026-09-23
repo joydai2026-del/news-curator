@@ -768,7 +768,8 @@
     if (!value.enabled) return Object.freeze({ enabled: false });
     // How long to wait before asking again when another request is already
     // buying this view's ranking, and how many times. Config, not a constant.
-    value = { in_progress_retry_ms: 2000, in_progress_max_attempts: 3, ...value };
+    value = { in_progress_retry_ms: 2000, in_progress_max_attempts: 3,
+      empty_page_max_attempts: 3, ...value };
     value = { request_timeout_ms: 8000, ...value };
     // The backend's validated function timeout can be as high as 300 seconds.
     // Keep the transport alive beyond that; the 8s timer only paints the
@@ -776,14 +777,16 @@
     value = { transport_timeout_ms: 310000, ...value };
     if (!exactFields(value, ["enabled", "model_version", "page_size", "policy_version",
       "provider_policy_id", "provider_retention_url", "url", "request_timeout_ms",
-      "transport_timeout_ms", "in_progress_retry_ms", "in_progress_max_attempts"]) || !boundedString(value.policy_version, 256) ||
+      "transport_timeout_ms", "in_progress_retry_ms", "in_progress_max_attempts",
+      "empty_page_max_attempts"]) || !boundedString(value.policy_version, 256) ||
       !boundedString(value.provider_policy_id, 256) ||
       !boundedString(value.model_version, 256) || !safeDestination(value.provider_retention_url) ||
       !Number.isInteger(value.page_size) || value.page_size < 1 || value.page_size > MAX_PAGE_SIZE ||
       !Number.isInteger(value.request_timeout_ms) || value.request_timeout_ms < 1 || value.request_timeout_ms > 8000 ||
       !Number.isInteger(value.transport_timeout_ms) || value.transport_timeout_ms < 310000 || value.transport_timeout_ms > 600000 ||
       !Number.isInteger(value.in_progress_retry_ms) || value.in_progress_retry_ms < 100 || value.in_progress_retry_ms > 10000 ||
-      !Number.isInteger(value.in_progress_max_attempts) || value.in_progress_max_attempts < 1 || value.in_progress_max_attempts > 10) {
+      !Number.isInteger(value.in_progress_max_attempts) || value.in_progress_max_attempts < 1 || value.in_progress_max_attempts > 10 ||
+      !Number.isInteger(value.empty_page_max_attempts) || value.empty_page_max_attempts < 1 || value.empty_page_max_attempts > 5) {
       fail("M2 reader configuration is invalid.");
     }
     const endpoint = safeDestination(value.url);
@@ -873,7 +876,9 @@
   function createM2Service(rawConfig, sessionProvider, fetchImpl = fetch) {
     const config = validateM2Config(rawConfig);
     if (!config.enabled) return Object.freeze({ enabled: false });
-    async function request(path, method, body, expected) {
+    async function request(path, method, body, expected, timeoutMs = config.transport_timeout_ms) {
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > config.transport_timeout_ms)
+        fail("The M2 reader request deadline is invalid.");
       // Refresh before a request when the bearer cannot outlive the longest
       // accepted transport window.  The extra 30 seconds covers client/server
       // clock skew and the final response validation round trip.
@@ -885,7 +890,7 @@
         accept: "application/json", "content-type": "application/json",
         authorization: `Bearer ${before.access_token}`,
       }, body: body === null ? undefined : JSON.stringify(body), credentials: "omit",
-      redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(config.transport_timeout_ms) });
+      redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(timeoutMs) });
       const payload = await boundedJson(response, "The M2 reader response was invalid.");
       if (response.redirected !== false || response.url !== url) fail("The M2 endpoint redirected unexpectedly.");
       const after = await sessionProvider(0);
@@ -940,9 +945,9 @@
       }, { ...history, policy_version: config.policy_version, model_version: config.model_version,
         page_size: config.page_size, server_commit_revision: history.history_revision,
         history_revision: history.included_history_revision, allow_frozen_revisions: true }),
-      page: (cursor, binding) => request(`/page?cursor=${encodeURIComponent(cursor)}`, "GET", null,
+      page: (cursor, binding, timeoutMs = config.transport_timeout_ms) => request(`/page?cursor=${encodeURIComponent(cursor)}`, "GET", null,
         { ...binding, policy_version: config.policy_version, model_version: config.model_version,
-          page_size: config.page_size }),
+          page_size: config.page_size }, timeoutMs),
     });
   }
 
@@ -1004,6 +1009,7 @@
         provider_retention_url: meta("provider-retention-url"), page_size: Number(meta("page-size")),
         request_timeout_ms: Number(meta("request-timeout-ms") || 8000),
         transport_timeout_ms: Number(meta("transport-timeout-ms") || meta("request-timeout-ms") || 8000),
+        empty_page_max_attempts: Number(meta("empty-page-max-attempts") || 3),
       } : { enabled: false });
       m2 = createM2Service(m2Config, (minimumValiditySeconds = 0) =>
         auth.sessionForRequest(undefined, undefined, minimumValiditySeconds));
@@ -1625,6 +1631,7 @@
       // This deadline starts before queued behavior writes and history retrieval.
       // It bounds the reader request, while an aborted browser request cannot prove
       // that upstream work stopped.
+      const operationExpiresAt = Date.now() + m2Config.transport_timeout_ms;
       const transportDeadline = setTimeout(terminalFallback, m2Config.transport_timeout_ms);
       try {
         if (searchEvent && eligibility.query) await recordBehavior("search_query", { query: eligibility.query });
@@ -1634,17 +1641,30 @@
         syncM2Consent(history);
         const canContinue = append && key === m2Key && m2Cursor && m2Binding &&
           history.history_generation === m2Binding.history_generation && history.consent_revision === m2Binding.consent_revision;
+        if (Date.now() >= operationExpiresAt) { terminalFallback(); return; }
         // A new eligible request always carries the committed history. The
         // server freezes existing pages and re-ranks continuation windows.
-        const response = canContinue
+        let response = canContinue
           // THE CONTRACT, stated once: /page returns the FROZEN order's binding,
           // so the reader compares against the frozen binding and not against
           // the live revision. Comparing against the live one meant that reading
           // or saving a story made a perfectly valid frozen page look invalid
           // here, and the reader dropped to the captured-edition fallback right
           // after the server had stopped re-ranking for exactly that reason.
-          ? await m2.page(m2Cursor, { ...m2Binding })
+          ? await m2.page(m2Cursor, { ...m2Binding }, Math.max(1, operationExpiresAt - Date.now()))
           : await m2.rank(history, eligibility);
+        // A bounded corpus scan may advance its cursor without admitting a
+        // card. Keep the same user action in flight instead of asking her to
+        // tap Load more again for an empty response. These page calls cannot
+        // trigger another paid ranking or spend a readable response slot.
+        for (let empty = 1; canContinue && empty < m2Config.empty_page_max_attempts &&
+            !response.cards.length && response.next_cursor && !response.end_of_run; empty++) {
+          if (epoch !== authEpoch || request !== m2Sequence || !usesM2() ||
+              JSON.stringify(m2Eligibility()) !== key) return;
+          if (Date.now() >= operationExpiresAt) { terminalFallback(); return; }
+          response = await m2.page(response.next_cursor, { ...response },
+            Math.max(1, operationExpiresAt - Date.now()));
+        }
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         // A read, save or interest click may have started after this request
         // took its server snapshot. Let that write finish before replacing the
@@ -1730,8 +1750,14 @@
         .catch(() => announce("Learning history could not be cleared. Try again."));
     });
     document.getElementById("m2-download-data")?.addEventListener("click", () => { void downloadOwnerData(); });
-    document.addEventListener("pointerdown", () => { m2InteractionEpoch += 1; }, true);
-    document.addEventListener("keydown", () => { m2InteractionEpoch += 1; }, true);
+    const noteCardInteraction = (event) => {
+      // A card action can change the state a slow rank should preserve. A tap
+      // on page chrome or empty space cannot, and must not cancel Load more.
+      if (event.target instanceof Element && event.target.closest(".card"))
+        m2InteractionEpoch += 1;
+    };
+    document.addEventListener("pointerdown", noteCardInteraction, true);
+    document.addEventListener("keydown", noteCardInteraction, true);
     searchBox?.addEventListener("input", () => {
       if (!usesM2()) return;
       m2Sequence += 1; clearTimeout(m2SearchTimer);

@@ -66,6 +66,7 @@ def test_enabled_workflow_step_validates_and_applies_public_m2_config(tmp_path):
     assert '<meta name="news-curator-m2-endpoint" content="https://ranker.example">' in page
     assert '<meta name="news-curator-m2-request-timeout-ms" content="8000">' in page
     assert '<meta name="news-curator-m2-transport-timeout-ms" content="310000">' in page
+    assert '<meta name="news-curator-m2-empty-page-max-attempts" content="3">' in page
 
 
 def test_enabled_workflow_step_fails_closed_without_valid_config(tmp_path):
@@ -94,6 +95,12 @@ def test_renderer_request_timeout_boundary(tmp_path):
     configure_m2_reader(page,{**base,'request_timeout_ms':8000})
     assert '<meta name="news-curator-m2-request-timeout-ms" content="8000">' in page.read_text()
     assert '<meta name="news-curator-m2-transport-timeout-ms" content="310000">' in page.read_text()
+    assert '<meta name="news-curator-m2-empty-page-max-attempts" content="3">' in page.read_text()
+    configure_m2_reader(page,{**base,'empty_page_max_attempts':5})
+    assert '<meta name="news-curator-m2-empty-page-max-attempts" content="5">' in page.read_text()
+    for attempts in (0,6,True):
+        with pytest.raises(ValueError,match='empty-page retry count'):
+            configure_m2_reader(page,{**base,'empty_page_max_attempts':attempts})
     configure_m2_reader(page,{**base,'request_timeout_ms':8000,'transport_timeout_ms':310000})
     assert '<meta name="news-curator-m2-transport-timeout-ms" content="310000">' in page.read_text()
     for timeout in (8001,310000):
