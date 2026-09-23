@@ -43,6 +43,10 @@ from .supabase_http import SupabaseAuthenticationError
 # four lane scans, and exclusive-story promotion. One extra covers a
 # conditional failure-path call absent from the successful measurement.
 CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 31
+# Two bounded continuation scans can run under one claim. Each scan is capped
+# at two general and eight lane RPCs when a refill is allowed; the remaining
+# calls cover claim, frozen-order reloads, owner states, appends and release.
+CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS = 31
 
 # Private control result from `_existing_run_page`: a bound order that was
 # deleted by a consent/history invalidation may be replaced, while an expired
@@ -381,7 +385,7 @@ class RankingService:
                     next_corpus = (self._exclusive_corpus_cursor(cursor_rows) if cursor_rows else
                                    {"before_published_at": before_published,
                                     "before_story_id": before_story})
-            elif has_more and filtered:
+            elif has_more:
                 next_corpus = self._next_corpus_cursor(
                     rows, hot_story_ids, general_boundary=general_boundary)
         elif has_more and rows:
@@ -664,35 +668,59 @@ class RankingService:
                     # inside it: a caller that waited for another continuation
                     # must observe the batch that caller already appended rather
                     # than append the same corpus cursor again.
-                    locked = self._store.load_frozen_order(user_id=owner.user_id,
-                        frozen_order_id=str(payload["frozen_order_id"]))
-                    if not locked or int(locked["expires_at"]) < int(self._clock()):
-                        raise StaleRankingError("cursor_expired")
-                    frozen = locked
-                    cards = list(frozen["cards"])
-                    locked_bindings = frozen.get("bindings") or {}
-                    locked_preview, locked_end, _locked_removed = self._slice(
-                        cards, offset, size, current,
-                        continuation_offsets=locked_bindings.get("continuation_offsets"),
-                        event_group_ids=locked_bindings.get("event_group_ids"))
-                    locked_needs_continuation = (offset >= len(cards)
-                        or (composition is not None and len(locked_preview) < size
-                            and locked_end >= len(cards)))
-                    if (locked_needs_continuation
-                            and frozen["bindings"].get("corpus_has_more")):
+                    # One corpus window can append fewer than a readable page
+                    # while older candidates remain. Refill under the SAME
+                    # continuation claim before reserving this response slot.
+                    # Re-read the persisted order after each append so the
+                    # second pass sees its cursor, pending rows and boundaries.
+                    terminal_pending = None
+                    for attempt in range(composition.continuation_refill_max_passes):
+                        locked = self._store.load_frozen_order(user_id=owner.user_id,
+                            frozen_order_id=str(payload["frozen_order_id"]))
+                        if not locked or int(locked["expires_at"]) < int(self._clock()):
+                            raise StaleRankingError("cursor_expired")
+                        locked_cards = list(locked["cards"])
+                        locked_bindings = locked.get("bindings") or {}
+                        locked_preview, locked_end, _locked_removed = self._slice(
+                            locked_cards, offset, size, current,
+                            continuation_offsets=locked_bindings.get("continuation_offsets"),
+                            event_group_ids=locked_bindings.get("event_group_ids"))
+                        needs_more = (offset >= len(locked_cards)
+                            or (len(locked_preview) < size and locked_end >= len(locked_cards)))
+                        if not needs_more or not locked_bindings.get("corpus_has_more"):
+                            break
+                        # Explicit exclusions plus already-frozen cards can
+                        # require far more than two general-pool RPCs. A second
+                        # such scan would exceed the claim's transport budget.
+                        # Leave this response ordinal unspent for a retry.
+                        excluded_count = len({str(card.get("story_id")) for card in locked_cards}
+                            | {str(story_id) for story_id in
+                               (locked_bindings.get("excluded_story_ids") or ())})
+                        general_budget = max(composition.pool_scan_max_batches,
+                            (excluded_count + composition.candidate_window_size
+                             + composition.page_size + 99) // 100)
+                        if attempt and general_budget > composition.pool_scan_max_batches:
+                            break
                         added, continuation_pending = self._continue_frozen_order(
-                            token, owner, frozen, str(payload["frozen_order_id"]), size,
+                            token, owner, locked, str(payload["frozen_order_id"]), size,
                             page_prefix=locked_preview)
-                    else:
-                        added = ()
-                        continuation_pending = bool(frozen["bindings"].get("corpus_has_more"))
+                        # An empty bounded scan preserves the same response
+                        # ordinal for the caller to retry. Do not turn it into
+                        # an unbounded search inside this one request.
+                        if not added:
+                            terminal_pending = continuation_pending
+                            break
+                    frozen = self._store.load_frozen_order(user_id=owner.user_id,
+                        frozen_order_id=str(payload["frozen_order_id"]))
+                    if not frozen or int(frozen["expires_at"]) < int(self._clock()):
+                        raise StaleRankingError("cursor_expired")
+                    cards = list(frozen["cards"])
+                    continuation_pending = (bool(frozen["bindings"].get("corpus_has_more"))
+                                            if terminal_pending is None else terminal_pending)
                 finally:
                     self._release_claim(owner, {"run_id": str(run_id)}, eligibility_key,
                                         continuation_token)
                 frozen["bindings"]["corpus_has_more"] = continuation_pending
-                if added:
-                    cards = cards + list(added)
-                    frozen["cards"] = cards
             else:
                 # The documented rollback: with no recipe configured there is no
                 # deterministic continuation to fall back on, so the pre-Phase-2
@@ -705,6 +733,15 @@ class RankingService:
             cards, offset, size, current,
             continuation_offsets=(frozen.get("bindings") or {}).get("continuation_offsets"),
             event_group_ids=(frozen.get("bindings") or {}).get("event_group_ids"))
+        if (composition is not None and continuation_pending and len(visible) < size
+                and (frozen.get("bindings") or {}).get("corpus_scan_has_more")):
+            # Persisted append(s) remain available for this same signed offset.
+            # Do not spend a readable response on a partial page while the
+            # bounded corpus scan says there may be older eligible stories.
+            return {"schema_version": 1, **self._public_bindings(frozen["bindings"]),
+                    "cards": [], "next_cursor": self._cursor(
+                        str(payload["frozen_order_id"]), offset, int(frozen["expires_at"]),
+                        response_number=response_number)}
         visible = self._overlay_owner_states(token, visible)
         self._record_filtered(owner, frozen, removed)
         next_cursor = self._cursor(str(payload["frozen_order_id"]), next_offset, int(frozen["expires_at"])) if next_offset < len(cards) else None
@@ -898,6 +935,7 @@ class RankingService:
         continuation_bindings = {
             "corpus_cursor": next_corpus,
             "corpus_has_more": more,
+            "corpus_scan_has_more": fetched_more,
             "pending_candidates": remaining_pending,
             "pending_exclusive_story_ids": remaining_pending_exclusive_ids,
             "continuation_mode": "recipe_only",
@@ -1153,7 +1191,9 @@ class RankingService:
         continuation while count-3 stories were still waiting.
         """
         if not rows:
-            return {}
+            return ({"before_published_at": general_boundary[0],
+                     "before_story_id": general_boundary[1]}
+                    if general_boundary and all(general_boundary) else {})
         oldest = min(rows, key=lambda item: (str(item["published_at"]), str(item["story_id"])))
         # A hot/interested lane may have fetched an older row than the general
         # keyset. Only the general query's own last row is its safe boundary.

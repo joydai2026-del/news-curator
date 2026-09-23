@@ -745,6 +745,7 @@
       untranslated: (other) => `Not translated. Shown in ${other}.`,
       endOfRun: "You have read everything in this run. Come back later for more.",
       stillPreparing: "Still preparing your page, try again.",
+      olderPending: "More stories are available. Tap Load more to continue.",
       alsoCovered: (count) => `Also in ${count} other ${count === 1 ? "source" : "sources"}`,
       search: "Search all retained stories",
     },
@@ -754,6 +755,7 @@
       untranslated: (other) => `未翻译，按原文显示。`,
       endOfRun: "这一轮的报道你都读完了，稍后再来看看。",
       stillPreparing: "页面还在准备，请稍后再试。",
+      olderPending: "还有更多报道。点击“加载更多”继续。",
       alsoCovered: (count) => `另有 ${count} 家媒体报道`,
       search: "搜索全部保留的报道",
     },
@@ -1675,8 +1677,15 @@
           if (mode) mode.textContent = strings().endOfRun;
           announce(strings().endOfRun);
         }
-        announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
-        if (!append && eligibility.query && !response.cards.length) {
+        if (!response.cards.length && response.next_cursor) {
+          const message = strings().olderPending;
+          const mode = document.getElementById("m2-mode");
+          if (mode) mode.textContent = message;
+          announce(message);
+        } else if (!response.end_of_run) {
+          announce(response.cards.length ? `${cards.size} stories loaded.` : "No matching stories found in the retained corpus.");
+        }
+        if (!append && eligibility.query && !response.cards.length && !response.next_cursor) {
           await recordBehavior("search_zero_results", { query: eligibility.query, result_count: 0 });
         }
       } catch (error) {

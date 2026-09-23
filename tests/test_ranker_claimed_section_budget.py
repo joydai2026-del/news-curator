@@ -23,7 +23,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from curator.recommendation.composition import CompositionPolicyError, parse_composition_policy
-from curator.recommendation.service import CLAIMED_SECTION_MAX_TRANSPORT_CALLS
+from curator.recommendation.service import (CLAIMED_SECTION_MAX_TRANSPORT_CALLS,
+    CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS)
 from curator.recommendation.runtime import claimed_transport_call_budget
 from curator.recommendation import runtime
 
@@ -214,6 +215,38 @@ def test_a_continuation_reads_owner_state_twice_but_ranking_reads_it_once():
     assert response["cards"] and store.extensions
     assert store.claimed_calls.count("owner_states") == 2
     assert runtime.MAX_OWNER_STATE_READS_PER_REQUEST == 2
+
+
+def test_two_real_continuation_scans_share_one_claim_and_one_response_slot():
+    # Seven repeated sources make the first actual corpus append short. The
+    # next older, diverse tail must top it up without another paid rank.
+    rows = [corpus_row(index, hours=1 + index,
+                       source=(f"head-{index}" if index < 50 else
+                               f"cluster-{index % 7}" if index < 225 else f"tail-{index}"),
+                       categories=[f"topic-{index}"])
+            for index in range(350)]
+    store = CountingStore(rows, events=liked_events())
+    subject = paid(store)
+    first = rank(subject, store)
+    second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
+    store.claimed_calls.clear()
+    store.extensions.clear()
+
+    third = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
+    assert len(third["cards"]) == 25
+    assert len(store.extensions) == 2, store.extensions
+    claimed = store.claimed_calls[
+        store.claimed_calls.index("claim_run_ranking"):
+        store.claimed_calls.index("release_run_ranking_claim") + 1]
+    assert len(claimed) == 19, Counter(claimed)
+    assert len(claimed) <= CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS
+    assert store.claimed_calls.count("claim_run_ranking") == 1
+    assert next(iter(store.views.values()))["pages_served"] == 3
+    replay = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
+    assert [card["story_id"] for card in replay["cards"]] == [
+        card["story_id"] for card in third["cards"]]
+    assert next(iter(store.views.values()))["pages_served"] == 3
+    assert subject._adapter.calls == 1
 
 
 def test_lowering_exclusive_scan_never_under_sizes_the_general_paid_path():
