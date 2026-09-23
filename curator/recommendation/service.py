@@ -834,6 +834,8 @@ class RankingService:
         exist. Any failure here degrades to "no more cards" rather than to a
         paid ranking: a page turn that quietly bills is the bug being fixed.
         """
+        started_at = time.perf_counter()
+        pool_ms = None
         composition = self._policy.composition
         bindings = frozen.get("bindings", {})
         cursor = bindings.get("corpus_cursor") or {}
@@ -868,10 +870,12 @@ class RankingService:
                 fetched, hot_story_ids = [], set()
                 pooled, cursor_rows, fetched_more = pending, [], False
             else:
+                pool_started_at = time.perf_counter()
                 fetched, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                     category_id, query, profile, composition,
                     cursor.get("before_published_at"), cursor.get("before_story_id"),
                     self._hot_cursor(cursor), excluded_story_ids=seen | original_exclusions)
+                pool_ms = round((time.perf_counter() - pool_started_at) * 1000)
                 known = {str(row.get("story_id")) for row in pending}
                 pooled = pending + [row for row in fetched
                                     if str(row.get("story_id")) not in known]
@@ -894,7 +898,9 @@ class RankingService:
             laned = self._cap_promotions(
                 laned, pending_exclusive_story_ids,
                 max(0, composition.exclusive_promote_to_all_max - prefix_promotions))
+        owner_states_started_at = time.perf_counter()
         owner_states = self._store.owner_states(token, [item.story_id for item in laned]) if laned else {}
+        owner_states_ms = round((time.perf_counter() - owner_states_started_at) * 1000)
         finalization = finalize_order(laned, policy=composition, owner_states=owner_states,
             page_size=min(size, composition.page_size), pages=composition.max_pages_per_run,
             profile=profile) if laned else None
@@ -977,6 +983,7 @@ class RankingService:
         # its cap and returns 0, and a transport failure raises. Serving cards
         # this store did not accept would show her the same stories again on the
         # next page turn, and letting the error out would 500 a page turn.
+        extend_started_at = time.perf_counter()
         try:
             total = self._store.extend_frozen_order(user_id=owner.user_id,
                 frozen_order_id=frozen_order_id, cards=added,
@@ -985,6 +992,14 @@ class RankingService:
             log_suppressed_exception("m2_continuation_failed", error, stream=sys.stderr,
                 reason="store_unavailable", frozen_order_id=frozen_order_id)
             return (), False
+        sys.stderr.write(json.dumps({"event": "m2_continuation_pass_timing",
+            "pass_total_ms": round((time.perf_counter() - started_at) * 1000),
+            "pool_ms": pool_ms,
+            "owner_states_ms": owner_states_ms,
+            "extend_ms": round((time.perf_counter() - extend_started_at) * 1000),
+            "pool_rows": len(pooled), "added_cards": len(added)},
+            separators=(",", ":")) + "\n")
+        sys.stderr.flush()
         if (not isinstance(total, int) or total < previous_total
                 or (added and total <= previous_total)):
             # The order did not grow: it has reached its cap, or the row was not
@@ -1862,6 +1877,7 @@ class RankingService:
         # corpus ends. The exclusion count is bounded by ServicePolicy.
         excluded = set(excluded_story_ids)
         def fetch_general():
+            scan_start = time.perf_counter()
             target = composition.candidate_window_size + composition.page_size
             general_rows: dict[str, Mapping[str, object]] = {}
             eligible_general = 0
@@ -1897,6 +1913,11 @@ class RankingService:
                 general_has_more = len(batch) == limit
                 if len(batch) < limit:
                     break
+            sys.stderr.write(json.dumps({"event": "m2_pool_timing", "lane": "general",
+                "duration_ms": round((time.perf_counter() - scan_start) * 1000),
+                "rpc_count": general_batches, "rows": len(general_rows)},
+                separators=(",", ":")) + "\n")
+            sys.stderr.flush()
             return general_rows, general_boundary, general_has_more
         # Each lane has its own keyset and reads the same immutable request
         # inputs. Overlap all I/O, then merge results in policy priority order
@@ -1906,6 +1927,8 @@ class RankingService:
             if lane not in ("interested", "surprise") or categories or sources)
 
         def fetch_lane(lane):
+            scan_start = time.perf_counter()
+            rpc_count = 0
             # Over-fetch so caps and spacing have something to choose from, and
             # so a lane whose head is all one source is not silently short.
             limit = self._lane_fetch_limit(quotas[lane])
@@ -1940,6 +1963,7 @@ class RankingService:
                     min_age_hours=None if lane == "updates" else composition.updates_max_age_hours,
                     limit=batch_limit, before_published_at=lane_cursor[0],
                     before_story_id=lane_cursor[1], before_source_count=lane_cursor[2])
+                rpc_count += 1
                 for row in rows:
                     story_id = row.get("story_id")
                     if (not isinstance(story_id, str) or story_id in excluded
@@ -1955,6 +1979,11 @@ class RankingService:
                                    last["independent_source_count"] if lane == "hot" else None)
                 if len(rows) < batch_limit:
                     break
+            sys.stderr.write(json.dumps({"event": "m2_pool_timing", "lane": lane,
+                "duration_ms": round((time.perf_counter() - scan_start) * 1000),
+                "rpc_count": rpc_count, "rows": len(lane_rows)},
+                separators=(",", ":")) + "\n")
+            sys.stderr.flush()
             return lane_rows, lane_hot_story_ids
 
         if composition.pool_parallel_workers == 1 or not lanes:
