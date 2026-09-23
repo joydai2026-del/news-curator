@@ -260,9 +260,8 @@ def _filtered(container, *, category_id=None, lane=None, categories=(), profile_
 
 # --- coverage and hot ------------------------------------------------------
 
-def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
-    """Applying a migration twice must not error. A recovery re-run should not
-    depend on anyone remembering whether it already ran."""
+def test_ordered_phase_two_migration_replay_restores_the_current_rpc(db):
+    """Replaying old definitions must end at the current non-ambiguous RPC."""
     for migration in ('supabase/migrations/202609180001_m2_retained_coverage_and_lanes.sql',
                       'supabase/migrations/202609180002_m2_reading_runs.sql',
                       'supabase/migrations/202609180003_m2_frozen_ranking_run_scope.sql',
@@ -270,13 +269,17 @@ def test_every_phase_two_migration_is_a_no_op_on_a_re_run(db):
                       'supabase/migrations/202609180005_m2_reading_run_page_budget.sql',
                       'supabase/migrations/202609180006_m2_reading_run_ranking_claim.sql',
                       'supabase/migrations/202609180007_m2_claimed_ranker_reservation.sql',
-                      # Superseded v2 definitions must not be replayed after
-                      # the later bulk-general migration: that would rewrite
-                      # the live limit guard back to 100 for this shared db.
-                      'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql',
-                      'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql'):
+                      'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
+                      'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
+                      'supabase/migrations/202609220001_m2_atomic_reading_run_progress.sql',
+                      'supabase/migrations/202609230001_m2_retained_candidates_v2_bulk_general.sql',
+                      'supabase/migrations/202609230002_m2_retained_candidates_filtered.sql'):
         again = _sql(db, (ROOT / migration).read_text(), check=False)
-        assert again.returncode == 0, f'{migration} is not idempotent: {again.stderr[:400]}'
+        assert again.returncode == 0, f'{migration} failed ordered replay: {again.stderr[:400]}'
+    functions = _sql(db, "select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
+                     "where n.nspname = 'public' and p.proname = 'm2_retained_candidates_v2';")
+    assert functions.stdout.strip() == '1'
+    assert len(_lane(db, limit=200)) >= 1
 
 
 def test_the_hot_lane_continuation_cursor_is_accepted_by_the_real_rpc(db):

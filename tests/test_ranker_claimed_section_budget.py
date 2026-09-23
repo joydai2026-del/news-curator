@@ -140,13 +140,9 @@ def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
         "that sizes run.ranking_claim_seconds. Raise the constant AND the claim "
         "together (composition.py Check 10 will refuse the boot otherwise), or "
         "take the call back out of the claimed section.")
-    # The constant may not drift arbitrarily above what anyone has measured: an
-    # inflated constant forces a longer claim, and a long claim is how long a
-    # crashed request blocks the feed.
-    assert CLAIMED_SECTION_MAX_TRANSPORT_CALLS - len(calls) <= 2, (
-        f"the constant ({CLAIMED_SECTION_MAX_TRANSPORT_CALLS}) sits more than two "
-        f"above the measured longest path ({len(calls)}). Lower it, and lower the "
-        "claim with it.")
+    # This first-page path is no longer the maximum claim holder. The same
+    # floor must cover a valid high-continuation setting and its retries.
+    assert CLAIMED_SECTION_MAX_TRANSPORT_CALLS == CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS
     assert calls[0] == CLAIM_METHOD, "the count must start at the claim itself"
 
 
@@ -285,10 +281,10 @@ def test_empty_high_exclusion_scan_does_not_add_a_claimed_progress_read():
 
 def test_lowering_exclusive_scan_never_under_sizes_the_general_paid_path():
     policy = {"exclusive_scan_max_batches": 1,
-              "exclusive_continuation_max_batches": 1}
+              "exclusive_continuation_max_batches": 10}
     assert claimed_transport_call_budget(policy) == CLAIMED_SECTION_MAX_TRANSPORT_CALLS
     policy["exclusive_scan_max_batches"] = 20
-    assert claimed_transport_call_budget(policy) == 30
+    assert claimed_transport_call_budget(policy) == CLAIMED_SECTION_MAX_TRANSPORT_CALLS
 
 
 def _document(**overrides):

@@ -40,11 +40,12 @@ from .supabase_http import SupabaseAuthenticationError
 # tests/test_ranker_claimed_section_budget.py, which walks the longest path with
 # a counting transport and refuses a count above this number.
 #
-# The longest measured path is 21 calls on the exclusive section. SQL-side
-# filtering means a candidate lane either fills in one call or returns short;
-# it no longer needs a second serial call to skip suppressed rows. Two calls
-# of room cover conditional failure-path work absent from that success.
-CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 23
+# The initial paid path now measures 21 calls after SQL-side filtering, but
+# the same claim must also protect two bounded continuation scans. Keep the
+# 31-call floor for the accepted continuation policy range, including its
+# owner-state retries; reducing it based on the first-page trace alone would
+# permit the claim to expire while a valid page turn is still working.
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 31
 # Two bounded continuation scans can run under one claim. Each scan is capped
 # at two general and eight lane RPCs when a refill is allowed; the remaining
 # calls cover claim, frozen-order reloads, owner states, appends and release.
