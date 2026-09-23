@@ -351,7 +351,8 @@ class RankingService:
             # lane's quota like any other candidate.
             promotion = [row for row in self._promotion_rows(
                 query, composition, before_published, before_story)
-                if not self._suppressed_by_profile(row, profile, composition)]
+                if not self._suppressed_by_profile(
+                    row, profile, composition, selected_category=category_id)]
             known = {row.get("story_id") for row in rows}
             rows = rows + [row for row in promotion if row.get("story_id") not in known]
         else:
@@ -623,6 +624,7 @@ class RankingService:
         bindings = frozen.get("bindings") or {}
         run_id = bindings.get("run_id")
         eligibility_key = bindings.get("eligibility_key")
+        selected_category = (bindings.get("eligibility") or {}).get("category")
         response_number = payload.get("response_number")
         legacy_cursor = response_number is None
         if legacy_cursor and composition is not None:
@@ -653,7 +655,7 @@ class RankingService:
         preview, preview_end, _preview_removed = self._slice(
             cards, offset, size, current,
             continuation_offsets=continuation_offsets,
-            event_group_ids=event_group_ids)
+            event_group_ids=event_group_ids, selected_category=selected_category)
         continuation_needed = (offset >= len(cards)
             or (composition is not None and len(preview) < size
                 and preview_end >= len(cards)))
@@ -690,7 +692,8 @@ class RankingService:
                         locked_preview, locked_end, _locked_removed = self._slice(
                             locked_cards, offset, size, current,
                             continuation_offsets=locked_bindings.get("continuation_offsets"),
-                            event_group_ids=locked_bindings.get("event_group_ids"))
+                            event_group_ids=locked_bindings.get("event_group_ids"),
+                            selected_category=selected_category)
                         needs_more = (offset >= len(locked_cards)
                             or (len(locked_preview) < size and locked_end >= len(locked_cards)))
                         if not needs_more or not locked_bindings.get("corpus_has_more"):
@@ -755,7 +758,8 @@ class RankingService:
         visible, next_offset, removed = self._slice(
             cards, offset, size, current,
             continuation_offsets=(frozen.get("bindings") or {}).get("continuation_offsets"),
-            event_group_ids=(frozen.get("bindings") or {}).get("event_group_ids"))
+            event_group_ids=(frozen.get("bindings") or {}).get("event_group_ids"),
+            selected_category=selected_category)
         if (composition is not None and continuation_pending and len(visible) < size
                 and (frozen.get("bindings") or {}).get("corpus_scan_has_more")):
             # Persisted append(s) remain available for this same signed offset.
@@ -1262,7 +1266,7 @@ class RankingService:
         return cursor
 
     def _slice(self, cards, offset, size, snapshot, *, continuation_offsets=None,
-               event_group_ids=None):
+               event_group_ids=None, selected_category=None):
         """One page of the frozen order, with "less like this" applied at RENDER.
 
         The frozen array itself is never mutated, so the HMAC-signed cursor stays
@@ -1294,7 +1298,8 @@ class RankingService:
             card = cards[position]
             stitched = any(boundary <= position for boundary in boundaries)
             position += 1
-            if self._suppressed_by_profile(card, profile, composition):
+            if self._suppressed_by_profile(
+                    card, profile, composition, selected_category=selected_category):
                 removed.append(str(card.get("story_id")))
                 continue
             if (stitched and self._violates_page_invariants(
@@ -1810,7 +1815,8 @@ class RankingService:
         visible, next_offset, removed = self._slice(
             cards, 0, size, snapshot,
             continuation_offsets=bindings.get("continuation_offsets"),
-            event_group_ids=bindings.get("event_group_ids"))
+            event_group_ids=bindings.get("event_group_ids"),
+            selected_category=(bindings.get("eligibility") or {}).get("category"))
         visible = self._overlay_owner_states(token, visible)
         self._record_filtered(owner, frozen, removed)
         pages_served = view_pages
@@ -1886,7 +1892,7 @@ class RankingService:
         excluded = set(excluded_story_ids)
         suppressed_sources = (tuple(sorted(profile.suppressed_sources))
                               if composition.immediate_negative_filter else ())
-        suppressed_topics = (tuple(sorted(profile.suppressed_topics))
+        suppressed_topics = (tuple(sorted(profile.suppressed_topics - {category_id}))
                              if composition.immediate_negative_filter else ())
         def fetch_general():
             scan_start = time.perf_counter()
@@ -1929,7 +1935,8 @@ class RankingService:
                     if story_id in excluded:
                         excluded_rows += 1
                         continue
-                    if self._suppressed_by_profile(row, profile, composition):
+                    if self._suppressed_by_profile(
+                            row, profile, composition, selected_category=category_id):
                         suppressed_rows += 1
                         continue
                     general_rows.setdefault(story_id, row)
@@ -2001,7 +2008,8 @@ class RankingService:
                 for row in rows:
                     story_id = row.get("story_id")
                     if (not isinstance(story_id, str) or story_id in excluded
-                            or self._suppressed_by_profile(row, profile, composition)):
+                            or self._suppressed_by_profile(
+                                row, profile, composition, selected_category=category_id)):
                         continue
                     eligible_lane += 1
                     lane_rows.append(row)
@@ -2036,11 +2044,11 @@ class RankingService:
         return list(merged.values()), hot_story_ids, general_boundary, general_has_more
 
     @staticmethod
-    def _suppressed_by_profile(row, profile, composition):
+    def _suppressed_by_profile(row, profile, composition, *, selected_category=None):
         if profile is None or not composition.immediate_negative_filter:
             return False
         return (row.get("source_id") in profile.suppressed_sources
-                or any(category in profile.suppressed_topics
+                or any(category != selected_category and category in profile.suppressed_topics
                        for category in (row.get("category_ids") or ())))
 
     def _card(self, row, owner_state, *, lane=None, composition=None, exclusive=False, also_covered_by=()):

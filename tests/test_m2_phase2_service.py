@@ -3109,6 +3109,60 @@ def test_a_category_inside_an_open_run_is_not_served_the_all_page():
     assert len(store.frozen) == 2
 
 
+def test_explicit_category_overrides_its_topic_dislike_but_all_still_hides_it():
+    rows = ([corpus_row(index, hours=2 + index / 100,
+                        source=f"world-{index}", categories=["world"])
+             for index in range(80)]
+            + [corpus_row(100 + index, hours=3 + index / 100,
+                          source=f"tech-{index}", categories=["tech"])
+               for index in range(80)])
+    rows[1]["category_ids"] = ["world", "other-topic"]
+
+    class ByCategory(PaidStore):
+        def retained_candidates_v2(self, *, category_id, **kwargs):
+            found = super().retained_candidates_v2(category_id=category_id, **kwargs)
+            return found if category_id is None else [
+                row for row in found if category_id in row["category_ids"]]
+
+    feedback = {"event_id": "world-dislike", "event_type": "less_like_this",
+                "event_revision": 9, "occurred_at": NOW.isoformat(),
+                "payload": {"story_id": rows[0]["story_id"], "topic_id": "world",
+                            "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
+    other_feedback = {"event_id": "other-topic-dislike", "event_type": "less_like_this",
+                      "event_revision": 10, "occurred_at": NOW.isoformat(),
+                      "payload": {"story_id": rows[1]["story_id"],
+                                  "topic_id": "other-topic", "surface": "reader"},
+                      "story_title": "", "story_summary": "",
+                      "source_id": rows[1]["source_id"]}
+    store = ByCategory(rows, events=liked_events() + [feedback, other_feedback])
+    subject = paid(store)
+
+    all_view = rank(subject, store)
+    assert all("world" not in card["category_ids"] for card in all_view["cards"])
+    world = rank(subject, store, eligibility={"category": "world", "query": None})
+    assert len(world["cards"]) == 25
+    assert all("world" in card["category_ids"] for card in world["cards"])
+    frozen = store.frozen["frozen-2"]["cards"]
+    assert {rows[0]["story_id"], rows[1]["story_id"]}.isdisjoint(
+        {card["story_id"] for card in frozen})
+    blocked = frozen[25]
+    store.events.append({"event_id": "world-dislike-during-run",
+                         "event_type": "less_like_this", "event_revision": 11,
+                         "occurred_at": NOW.isoformat(),
+                         "payload": {"story_id": blocked["story_id"],
+                                     "topic_id": "world", "surface": "reader"},
+                         "story_title": "", "story_summary": "",
+                         "source_id": blocked["source_id"]})
+    second = subject.page(authorization="Bearer valid", cursor=world["next_cursor"])
+    assert len(second["cards"]) == 25
+    assert all(card["source_id"] != blocked["source_id"] for card in second["cards"])
+    replay = rank(subject, store, eligibility={"category": "world", "query": None})
+    assert [card["story_id"] for card in replay["cards"]] == [
+        card["story_id"] for card in world["cards"]]
+    assert subject._adapter.calls == 2
+
+
 def test_refreshing_a_category_inside_the_run_is_free():
     store = PaidStore(events=liked_events())
     subject = paid(store)
