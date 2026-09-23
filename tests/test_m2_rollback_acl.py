@@ -7,6 +7,7 @@ def test_rollback_sql_revokes_m2_not_m1_and_restores_in_transaction() -> None:
     revoked=sql.split("revoke execute on function ",1)[1].split(" from authenticated",1)[0]
     assert "begin;" in sql and "rollback;" in sql
     assert "public.m2_owner_export_page(text,text)" in revoked
+    assert "public.m2_opened_candidate_ids(text[])" in revoked
     assert "public.set_story_state_with_event" in revoked
     assert "public.set_story_state(text,boolean,boolean,bigint,text)" not in revoked
     assert " and " in sql and "m1_fallback_preserved" in sql

@@ -12,6 +12,7 @@ from scripts.verify_import_rehearsal import validate_local_socket
 TARGET = re.compile(r"^nc_m2_[a-z0-9_]+$")
 M2 = (
     "public.m2_history_snapshot(integer)", "public.m2_owner_story_states(text[])",
+    "public.m2_opened_candidate_ids(text[])",
     "public.m2_owner_export_page(text,text)",
     "public.append_behavior_event(text,text,jsonb,timestamptz,bigint,integer)",
     "public.set_behavior_consent(boolean,boolean,text)", "public.clear_behavior_history()",

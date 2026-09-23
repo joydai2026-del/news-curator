@@ -157,9 +157,11 @@ def test_opened_candidate_ids_are_owner_scoped_bounded_and_authenticated(db):
     _sql(db, f"insert into public.user_story_state(user_id, story_id, read_at) values "
         f"('{OWNER}', '{first}', now()), ('{OTHER}', '{second}', now()) "
         "on conflict(user_id,story_id) do update set read_at=excluded.read_at;")
-    query = f"select public.m2_opened_candidate_ids(array['{first}','{second}','{first}']);"
-    assert _last(_as_owner(db, OWNER, query)) == first
-    assert _last(_as_owner(db, OTHER, query)) == second
+    query = f"select to_jsonb(public.m2_opened_candidate_ids(array['{first}','{second}','{first}']))::text;"
+    assert json.loads(_last(_as_owner(db, OWNER, query))) == [first]
+    assert json.loads(_last(_as_owner(db, OTHER, query))) == [second]
+    assert _last(_as_owner(db, OWNER,
+        f"select pg_typeof(public.m2_opened_candidate_ids(array['{first}']))::text;")) == 'text[]'
     assert _service(db, query, check=False).returncode != 0
     assert _sql(db, "set role anon;" + query, check=False).returncode != 0
     assert _as_owner(db, '', query, check=False).returncode != 0
@@ -167,7 +169,7 @@ def test_opened_candidate_ids_are_owner_scoped_bounded_and_authenticated(db):
         assert _as_owner(db, OWNER, f"select public.m2_opened_candidate_ids({expression});",
                          check=False).returncode != 0
     assert _last(_as_owner(db, OWNER,
-        f"select count(*) from public.m2_opened_candidate_ids(array_fill('{first}'::text,array[10000]));")) == '1'
+        f"select cardinality(public.m2_opened_candidate_ids(array_fill('{first}'::text,array[10000])));")) == '1'
     # The old rich-state endpoint cannot safely carry the pooled input.
     assert _as_owner(db, OWNER,
         f"select public.m2_owner_story_states(array_fill('{first}'::text,array[233]));",
@@ -198,9 +200,9 @@ def benchmark_distinct_opened_candidate_ids(db):
       analyze public.user_story_state;
     """)
     request = json.dumps({"p_story_ids": ids}, separators=(',', ':'))
-    statement = ("select coalesce(json_agg(id),'[]'::json) from "
-        "public.m2_opened_candidate_ids(array(select jsonb_array_elements_text("
-        + _quote(request) + "::jsonb->'p_story_ids'))) as id;")
+    statement = ("select to_jsonb(public.m2_opened_candidate_ids("
+        "array(select jsonb_array_elements_text("
+        + _quote(request) + "::jsonb->'p_story_ids'))))::text;")
     elapsed, result_size = [], None
     for _ in range(5):
         started = time.perf_counter()
@@ -1452,6 +1454,27 @@ def test_owner_candidates_opened_filter_stays_after_dedupe(db):
              f"values ('{OWNER}','{newer['story_id']}',now());")
     assert _owner_candidates(db, OWNER, category=label) == []
     assert [row['story_id'] for row in _owner_candidates(db, OTHER, category=label)] == [newer['story_id']]
+
+
+def test_owner_hot_cursor_uses_source_count_before_publication_time(db):
+    label = 'owner-hot-full-keyset'
+    rows = [_row(f'https://example.test/{label}-{index}',
+                 title=f'Owner hot keyset distinct {index}', category_ids=[label],
+                 published_at=_iso(BASE + timedelta(minutes=minute)))
+            for index, minute in enumerate((0, -10, 10, -5))]
+    _service(db, f"select public.m2_ingest_retained_corpus({_quote(json.dumps(rows))}::jsonb);")
+    coverage = [{'story_id': row['story_id'], 'publisher_id': f'keyset-{publisher}',
+                 'is_independent': True, 'first_seen_at': _iso(BASE)}
+                for index, row in enumerate(rows) for publisher in range(5 - index)]
+    _service(db, f"select public.m2_ingest_retained_coverage({_quote(json.dumps(coverage))}::jsonb);")
+    _sql(db, f"insert into public.user_story_state(user_id,story_id,read_at) "
+             f"values ('{OWNER}','{rows[0]['story_id']}',now());")
+    first = _owner_candidates(db, OWNER, category=label, lane='hot', limit=1)
+    second = _owner_candidates(db, OWNER, category=label, lane='hot', limit=1, before=first[0])
+    third = _owner_candidates(db, OWNER, category=label, lane='hot', limit=1, before=second[0])
+    assert [page[0]['story_id'] for page in (first, second, third)] == [
+        row['story_id'] for row in rows[1:]]
+    assert _owner_candidates(db, OWNER, category=label, lane='hot', limit=1, before=third[0]) == []
 
 
 def benchmark_owner_candidates_long_opened_head(db):
