@@ -249,6 +249,28 @@ def test_two_real_continuation_scans_share_one_claim_and_one_response_slot():
     assert subject._adapter.calls == 1
 
 
+def test_empty_high_exclusion_scan_does_not_add_a_claimed_progress_read():
+    store = CountingStore(events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    frozen["bindings"]["corpus_has_more"] = True
+    frozen["bindings"]["excluded_story_ids"] = [
+        f"story:{index + 10000:064x}" for index in range(1000)]
+    next(iter(store.views.values()))["pages_served"] = 2
+    store.claimed_calls.clear()
+    subject._continue_frozen_order = lambda *args, **kwargs: ((), True)
+
+    subject.page(authorization="Bearer valid", cursor=subject._cursor(
+        "frozen-1", len(frozen["cards"]), int(frozen["expires_at"]), response_number=3))
+
+    claimed = store.claimed_calls[
+        store.claimed_calls.index("claim_run_ranking"):
+        store.claimed_calls.index("release_run_ranking_claim") + 1]
+    assert claimed.count("load_frozen_order") == 2, Counter(claimed)
+    assert len(claimed) <= CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS
+
+
 def test_lowering_exclusive_scan_never_under_sizes_the_general_paid_path():
     policy = {"exclusive_scan_max_batches": 1,
               "exclusive_continuation_max_batches": 1}
