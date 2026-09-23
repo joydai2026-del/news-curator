@@ -3184,6 +3184,81 @@ def test_a_search_and_the_exclusive_section_are_their_own_views():
     assert len(store.reservations) == 3
 
 
+def test_explicit_language_section_replays_its_first_page_after_topic_feedback():
+    rows = exclusive_corpus(12)
+    for row in rows:
+        row["category_ids"] = ["world"]
+    feedback = {"event_id": "less-world", "event_type": "less_like_this",
+                "event_revision": 1, "occurred_at": NOW.isoformat(),
+                "payload": {"story_id": rows[0]["story_id"], "topic_id": "world",
+                            "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
+    store = PaidStore(events=[feedback], exclusive=rows)
+    subject = paid(store, exclusive_category="only-other-language-press")
+    eligibility = {"category": "only-other-language-press", "query": None}
+
+    first = rank(subject, store, eligibility=eligibility)
+    replay = rank(subject, store, eligibility=eligibility)
+    first_ids = [card["story_id"] for card in first["cards"]]
+    replay_ids = [card["story_id"] for card in replay["cards"]]
+    assert first_ids == replay_ids
+    assert first_ids and rows[0]["story_id"] not in first_ids
+    assert subject._adapter.calls == 1
+
+
+def test_exclusive_source_suppression_advances_past_a_full_raw_batch():
+    rows = exclusive_corpus(120)
+    for row in rows[:51]:
+        row["source_id"] = "blocked-source"
+    feedback = {"event_id": "less-source", "event_type": "less_like_this",
+                "event_revision": 1, "occurred_at": NOW.isoformat(),
+                "payload": {"story_id": rows[0]["story_id"], "topic_id": "world",
+                            "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": "blocked-source"}
+    store = PaidStore(events=[feedback], exclusive=rows)
+    subject = paid(store, exclusive_category="only-other-language-press")
+    response = rank(subject, store, eligibility={
+        "category": "only-other-language-press", "query": None})
+    served = list(response["cards"])
+    assert served, "the first page did not scan past a disliked source"
+    cursor = response.get("next_cursor")
+    for _ in range(5):
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        served.extend(response["cards"])
+        cursor = response.get("next_cursor")
+    assert len({card["story_id"] for card in served}) == 69
+    assert all(card["source_id"] != "blocked-source" for card in served)
+    assert subject._adapter.calls == 1
+
+
+def test_exclusive_source_feedback_respects_disabled_immediate_filter_policy():
+    rows = exclusive_corpus(81)
+    feedback = {"event_id": "less-source", "event_type": "less_like_this",
+                "event_revision": 1, "occurred_at": NOW.isoformat(),
+                "payload": {"story_id": rows[0]["story_id"], "topic_id": "world",
+                            "surface": "reader"},
+                "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
+    store = PaidStore(events=[feedback], exclusive=rows)
+    subject = paid(store, exclusive_category="only-other-language-press")
+    subject._policy = replace(subject._policy, composition=replace(
+        subject._policy.composition, immediate_negative_filter=False))
+    response = rank(subject, store, eligibility={
+        "category": "only-other-language-press", "query": None})
+    served = list(response["cards"])
+    cursor = response.get("next_cursor")
+    for _ in range(5):
+        if not cursor:
+            break
+        response = subject.page(authorization="Bearer valid", cursor=cursor)
+        served.extend(response["cards"])
+        cursor = response.get("next_cursor")
+    assert len({card["story_id"] for card in served}) == 81
+    assert rows[0]["story_id"] in {card["story_id"] for card in served}
+    assert subject._adapter.calls == 1
+
+
 def test_the_page_budget_is_spent_per_view():
     rows = [corpus_row(index, hours=1 + index, source=f"deep{index}", categories=[f"d{index % 9}"])
             for index in range(300)]

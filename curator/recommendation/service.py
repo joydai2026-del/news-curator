@@ -333,6 +333,9 @@ class RankingService:
         profile = (BehaviorProfile.from_snapshot(run_snapshot) if same_epoch else
                    build_profile(snapshot, policy=composition, now=self._now())
                    if composition is not None else BehaviorProfile())
+        exclusive_suppressed_sources = (profile.suppressed_sources
+                                        if composition is not None and composition.immediate_negative_filter
+                                        else ())
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
         if exclusive:
@@ -340,7 +343,8 @@ class RankingService:
                 query=query, before_published=before_published, before_story=before_story,
                 target_count=self._policy.candidate_limit + 1,
                 excluded_story_ids=excluded_set,
-                max_batches=self._policy.exclusive_scan_max_batches)
+                max_batches=self._policy.exclusive_scan_max_batches,
+                suppressed_sources=exclusive_suppressed_sources)
         elif composition is not None:
             rows, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                 category_id, query, profile, composition, before_published, before_story,
@@ -387,7 +391,8 @@ class RankingService:
             # rather than from a narrower one written by a different code path.
             if exclusive:
                 cursor_rows = self._exclusive_safe_cursor_rows(
-                    exclusive_consumed_rows, {str(row.get("story_id")) for row in rows}, excluded_set)
+                    exclusive_consumed_rows, {str(row.get("story_id")) for row in rows},
+                    excluded_set, suppressed_sources=exclusive_suppressed_sources)
                 if has_more:
                     next_corpus = (self._exclusive_corpus_cursor(cursor_rows) if cursor_rows else
                                    {"before_published_at": before_published,
@@ -854,6 +859,8 @@ class RankingService:
         category_id = eligibility.get("category") if isinstance(eligibility, Mapping) else None
         query = eligibility.get("query") if isinstance(eligibility, Mapping) else None
         profile = BehaviorProfile.from_snapshot(bindings.get("profile_snapshot"))
+        exclusive_suppressed_sources = (profile.suppressed_sources
+                                        if composition.immediate_negative_filter else ())
         seen = {str(card.get("story_id")) for card in frozen.get("cards", ())}
         original_exclusions = {str(story_id) for story_id in
                                (bindings.get("excluded_story_ids") or ())}
@@ -869,7 +876,8 @@ class RankingService:
                 before_story=cursor.get("before_story_id"),
                 target_count=self._policy.candidate_limit + 1,
                 excluded_story_ids=seen | original_exclusions,
-                max_batches=self._policy.exclusive_continuation_max_batches)
+                max_batches=self._policy.exclusive_continuation_max_batches,
+                suppressed_sources=exclusive_suppressed_sources)
             hot_story_ids: set[str] = set()
             used_pending = False
         else:
@@ -893,7 +901,9 @@ class RankingService:
             used_pending = bool(pending)
         event_groups = dict(bindings.get("event_group_ids") or {})
         eligible_rows = [row for row in pooled
-                         if str(row.get("story_id")) not in (seen | original_exclusions)]
+                         if str(row.get("story_id")) not in (seen | original_exclusions)
+                         and not (exclusive and self._suppressed_by_profile(
+                             row, profile, composition, selected_category=category_id))]
         rows = self._exclude_frozen_duplicates(
             eligible_rows, frozen.get("cards", ()), event_groups)
         retained_ids = {str(row.get("story_id")) for row in rows}
@@ -948,7 +958,8 @@ class RankingService:
         if exclusive:
             safe_rows = self._exclusive_safe_cursor_rows(
                 cursor_rows, {item.story_id for item in laned},
-                seen | original_exclusions | semantic_drop_ids)
+                seen | original_exclusions | semantic_drop_ids,
+                suppressed_sources=exclusive_suppressed_sources)
             next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
             remaining_pending = []
         elif used_pending:
@@ -1520,7 +1531,8 @@ class RankingService:
         return ready
 
     def _exclusive_display_rows(self, *, query, before_published, before_story,
-                                target_count, excluded_story_ids, max_batches):
+                                target_count, excluded_story_ids, max_batches,
+                                suppressed_sources=()):
         """Read through raw exclusive rows until enough complete display copy exists.
 
         The RPC caps one call at 100 rows. Its cursor is over the raw corpus, so
@@ -1529,6 +1541,7 @@ class RankingService:
         """
         ready = []
         excluded = {str(story_id) for story_id in excluded_story_ids}
+        suppressed = set(suppressed_sources)
         consumed_rows = []
         batches = 0
         while len(ready) < target_count and (max_batches is None or batches < max_batches):
@@ -1542,7 +1555,8 @@ class RankingService:
             for row in batch:
                 consumed_rows.append(row)
                 story_id = str(row.get("story_id"))
-                if story_id not in excluded and self._display_ready_rows((row,)):
+                if (story_id not in excluded and row.get("source_id") not in suppressed
+                        and self._display_ready_rows((row,))):
                     ready.append(row)
                 if len(ready) >= target_count:
                     # The last candidate is a look-ahead sentinel proving there
@@ -1580,7 +1594,8 @@ class RankingService:
                 ready.append(row)
         return ready
 
-    def _exclusive_safe_cursor_rows(self, consumed_rows, admitted_story_ids, excluded_story_ids):
+    def _exclusive_safe_cursor_rows(self, consumed_rows, admitted_story_ids,
+                                    excluded_story_ids, *, suppressed_sources=()):
         """Return the raw prefix that can be retired without losing a story.
 
         Display-incomplete and explicitly excluded rows are intentionally
@@ -1590,10 +1605,12 @@ class RankingService:
         """
         admitted = {str(story_id) for story_id in admitted_story_ids}
         excluded = {str(story_id) for story_id in excluded_story_ids}
+        suppressed = set(suppressed_sources)
         safe = []
         for row in consumed_rows:
             story_id = str(row.get("story_id"))
-            if (story_id in excluded or not self._display_ready_rows((row,))
+            if (story_id in excluded or row.get("source_id") in suppressed
+                    or not self._display_ready_rows((row,))
                     or story_id in admitted):
                 safe.append(row)
                 continue
@@ -2043,12 +2060,17 @@ class RankingService:
                 merged.setdefault(row["story_id"], row)
         return list(merged.values()), hot_story_ids, general_boundary, general_has_more
 
-    @staticmethod
-    def _suppressed_by_profile(row, profile, composition, *, selected_category=None):
-        if profile is None or not composition.immediate_negative_filter:
+    def _suppressed_by_profile(self, row, profile, composition, *, selected_category=None):
+        if profile is None or composition is None or not composition.immediate_negative_filter:
             return False
+        # An explicit language-only section is not a topic. Its stories carry
+        # ordinary topic tags, which must not make a first page disappear on
+        # replay after the owner has chosen this section. Source dislikes still
+        # apply, both when ranking and when rendering the frozen order.
+        ignore_topics = self._is_exclusive_category(selected_category)
         return (row.get("source_id") in profile.suppressed_sources
-                or any(category != selected_category and category in profile.suppressed_topics
+                or any(not ignore_topics and category != selected_category
+                       and category in profile.suppressed_topics
                        for category in (row.get("category_ids") or ())))
 
     def _card(self, row, owner_state, *, lane=None, composition=None, exclusive=False, also_covered_by=()):
