@@ -96,7 +96,9 @@ def asgi_request(app, request):
 
 
 def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surprise=False,
-                      inject_slow_valid_fallback=False):
+                      inject_slow_valid_fallback=False, inject_empty_continuation=False,
+                      inject_empty_owner_switch=False, inject_empty_expired_deadline=False,
+                      inject_empty_pointerdown=False):
     """The whole reader drive. `include_the_tail` selects everything from the
     saved-navigation step onward, which is the part issue #48 breaks."""
     artifact_dir = Path(os.environ.get('NEWS_CURATOR_QA_OUTPUT_DIR', str(tmp_path)))
@@ -125,6 +127,9 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
     app=RankingASGI(service=service,reader_origin=READER)
     requests=[]; page_errors=[]; export_mode={'oversized':False}; export_requests=[]; history_mode={'fail':False}
     cursor_mode={'reject_once':False,'rejections':0}
+    empty_mode={'remaining':int(inject_empty_continuation or inject_empty_owner_switch
+                                or inject_empty_expired_deadline or inject_empty_pointerdown),
+                'rank_response':None}
     surprise_mode={'remaining':1 if inject_server_selected_surprise else 0}
     def route_handler(route):
         request=route.request; parsed=urlsplit(request.url); body=request.post_data_json if request.post_data else {}
@@ -140,11 +145,18 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
             file=site/(parsed.path.lstrip('/') or 'index.html')
             return route.fulfill(status=200,content_type='text/javascript' if file.suffix=='.js' else 'text/html',body=file.read_bytes())
         if request.url.startswith(RANKER):
+            if parsed.path=='/page' and empty_mode['remaining']:
+                empty_mode['remaining']-=1
+                assert empty_mode['rank_response'] is not None
+                pending={**empty_mode['rank_response'],'cards':[]}
+                return route.fulfill(status=200,content_type='application/json',body=json.dumps(pending))
             if parsed.path=='/page' and cursor_mode['reject_once']:
                 cursor_mode['reject_once']=False;cursor_mode['rejections']+=1
                 return route.fulfill(status=409,content_type='application/json',
                     body=json.dumps({'error':'cursor_version'}))
             status,payload=asgi_request(app,request)
+            if parsed.path=='/rank' and status==200:
+                empty_mode['rank_response']=json.loads(payload)
             # M2 is the source of truth for a ranked response.  A category
             # request may deliberately include a server-selected surprise
             # story that does not carry the locally selected category.
@@ -266,6 +278,53 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
             page.goto(READER,wait_until='networkidle')
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
             assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
+            if inject_empty_owner_switch or inject_empty_expired_deadline or inject_empty_pointerdown:
+                page.evaluate('''(delay) => {
+                    window.__stallM2=true;window.__stallM2Delay=delay;
+                    window.__stallM2ForceModel=false;
+                }''', 8500 if inject_empty_pointerdown else 400)
+                with page.expect_request(lambda request:urlsplit(request.url).path=='/page'):
+                    page.locator('#load-more').click()
+                if inject_empty_pointerdown:
+                    page.evaluate('''() => document.body.dispatchEvent(
+                        new PointerEvent("pointerdown", {bubbles:true}))''')
+                    page.wait_for_function(
+                        '() => document.querySelectorAll("[data-m2-card=true]").length===50', timeout=20000)
+                    assert requests.count('/page')==2 and not page_errors,page_errors
+                    return
+                if inject_empty_owner_switch:
+                    page.evaluate('window.dispatchEvent(new Event("news-curator:auth-changed"))')
+                else:
+                    page.evaluate('''() => {
+                        const actualNow=Date.now.bind(Date);
+                        Date.now=()=>actualNow()+310001;
+                    }''')
+                page.wait_for_timeout(1000)
+                assert empty_mode['remaining']==0
+                assert requests.count('/page')==1
+                if inject_empty_expired_deadline:
+                    assert 'Could not load more' in page.locator('#m2-mode').inner_text()
+                    assert page.locator('[data-m2-card=true]').count()==25
+                assert not page_errors,page_errors
+                return
+            if inject_empty_continuation:
+                first_ids=page.locator('[data-m2-card=true]').evaluate_all(
+                    '(cards)=>cards.map(card=>card.dataset.storyId)')
+                page.locator('#load-more').click()
+                if inject_empty_continuation > 1:
+                    page.wait_for_function('''() => document.querySelector('#m2-mode').textContent
+                        .includes('Tap Load more to continue')''', timeout=10000)
+                    assert requests.count('/page')==3 and requests.count('/rank')==1
+                    assert page.locator('[data-m2-card=true]').count()==25
+                    return
+                page.wait_for_function(
+                    '() => document.querySelectorAll("[data-m2-card=true]").length===50', timeout=10000)
+                ids=page.locator('[data-m2-card=true]').evaluate_all(
+                    '(cards)=>cards.map(card=>card.dataset.storyId)')
+                assert ids[:25]==first_ids and len(set(ids))==50
+                assert requests.count('/page')==2 and requests.count('/rank')==1
+                assert 'Tap Load more to continue' not in page.locator('#m2-mode').inner_text()
+                return
             if inject_slow_valid_fallback:
                 page.evaluate('''() => {
                     window.__stallM2=true;
@@ -616,6 +675,26 @@ def test_m2_category_displays_server_selected_surprise_story(tmp_path):
 def test_slow_valid_server_fallback_renders_after_loading_threshold(tmp_path):
     """A valid server fallback remains usable even when it arrives after the loading threshold."""
     _drive_the_reader(tmp_path, include_the_tail=False, inject_slow_valid_fallback=True)
+
+
+def test_one_load_more_automatically_skips_bounded_empty_continuation(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=False, inject_empty_continuation=True)
+
+
+def test_empty_continuation_retries_stop_at_configured_bound(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=False, inject_empty_continuation=4)
+
+
+def test_empty_continuation_does_not_retry_after_account_epoch_change(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=False, inject_empty_owner_switch=True)
+
+
+def test_empty_continuation_does_not_retry_after_operation_deadline(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=False, inject_empty_expired_deadline=True)
+
+
+def test_empty_continuation_keeps_loading_after_unrelated_pointerdown(tmp_path):
+    _drive_the_reader(tmp_path, include_the_tail=False, inject_empty_pointerdown=True)
 
 
 # The ONE expected failure this suite carries, and the CI guard names exactly

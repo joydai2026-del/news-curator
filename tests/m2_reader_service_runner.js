@@ -150,8 +150,11 @@ function response(value, url) { return { ok: true, redirected: false, url,
   // The retry budget is config, with safe defaults.
   assert.equal(reader.validateM2Config(config).in_progress_retry_ms, 2000);
   assert.equal(reader.validateM2Config(config).in_progress_max_attempts, 3);
+  assert.equal(reader.validateM2Config(config).empty_page_max_attempts, 3);
   assert.throws(() => reader.validateM2Config({ ...config, in_progress_retry_ms: 99 }), /configuration/);
   assert.throws(() => reader.validateM2Config({ ...config, in_progress_max_attempts: 0 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, empty_page_max_attempts: 0 }), /configuration/);
+  assert.throws(() => reader.validateM2Config({ ...config, empty_page_max_attempts: 6 }), /configuration/);
 
   // A prompt revision bump is a QUESTION the reader can answer in one tap, so
   // it must not collapse into the generic failure that shows a dead feed.

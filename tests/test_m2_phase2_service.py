@@ -2147,6 +2147,35 @@ def test_independent_candidate_lanes_overlap_without_changing_the_recipe():
     assert concurrent[1:] == serial[1:]
 
 
+def test_general_candidate_scan_overlaps_lane_reads_without_changing_order():
+    class GeneralOverlapStore(PaidStore):
+        def __init__(self):
+            super().__init__(events=liked_events())
+            self.first_reads = threading.Barrier(2, timeout=2)
+            self.waited = set()
+            self.wait_lock = threading.Lock()
+
+        def retained_candidates_v2(self, **kwargs):
+            lane = kwargs.get("lane")
+            if lane in (None, "updates"):
+                with self.wait_lock:
+                    first_read = lane not in self.waited
+                    self.waited.add(lane)
+                if first_read:
+                    self.first_reads.wait()
+            return super().retained_candidates_v2(**kwargs)
+
+    concurrent_store = GeneralOverlapStore()
+    subject = paid(concurrent_store)
+    policy = subject._policy.composition
+    concurrent = subject._pool_rows(None, None, BehaviorProfile(), policy, None, None)
+    serial = paid(PaidStore(events=liked_events()))._pool_rows(
+        None, None, BehaviorProfile(), replace(policy, pool_parallel_workers=1), None, None)
+    assert concurrent_store.waited == {None, "updates"}
+    assert [row["story_id"] for row in concurrent[0]] == [row["story_id"] for row in serial[0]]
+    assert concurrent[1:] == serial[1:]
+
+
 @pytest.mark.parametrize("workers", [0, 5, True])
 def test_candidate_lane_parallelism_refuses_unbounded_policy(workers):
     import yaml
