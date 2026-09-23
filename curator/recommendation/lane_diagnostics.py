@@ -16,7 +16,7 @@ LANES = ("updates", "hot", "interested", "surprise", "more")
 STAGES = (
     "window_input", "window_selected", "source_cap_rejected", "pre_finalize",
     "opened_removed", "duplicate_removed", "finalized", "finalize_remaining",
-    "frozen_duplicate_removed", "append_selected",
+    "frozen_duplicate_removed", "append_selected", "admission_opened_removed",
 )
 
 

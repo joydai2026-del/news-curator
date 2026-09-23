@@ -309,7 +309,7 @@ def exclusive_scan_limits(policy) -> tuple[int, int]:
 def claimed_transport_call_budget(policy) -> int:
     """Call bound shared by claim-window and function-timeout validation."""
     initial_batches, _ = exclusive_scan_limits(policy)
-    return max(CLAIMED_SECTION_MAX_TRANSPORT_CALLS, initial_batches + 10)
+    return max(CLAIMED_SECTION_MAX_TRANSPORT_CALLS, initial_batches + 11)
 
 
 def full_request_transport_call_budget(policy) -> int:

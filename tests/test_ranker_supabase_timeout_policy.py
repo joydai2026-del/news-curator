@@ -97,7 +97,7 @@ def _boot_env():
     }
 
 
-@pytest.mark.parametrize(("retries", "worst_case"), [(0, 215), (1, 225), (2, 235)])
+@pytest.mark.parametrize(("retries", "worst_case"), [(0, 225), (1, 235), (2, 245)])
 def test_boot_requires_room_for_both_continuation_owner_state_reads(monkeypatch, retries, worst_case):
     path, policy = load_ranker_policy({}, RANKER_POLICY_DEFAULT, root=ROOT)
     policy["supabase"]["timeout_retries"] = retries
@@ -122,4 +122,4 @@ def test_boot_keeps_the_claim_budget_to_one_owner_state_read(monkeypatch):
     monkeypatch.setattr(runtime, "configured_token_counter", stop_at_tokenizer)
     with pytest.raises(RuntimeError, match="reached tokenizer"):
         runtime.build_application(environ={**_boot_env(), FUNCTION_TIMEOUT_ENV: "240"})
-    assert claim_counts == [32]
+    assert claim_counts == [34]

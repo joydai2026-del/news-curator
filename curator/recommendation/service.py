@@ -41,16 +41,17 @@ from .supabase_http import SupabaseAuthenticationError
 # tests/test_ranker_claimed_section_budget.py, which walks the longest path with
 # a counting transport and refuses a count above this number.
 #
-# The initial paid path now measures 21 calls after SQL-side filtering, but
+# The initial paid path now measures 22 calls after SQL-side filtering, but
 # the same claim must also protect two bounded continuation scans. Keep the
-# 31-call floor for the accepted continuation policy range, including its
+# 33-call floor for the accepted continuation policy range, including its
 # owner-state retries; reducing it based on the first-page trace alone would
 # permit the claim to expire while a valid page turn is still working.
-CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 31
+CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 33
 # Two bounded continuation scans can run under one claim. Each scan is capped
 # at two general and eight lane RPCs when a refill is allowed; the remaining
-# calls cover claim, frozen-order reloads, owner states, appends and release.
-CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS = 31
+# calls cover claim, frozen-order reloads, owner states, appends and release,
+# plus one non-retried opened-ID lookup per pass.
+CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS = 33
 
 # Private control result from `_existing_run_page`: a bound order that was
 # deleted by a consent/history invalidation may be replaced, while an expired
@@ -115,7 +116,8 @@ class RankingStore(Protocol):
     def retained_candidates_v2(self, *, category_id: str | None, query: str | None, lane: str | None,
                             profile_categories: Sequence[str], profile_sources: Sequence[str],
                             trend_window_hours: int, trend_min_sources: int, max_age_hours: int | None,
-                            min_age_hours: int | None, limit: int, before_published_at: str | None = None,
+                            min_age_hours: int | None, limit: int, owner_id: str,
+                            hide_already_opened: bool, before_published_at: str | None = None,
                             before_story_id: str | None = None,
                             before_source_count: int | None = None,
                             excluded_story_ids: Sequence[str] = (),
@@ -139,6 +141,7 @@ class RankingStore(Protocol):
                              frozen_order_id: str, response_number: int,
                              offset: int, next_offset: int) -> Mapping[str, object]: ...
     def owner_states(self, access_token: str, story_ids: Sequence[str]) -> Mapping[str, Mapping[str, object]]: ...
+    def opened_candidate_ids(self, access_token: str, story_ids: Sequence[str]) -> set[str]: ...
     def reserve_budget(self, *, user_id: str, request_id: str, amount_usd: float, daily_limit_usd: float) -> bool: ...
     def reserve_budget_claimed(self, *, user_id: str, request_id: str, amount_usd: float,
                                daily_limit_usd: float, run_id: str, eligibility_key: str,
@@ -349,7 +352,7 @@ class RankingService:
         elif composition is not None:
             rows, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                 category_id, query, profile, composition, before_published, before_story,
-                excluded_story_ids=excluded_set)
+                excluded_story_ids=excluded_set, owner=owner)
             # Capped promotion: a few stories only the other language's press
             # carried get to compete for a place in All, on merit. They do NOT
             # get extra slots; they enter the same pool and take their own
@@ -376,9 +379,13 @@ class RankingService:
                     general_has_more if composition is not None else
                     len(filtered) > self._policy.candidate_limit)
         has_more = has_more or len(filtered) > self._policy.candidate_limit
+        lane_diagnostics = LaneDiagnostics() if composition is not None else None
+        opened_ids = (self._opened_candidate_ids(token, filtered, composition, profile, lane_diagnostics)
+                      if composition is not None else set())
+        opened_rows = [row for row in filtered if str(row["story_id"]) in opened_ids]
+        filtered = [row for row in filtered if str(row["story_id"]) not in opened_ids]
         rows = filtered[:self._policy.candidate_limit]
         laned: tuple[LanedCandidate, ...] = ()
-        lane_diagnostics = LaneDiagnostics() if composition is not None else None
         if composition is not None:
             # THIS is the product: four labeled pools with quotas and caps. The
             # model only reorders what the recipe hands it.
@@ -395,14 +402,14 @@ class RankingService:
             if exclusive:
                 cursor_rows = self._exclusive_safe_cursor_rows(
                     exclusive_consumed_rows, {str(row.get("story_id")) for row in rows},
-                    excluded_set, suppressed_sources=exclusive_suppressed_sources)
+                    excluded_set | opened_ids, suppressed_sources=exclusive_suppressed_sources)
                 if has_more:
                     next_corpus = (self._exclusive_corpus_cursor(cursor_rows) if cursor_rows else
                                    {"before_published_at": before_published,
                                     "before_story_id": before_story})
             elif has_more:
                 next_corpus = self._next_corpus_cursor(
-                    rows, hot_story_ids, general_boundary=general_boundary)
+                    rows + opened_rows, hot_story_ids, general_boundary=general_boundary)
         elif has_more and rows:
             boundary = rows[-1]
             next_corpus = {"before_published_at": boundary["published_at"],
@@ -906,7 +913,8 @@ class RankingService:
                 fetched, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                     category_id, query, profile, composition,
                     cursor.get("before_published_at"), cursor.get("before_story_id"),
-                    self._hot_cursor(cursor), excluded_story_ids=seen | original_exclusions)
+                    self._hot_cursor(cursor), excluded_story_ids=seen | original_exclusions,
+                    owner=owner)
                 pool_ms = round((time.perf_counter() - pool_started_at) * 1000)
                 known = {str(row.get("story_id")) for row in pending}
                 pooled = pending + [row for row in fetched
@@ -924,6 +932,8 @@ class RankingService:
         retained_ids = {str(row.get("story_id")) for row in rows}
         semantic_drop_ids = {str(row.get("story_id")) for row in eligible_rows
                              if str(row.get("story_id")) not in retained_ids}
+        opened_ids = self._opened_candidate_ids(token, rows, composition, profile, lane_diagnostics)
+        rows = [row for row in rows if str(row["story_id"]) not in opened_ids]
         if rows or semantic_drop_ids:
             composition_now = self._now()
             lane_diagnostics.record("frozen_duplicate_removed", (
@@ -981,7 +991,7 @@ class RankingService:
         if exclusive:
             safe_rows = self._exclusive_safe_cursor_rows(
                 cursor_rows, {item.story_id for item in laned},
-                seen | original_exclusions | semantic_drop_ids,
+                seen | original_exclusions | semantic_drop_ids | opened_ids,
                 suppressed_sources=exclusive_suppressed_sources)
             next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
             remaining_pending = []
@@ -1131,6 +1141,18 @@ class RankingService:
             # itself already happened; this only records it.
             log_suppressed_exception("m2_filter_record_failed", error, stream=sys.stderr,
                 run_id=str(run_id))
+
+    def _opened_candidate_ids(self, token, rows, composition, profile, diagnostics):
+        if not composition.hide_already_opened or not rows:
+            return set()
+        # This snapshot only protects admission capacity. The authoritative
+        # post-provider state/freshness reads remain mandatory for races.
+        opened = self._store.opened_candidate_ids(token, [str(row["story_id"]) for row in rows])
+        now = self._now()
+        diagnostics.record("admission_opened_removed", (
+            assign_lane(row, profile=profile, policy=composition, now=now)[0]
+            for row in rows if str(row["story_id"]) in opened))
+        return opened
 
     @staticmethod
     def _hot_cursor(cursor):
@@ -1903,7 +1925,7 @@ class RankingService:
         return rendered
 
     def _pool_rows(self, category_id, query, profile, composition, before_published, before_story,
-                   hot_cursor=None, *, excluded_story_ids=()):
+                   hot_cursor=None, *, excluded_story_ids=(), owner: AuthenticatedOwner):
         """Ask the corpus for each lane, then merge.
 
         Returns ``(rows, hot_story_ids, general_boundary, general_has_more)``.
@@ -1917,6 +1939,16 @@ class RankingService:
         today's feed is the newest 50 rows. Each lane orders by its own criterion,
         so each is asked for separately and the recipe merges what comes back.
         """
+        if not isinstance(owner, AuthenticatedOwner) or not isinstance(owner.user_id, str):
+            raise AuthenticationError("verified owner required for candidate retrieval")
+        try:
+            valid_owner_id = str(uuid.UUID(owner.user_id)) == owner.user_id
+        except ValueError:
+            valid_owner_id = False
+        if not valid_owner_id or owner.actor_kind is not ActorKind.HUMAN:
+            raise AuthenticationError("verified owner required for candidate retrieval")
+        owner_id = owner.user_id
+        hide_already_opened = composition.hide_already_opened
         categories = sorted({topic for topic, weight in profile.topic_affinity.items() if weight > 0})
         sources = sorted({source for source, weight in profile.source_affinity.items() if weight > 0})
         quotas = lane_window_quotas(composition, composition.candidate_window_size)
@@ -1956,6 +1988,7 @@ class RankingService:
                             target - eligible_general)
                 batch = self._store.retained_candidates_v2(
                     category_id=category_id, query=query, lane=None,
+                    owner_id=owner_id, hide_already_opened=hide_already_opened,
                     profile_categories=(), profile_sources=(),
                     trend_window_hours=composition.trend_window_hours,
                     trend_min_sources=composition.trend_min_independent_sources,
@@ -2030,6 +2063,7 @@ class RankingService:
                     break
                 rows = self._store.retained_candidates_v2(
                     category_id=category_id, query=query, lane=lane,
+                    owner_id=owner_id, hide_already_opened=hide_already_opened,
                     profile_categories=categories, profile_sources=sources,
                     trend_window_hours=composition.trend_window_hours,
                     trend_min_sources=composition.trend_min_independent_sources,

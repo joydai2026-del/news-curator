@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Mapping
 
 
@@ -152,18 +153,28 @@ class SupabaseHTTP:
     def retained_candidates_v2(self, *, category_id: str | None, query: str | None, lane: str | None,
                             profile_categories, profile_sources, trend_window_hours: int,
                             trend_min_sources: int, max_age_hours: int | None, min_age_hours: int | None,
-                            limit: int, before_published_at: str | None = None,
+                            limit: int, owner_id: str, hide_already_opened: bool,
+                            before_published_at: str | None = None,
                             before_story_id: str | None = None, before_source_count: int | None = None,
                             excluded_story_ids=(), suppressed_sources=(), suppressed_topics=()):
+        if not isinstance(owner_id, str):
+            raise ValueError("verified owner required for candidate retrieval")
+        try:
+            valid_owner_id = str(uuid.UUID(owner_id)) == owner_id
+        except ValueError:
+            valid_owner_id = False
+        if not valid_owner_id or type(hide_already_opened) is not bool:
+            raise ValueError("verified owner required for candidate retrieval")
         # One request per lane. The hot lane pages on its FULL sort key
         # (independent_source_count, published_at, story_id), because its
         # ordering leads with the count and a published_at-only keyset would skip
         # or repeat rows at the page boundary.
-        page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_filtered", token=self._service_token(),
+        page = self._request("POST", "/rest/v1/rpc/m2_retained_candidates_for_owner", token=self._service_token(),
             # Lane reads may overlap. Keep each no-redirect opener private to
             # its call rather than sharing a handler chain across threads.
             key=self._service, opener=urllib.request.build_opener(_NoRedirect),
-            body={"p_category_id": category_id, "p_query": query, "p_lane": lane,
+            body={"p_owner_id": owner_id, "p_hide_already_opened": hide_already_opened,
+                "p_category_id": category_id, "p_query": query, "p_lane": lane,
                 "p_profile_categories": list(profile_categories), "p_profile_sources": list(profile_sources),
                 "p_trend_window_hours": trend_window_hours, "p_trend_min_sources": trend_min_sources,
                 "p_max_age_hours": max_age_hours, "p_min_age_hours": min_age_hours,
@@ -205,6 +216,19 @@ class SupabaseHTTP:
         if not isinstance(result, Mapping):
             raise SupabaseHTTPError("claimed reservation RPC returned a non-object")
         return result
+
+    def opened_candidate_ids(self, access_token: str, story_ids):
+        ids = list(story_ids)
+        if len(ids) > 10000:
+            raise ValueError("opened candidate lookup exceeds protocol limit")
+        # No retry: exactly one extra bounded read per composition pass. Use the
+        # reader's token, never the service role, and return no story content.
+        result = self._request("POST", "/rest/v1/rpc/m2_opened_candidate_ids",
+            token=access_token, key=self._publishable, body={"p_story_ids": ids})
+        if (not isinstance(result, list) or any(not isinstance(item, str) for item in result)
+                or not set(result).issubset(ids)):
+            raise SupabaseHTTPError("opened candidate RPC returned invalid IDs")
+        return set(result)
 
     def owner_states(self, access_token: str, story_ids):
         attempts = self._timeout_retries + 1

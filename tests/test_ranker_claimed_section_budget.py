@@ -108,7 +108,8 @@ def _longest_path_calls(capsys):
                   exclude_story_ids=[row["story_id"] for row in rows[:1000]])
     assert result["result_mode"] == "model" and len(result["cards"]) == 25
     assert combined_store.claimed_calls.count("retained_candidates_v2") == 5
-    assert len(combined_store.claimed_calls) == 16
+    assert len(combined_store.claimed_calls) == 17
+    assert combined_store.claimed_calls.count("opened_candidate_ids") == 1
     rollback_store = CountingStore(rows, events=liked_events(), exclusive=exclusive)
     rollback_subject = paid(rollback_store, exclusive_category="only-other-language-press")
     rollback_subject._policy = replace(rollback_subject._policy,
@@ -118,7 +119,7 @@ def _longest_path_calls(capsys):
                   exclude_story_ids=[row["story_id"] for row in rows[:1000]])
     assert result["result_mode"] == "model" and len(result["cards"]) == 25
     assert rollback_store.claimed_calls.count("retained_candidates_v2") == 5
-    assert len(rollback_store.claimed_calls) == 16
+    assert len(rollback_store.claimed_calls) == 17
     return max((general, list(exclusive_store.claimed_calls),
                 list(excluded_store.claimed_calls),
                 list(combined_store.claimed_calls),
@@ -202,7 +203,7 @@ def test_the_claim_covers_the_measured_section_at_the_shipped_values():
     """The shipped numbers satisfy the rule they are validated by."""
     _, policy = runtime.load_ranker_policy({}, root=Path(__file__).resolve().parents[1])
     calls = claimed_transport_call_budget(policy) + runtime.supabase_timeout_retries(policy)
-    deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 210
+    deadline, settle, timeout, margin, claim = 25, 5, 5, 10, 220
     assert claim > deadline + settle + calls * timeout + margin
 
 
@@ -246,7 +247,8 @@ def test_two_real_continuation_scans_share_one_claim_and_one_response_slot():
     claimed = store.claimed_calls[
         store.claimed_calls.index("claim_run_ranking"):
         store.claimed_calls.index("release_run_ranking_claim") + 1]
-    assert len(claimed) == 19, Counter(claimed)
+    assert len(claimed) == 21, Counter(claimed)
+    assert claimed.count("opened_candidate_ids") == 2
     assert len(claimed) <= CONTINUATION_CLAIMED_MAX_TRANSPORT_CALLS
     assert store.claimed_calls.count("claim_run_ranking") == 1
     assert next(iter(store.views.values()))["pages_served"] == 3

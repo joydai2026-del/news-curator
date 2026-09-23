@@ -145,6 +145,49 @@ def _client(timeout_seconds=None):
                         service_role_key="sb_secret_canary", **kwargs)
 
 
+def _candidate_args():
+    return dict(category_id=None, query=None, lane="hot", profile_categories=(),
+                profile_sources=(), trend_window_hours=48, trend_min_sources=2,
+                max_age_hours=None, min_age_hours=None, limit=12)
+
+
+@pytest.mark.parametrize("owner", [None, "", "malformed", 123])
+def test_owner_candidate_rpc_rejects_invalid_owner_before_transport(owner):
+    client = _client()
+    calls = []
+    client._request = lambda *args, **kwargs: calls.append((args, kwargs)) or []
+    with pytest.raises((ValueError, SupabaseHTTPError)):
+        client.retained_candidates_v2(**_candidate_args(), owner_id=owner,
+                                      hide_already_opened=True)
+    assert calls == []
+
+
+@pytest.mark.parametrize("hide", [None, 0, 1, "false"])
+def test_owner_candidate_rpc_rejects_invalid_opened_policy_before_transport(hide):
+    client = _client()
+    calls = []
+    client._request = lambda *args, **kwargs: calls.append((args, kwargs)) or []
+    with pytest.raises(ValueError, match="verified owner required"):
+        client.retained_candidates_v2(**_candidate_args(),
+            owner_id="11111111-1111-1111-1111-111111111111", hide_already_opened=hide)
+    assert calls == []
+
+
+def test_owner_candidate_rpc_has_no_unfiltered_fallback_on_failure():
+    client = _client()
+    paths = []
+    def unavailable(_method, path, **kwargs):
+        paths.append(path)
+        assert kwargs["body"]["p_owner_id"] == "11111111-1111-1111-1111-111111111111"
+        assert kwargs["body"]["p_hide_already_opened"] is True
+        raise SupabaseHTTPError("supabase request failed")
+    client._request = unavailable
+    with pytest.raises(SupabaseHTTPError, match="supabase request failed"):
+        client.retained_candidates_v2(**_candidate_args(),
+            owner_id="11111111-1111-1111-1111-111111111111", hide_already_opened=True)
+    assert paths == ["/rest/v1/rpc/m2_retained_candidates_for_owner"]
+
+
 def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypatch):
     client = _client()
     built = []
@@ -166,10 +209,11 @@ def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypat
         assert client.retained_candidates_v2(
             category_id=None, query=None, lane=lane, profile_categories=(), profile_sources=(),
             trend_window_hours=48, trend_min_sources=2, max_age_hours=None, min_age_hours=None,
-            limit=1) == []
+            limit=1, owner_id="11111111-1111-1111-1111-111111111111",
+            hide_already_opened=True) == []
     assert len(built) == 2 and built[0] is not built[1]
     assert [opener for opener, _ in opened] == built
-    assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_filtered") for _, url in opened)
+    assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_for_owner") for _, url in opened)
 
 
 def test_general_candidate_rpc_can_read_two_hundred_while_lanes_stay_at_one_hundred():
@@ -190,7 +234,8 @@ def test_general_candidate_rpc_can_read_two_hundred_while_lanes_stay_at_one_hund
             category_id=None, query=None, lane=lane, profile_categories=(), profile_sources=(),
             trend_window_hours=48, trend_min_sources=2, max_age_hours=None, min_age_hours=None,
             limit=250, excluded_story_ids=("story:seen",),
-            suppressed_sources=("blocked-wire",), suppressed_topics=("blocked-topic",)) == []
+            suppressed_sources=("blocked-wire",), suppressed_topics=("blocked-topic",),
+            owner_id="11111111-1111-1111-1111-111111111111", hide_already_opened=True) == []
     assert limits == [200, 100]
     assert filters == [(["story:seen"], ["blocked-wire"], ["blocked-topic"])] * 2
 
@@ -234,6 +279,43 @@ def test_owner_state_read_does_not_retry_an_http_failure():
     with pytest.raises(SupabaseHTTPError):
         client.owner_states("owner-token", ["story:one"])
     assert opener.calls == 1
+
+
+def test_opened_lookup_is_one_authenticated_ids_only_call_above_old_limit():
+    client = _client()
+    ids = [f"story:{index:064x}" for index in range(233)]
+    calls = []
+    def capture(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return [ids[0]]
+    client._request = capture
+    assert client.opened_candidate_ids("reader-token", ids + [ids[0]]) == {ids[0]}
+    assert calls == [("POST", "/rest/v1/rpc/m2_opened_candidate_ids", {
+        "token": "reader-token", "key": client._publishable,
+        "body": {"p_story_ids": ids + [ids[0]]}})]
+
+
+@pytest.mark.parametrize("response", [None, {}, [None], [{"story_id": "private"}], ["unknown"]])
+def test_opened_lookup_rejects_malformed_or_unrequested_response(response):
+    client = _client()
+    client._request = lambda *_args, **_kwargs: response
+    with pytest.raises(SupabaseHTTPError, match="invalid IDs"):
+        client.opened_candidate_ids("reader-token", [f"story:{1:064x}"])
+
+
+def test_opened_lookup_bound_and_failure_never_retry():
+    client = _client()
+    calls = []
+    def timeout(*_args, **_kwargs):
+        calls.append(1)
+        raise SupabaseHTTPError("timeout")
+    client._request = timeout
+    with pytest.raises(ValueError, match="protocol limit"):
+        client.opened_candidate_ids("reader-token", [f"story:{1:064x}"] * 10001)
+    assert calls == []
+    with pytest.raises(SupabaseHTTPError):
+        client.opened_candidate_ids("reader-token", [f"story:{1:064x}"] * 10000)
+    assert calls == [1]
 
 
 class _Raise:
