@@ -2467,6 +2467,36 @@ def test_complete_later_page_reuses_the_persisted_refill_snapshot(complete_conti
     assert store.page_reads == 3, "a complete persisted page was fetched twice"
 
 
+def test_page_stage_timing_has_only_fixed_labels_and_durations(
+        complete_continuation_page, capsys):
+    store, subject, cursor, _offset = complete_continuation_page
+    store.frozen["frozen-1"]["bindings"]["eligibility"]["query"] = "private search text"
+    subject.page(authorization="Bearer valid", cursor=cursor)
+
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    timings = [event for event in events if event.get("event") == "m2_page_stage_timing"]
+    assert len(timings) == 1
+    timing = timings[0]
+    assert set(timing) == {"event", "route", "total_ms", "stages_ms"}
+    assert timing["route"] == "/page"
+    fixed_labels = {
+        "authenticate", "cursor_decode", "frozen_load", "history_load",
+        "claim", "locked_load", "continuation_pass", "final_load",
+        "claim_release", "owner_overlay", "filtered_record", "response_reserve",
+    }
+    assert set(timing["stages_ms"]).issubset(fixed_labels)
+    assert fixed_labels - {"final_load"} == set(timing["stages_ms"])
+    assert isinstance(timing["total_ms"], (int, float))
+    assert timing["total_ms"] >= 0
+    assert all(isinstance(value, (int, float)) and value >= 0
+               for value in timing["stages_ms"].values())
+    serialized = json.dumps(timing)
+    for private_value in (OWNER_ID, "frozen-1", cursor, "valid", "story:",
+                          "https://example.test", "private search text"):
+        assert private_value not in serialized
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
 def test_reused_page_cannot_survive_privacy_deletion(complete_continuation_page):
     store, subject, cursor, _offset = complete_continuation_page
 
