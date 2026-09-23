@@ -150,7 +150,7 @@ def test_log_allowlist_refuses_dynamic_keys_values_and_phase(capsys):
         assert row[key] not in output
 
 
-@pytest.mark.parametrize("error_type", (OSError, ValueError))
+@pytest.mark.parametrize("error_type", (OSError, ValueError, RuntimeError))
 def test_unavailable_log_sink_does_not_fail_composition(monkeypatch, error_type):
     from curator.recommendation.lane_diagnostics import LaneDiagnostics
 
@@ -163,7 +163,9 @@ def test_unavailable_log_sink_does_not_fail_composition(monkeypatch, error_type)
 
 
 @pytest.mark.parametrize("failure_at", ("write", "flush"))
-def test_sink_failure_preserves_feed_order_and_exactly_one_provider_attempt(monkeypatch, failure_at):
+@pytest.mark.parametrize("error_type", (OSError, ValueError, RuntimeError))
+def test_sink_failure_preserves_feed_order_and_exactly_one_provider_attempt(
+        monkeypatch, failure_at, error_type):
     import sys
     from tests import test_m2_phase2_service as harness
 
@@ -197,7 +199,7 @@ def test_sink_failure_preserves_feed_order_and_exactly_one_provider_attempt(monk
             if value.startswith('{"event":"m2_lane_counts",'):
                 self.failures += 1
                 if failure_at == "write":
-                    raise OSError("diagnostic sink unavailable")
+                    raise error_type("diagnostic sink unavailable")
                 self.fail_flush = True
                 return len(value)
             return original.write(value)
@@ -205,7 +207,7 @@ def test_sink_failure_preserves_feed_order_and_exactly_one_provider_attempt(monk
         def flush(self):
             if self.fail_flush:
                 self.fail_flush = False
-                raise ValueError("diagnostic sink closed")
+                raise error_type("diagnostic sink closed")
             return original.flush()
 
     sink = FailingDiagnosticSink()

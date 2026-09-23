@@ -46,6 +46,8 @@ class LaneDiagnostics:
         try:
             sys.stderr.write(payload)
             sys.stderr.flush()
-        except (OSError, ValueError):
-            # An unavailable log sink must not change the feed or spend path.
+        except Exception:
+            # A wrapped sink may raise any ordinary exception. Guard only its
+            # write/flush, never metric construction or feed work, and never
+            # retry a paid request or expose the sink's exception message.
             pass
