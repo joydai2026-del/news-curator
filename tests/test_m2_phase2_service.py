@@ -17,7 +17,7 @@ import pytest
 
 from dataclasses import replace
 
-from curator.recommendation.composition import load_composition_policy
+from curator.recommendation.composition import load_composition_policy, parse_composition_policy
 from curator.recommendation.profile import BehaviorProfile
 from curator.recommendation.rankllm_adapter import RankLLMAdapter, RankerPolicy
 from curator.recommendation.service import (
@@ -2114,6 +2114,49 @@ def test_general_scan_reports_saturation_independently_of_candidate_limit():
     assert third == [] and not more
 
 
+def test_independent_candidate_lanes_overlap_without_changing_the_recipe():
+    class OverlapStore(PaidStore):
+        def __init__(self):
+            super().__init__(events=liked_events())
+            self.all_lanes = threading.Barrier(4, timeout=2)
+            self.wait_lock = threading.Lock()
+            self.waited = set()
+
+        def retained_candidates_v2(self, **kwargs):
+            lane = kwargs.get("lane")
+            if lane in {"updates", "hot", "interested", "surprise"}:
+                with self.wait_lock:
+                    first_read = lane not in self.waited
+                    self.waited.add(lane)
+                if first_read:
+                    self.all_lanes.wait()
+            return super().retained_candidates_v2(**kwargs)
+
+    concurrent_store = OverlapStore()
+    concurrent_subject = paid(concurrent_store)
+    policy = concurrent_subject._policy.composition
+    profile = BehaviorProfile(topic_affinity={"world": 1.0})
+    concurrent = concurrent_subject._pool_rows(
+        None, None, profile, policy, None, None)
+    serial_subject = paid(PaidStore(events=liked_events()))
+    serial = serial_subject._pool_rows(
+        None, None, profile, replace(policy, pool_parallel_workers=1), None, None)
+
+    assert concurrent_store.waited == set(policy.lane_priority)
+    assert [row["story_id"] for row in concurrent[0]] == [row["story_id"] for row in serial[0]]
+    assert concurrent[1:] == serial[1:]
+
+
+@pytest.mark.parametrize("workers", [0, 5, True])
+def test_candidate_lane_parallelism_refuses_unbounded_policy(workers):
+    import yaml
+
+    document = yaml.safe_load(POLICY_PATH.read_text())
+    document["composition"]["pool_parallel_workers"] = workers
+    with pytest.raises(ValueError, match="composition.pool_parallel_workers"):
+        parse_composition_policy(document)
+
+
 def test_no_hot_rows_means_no_hot_cursor_at_all():
     subject = paid(PaidStore(events=liked_events()))
     general = {"story_id": "story:" + "a" * 64, "published_at": "2026-09-18T01:00:00+00:00",
@@ -2305,6 +2348,48 @@ def test_concurrent_end_cursors_append_one_continuation_batch():
     assert sum(result is not None for result in results) == 1
     ids = [card["story_id"] for card in store.frozen["frozen-1"]["cards"]]
     assert len(ids) == len(set(ids)), "concurrent continuation appended a duplicate batch"
+
+
+def test_parallel_lane_failure_releases_continuation_claim_for_retry():
+    class FailingLaneStore(PaidStore):
+        fail_hot_lane = False
+        releases = 0
+
+        def retained_candidates_v2(self, **kwargs):
+            if self.fail_hot_lane and kwargs.get("lane") == "hot":
+                raise RuntimeError("candidate read failed")
+            return super().retained_candidates_v2(**kwargs)
+
+        def release_run_ranking_claim(self, **kwargs):
+            self.releases += 1
+            return super().release_run_ranking_claim(**kwargs)
+
+    rows = [corpus_row(index, hours=1 + index, source=f"deep{index}",
+                       categories=[f"d{index % 9}"]) for index in range(300)]
+    store = FailingLaneStore(rows, events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    frozen = store.frozen["frozen-1"]
+    initial_ids = [card["story_id"] for card in frozen["cards"]]
+    cursor = subject._cursor("frozen-1", len(initial_ids),
+        int(frozen["expires_at"]), response_number=2)
+    pages_before = [view["pages_served"] for view in store.views.values()]
+    releases_before = store.releases
+
+    store.fail_hot_lane = True
+    with pytest.raises(RuntimeError, match="candidate read failed"):
+        subject.page(authorization="Bearer valid", cursor=cursor)
+    assert all(view["claim_token"] is None for view in store.views.values())
+    assert store.releases == releases_before + 1
+    assert [view["pages_served"] for view in store.views.values()] == pages_before
+    assert store.extensions == []
+    assert [card["story_id"] for card in frozen["cards"]] == initial_ids
+    assert subject._adapter.calls == 1
+
+    store.fail_hot_lane = False
+    retried = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert retried["cards"]
+    assert subject._adapter.calls == 1
 
 
 def test_waiting_continuation_reloads_after_the_mutation_lock():
