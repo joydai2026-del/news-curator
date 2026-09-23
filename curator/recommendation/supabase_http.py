@@ -169,7 +169,7 @@ class SupabaseHTTP:
                 "p_before_published_at": before_published_at,
                 "p_before_story_id": before_story_id,
                 "p_before_source_count": before_source_count,
-                "p_limit": min(100, max(1, limit))})
+                "p_limit": min(200 if lane is None else 100, max(1, limit))})
         if not isinstance(page, list):
             raise SupabaseHTTPError("candidate RPC returned a non-list")
         return page

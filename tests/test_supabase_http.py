@@ -150,6 +150,23 @@ def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypat
     assert all(url.endswith("/rest/v1/rpc/m2_retained_candidates_v2") for _, url in opened)
 
 
+def test_general_candidate_rpc_can_read_two_hundred_while_lanes_stay_at_one_hundred():
+    client = _client()
+    limits = []
+
+    def capture(_method, _path, **kwargs):
+        limits.append(kwargs["body"]["p_limit"])
+        return []
+
+    client._request = capture
+    for lane in (None, "updates"):
+        assert client.retained_candidates_v2(
+            category_id=None, query=None, lane=lane, profile_categories=(), profile_sources=(),
+            trend_window_hours=48, trend_min_sources=2, max_age_hours=None, min_age_hours=None,
+            limit=250) == []
+    assert limits == [200, 100]
+
+
 def test_owner_state_read_retries_one_configured_timeout_then_returns_live_state():
     class Response:
         def __enter__(self): return self

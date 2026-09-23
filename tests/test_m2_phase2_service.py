@@ -1346,6 +1346,41 @@ def test_excluded_head_still_refills_four_pages_from_older_corpus(excluded_head)
     assert subject._adapter.calls == 1
 
 
+def test_general_pool_reads_past_one_hundred_excluded_heads_in_one_rpc():
+    class CountingStore(Store):
+        def __init__(self, rows):
+            super().__init__(rows)
+            self.general_limits = []
+
+        def retained_candidates_v2(self, **kwargs):
+            if kwargs["lane"] is None:
+                self.general_limits.append(kwargs["limit"])
+            return super().retained_candidates_v2(**kwargs)
+
+    rows = [corpus_row(index, hours=index + 1, source=f"source-{index}",
+                       categories=[f"topic-{index}"]) for index in range(200)]
+    store = CountingStore(rows)
+    subject = paid(store)
+    excluded = {row["story_id"] for row in rows[:100]}
+    target = (subject._policy.composition.candidate_window_size
+              + subject._policy.composition.page_size)
+
+    pooled, _, _, _ = subject._pool_rows(
+        None, None, BehaviorProfile(), subject._policy.composition,
+        None, None, None, excluded_story_ids=excluded)
+
+    assert store.general_limits == [100 + target]
+    assert len(pooled) == target
+    assert not ({row["story_id"] for row in pooled} & excluded)
+    store.general_limits.clear()
+    rolled_back, _, _, _ = subject._pool_rows(
+        None, None, BehaviorProfile(),
+        replace(subject._policy.composition, general_pool_batch_limit=100),
+        None, None, None, excluded_story_ids=excluded)
+    assert store.general_limits == [100, 100]
+    assert [row["story_id"] for row in rolled_back[:target]] == [row["story_id"] for row in pooled]
+
+
 def test_post_rank_less_like_feedback_refills_four_pages_from_older_corpus():
     rows = [corpus_row(index, hours=1 + index, source=f"feedback-{index}",
                        categories=[f"feedback-topic-{index}"])
@@ -1787,7 +1822,9 @@ def test_general_semantic_drop_only_batch_advances_to_older_unique_rows():
     assert [len(page) for page in pages] == [25, 25, 25]
     assert {card["story_id"] for card in served} == expected_ids
     assert len(served) == len({card["story_id"] for card in served}) == 75
-    assert empty_responses >= 1
+    # The wider general read now reaches the older unique rows without a
+    # visible empty response between these pages.
+    assert empty_responses == 0
     assert all(card["lane_label"] for card in served)
     assert subject._adapter.calls == 1
 
@@ -2183,6 +2220,16 @@ def test_candidate_lane_parallelism_refuses_unbounded_policy(workers):
     document = yaml.safe_load(POLICY_PATH.read_text())
     document["composition"]["pool_parallel_workers"] = workers
     with pytest.raises(ValueError, match="composition.pool_parallel_workers"):
+        parse_composition_policy(document)
+
+
+@pytest.mark.parametrize("batch_limit", [99, 201, True])
+def test_general_pool_batch_limit_refuses_out_of_contract_policy(batch_limit):
+    import yaml
+
+    document = yaml.safe_load(POLICY_PATH.read_text())
+    document["composition"]["general_pool_batch_limit"] = batch_limit
+    with pytest.raises(ValueError, match="composition.general_pool_batch_limit"):
         parse_composition_policy(document)
 
 

@@ -69,6 +69,7 @@ MIGRATIONS = (
     'supabase/migrations/202609180101_m2_retained_candidates_dedupe.sql',
     'supabase/migrations/202609180102_m2_retained_candidates_v2_dedupe.sql',
     'supabase/migrations/202609210001_m2_retained_candidates_v2_dedupe_linear.sql',
+    'supabase/migrations/202609230001_m2_retained_candidates_v2_bulk_general.sql',
 )
 
 # Seeded corpus size. The live retained corpus was about 6,500 rows when the
@@ -412,6 +413,27 @@ def _dominant(plan_text):
 
 
 # --- the measurements -------------------------------------------------------
+
+def test_general_pool_accepts_two_hundred_but_refuses_unbounded_reads(db):
+    elapsed = []
+    for _ in range(REPEATS):
+        started = time.perf_counter()
+        result = _service(db,
+            'select count(*) from public.m2_retained_candidates_v2(p_lane => null, p_limit => 200);')
+        elapsed.append((time.perf_counter() - started) * 1000)
+        assert _last(result) == '200'
+    median = statistics.median(elapsed)
+    print(f'bulk general 200 rows: {median:.1f} ms median of {REPEATS}')
+    assert median < LANE_BUDGET_MS, f'bulk general read took {median:.1f} ms'
+    refused = _service(db,
+        'select count(*) from public.m2_retained_candidates_v2(p_lane => null, p_limit => 201);',
+        check=False)
+    assert refused.returncode != 0 and 'invalid limit' in refused.stderr
+    lane_refused = _service(db,
+        "select count(*) from public.m2_retained_candidates_v2(p_lane => 'updates', p_limit => 101);",
+        check=False)
+    assert lane_refused.returncode != 0 and 'invalid limit' in lane_refused.stderr
+
 
 def test_the_corpus_really_is_at_scale_and_spread_across_the_window(db):
     """A scale test that quietly seeded 6 rows would pass every assertion below

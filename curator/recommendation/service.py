@@ -40,9 +40,11 @@ from .supabase_http import SupabaseAuthenticationError
 # tests/test_ranker_claimed_section_budget.py, which walks the longest path with
 # a counting transport and refuses a count above this number.
 #
-# The longest measured path is 30: a paid view with 1,000 exclusions, all
-# four lane scans, and exclusive-story promotion. One extra covers a
-# conditional failure-path call absent from the successful measurement.
+# The longest measured path is 30 with the validated 100-row general-pool
+# rollback setting: a paid view with 1,000 exclusions, all four lanes, and
+# exclusive-story promotion. The shipped 200-row setting uses 25 calls, but
+# the claim must remain safe across the WHOLE programmable policy range.
+# One extra covers a conditional failure-path call absent from that success.
 CLAIMED_SECTION_MAX_TRANSPORT_CALLS = 31
 # Two bounded continuation scans can run under one claim. Each scan is capped
 # at two general and eight lane RPCs when a refill is allowed; the remaining
@@ -1890,7 +1892,11 @@ class RankingService:
             general_budget = max(composition.pool_scan_max_batches,
                                  (len(excluded) + target + 99) // 100)
             while eligible_general < target and general_batches < general_budget:
-                limit = min(100, target - eligible_general + len(excluded))
+                # The SQL guard permits 200 for this broad pool. A single
+                # read can pass a frozen 100-story head without rerunning the
+                # full-corpus dedupe on a second serial RPC.
+                limit = min(composition.general_pool_batch_limit,
+                            target - eligible_general + len(excluded))
                 batch = self._store.retained_candidates_v2(
                     category_id=category_id, query=query, lane=None,
                     profile_categories=(), profile_sources=(),
