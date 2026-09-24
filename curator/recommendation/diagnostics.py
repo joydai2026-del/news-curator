@@ -92,6 +92,7 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'invalid_translation_overlay',
     'model results cannot carry a fallback reason',
     'model tokenizer mismatch',
+    'NEWS_CURATOR_MODAL_PREPARATION_SCRUB_CRON must be a nonempty cron expression',
     'next_run_preparation must be an object',
     'next_run_preparation_enabled must be boolean',
     'next_run_preparation_minimum_overlap must be 1..50',
