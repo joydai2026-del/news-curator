@@ -412,9 +412,10 @@ class RankingService:
             # carried get to compete for a place in All, on merit. They do NOT
             # get extra slots; they enter the same pool and take their own
             # lane's quota like any other candidate.
-            promotion = [row for row in self._promotion_rows(
-                query, composition, before_published, before_story)
-                if row.get("story_id") not in hidden_story_ids]
+            if category_id is None:
+                promotion = [row for row in self._promotion_rows(
+                    query, composition, before_published, before_story)
+                    if row.get("story_id") not in hidden_story_ids]
             known = {row.get("story_id") for row in rows}
             rows = rows + [row for row in promotion if row.get("story_id") not in known]
         else:
