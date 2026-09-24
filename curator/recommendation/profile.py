@@ -36,10 +36,9 @@ class BehaviorProfile:
     # The owner's own topic proportions, from positive actions only. This is the
     # reference distribution the B6 calibration alarm measures the page against.
     observed_topic_mix: Mapping[str, float] = field(default_factory=dict)
-    # Sources and topics the owner explicitly asked for less of. They never block
-    # a source globally; they lower matched features and filter inside a run.
-    suppressed_sources: frozenset[str] = frozenset()
-    suppressed_topics: frozenset[str] = frozenset()
+    # A negative tap hides only that story. Its topic is a soft ranking signal;
+    # neither the publisher nor the whole topic is excluded.
+    hidden_story_ids: frozenset[str] = frozenset()
     event_count: int = 0
 
     @property
@@ -55,18 +54,17 @@ class BehaviorProfile:
     def as_snapshot(self) -> dict[str, object]:
         """The frozen form stored on the reading run row."""
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "source_affinity": dict(self.source_affinity),
             "topic_affinity": dict(self.topic_affinity),
             "observed_topic_mix": dict(self.observed_topic_mix),
-            "suppressed_sources": sorted(self.suppressed_sources),
-            "suppressed_topics": sorted(self.suppressed_topics),
+            "hidden_story_ids": sorted(self.hidden_story_ids),
             "event_count": self.event_count,
         }
 
     @classmethod
     def from_snapshot(cls, snapshot: object) -> "BehaviorProfile":
-        if not isinstance(snapshot, Mapping) or snapshot.get("schema_version") != 1:
+        if not isinstance(snapshot, Mapping) or snapshot.get("schema_version") not in (1, 2):
             return cls()
 
         def numbers(key: str) -> dict[str, float]:
@@ -81,9 +79,15 @@ class BehaviorProfile:
             return frozenset(str(item) for item in value) if isinstance(value, list) else frozenset()
 
         count = snapshot.get("event_count")
-        return cls(source_affinity=numbers("source_affinity"), topic_affinity=numbers("topic_affinity"),
-                   observed_topic_mix=numbers("observed_topic_mix"), suppressed_sources=names("suppressed_sources"),
-                   suppressed_topics=names("suppressed_topics"),
+        source_affinity = numbers("source_affinity")
+        if snapshot.get("schema_version") == 1:
+            # Legacy negatives mix unsaves with source-wide Less like signals.
+            # A one-run transition cannot separate them, so discard negative
+            # source weights and retain positive publisher learning.
+            source_affinity = {name: weight for name, weight in source_affinity.items() if weight > 0}
+        return cls(source_affinity=source_affinity, topic_affinity=numbers("topic_affinity"),
+                   observed_topic_mix=numbers("observed_topic_mix"),
+                   hidden_story_ids=names("hidden_story_ids"),
                    event_count=count if isinstance(count, int) and not isinstance(count, bool) else 0)
 
 
@@ -104,8 +108,7 @@ def build_profile(snapshot: Mapping[str, object], *, policy: CompositionPolicy, 
     sources: dict[str, float] = {}
     topics: dict[str, float] = {}
     positive_topics: dict[str, float] = {}
-    suppressed_sources: set[str] = set()
-    suppressed_topics: set[str] = set()
+    hidden_story_ids: set[str] = set()
     counted = 0
     for event in events:
         if not isinstance(event, Mapping):
@@ -125,28 +128,25 @@ def build_profile(snapshot: Mapping[str, object], *, policy: CompositionPolicy, 
             continue
         age_hours = max(0.0, (now - occurred).total_seconds() / 3600.0)
         value = weight * half_life_weight(age_hours, policy.decay_half_life_hours)
-        # Suppression is a recent act, not a permanent verdict. Outside the
-        # window the event still lowers affinity through the decay above; it just
-        # stops removing the source from the page outright.
-        suppressing = age_hours <= policy.negative_suppression_days * 24
+        # The configured window applies only to the clicked story. Similar
+        # coverage is discouraged by soft topic affinity and model context.
+        hiding_story = age_hours <= policy.negative_suppression_days * 24
         counted += 1
         source_id = event.get("source_id")
-        if isinstance(source_id, str) and source_id:
+        if isinstance(source_id, str) and source_id and action != "less_like_this":
             sources[source_id] = sources.get(source_id, 0.0) + value
-            if action == "less_like_this" and suppressing:
-                suppressed_sources.add(source_id)
+        story_id = payload.get("story_id")
+        if action == "less_like_this" and hiding_story and isinstance(story_id, str) and story_id:
+            hidden_story_ids.add(story_id)
         topic_id = payload.get("topic_id")
         if isinstance(topic_id, str) and topic_id:
             topics[topic_id] = topics.get(topic_id, 0.0) + value
-            if action == "less_like_this" and suppressing:
-                suppressed_topics.add(topic_id)
-            elif value > 0:
+            if value > 0:
                 positive_topics[topic_id] = positive_topics.get(topic_id, 0.0) + value
     total = sum(positive_topics.values())
     mix = {topic: value / total for topic, value in positive_topics.items()} if total > 0 else {}
     return BehaviorProfile(source_affinity=sources, topic_affinity=topics, observed_topic_mix=mix,
-                           suppressed_sources=frozenset(suppressed_sources),
-                           suppressed_topics=frozenset(suppressed_topics), event_count=counted)
+                           hidden_story_ids=frozenset(hidden_story_ids), event_count=counted)
 
 
 def _timestamp(value: object) -> datetime | None:

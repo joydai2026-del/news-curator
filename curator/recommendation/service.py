@@ -362,6 +362,7 @@ class RankingService:
         exclusive_has_more = False
         run_snapshot = run.get("profile_snapshot") if run else None
         same_epoch = (isinstance(run_snapshot, Mapping)
+            and run_snapshot.get("schema_version") == 2
             and run_snapshot.get("_history_generation", snapshot.get("history_generation"))
                 == snapshot.get("history_generation")
             and run_snapshot.get("_consent_revision", snapshot.get("consent_revision"))
@@ -372,30 +373,29 @@ class RankingService:
         profile = (BehaviorProfile.from_snapshot(run_snapshot) if same_epoch else
                    build_profile(snapshot, policy=composition, now=self._now())
                    if composition is not None else BehaviorProfile())
-        exclusive_suppressed_sources = (profile.suppressed_sources
-                                        if composition is not None and composition.immediate_negative_filter
-                                        else ())
+        # The run freezes affinity, but a new view inside it must honor a tap
+        # recorded after run open. This also covers predeploy schema-1 runs.
+        hidden_story_ids = (build_profile(snapshot, policy=composition, now=self._now()).hidden_story_ids
+                            if composition is not None and composition.immediate_negative_filter else frozenset())
         # The language-exclusive section is served by the same M2 path: same
         # recipe, same pagination, same frozen order. Only the corpus narrows.
         if exclusive:
             rows, exclusive_consumed_rows, exclusive_has_more = self._exclusive_display_rows(
                 query=query, before_published=before_published, before_story=before_story,
                 target_count=self._policy.candidate_limit + 1,
-                excluded_story_ids=excluded_set,
-                max_batches=self._policy.exclusive_scan_max_batches,
-                suppressed_sources=exclusive_suppressed_sources)
+                excluded_story_ids=excluded_set | hidden_story_ids,
+                max_batches=self._policy.exclusive_scan_max_batches)
         elif composition is not None:
             rows, hot_story_ids, general_boundary, general_has_more = self._pool_rows(
                 category_id, query, profile, composition, before_published, before_story,
-                excluded_story_ids=excluded_set, owner=owner)
+                excluded_story_ids=excluded_set | hidden_story_ids, owner=owner)
             # Capped promotion: a few stories only the other language's press
             # carried get to compete for a place in All, on merit. They do NOT
             # get extra slots; they enter the same pool and take their own
             # lane's quota like any other candidate.
             promotion = [row for row in self._promotion_rows(
                 query, composition, before_published, before_story)
-                if not self._suppressed_by_profile(
-                    row, profile, composition, selected_category=category_id)]
+                if row.get("story_id") not in hidden_story_ids]
             known = {row.get("story_id") for row in rows}
             rows = rows + [row for row in promotion if row.get("story_id") not in known]
         else:
@@ -408,7 +408,7 @@ class RankingService:
         # section. When the section itself is being served, every row has it.
         exclusive_ids = ({str(row["story_id"]) for row in rows} if exclusive
                          else {str(row["story_id"]) for row in promotion})
-        filtered = ([row for row in rows if row.get("story_id") not in excluded_set]
+        filtered = ([row for row in rows if row.get("story_id") not in (excluded_set | hidden_story_ids)]
                     if not exclusive else rows)
         has_more = (exclusive_has_more if exclusive else
                     general_has_more if composition is not None else
@@ -437,7 +437,7 @@ class RankingService:
             if exclusive:
                 cursor_rows = self._exclusive_safe_cursor_rows(
                     exclusive_consumed_rows, {str(row.get("story_id")) for row in rows},
-                    excluded_set | opened_ids, suppressed_sources=exclusive_suppressed_sources)
+                    excluded_set | opened_ids | hidden_story_ids)
                 if has_more:
                     next_corpus = (self._exclusive_corpus_cursor(cursor_rows) if cursor_rows else
                                    {"before_published_at": before_published,
@@ -948,8 +948,8 @@ class RankingService:
         category_id = eligibility.get("category") if isinstance(eligibility, Mapping) else None
         query = eligibility.get("query") if isinstance(eligibility, Mapping) else None
         profile = BehaviorProfile.from_snapshot(bindings.get("profile_snapshot"))
-        exclusive_suppressed_sources = (profile.suppressed_sources
-                                        if composition.immediate_negative_filter else ())
+        hidden_story_ids = (profile.hidden_story_ids
+                            if composition.immediate_negative_filter else frozenset())
         seen = {str(card.get("story_id")) for card in frozen.get("cards", ())}
         original_exclusions = {str(story_id) for story_id in
                                (bindings.get("excluded_story_ids") or ())}
@@ -964,9 +964,8 @@ class RankingService:
                 query=query, before_published=cursor.get("before_published_at"),
                 before_story=cursor.get("before_story_id"),
                 target_count=self._policy.candidate_limit + 1,
-                excluded_story_ids=seen | original_exclusions,
-                max_batches=self._policy.exclusive_continuation_max_batches,
-                suppressed_sources=exclusive_suppressed_sources)
+                excluded_story_ids=seen | original_exclusions | hidden_story_ids,
+                max_batches=self._policy.exclusive_continuation_max_batches)
             hot_story_ids: set[str] = set()
             used_pending = False
         else:
@@ -1059,7 +1058,7 @@ class RankingService:
             safe_rows = self._exclusive_safe_cursor_rows(
                 cursor_rows, {item.story_id for item in laned},
                 seen | original_exclusions | semantic_drop_ids | opened_ids,
-                suppressed_sources=exclusive_suppressed_sources)
+)
             next_corpus = (self._exclusive_corpus_cursor(safe_rows) if safe_rows else dict(cursor))
             remaining_pending = []
         elif used_pending:
@@ -1405,8 +1404,7 @@ class RankingService:
             profile = build_profile(snapshot, policy=composition, now=self._now())
         boundaries = {value for value in (continuation_offsets or ())
                       if isinstance(value, int) and not isinstance(value, bool) and value >= 0}
-        if ((profile is None
-                or (not profile.suppressed_sources and not profile.suppressed_topics))
+        if ((profile is None or not profile.hidden_story_ids)
                 and not any(boundary < offset + size for boundary in boundaries)):
             return cards[offset:offset + size], offset + size, []
         visible, removed, position = [], [], offset
@@ -2021,14 +2019,17 @@ class RankingService:
         # last few hours alone and the page comes back short with hundreds of
         # candidates unread. Python assigns the lanes; this just makes sure the
         # recipe has a corpus to work from.
-        # The filtered SQL RPC applies frozen exclusions and profile suppression
-        # after dedupe but before LIMIT. Continue on its keyset only when the
-        # selected lane cannot fill the window or the corpus is exhausted.
+        # The SQL RPC excludes clicked stories before LIMIT, leaving their
+        # publishers and broad topics eligible for every lane.
         excluded = set(excluded_story_ids)
-        suppressed_sources = (tuple(sorted(profile.suppressed_sources))
-                              if composition.immediate_negative_filter else ())
-        suppressed_topics = (tuple(sorted(profile.suppressed_topics - {category_id}))
-                             if composition.immediate_negative_filter else ())
+        if composition.immediate_negative_filter:
+            excluded.update(profile.hidden_story_ids)
+        # Owner history and explicit exclusions can each contain up to 1,000
+        # ids, while the candidate RPC accepts 1,200. Keep the full set for
+        # Python filtering and bounded keyset scans; send only the SQL maximum.
+        sql_excluded = tuple(sorted(excluded))[:1200]
+        suppressed_sources = ()
+        suppressed_topics = ()
         def fetch_general():
             scan_start = time.perf_counter()
             target = composition.candidate_window_size + composition.page_size
@@ -2058,7 +2059,7 @@ class RankingService:
                     max_age_hours=None, min_age_hours=None,
                     limit=limit, before_published_at=general_boundary[0],
                     before_story_id=general_boundary[1], before_source_count=None,
-                    excluded_story_ids=tuple(sorted(excluded)),
+                    excluded_story_ids=sql_excluded,
                     suppressed_sources=suppressed_sources,
                     suppressed_topics=suppressed_topics)
                 general_batches += 1
@@ -2136,7 +2137,7 @@ class RankingService:
                     min_age_hours=None if lane == "updates" else composition.updates_max_age_hours,
                     limit=batch_limit, before_published_at=lane_cursor[0],
                     before_story_id=lane_cursor[1], before_source_count=lane_cursor[2],
-                    excluded_story_ids=tuple(sorted(excluded)),
+                    excluded_story_ids=sql_excluded,
                     suppressed_sources=suppressed_sources,
                     suppressed_topics=suppressed_topics)
                 rpc_count += 1
@@ -2179,15 +2180,7 @@ class RankingService:
     def _suppressed_by_profile(self, row, profile, composition, *, selected_category=None):
         if profile is None or composition is None or not composition.immediate_negative_filter:
             return False
-        # An explicit language-only section is not a topic. Its stories carry
-        # ordinary topic tags, which must not make a first page disappear on
-        # replay after the owner has chosen this section. Source dislikes still
-        # apply, both when ranking and when rendering the frozen order.
-        ignore_topics = self._is_exclusive_category(selected_category)
-        return (row.get("source_id") in profile.suppressed_sources
-                or any(not ignore_topics and category != selected_category
-                       and category in profile.suppressed_topics
-                       for category in (row.get("category_ids") or ())))
+        return row.get("story_id") in profile.hidden_story_ids
 
     def _card(self, row, owner_state, *, lane=None, composition=None, exclusive=False, also_covered_by=()):
         language = str(row["language"])

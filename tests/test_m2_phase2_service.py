@@ -724,6 +724,12 @@ def test_an_empty_filtered_slice_keeps_its_response_ordinal_for_older_cards():
         "event_revision": 9, "occurred_at": NOW.isoformat(),
         "payload": {"story_id": "story:" + "0" * 64, "surface": "reader"},
         "story_title": "", "story_summary": "", "source_id": "blocked"})
+    store.events.extend({"event_id": f"hide-{index}", "event_type": "less_like_this",
+        "event_revision": 20 + index, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": f"story:{index:064x}", "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": "blocked"}
+        for index in range(25, 75))
+
 
     empty = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
     assert empty["cards"] == [] and empty["next_cursor"]
@@ -758,6 +764,12 @@ def test_an_empty_filtered_replay_cannot_move_a_spent_ordinal_to_new_cards():
         "event_revision": 9, "occurred_at": NOW.isoformat(),
         "payload": {"story_id": "story:" + "0" * 64, "surface": "reader"},
         "story_title": "", "story_summary": "", "source_id": "blocked"})
+    store.events.extend({"event_id": f"hide-{index}", "event_type": "less_like_this",
+        "event_revision": 20 + index, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": f"story:{index:064x}", "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": "blocked"}
+        for index in range(75, 125))
+
     moved = subject.page(authorization="Bearer valid", cursor=page_four_cursor)
     assert moved["cards"] == [] and moved["next_cursor"]
     decoded = subject._decode_cursor(moved["next_cursor"])
@@ -803,7 +815,7 @@ def test_one_run_is_opened_and_its_profile_is_frozen_on_it():
     rank(subject, store)
     rank(subject, store)
     assert len(store.runs) == 1
-    assert store.runs[0]["profile_snapshot"]["schema_version"] == 1
+    assert store.runs[0]["profile_snapshot"]["schema_version"] == 2
     assert store.frozen["frozen-1"]["bindings"]["run_id"] == "run-1"
 
 
@@ -1411,7 +1423,7 @@ def test_general_pool_sql_filter_refills_past_one_hundred_excluded_heads_in_one_
 
 
 @pytest.mark.parametrize("total, expected_general, has_more", [(130, 33, False), (230, 75, True)])
-def test_live_shape_ninety_seven_suppressed_stories_refills_or_ends_honestly(
+def test_live_shape_ninety_seven_hidden_stories_refills_or_ends_honestly(
         total, expected_general, has_more):
     class CountingStore(Store):
         def __init__(self, rows):
@@ -1429,7 +1441,8 @@ def test_live_shape_ninety_seven_suppressed_stories_refills_or_ends_honestly(
             for index in range(total)]
     store = CountingStore(rows)
     subject = paid(store)
-    profile = BehaviorProfile(suppressed_topics=frozenset({"suppressed-topic"}))
+    profile = BehaviorProfile(hidden_story_ids=frozenset(
+        row["story_id"] for row in rows[:97]))
     pooled, _, _, general_has_more = subject._pool_rows(
         None, None, profile, subject._policy.composition, None, None,
         owner=subject._authenticate("Bearer valid")[1])
@@ -1439,7 +1452,7 @@ def test_live_shape_ninety_seven_suppressed_stories_refills_or_ends_honestly(
     assert len(pooled) >= expected_general
     if not has_more:
         assert len(pooled) == 33
-    assert all("suppressed-topic" not in row["category_ids"] for row in pooled)
+    assert all(row["story_id"] not in profile.hidden_story_ids for row in pooled)
 
 
 def test_post_rank_less_like_feedback_refills_four_pages_from_older_corpus():
@@ -1505,7 +1518,10 @@ def test_preexisting_less_like_feedback_does_not_spend_page_slots_on_hidden_stor
 
     assert pages == [25, 25, 25, 25]
     assert len(served) == len(set(served)) == 100
-    assert not ({row["story_id"] for row in blocked} & set(served))
+    hidden = blocked if suppression == "source" else blocked[:1]
+    assert not ({row["story_id"] for row in hidden} & set(served))
+    if suppression == "topic":
+        assert {row["story_id"] for row in blocked[1:]} & set(served)
     assert subject._adapter.calls == 1
 
 
@@ -1537,7 +1553,63 @@ def test_suppressed_lane_head_does_not_hide_qualified_cards_beyond_it(lane, expe
     assert subject._adapter.calls == 1
 
 
-def test_broad_negative_topic_has_bounded_candidate_scan():
+@pytest.mark.parametrize("legacy_run_profile", [False, True])
+def test_new_view_in_same_run_hides_only_newly_disliked_story(legacy_run_profile):
+    class ByCategory(PaidStore):
+        def retained_candidates_v2(self, *, category_id, **kwargs):
+            rows = super().retained_candidates_v2(category_id=category_id, **kwargs)
+            return rows if category_id is None else [
+                row for row in rows if category_id in row["category_ids"]]
+
+    rows = default_corpus()
+    world = [row for row in rows if "world" in row["category_ids"]]
+    world[0]["source_id"] = world[1]["source_id"] = "shared-publisher"
+    store = ByCategory(rows, events=liked_events())
+    subject = paid(store)
+    rank(subject, store)
+    if legacy_run_profile:
+        stored_profile = store.runs[0]["profile_snapshot"]
+        stored_profile["schema_version"] = 1
+        stored_profile["source_affinity"] = {"shared-publisher": -100}
+        stored_profile["suppressed_sources"] = ["shared-publisher"]
+        stored_profile["suppressed_topics"] = ["world"]
+    store.events.append({"event_id": "after-run-dislike", "event_type": "less_like_this",
+                         "event_revision": store.included + 1, "occurred_at": NOW.isoformat(),
+                         "payload": {"story_id": world[0]["story_id"],
+                                     "topic_id": "world", "surface": "reader"},
+                         "story_title": world[0]["title"], "story_summary": world[0]["summary"],
+                         "source_id": "shared-publisher"})
+
+    category = rank(subject, store, eligibility={"category": "world", "query": None})
+    served = {card["story_id"] for card in category["cards"]}
+    assert world[0]["story_id"] not in served
+    assert world[1]["story_id"] in served
+    assert len(store.runs) == 1
+
+
+def test_less_like_hot_story_keeps_shared_publisher_and_topic_in_all():
+    rows = default_corpus()
+    hot = [row for row in rows if row["independent_source_count"] >= 4]
+    hot[0]["source_id"] = hot[1]["source_id"] = "shared-publisher"
+    hot[0]["category_ids"] = hot[1]["category_ids"] = ["shared-topic"]
+    feedback = {"event_id": "specific-hot-feedback", "event_type": "less_like_this",
+                "event_revision": 10, "occurred_at": NOW.isoformat(),
+                "payload": {"story_id": hot[0]["story_id"],
+                            "topic_id": "shared-topic", "surface": "reader"},
+                "story_title": hot[0]["title"], "story_summary": hot[0]["summary"],
+                "source_id": "shared-publisher"}
+    store = PaidStore(rows, events=liked_events() + [feedback])
+    response = rank(paid(store), store)
+    cards = response["cards"]
+
+    assert len(cards) == 25
+    assert hot[0]["story_id"] not in {card["story_id"] for card in cards}
+    assert any(card["story_id"] == hot[1]["story_id"] and card["lane"] == "hot"
+               for card in cards)
+    assert any(card["lane"] == "hot" for card in cards)
+
+
+def test_topic_feedback_keeps_topic_pool_available_with_bounded_scan():
     class CountingStore(PaidStore):
         def __init__(self, rows, events):
             super().__init__(rows, events=events)
@@ -1560,11 +1632,12 @@ def test_broad_negative_topic_has_bounded_candidate_scan():
 
     response = rank(subject, store)
 
-    assert response["cards"] == []
-    assert response["fallback_reason"] == "no_candidates"
+    assert len(response["cards"]) == 25
+    assert rows[0]["story_id"] not in {card["story_id"] for card in response["cards"]}
+    assert any("blocked-topic" in card["category_ids"] for card in response["cards"])
     composition = subject._policy.composition
     assert store.candidate_fetches <= (len(composition.lane_priority) + 1) * composition.pool_scan_max_batches
-    assert subject._adapter.calls == 0
+    assert subject._adapter.calls == 1
 
 
 @pytest.mark.parametrize(("count", "expected_pages"), [
@@ -1617,7 +1690,7 @@ def test_pending_tail_refills_a_filtered_second_page():
     second = subject.page(authorization="Bearer valid", cursor=first["next_cursor"])
 
     assert len(second["cards"]) == 25
-    assert all(card["source_id"] != blocked["source_id"] for card in second["cards"])
+    assert blocked["story_id"] not in {card["story_id"] for card in second["cards"]}
     assert subject._adapter.calls == 1
 
 
@@ -2180,7 +2253,14 @@ def test_an_all_hidden_head_can_reach_older_visible_stories_without_repaying():
                 "payload": {"story_id": rows[0]["story_id"],
                             "topic_id": "blocked-topic", "surface": "reader"},
                 "story_title": "", "story_summary": "", "source_id": rows[0]["source_id"]}
-    store = PaidStore(rows, events=liked_events() + [feedback])
+    hidden_events = [feedback] + [
+        {"event_id": f"clicked-{index}", "event_type": "less_like_this",
+         "event_revision": 10 + index, "occurred_at": NOW.isoformat(),
+         "payload": {"story_id": row["story_id"], "surface": "reader"},
+         "story_title": row["title"], "story_summary": row["summary"],
+         "source_id": row["source_id"]}
+        for index, row in enumerate(rows[1:200], start=1)]
+    store = PaidStore(rows, events=liked_events() + hidden_events)
     subject = paid(store)
     first = rank(subject, store)
     assert len(first["cards"]) == 25 and first["next_cursor"]
@@ -3069,6 +3149,12 @@ def test_a_filtered_empty_refresh_preserves_the_views_response_high_water_mark()
         "event_revision": 9, "occurred_at": NOW.isoformat(),
         "payload": {"story_id": "story:" + "0" * 64, "surface": "reader"},
         "story_title": "", "story_summary": "", "source_id": "blocked"})
+    store.events.extend({"event_id": f"hide-{index}", "event_type": "less_like_this",
+        "event_revision": 20 + index, "occurred_at": NOW.isoformat(),
+        "payload": {"story_id": f"story:{index:064x}", "surface": "reader"},
+        "story_title": "", "story_summary": "", "source_id": "blocked"}
+        for index in range(1, 50))
+
 
     refreshed = rank(subject, store)
     assert refreshed["cards"] == [] and refreshed["next_cursor"]
@@ -3496,7 +3582,7 @@ def test_a_category_inside_an_open_run_is_not_served_the_all_page():
     assert len(store.frozen) == 2
 
 
-def test_explicit_category_overrides_its_topic_dislike_but_all_still_hides_it():
+def test_topic_feedback_keeps_category_available_and_hides_clicked_story():
     rows = ([corpus_row(index, hours=2 + index / 100,
                         source=f"world-{index}", categories=["world"])
              for index in range(80)]
@@ -3526,7 +3612,8 @@ def test_explicit_category_overrides_its_topic_dislike_but_all_still_hides_it():
     subject = paid(store)
 
     all_view = rank(subject, store)
-    assert all("world" not in card["category_ids"] for card in all_view["cards"])
+    assert any("world" in card["category_ids"] for card in all_view["cards"])
+    assert rows[0]["story_id"] not in {card["story_id"] for card in all_view["cards"]}
     world = rank(subject, store, eligibility={"category": "world", "query": None})
     assert len(world["cards"]) == 25
     assert all("world" in card["category_ids"] for card in world["cards"])
@@ -3543,7 +3630,7 @@ def test_explicit_category_overrides_its_topic_dislike_but_all_still_hides_it():
                          "source_id": blocked["source_id"]})
     second = subject.page(authorization="Bearer valid", cursor=world["next_cursor"])
     assert len(second["cards"]) == 25
-    assert all(card["source_id"] != blocked["source_id"] for card in second["cards"])
+    assert blocked["story_id"] not in {card["story_id"] for card in second["cards"]}
     replay = rank(subject, store, eligibility={"category": "world", "query": None})
     assert [card["story_id"] for card in replay["cards"]] == [
         card["story_id"] for card in world["cards"]]
@@ -3593,7 +3680,7 @@ def test_explicit_language_section_replays_its_first_page_after_topic_feedback()
     assert subject._adapter.calls == 1
 
 
-def test_exclusive_source_suppression_advances_past_a_full_raw_batch():
+def test_exclusive_clicked_story_hide_keeps_shared_source():
     rows = exclusive_corpus(120)
     for row in rows[:51]:
         row["source_id"] = "blocked-source"
@@ -3615,12 +3702,13 @@ def test_exclusive_source_suppression_advances_past_a_full_raw_batch():
         response = subject.page(authorization="Bearer valid", cursor=cursor)
         served.extend(response["cards"])
         cursor = response.get("next_cursor")
-    assert len({card["story_id"] for card in served}) == 69
-    assert all(card["source_id"] != "blocked-source" for card in served)
+    assert len({card["story_id"] for card in served}) == 79
+    assert rows[0]["story_id"] not in {card["story_id"] for card in served}
+    assert any(card["source_id"] == "blocked-source" for card in served)
     assert subject._adapter.calls == 1
 
 
-def test_exclusive_source_feedback_respects_disabled_immediate_filter_policy():
+def test_exclusive_story_feedback_respects_disabled_immediate_filter_policy():
     rows = exclusive_corpus(81)
     feedback = {"event_id": "less-source", "event_type": "less_like_this",
                 "event_revision": 1, "occurred_at": NOW.isoformat(),

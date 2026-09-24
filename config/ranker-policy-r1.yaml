@@ -2,7 +2,10 @@ schema_version: 1
 provider: openai
 model: gpt-5-mini
 endpoint: https://api.openai.com/v1
-prompt_revision: m2-rankllm-predictions-r1
+prompt_revision: m2-rankllm-predictions-r2
+# The provider data-processing consent scope is unchanged by the ranking
+# instruction update. Keep the live owner consent binding and history intact.
+provider_policy_id: m2-rankllm-predictions-r1
 prompt_template: config/rankllm-news-curator-predictions.yaml
 # Raised for the five-field prediction payload. The engine sizes its own
 # guard from the answer it actually asks for, so this and the schema move

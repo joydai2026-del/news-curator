@@ -72,7 +72,7 @@ def validate_m2_ranker_contract(config: object, ranker_policy: Path) -> dict[str
         raise ValueError("The ranker policy is invalid.")
     expected = {
         "policy_version": policy.get("prompt_revision"),
-        "provider_policy_id": policy.get("prompt_revision"),
+        "provider_policy_id": policy.get("provider_policy_id"),
         "model_version": policy.get("model"),
         "page_size": policy.get("maximum_page_size"),
     }

@@ -22,6 +22,16 @@ from curator.recommendation.deployment import FUNCTION_TIMEOUT_ENV
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_prompt_revision_changes_without_resetting_provider_consent(monkeypatch):
+    _, policy = load_ranker_policy({}, RANKER_POLICY_DEFAULT, root=ROOT)
+    monkeypatch.setattr(runtime, "configured_token_counter", lambda *_args: len)
+    app = runtime.build_application(environ=_boot_env())
+    assert app._service._policy.policy_version == policy["prompt_revision"]
+    assert app._service._adapter._policy.prompt_revision == policy["prompt_revision"]
+    assert app._service._policy.provider_policy_id == policy["provider_policy_id"]
+    assert policy["prompt_revision"] != policy["provider_policy_id"]
+
+
 def test_shipped_policy_declares_a_timeout_the_heavy_query_can_finish_in():
     _, policy = load_ranker_policy({}, RANKER_POLICY_DEFAULT, root=ROOT)
     value = supabase_timeout_seconds(policy)

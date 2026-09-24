@@ -54,7 +54,7 @@ def test_disabled_workflow_step_is_byte_identical_to_existing_m1_callback_path(t
 
 def test_enabled_workflow_step_validates_and_applies_public_m2_config(tmp_path):
     workspace=_workspace(tmp_path/'enabled');(workspace/'runner-temp').mkdir()
-    config=json.dumps({'enabled':True,'url':'https://ranker.example','policy_version':'m2-rankllm-predictions-r1',
+    config=json.dumps({'enabled':True,'url':'https://ranker.example','policy_version':'m2-rankllm-predictions-r2',
         'model_version':'gpt-5-mini','provider_policy_id':'m2-rankllm-predictions-r1',
         'provider_retention_url':'https://policy.example/privacy','page_size':25,
         'request_timeout_ms':8000,'transport_timeout_ms':310000})
@@ -70,12 +70,13 @@ def test_enabled_workflow_step_validates_and_applies_public_m2_config(tmp_path):
 
 
 def test_enabled_workflow_step_fails_closed_without_valid_config(tmp_path):
-    base={'enabled':True,'url':'https://ranker.example','policy_version':'m2-rankllm-predictions-r1',
+    base={'enabled':True,'url':'https://ranker.example','policy_version':'m2-rankllm-predictions-r2',
         'model_version':'gpt-5-mini','provider_policy_id':'m2-rankllm-predictions-r1',
         'provider_retention_url':'https://policy.example/privacy','page_size':25}
     invalid_configs=('', '{invalid', json.dumps({**base,'request_timeout_ms':8001}),
         json.dumps({**base,'request_timeout_ms':310000}),
         json.dumps({**base,'policy_version':'stale-policy','request_timeout_ms':8000,'transport_timeout_ms':310000}),
+        json.dumps({**base,'provider_policy_id':'stale-consent','request_timeout_ms':8000,'transport_timeout_ms':310000}),
         json.dumps({**base,'request_timeout_ms':8000,'transport_timeout_ms':309999}),
         json.dumps({**base,'request_timeout_ms':8000,'transport_timeout_ms':600001}))
     for index,config in enumerate(invalid_configs):

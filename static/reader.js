@@ -1016,6 +1016,8 @@
     } catch (_) { announce("Personalized feed configuration is unavailable. Public stories remain available."); }
     let m2Active = false, m2Sequence = 0, m2InteractionEpoch = 0, m2Cursor = null, m2Binding = null, m2Key = null, m2Topic = null;
     let m2Section = null, m2PublicCards = [], m2Position = 0, m2Entries = [];
+    const m2HiddenStoryIds = new Set();
+    let m2HiddenGeneration = null;
     const LANGUAGE_STORAGE_KEY = "news-curator-display-language";
     const configuredLanguage = document.querySelector('meta[name="news-curator-display-language"]')?.content;
     // The reader's own choice wins over the site default; neither is hardcoded.
@@ -1543,6 +1545,8 @@
       }
       const reason = response.result_mode === "model" ? "Ranked using your current query and permitted reading history." : "Freshness order. Model ranking was not used.";
       response.cards.forEach((incoming) => {
+        // An older in-flight response cannot repaint a clicked hidden story.
+        if (m2HiddenStoryIds.has(incoming.story_id)) return;
         const entry = mergeM2CardState(incoming, currentEntries.get(incoming.story_id), sameHistoryContext);
         if (cards.has(entry.story_id)) return;
         m2Entries.push(entry);
@@ -1645,6 +1649,9 @@
         const history = await api.historySnapshot();
         if (epoch !== authEpoch || request !== m2Sequence || !usesM2()) return;
         syncM2Consent(history);
+        if (m2HiddenGeneration !== null && m2HiddenGeneration !== history.history_generation) {
+          m2HiddenStoryIds.clear(); m2HiddenGeneration = null;
+        }
         const canContinue = append && key === m2Key && m2Cursor && m2Binding &&
           history.history_generation === m2Binding.history_generation && history.consent_revision === m2Binding.consent_revision;
         if (Date.now() >= operationExpiresAt) { terminalFallback(); return; }
@@ -1946,6 +1953,7 @@
       abortOwnerExport();
       authEpoch += 1;
       pendingStateMutations.clear(); pendingInterestMutations.clear();
+      m2HiddenStoryIds.clear(); m2HiddenGeneration = null;
       leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
@@ -1991,6 +1999,7 @@
       abortOwnerExport();
       authEpoch += 1;
       pendingStateMutations.clear(); pendingInterestMutations.clear();
+      m2HiddenStoryIds.clear(); m2HiddenGeneration = null;
       leaveM2();
       leaveDiscovery(true);
       if (discoveryControls) discoveryControls.hidden = true;
@@ -2424,10 +2433,22 @@
             rememberM2State(presentationCard, { interests: [...interestStates(presentationCard)].map(([savedTopicId, state]) => ({
               topic_id: savedTopicId, signal: state.signal, revision: state.revision,
             })) });
-            announce(`${signal === "less_like" ? "Less" : "More"} like this was saved for future rankings.`);
+            if (signal === "less_like" && presentationCard.dataset.m2Card === "true") {
+              m2HiddenStoryIds.add(storyId);
+              m2HiddenGeneration = m2Binding?.history_generation ?? null;
+              m2Entries = m2Entries.filter((entry) => entry.story_id !== storyId);
+              view.removeCard(presentationCard);
+              presentationCard.remove();
+              cards.delete(storyId);
+              if (publicStoryCount) publicStoryCount.textContent = `${cards.size} stories loaded`;
+              view.apply();
+              announce("Story hidden. We will show less coverage like this.");
+            } else {
+              announce("More like this was saved for future rankings.");
+            }
           })
           .catch(() => {
-            if (requestEpoch === authEpoch) announce("More like this could not be saved. Try again.");
+            if (requestEpoch === authEpoch) announce(`${signal === "less_like" ? "Less" : "More"} like this could not be saved. Try again.`);
           })
           .finally(() => {
             const pending = pendingInterestMutations.get(storyId);

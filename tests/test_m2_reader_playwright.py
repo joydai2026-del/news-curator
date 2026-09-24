@@ -278,6 +278,13 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                   window.__stateReleases=window.__stateReleases||[];
                   window.__stateReleases.push(()=>originalFetch(url,options).then(resolve,reject));
                 });
+              if(window.__holdM2Response && String(url).startsWith("https://ranker.example"))
+                return new Promise((resolve,reject)=>{
+                  originalFetch(url,options).then(response=>{
+                    window.__heldM2Releases=window.__heldM2Releases||[];
+                    window.__heldM2Releases.push(()=>resolve(response));
+                  },reject);
+                });
               return window.__stallM2 && String(url).startsWith("https://ranker.example")
                 ?new Promise((resolve,reject)=>{
                     const timer=setTimeout(()=>originalFetch(url,options).then(async(response)=>{
@@ -622,10 +629,25 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
             page.wait_for_function('(category)=>document.querySelectorAll("[data-m2-card=true]").length>0 && Array.from(document.querySelectorAll("[data-m2-card=true]")).every(c=>c.dataset.topicApiIds.split(" ").includes(category))',arg=category)
             assert store.rank_reads[-1][0]==category
             card=page.locator('[data-m2-card=true]').first
+            clicked_story_id=card.get_attribute('data-story-id')
+            # Capture a pre-feedback server response, then hold it at the
+            # browser boundary. Its arrival must not repaint the hidden story.
+            page.evaluate('window.__holdM2Response=true;window.__heldM2Releases=[]')
+            with page.expect_request(lambda request:urlsplit(request.url).path=='/rank'):
+                page.evaluate('document.querySelector("#m2-refresh").click()')
+            page.wait_for_function('() => window.__heldM2Releases.length===1')
             card.locator('.accordion-toggle').click()
             with page.expect_response(lambda response:response.url.endswith('/set_story_interest_with_event')):
                 card.locator('.less-interest-action').click()
-            page.wait_for_function('() => document.querySelector("[data-m2-card=true] .less-interest-action").getAttribute("aria-pressed")==="true"')
+            page.wait_for_function(
+                '(story_id) => !Array.from(document.querySelectorAll("[data-m2-card=true]")).some(card => card.dataset.storyId === story_id)',
+                arg=clicked_story_id)
+            page.evaluate('window.__holdM2Response=false;window.__heldM2Releases[0]()')
+            page.wait_for_timeout(200)
+            assert page.locator(f'[data-m2-card=true][data-story-id="{clicked_story_id}"]').count()==0
+            page.locator('#m2-language-toggle').click()
+            assert page.locator(f'[data-m2-card=true][data-story-id="{clicked_story_id}"]').count()==0
+            assert page.locator('[data-m2-card=true]').count() >= 1
             assert any(event['event_type']=='less_like_this' for event in store.events)
             with page.expect_download() as download_info:
                 page.locator('#m2-download-data').click()
