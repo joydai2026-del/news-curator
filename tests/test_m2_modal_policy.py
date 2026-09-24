@@ -69,15 +69,21 @@ def _load(monkeypatch, **values):
     return importlib.import_module(MODULE), captured
 
 
-def _required(tmp_path):
+def _required(tmp_path, *, preparation_enabled=False):
     context = tmp_path / "context"
     context.mkdir()
     containerfile = context / "Containerfile"
     containerfile.write_text("FROM scratch\n")
+    policy = context / "config" / "ranker-policy-r1.yaml"
+    policy.parent.mkdir()
+    policy.write_text("schema_version: 1\nnext_run_preparation:\n"
+                      f"  enabled: {str(preparation_enabled).lower()}\n")
     manifest = context / "context-manifest.json"
-    data = containerfile.read_bytes()
-    manifest.write_text(json.dumps({"files": [{"path": "Containerfile", "size": len(data),
-        "sha256": hashlib.sha256(data).hexdigest()}]}) + "\n")
+    files = [containerfile, policy]
+    manifest.write_text(json.dumps({"files": [
+        {"path": item.relative_to(context).as_posix(), "size": len(item.read_bytes()),
+         "sha256": hashlib.sha256(item.read_bytes()).hexdigest()} for item in files
+    ]}) + "\n")
     return {
         "NEWS_CURATOR_MODAL_DEPLOYMENT_ENABLED": "true",
         "NEWS_CURATOR_RANKER_CONTEXT": str(context),

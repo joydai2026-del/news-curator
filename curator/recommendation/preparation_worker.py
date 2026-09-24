@@ -22,10 +22,14 @@ def process_one_preparation(*, store, adapter, policy) -> str:
     job_id, claim_token = str(job["job_id"]), str(job["claim_token"])
     request_id, user_id = str(job["request_id"]), str(job["user_id"])
     attempted = False
+    reserved = False
+    attempt_mark_uncertain = False
+    settlement_attempted = False
     try:
         request = request_from_payload(job["request_payload"])
         if (request.request_id != request_id or request.owner.user_id != user_id
                 or user_id not in policy.preview_owner_ids
+                or request.owner.tenant_id != policy.tenant_id
                 or request.policy_version != policy.policy_version
                 or request.model_version != policy.model_version):
             store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
@@ -42,9 +46,9 @@ def process_one_preparation(*, store, adapter, policy) -> str:
                 daily_limit_usd=policy.daily_cost_limit_usd):
             store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
             return "budget_denied"
+        reserved = True
         observed = {}
         attempt_mark_denied = False
-        attempt_mark_uncertain = False
 
         def on_attempt(_attempt, _elapsed):
             nonlocal attempted, attempt_mark_denied, attempt_mark_uncertain
@@ -69,6 +73,13 @@ def process_one_preparation(*, store, adapter, policy) -> str:
                             output_tokens=outcome.output_tokens,
                             unknown_attempts=unknown_attempts)
 
+        def settle_observed_usage():
+            settled = adapter.settle_observed_cost(input_tokens=observed["input_tokens"],
+                output_tokens=observed["output_tokens"],
+                unknown_attempts=observed["unknown_attempts"], reserved_usd=estimate)
+            store.settle_budget(user_id=user_id, request_id=request_id,
+                                actual_usd=settled, status="settled")
+
         try:
             receipt = adapter.rank(request, provider_processing_consent=True,
                 budget=BudgetState(0), estimated_input_tokens=prepared.input_tokens_bound,
@@ -81,12 +92,17 @@ def process_one_preparation(*, store, adapter, policy) -> str:
             # by a future adapter. The same cost rule applies either way.
             receipt = None
         if attempt_mark_denied:
-            if not attempted:
+            if observed:
+                # A refused retry cannot start another transport. Settle any
+                # usage already reported by an earlier completed attempt.
+                settle_observed_usage()
+            elif not attempted:
                 # First attempt was refused. No provider transport began.
+                settlement_attempted = True
                 store.settle_budget(user_id=user_id, request_id=request_id,
                                     actual_usd=0.0, status="released")
-            # On a refused retry the earlier attempt may already have charged,
-            # so keep its reservation for reconciliation.
+            # If an earlier attempt has no observed usage, its charge is
+            # uncertain and the ceiling stays reserved for reconciliation.
             store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
             return "failed" if attempted else "stale"
         if attempt_mark_uncertain:
@@ -95,12 +111,9 @@ def process_one_preparation(*, store, adapter, policy) -> str:
             store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
             return "failed"
         if observed:
-            settled = adapter.settle_observed_cost(input_tokens=observed["input_tokens"],
-                output_tokens=observed["output_tokens"],
-                unknown_attempts=observed["unknown_attempts"], reserved_usd=estimate)
-            store.settle_budget(user_id=user_id, request_id=request_id,
-                                actual_usd=settled, status="settled")
+            settle_observed_usage()
         elif not attempted:
+            settlement_attempted = True
             store.settle_budget(user_id=user_id, request_id=request_id,
                                 actual_usd=0.0, status="released")
         # An attempted call without observed usage may have charged. Its
@@ -112,11 +125,18 @@ def process_one_preparation(*, store, adapter, policy) -> str:
         if store.finish_prepared_order(job_id=job_id, claim_token=claim_token,
                                        ranked_candidate_ids=receipt.ranked_candidate_ids):
             return "ready"
+        store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
         return "stale"
     except Exception:
-        # Release only when absolutely no attempt started and no ambiguous
-        # operation occurred. An exception can conceal a provider charge or a
-        # settlement result, so leave the durable reservation intact.
+        # Release a known reservation only when no transport started and no
+        # authorization or settlement outcome is uncertain. Otherwise an
+        # exception can conceal a provider charge.
+        if reserved and not attempted and not attempt_mark_uncertain and not settlement_attempted:
+            try:
+                store.settle_budget(user_id=user_id, request_id=request_id,
+                                    actual_usd=0.0, status="released")
+            except Exception:
+                pass
         try:
             store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
         except Exception:

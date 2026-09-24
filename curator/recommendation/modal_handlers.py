@@ -3,6 +3,10 @@
 # Where the image puts the tree. Everything below is discovered from the ranker
 # policy relative to it; no handler names a config file of its own.
 IMAGE_ROOT = "/opt/news-curator"
+PREPARATION_OUTCOMES = frozenset({
+    "ready", "failed", "stale", "invalid", "unpreparable",
+    "budget_denied", "empty", "disabled",
+})
 
 
 def image_inputs(root=IMAGE_ROOT):
@@ -36,6 +40,8 @@ def scrub_expired_preparations():
 
     started = time.monotonic()
     count = build_application()._service._store.scrub_expired_prepared_orders()
+    if type(count) is not int or not 0 <= count <= 100:
+        raise ValueError("prepared scrub returned an invalid count")
     result = {"event": "m2_preparation_scrub", "scrubbed": count,
               "duration_ms": round((time.monotonic() - started) * 1000)}
     print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
@@ -64,6 +70,8 @@ def prepare_next_run():
     for _ in range(batch_size):
         outcome = process_one_preparation(
             store=service._store, adapter=service._adapter, policy=service._policy)
+        if type(outcome) is not str or outcome not in PREPARATION_OUTCOMES:
+            raise ValueError("preparation worker returned an invalid outcome")
         counts[outcome] = counts.get(outcome, 0) + 1
         if outcome in {"disabled", "empty"}:
             break

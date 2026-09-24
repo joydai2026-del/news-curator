@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+import pytest
 
 from curator.contracts.enums import RankingResultMode
 from curator.contracts.ranking_request import RankingResponseReceipt
@@ -230,3 +232,121 @@ def test_uncertain_retry_authorization_blocks_retry_and_retains_reservation():
     assert store.calls == ["claim", "reserve", "mark", "mark", "fail"]
     assert adapter.calls.count("provider") == 1
     assert ("settle", "released") not in store.calls
+
+
+def test_rejected_finish_scrubs_the_private_payload():
+    from curator.recommendation.preparation_worker import process_one_preparation
+
+    class RejectingStore(Store):
+        def finish_prepared_order(self, **kwargs):
+            self.calls.append("finish")
+            return False
+
+    store, adapter = RejectingStore(), Adapter()
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "stale"
+    assert store.calls == ["claim", "reserve", "mark", ("settle", "settled"), "finish", "fail"]
+
+
+def test_disabled_policy_never_claims_or_spends():
+    from curator.recommendation.preparation_worker import process_one_preparation
+    store, adapter = Store(), Adapter()
+    disabled = replace(policy(), next_run_preparation_enabled=False)
+    assert process_one_preparation(store=store, adapter=adapter, policy=disabled) == "disabled"
+    assert store.calls == [] and adapter.calls == []
+
+
+@pytest.mark.parametrize("change", (
+    {"preview_owner_ids": ("someone-else",)},
+    {"policy_version": "other-policy"},
+    {"model_version": "other-model"},
+))
+def test_worker_refuses_allowlist_or_policy_mismatch_before_spending(change):
+    from curator.recommendation.preparation_worker import process_one_preparation
+    store, adapter = Store(), Adapter()
+    mismatched = replace(policy(), **change)
+    assert process_one_preparation(store=store, adapter=adapter, policy=mismatched) == "invalid"
+    assert store.calls == ["claim", "fail"] and adapter.calls == []
+
+
+def test_worker_refuses_request_owner_mismatch_before_spending():
+    from curator.recommendation.preparation_worker import process_one_preparation
+    store, adapter = Store(), Adapter()
+    store.job["user_id"] = "different-owner"
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "invalid"
+    assert store.calls == ["claim", "fail"] and adapter.calls == []
+
+
+def test_pre_attempt_adapter_failure_releases_the_reservation():
+    from curator.recommendation.preparation_worker import process_one_preparation
+
+    class ExplodingAdapter(Adapter):
+        def rank(self, req, **kwargs):
+            self.calls.append("rank")
+            raise RuntimeError("unknown model tokenizer")
+
+    store, adapter = Store(), ExplodingAdapter()
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "failed"
+    assert store.calls == ["claim", "reserve", ("settle", "released"), "fail"]
+
+
+def test_exception_after_provider_attempt_retains_uncertain_reservation():
+    from curator.recommendation.preparation_worker import process_one_preparation
+
+    class ExplodingAdapter(Adapter):
+        def rank(self, req, **kwargs):
+            kwargs["attempt_observer"](0, 0)
+            raise RuntimeError("provider outcome unknown")
+
+    store = Store()
+    assert process_one_preparation(store=store, adapter=ExplodingAdapter(), policy=policy()) == "failed"
+    assert store.calls == ["claim", "reserve", "mark", "fail"]
+
+
+def test_ambiguous_budget_reservation_does_not_try_to_release():
+    from curator.recommendation.preparation_worker import process_one_preparation
+
+    class UncertainStore(Store):
+        def reserve_prepared_budget(self, **kwargs):
+            self.calls.append("reserve")
+            raise TimeoutError("reservation outcome unknown")
+
+    store, adapter = UncertainStore(), Adapter()
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "failed"
+    assert store.calls == ["claim", "reserve", "fail"]
+    assert "rank" not in adapter.calls
+
+
+def test_worker_refuses_foreign_tenant_before_spending():
+    from curator.recommendation.preparation_worker import process_one_preparation
+    store, adapter = Store(), Adapter()
+    foreign = replace(store.request, owner=replace(store.request.owner, tenant_id="foreign-tenant"))
+    store.job["request_payload"] = request_to_payload(foreign)
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "invalid"
+    assert store.calls == ["claim", "fail"] and adapter.calls == []
+
+
+def test_refused_retry_settles_already_observed_usage():
+    from curator.recommendation.preparation_worker import process_one_preparation
+    from curator.recommendation.rankllm_adapter import ProviderOutcome
+
+    class RefusingRetryStore(Store):
+        def mark_prepared_attempt(self, **kwargs):
+            self.calls.append("mark")
+            return self.calls.count("mark") == 1
+
+        def settle_budget(self, **kwargs):
+            self.calls.append(("settle", kwargs["status"], kwargs["actual_usd"]))
+
+    class ObservingAdapter(Adapter):
+        def rank(self, req, **kwargs):
+            kwargs["attempt_observer"](0, 0)
+            kwargs["usage_observer"](ProviderOutcome((), 100, 10, "provider"), 0, 1)
+            try:
+                kwargs["attempt_observer"](1, 1)
+            except RuntimeError:
+                return type("Fallback", (), {"result_mode": RankingResultMode.FALLBACK})()
+            raise AssertionError("retry must be refused")
+
+    store, adapter = RefusingRetryStore(), ObservingAdapter()
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "failed"
+    assert store.calls == ["claim", "reserve", "mark", "mark", ("settle", "settled", .001), "fail"]

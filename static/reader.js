@@ -899,6 +899,7 @@
       const response = await fetchImpl(url, { method, headers: {
         accept: "application/json", "content-type": "application/json",
         authorization: `Bearer ${before.access_token}`,
+        "x-news-curator-order-origin": "1",
       }, body: body === null ? undefined : JSON.stringify(body), credentials: "omit",
       redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(timeoutMs) });
       const payload = await boundedJson(response, "The M2 reader response was invalid.");

@@ -1605,17 +1605,71 @@ def _prepared_owner(db):
     return owner, run_id
 
 
-def _enqueue_prepared(db, owner, run_id, key):
+def _enqueue_prepared(db, owner, run_id, key, *, accepted=True, candidate_ids=('candidate-one',)):
     request_id = str(uuid.uuid4())
     payload = {'request_id': request_id, 'owner': {'user_id': owner},
-               'candidates': [{'candidate_id': 'candidate-one'}],
+               'candidates': [{'candidate_id': candidate_id} for candidate_id in candidate_ids],
                'query': 'private test query'}
     statement = ("select public.m2_enqueue_prepared_order("
                  f"'{owner}','{run_id}','{key * 64}','{'a' * 64}',"
                  f"1,1,0,'provider-policy-test','{request_id}',"
                  f"{_quote(json.dumps(payload))}::jsonb,3600);")
-    assert _last(_service(db, statement)) == 't'
+    assert _last(_service(db, statement)) == ('t' if accepted else 'f')
     return request_id
+
+
+@pytest.mark.parametrize('setting,change', [
+    ('provider_processing_enabled', 'false'),
+    ('learning_enabled', 'false'),
+    ('provider_policy_id', "'provider-policy-changed'"),
+])
+def test_consent_change_erases_queued_payload_without_revision_bump(db, setting, change):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '9')
+        before = _last(_sql(db, f"select consent_revision from public.user_behavior_settings "
+                                   f"where user_id='{owner}';"))
+        _sql(db, f"update public.user_behavior_settings set {setting}={change} "
+                 f"where user_id='{owner}';")
+        assert _last(_sql(db, f"select consent_revision from public.user_behavior_settings "
+                                  f"where user_id='{owner}';")) == before
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '0'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_expired_inference_rows_are_purged_in_bounded_batches(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        requests = [_enqueue_prepared(db, owner, run_id, key) for key in 'abcde']
+        _service(db, f"update public.m2_prepared_orders set status='ready',"
+                     "ranked_candidate_ids='[\"candidate-one\"]'::jsonb "
+                     f"where request_id='{requests[0]}';"
+                     f"update public.m2_prepared_orders set status='consumed',"
+                     "ranked_candidate_ids='[\"candidate-one\"]'::jsonb "
+                     f"where request_id='{requests[1]}';"
+                     f"update public.m2_prepared_orders set status='failed' "
+                     f"where request_id='{requests[2]}';"
+                     f"update public.m2_prepared_orders set expires_at=now()-interval '1 second' "
+                     f"where request_id in ('{requests[0]}','{requests[1]}','{requests[2]}','{requests[3]}');")
+        private_count = ("select count(*) from public.m2_prepared_orders "
+                         f"where user_id='{owner}' and expires_at<=now() "
+                         "and (request_payload<>'{}'::jsonb or ranked_candidate_ids is not null);")
+        assert _last(_service(db, private_count)) == '4'
+        assert _last(_service(db, 'select public.m2_scrub_expired_prepared_orders(2);')) == '2'
+        assert _last(_service(db, private_count)) == '2'
+        assert _last(_service(db, 'select public.m2_scrub_expired_prepared_orders(100);')) in ('2', '3')
+        assert _last(_service(db, private_count)) == '0'
+        # One more pass removes the just-scrubbed failed row too. The live
+        # unexpired job remains available.
+        _service(db, 'select public.m2_scrub_expired_prepared_orders(100);')
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}' and expires_at<=now();")) == '0'
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where request_id='{requests[4]}' and status='pending';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
 
 
 def test_prepared_expiration_scrubs_private_payload_in_bounded_batches(db):
@@ -1634,13 +1688,14 @@ def test_prepared_expiration_scrubs_private_payload_in_bounded_batches(db):
         assert _service(db, 'select public.m2_scrub_expired_prepared_orders(0);',
                         check=False).returncode != 0
         assert _last(_service(db, statement)) == '1'
-        assert _last(_service(db, 'select public.m2_scrub_expired_prepared_orders(100);')) == '2'
+        assert _last(_service(db, 'select public.m2_scrub_expired_prepared_orders(100);')) == '3'
         rows = json.loads(_last(_service(db,
             "select jsonb_agg(jsonb_build_object('status',status,'payload',request_payload,"
             "'token',claim_token) order by request_id) from public.m2_prepared_orders "
             f"where user_id='{owner}';")))
         assert len([row for row in rows if row['status'] == 'failed'
-                    and row['payload'] == {} and row['token'] is None]) == 3
+                    and row['payload'] == {} and row['token'] is None]) == 2
+        # The first scrubbed row becomes terminal and the second pass purges it.
         assert len([row for row in rows if row['status'] == 'pending'
                     and row['payload']['query'] == 'private test query']) == 1
         # Claim also invokes the scrub, so expiration is not dependent on an
@@ -1651,6 +1706,26 @@ def test_prepared_expiration_scrubs_private_payload_in_bounded_batches(db):
                                   "'{}'::jsonb)::text;")) == '{}'
         assert _last(_service(db, f"select request_payload::text from public.m2_prepared_orders "
                                   f"where request_id='{requests[3]}';")) == '{}'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_a_crashed_prepared_claim_is_never_reclaimed_before_expiry(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '7')
+        claim = f"select public.m2_claim_prepared_order('{'a' * 64}');"
+        job = json.loads(_last(_service(db, claim)))
+        assert job is not None
+        for status in ('claimed', 'attempting'):
+            _service(db, f"update public.m2_prepared_orders set status='{status}', "
+                         "claimed_at=now()-interval '30 minutes' "
+                         f"where job_id='{job['job_id']}';")
+            assert _last(_service(db, f"select coalesce(public.m2_claim_prepared_order("
+                                      f"'{'a' * 64}'),'{{}}'::jsonb)::text;")) == '{}'
+        assert _last(_service(db, "select count(*) from public.m2_prepared_orders "
+                                  f"where job_id='{job['job_id']}' and "
+                                  "status='attempting' and request_payload <> '{}'::jsonb;")) == '1'
     finally:
         _sql(db, f"delete from auth.users where id='{owner}';")
 
@@ -1742,7 +1817,7 @@ def test_prepared_order_allows_accounted_positive_events_through_consume(db):
                  f"values ('{target_run}','{owner}');")
         consumed = json.loads(_last(_service(db,
             f"select public.m2_consume_prepared_order('{owner}','{target_run}',"
-            f"'{'1' * 64}','{'a' * 64}')::text;")))
+            f"'{'1' * 64}','{'a' * 64}',array['candidate-one']::text[],1)::text;")))
         assert consumed['ranked_candidate_ids'] == ['candidate-one']
         assert consumed['owner_id'] == owner
         assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
@@ -1766,6 +1841,141 @@ def test_prepared_order_rejects_negative_feedback_before_budget(db, event_type, 
             f"'{job['job_id']}','{job['claim_token']}',0.01,1.00);")) == 'f'
         assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
                                    f"where request_id='{request_id}';")) == '0'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_history_allows_only_valid_search_activity(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '0')
+        story_id = 'story:' + 'd' * 64
+        _append_prepared_event(db, owner, 'search_query',
+                               {'query': 'energy storage', 'surface': 'test'})
+        _append_prepared_event(db, owner, 'search_zero_results',
+                               {'query': 'rare query', 'result_count': 0, 'surface': 'test'})
+        _append_prepared_event(db, owner, 'search_result_click',
+                               {'query': 'energy storage', 'story_id': story_id,
+                                'result_position': 1, 'surface': 'test'})
+        assert _last(_service(db,
+            f"select public.m2_prepared_history_is_compatible('{owner}',1,0);")) == 't'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_history_rejects_future_unrecognized_event_types(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '8')
+        # A future migration may extend the event enum. Simulate that inside
+        # a rolled-back transaction: unknown feedback must fail closed.
+        result = _sql(db, f"""
+            begin;
+            alter table public.user_behavior_events
+              drop constraint user_behavior_events_event_type_check;
+            insert into public.user_behavior_events(
+              user_id,event_id,event_revision,schema_version,actor_kind,event_type,
+              payload,request_digest,occurred_at)
+            values ('{owner}','event:{'f' * 64}',1,1,'human','mute_source',
+              '{{"source_id":"private-source"}}'::jsonb,'{'a' * 64}',now());
+            update public.user_behavior_revisions set latest_revision=1
+              where user_id='{owner}';
+            set local role service_role;
+            set local request.jwt.claims = '{{"role":"service_role"}}';
+            do $block$ begin
+              if public.m2_prepared_history_is_compatible('{owner}',1,0) then
+                raise exception 'unknown event was accepted as positive';
+              end if;
+            end $block$;
+            rollback;
+        """, check=False)
+        assert result.returncode == 0, result.stderr
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_enqueue_accepts_only_accounted_positive_events_after_snapshot(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        story_id = 'story:' + 'e' * 64
+        _append_prepared_event(db, owner, 'read_more',
+                               {'story_id': story_id, 'surface': 'test'})
+        accepted_request = _enqueue_prepared(db, owner, run_id, 'a')
+        assert _last(_service(db, f"select behavior_revision from public.m2_prepared_orders "
+                                      f"where request_id='{accepted_request}';")) == '0'
+        _append_prepared_event(db, owner, 'less_like_this',
+                               {'story_id': story_id, 'surface': 'test'})
+        _enqueue_prepared(db, owner, run_id, 'b', accepted=False)
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_consume_keeps_ready_job_when_current_window_overlap_is_too_small(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        candidates = tuple(f'candidate-{number}' for number in range(1, 6))
+        request_id = _enqueue_prepared(db, owner, run_id, 'e',
+                                       candidate_ids=candidates)
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        job_id, token = job['job_id'], job['claim_token']
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job_id}','{token}',0.01,1.00);")) == 't'
+        assert _last(_service(db, f"select public.m2_mark_prepared_attempt("
+            f"'{job_id}','{token}');")) == 't'
+        ranked = _quote(json.dumps(candidates)) + '::jsonb'
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{job_id}','{token}',{ranked});")) == 't'
+        target_run = str(uuid.uuid4())
+        _sql(db, f"update public.m2_reading_runs set closed_at=now() where run_id='{run_id}';"
+                 f"insert into public.m2_reading_runs(run_id,user_id) "
+                 f"values ('{target_run}','{owner}');")
+        prefix = (f"select coalesce(public.m2_consume_prepared_order("
+                  f"'{owner}','{target_run}','{'e' * 64}','{'a' * 64}',")
+        for current in ("array['candidate-1','candidate-2','candidate-3','candidate-4']::text[]",
+                        "array['candidate-1','candidate-1','candidate-1','candidate-1','candidate-1']::text[]"):
+            assert _last(_service(db, prefix + current + ",5),'{}'::jsonb)::text;")) == '{}'
+            assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                          f"where request_id='{request_id}';")) == 'ready'
+        consumed = json.loads(_last(_service(db, prefix +
+            "array['candidate-1','candidate-2','candidate-3','candidate-4','candidate-5']::text[],5),'{}'::jsonb)::text;")))
+        assert consumed['ranked_candidate_ids'] == list(candidates)
+        assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                      f"where request_id='{request_id}';")) == 'consumed'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_consume_skips_newest_unusable_ready_order_for_an_older_match(db):
+    owner, first_run = _prepared_owner(db)
+    try:
+        older = _enqueue_prepared(db, owner, first_run, 'f')
+        second_run, target_run = str(uuid.uuid4()), str(uuid.uuid4())
+        _sql(db, f"update public.m2_reading_runs set closed_at=now() where run_id='{first_run}';"
+                 f"insert into public.m2_reading_runs(run_id,user_id) "
+                 f"values ('{second_run}','{owner}');")
+        newer = _enqueue_prepared(db, owner, second_run, 'f')
+        _sql(db, f"update public.m2_reading_runs set closed_at=now() where run_id='{second_run}';"
+                 f"insert into public.m2_reading_runs(run_id,user_id) "
+                 f"values ('{target_run}','{owner}');")
+        _service(db, f"update public.m2_prepared_orders set status='ready',"
+                     "ranked_candidate_ids='[\"older-candidate\"]'::jsonb,"
+                     "request_payload='{}'::jsonb,created_at=now()-interval '2 minutes' "
+                     f"where request_id='{older}';"
+                     f"update public.m2_prepared_orders set status='ready',"
+                     "ranked_candidate_ids='[\"newer-candidate\"]'::jsonb,"
+                     "request_payload='{}'::jsonb,created_at=now()-interval '1 minute' "
+                     f"where request_id='{newer}';")
+        consumed = json.loads(_last(_service(db,
+            f"select public.m2_consume_prepared_order('{owner}','{target_run}',"
+            f"'{'f' * 64}','{'a' * 64}',array['older-candidate']::text[],1)::text;")))
+        assert consumed['ranked_candidate_ids'] == ['older-candidate']
+        assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                      f"where request_id='{older}';")) == 'consumed'
+        assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                      f"where request_id='{newer}';")) == 'ready'
     finally:
         _sql(db, f"delete from auth.users where id='{owner}';")
 
@@ -1802,16 +2012,35 @@ def test_prepared_retry_reauthorization_checks_live_consent_and_negative_feedbac
         assert _last(_service(db, mark)) == 't'
         assert _last(_service(db, f"select public.m2_mark_prepared_attempt("
             f"'{job_id}','{uuid.uuid4()}');")) == 'f'
-        _sql(db, f"update public.user_behavior_settings set provider_processing_enabled=false "
-                 f"where user_id='{owner}';")
-        assert _last(_service(db, mark)) == 'f'
-        _sql(db, f"update public.user_behavior_settings set provider_processing_enabled=true "
-                 f"where user_id='{owner}';")
         _append_prepared_event(db, owner, 'less_like_this',
             {'story_id': 'story:' + 'd' * 64, 'surface': 'test'})
         assert _last(_service(db, mark)) == 'f'
         assert _last(_service(db, f"select status from public.m2_prepared_orders "
                                       f"where job_id='{job_id}';")) == 'attempting'
+        assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
+                                   f"where request_id='{request_id}' and status='reserved';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_consent_withdrawal_deletes_attempting_payload_and_refuses_retry(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = _enqueue_prepared(db, owner, run_id, 'c')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        job_id, token = job['job_id'], job['claim_token']
+        mark = f"select public.m2_mark_prepared_attempt('{job_id}','{token}');"
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job_id}','{token}',0.01,1.00);")) == 't'
+        assert _last(_service(db, mark)) == 't'
+        _sql(db, f"update public.user_behavior_settings set provider_processing_enabled=false "
+                 f"where user_id='{owner}';")
+        assert _last(_service(db, mark)) == 'f'
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '0'
+        # A possibly attempted provider call still has its cost record for
+        # reconciliation even after owner-private payloads are erased.
         assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
                                    f"where request_id='{request_id}' and status='reserved';")) == '1'
     finally:

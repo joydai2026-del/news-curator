@@ -190,3 +190,33 @@ def test_plain_runtime_error_503_is_unchanged():
                    headers=[(b"authorization", b"Bearer valid")])
     assert sent[0]["status"] == 503
     assert json.loads(sent[1]["body"]) == {"error": "ranker unavailable"}
+
+
+@pytest.mark.parametrize("path,method,query,body", [
+    ("/rank", "POST", b"", b"{}"),
+    ("/page", "GET", b"cursor=frozen", b""),
+])
+@pytest.mark.parametrize("capability,expected_origin", [
+    (None, None),
+    (b"0", None),
+    (b"1", "prepared_model"),
+])
+def test_order_origin_projection_respects_exact_reader_capability(
+        path, method, query, body, capability, expected_origin):
+    class ProvenanceService(Service):
+        def rank(self, *, authorization, body):
+            return {"schema_version": 1, "cards": [],
+                    "order_origin": "prepared_model"}
+
+        def page(self, *, authorization, cursor):
+            assert cursor == "frozen"
+            return {"schema_version": 1, "cards": [],
+                    "order_origin": "prepared_model"}
+
+    headers = [] if capability is None else [(b"x-news-curator-order-origin", capability)]
+    sent = request(RankingASGI(service=ProvenanceService(), reader_origin="https://reader.example"),
+                   path=path, method=method, query=query, body=body, headers=headers)
+    assert sent[0]["status"] == 200
+    result = json.loads(sent[1]["body"])
+    assert result.get("order_origin") == expected_origin
+    assert "x-news-curator-order-origin" in dict(sent[0]["headers"])[b"access-control-allow-headers"].decode()

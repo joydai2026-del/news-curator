@@ -519,3 +519,67 @@ def test_prepared_scrub_rejects_invalid_count(result):
     client._opener = Capture()
     with pytest.raises(SupabaseHTTPError, match="invalid count"):
         client.scrub_expired_prepared_orders()
+
+
+def test_continuation_claim_converts_utc_expiry_and_pins_rpc_body():
+    client = _client()
+    seen = {}
+    result = {"granted": True, "frozen_order": {
+        "bindings": {}, "cards": [], "page_size": 25,
+        "expires_at": "2026-09-24T09:30:00+00:00"}}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return json.dumps(result).encode()
+
+    class Capture:
+        def open(self, request, timeout):
+            seen.update(method=request.method, url=request.full_url,
+                        body=json.loads(request.data), headers=dict(request.header_items()))
+            return Response()
+
+    client._opener = Capture()
+    claimed = client.claim_continuation_snapshot(
+        user_id="owner", run_id="run", eligibility_key="a" * 64,
+        frozen_order_id="frozen", token="claim", ttl_seconds=60)
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://example.test/rest/v1/rpc/m2_claim_continuation_snapshot"
+    assert seen["body"] == {"p_user_id": "owner", "p_run_id": "run",
+                            "p_eligibility_key": "a" * 64, "p_frozen_order_id": "frozen",
+                            "p_token": "claim", "p_ttl_seconds": 60}
+    assert seen["headers"]["Apikey"] == "sb_secret_canary"
+    assert "Authorization" not in seen["headers"]
+    assert claimed["frozen_order"]["expires_at"] == 1790242200
+
+
+def test_consume_prepared_order_uses_exact_service_rpc_and_body():
+    client = _client()
+    seen = {}
+    result = {"status": "ready", "ranked_candidate_ids": []}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return json.dumps(result).encode()
+
+    class Capture:
+        def open(self, request, timeout):
+            seen.update(method=request.method, url=request.full_url,
+                        body=json.loads(request.data), headers=dict(request.header_items()))
+            return Response()
+
+    client._opener = Capture()
+    consumed = client.consume_prepared_order(
+        user_id="owner", target_run_id="target-run",
+        eligibility_key="b" * 64, policy_digest="c" * 64,
+        candidate_ids=["story:" + "d" * 64], minimum_overlap=5)
+    assert consumed == result
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://example.test/rest/v1/rpc/m2_consume_prepared_order"
+    assert seen["body"] == {"p_user_id": "owner", "p_target_run_id": "target-run",
+                            "p_eligibility_key": "b" * 64, "p_policy_digest": "c" * 64,
+                            "p_candidate_ids": ["story:" + "d" * 64],
+                            "p_minimum_overlap": 5}
+    assert seen["headers"]["Apikey"] == "sb_secret_canary"
+    assert "Authorization" not in seen["headers"]

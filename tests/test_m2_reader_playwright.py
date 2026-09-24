@@ -23,6 +23,7 @@ from scripts.build_auth_callback import activate_personalization_link
 # requirements file and installed by no workflow, so every assertion below
 # reported SKIPPED and proved nothing. A hard import is the point: a missing
 # browser stack must fail the run, never quietly pass it.
+import pytest
 from playwright import sync_api as playwright
 ROOT=Path(__file__).resolve().parents[1]
 READER='https://reader.example'
@@ -99,7 +100,8 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                       inject_empty_owner_switch=False, inject_empty_expired_deadline=False,
                       inject_empty_pointerdown=False, inject_saved_race=False,
                       inject_saved_page_race=False, inject_saved_auth_race=False,
-                      inject_fast_page_history_failure=False):
+                      inject_fast_page_history_failure=False, order_case=None,
+                      expected_order_copy=None):
     """The whole reader drive. `include_the_tail` selects everything from the
     saved-navigation step onward, which is the part issue #48 breaks."""
     artifact_dir = Path(os.environ.get('NEWS_CURATOR_QA_OUTPUT_DIR', str(tmp_path)))
@@ -157,6 +159,16 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                 return route.fulfill(status=409,content_type='application/json',
                     body=json.dumps({'error':'cursor_version'}))
             status,payload=asgi_request(app,request)
+            if parsed.path=='/rank' and status==200 and order_case is not None:
+                response=json.loads(payload)
+                if order_case.startswith('legacy_'):
+                    response.pop('order_origin',None)
+                else:
+                    response['order_origin']=order_case
+                if order_case in ('prepared_model','direct_model','legacy_model'):
+                    response['result_mode']='model'
+                    response['fallback_reason']=''
+                payload=json.dumps(response).encode()
             if parsed.path=='/page' and history_mode['fail_after_page']:
                 history_mode['fail']=True
             if parsed.path=='/rank' and status==200:
@@ -304,7 +316,19 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
         try:
             page.goto(READER + '?silent=1',wait_until='networkidle')
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
-            assert '/rank' in requests and 'Model ranking was not used' in page.locator('#m2-mode').inner_text()
+            assert '/rank' in requests
+            if expected_order_copy is not None:
+                assert page.locator('#m2-mode').inner_text() == expected_order_copy
+                signal = page.locator('[data-m2-card=true] .signal span').first
+                assert signal.inner_text() == expected_order_copy
+                rank_calls = requests.count('/rank')
+                page.locator('#m2-language-toggle').click()
+                assert signal.inner_text() == expected_order_copy
+                assert requests.count('/rank') == rank_calls
+                assert not page_errors, page_errors
+                return
+            assert page.locator('#m2-mode').inner_text() == (
+                'Freshness order. Model ranking was not used.')
             if inject_saved_race:
                 saved_only = rows[-1]['story_id']
                 replacement_saved = rows[-2]['story_id']
@@ -853,3 +877,16 @@ def test_fast_continuation_does_not_require_a_second_history_snapshot(tmp_path):
 
 def test_reader_surfaces_after_leaving_the_personalized_feed(tmp_path):
     _drive_the_reader(tmp_path, include_the_tail=True)
+
+
+@pytest.mark.parametrize("origin,copy", [
+    ("recipe", "Your reading mix, ordered by feed rules. Model ranking was not used for this view."),
+    ("prepared_model", "Uses a model order prepared earlier; new stories follow feed rules."),
+    ("direct_model", "Ranked using this request’s query and permitted reading history."),
+    ("freshness", "Freshness order. Model ranking was not used."),
+    ("legacy_fallback", "Reading order. Model ranking was not used."),
+    ("legacy_model", "Ranked using the model."),
+])
+def test_order_origin_copy_is_exact_for_each_reader_branch(tmp_path, origin, copy):
+    _drive_the_reader(tmp_path, include_the_tail=False,
+                      order_case=origin, expected_order_copy=copy)

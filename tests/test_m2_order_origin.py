@@ -44,6 +44,12 @@ def test_recipe_and_prepared_model_origins_survive_page_turns():
     second = rank(subject, store)
     assert second["result_mode"] == "model"
     assert second["order_origin"] == "prepared_model"
+    recipe_ids = [card["story_id"] for card in first["cards"]]
+    served_ids = [card["story_id"] for card in second["cards"]]
+    assert served_ids != recipe_ids
+    # The diversity pass may move later cards, but the leading prepared
+    # permutation must reach the visible page, not only its provenance label.
+    assert served_ids[:3] == store.ready["ranked_candidate_ids"][:3]
     assert subject.page(authorization="Bearer valid", cursor=second["next_cursor"])["order_origin"] == "prepared_model"
 
 

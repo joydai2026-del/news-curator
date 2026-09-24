@@ -46,6 +46,7 @@ function response(value, url) { return { ok: true, redirected: false, url,
   assert.equal(JSON.parse(calls[0].options.body).server_commit_revision, 8);
   assert.equal(calls[0].options.signal instanceof AbortSignal, true);
   assert.equal(calls[0].options.headers.authorization, "Bearer token-a");
+  assert.equal(calls[0].options.headers["x-news-curator-order-origin"], "1");
   assert.equal(JSON.stringify(calls[0]).includes("user_id"), false);
 
   const changed = reader.createM2Service(config, async () => ({ access_token: token }),
@@ -118,14 +119,16 @@ function response(value, url) { return { ok: true, redirected: false, url,
     model_version: config.model_version, page_size: config.page_size,
     history_revision: history.included_history_revision,
     server_commit_revision: history.history_revision };
+  const pagerCalls = [];
   const pager = reader.createM2Service(config, async () => ({ access_token: token }),
-    async (url) => response(payload(), url));
+    async (url, options) => { pagerCalls.push({ url, options }); return response(payload(), url); });
   // The behavior revision has since moved (she read a card and saved one), but
   // the frozen order still carries the revisions it was computed against.
   const pagedAfterReads = await pager.page("cursor-token", frozenBinding);
   assert.equal(pagedAfterReads.server_commit_revision, history.history_revision,
     "a page must keep answering with the frozen order's own binding");
   assert.equal(pagedAfterReads.cards.length > 0, true, "load more fell back after a read or save");
+  assert.equal(pagerCalls[0].options.headers["x-news-curator-order-origin"], "1");
 
   // end_of_run is optional on the wire, so reader and ranker deploy in either
   // order: an older ranker never sends it, and the reader defaults it to false.
@@ -142,6 +145,10 @@ function response(value, url) { return { ok: true, redirected: false, url,
   }
   assert.throws(() => reader.validateM2Response({ ...payload(), order_origin: "prepared_model" }, frozenBinding),
     /feed response/);
+  for (const origin of ["recipe", "freshness"]) {
+    assert.throws(() => reader.validateM2Response({ ...payload(), result_mode: "model",
+      fallback_reason: "", order_origin: origin }, frozenBinding), /feed response/);
+  }
   assert.throws(() => reader.validateM2Response({ ...payload(), order_origin: "unknown" }, frozenBinding),
     /feed response/);
   assert.equal(reader.validateM2Response({ ...payload(), end_of_run: true }, frozenBinding).end_of_run, true);

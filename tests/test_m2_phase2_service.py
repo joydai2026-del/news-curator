@@ -2592,8 +2592,10 @@ def _enable_atomic_continuation_snapshot(store):
             return {"granted": False, "frozen_order": None}
         if claim["frozen_order_id"] != frozen_order_id:
             return {"granted": True, "frozen_order": None}
+        full = Store.load_frozen_order(store, user_id=user_id,
+            frozen_order_id=frozen_order_id)
         return {"granted": True, "frozen_order": copy.deepcopy(
-            Store.load_frozen_order(store, user_id=user_id, frozen_order_id=frozen_order_id))}
+            {key: full[key] for key in ("bindings", "cards", "page_size", "expires_at")})}
     store.claim_continuation_snapshot = claim_with_snapshot
 
 
@@ -2625,6 +2627,31 @@ def test_atomic_snapshot_rejects_privacy_deletion_after_append(complete_continua
     assert store.response_reservations == 1
     assert next(iter(store.views.values()))["pages_served"] == 1
     assert all(view["claim_token"] is None for view in store.views.values())
+
+
+def test_claim_for_a_different_frozen_order_loads_the_cursor_order_and_serves_no_cards(
+        complete_continuation_page):
+    store, subject, cursor, _offset = complete_continuation_page
+    _enable_atomic_continuation_snapshot(store)
+    # The view was rebound after this cursor was issued. The atomic claim is
+    # granted but cannot return a snapshot for the cursor's frozen order.
+    view = next(iter(store.views.values()))
+    view["frozen_order_id"] = "frozen-other"
+    loaded_ids = []
+    original_load = store.load_frozen_order
+
+    def record_load(**kwargs):
+        loaded_ids.append(kwargs["frozen_order_id"])
+        return original_load(**kwargs)
+
+    store.load_frozen_order = record_load
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+
+    assert loaded_ids and set(loaded_ids) == {"frozen-1"}
+    assert store.page_reads > 1, "a mismatched claim must load the cursor order"
+    assert response["cards"] == [] and response["end_of_run"] is True
+    assert store.response_reservations == 1
+    assert view["pages_served"] == 1
 
 
 def test_page_stage_timing_has_only_fixed_labels_and_durations(

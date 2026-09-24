@@ -480,11 +480,14 @@ class RankingService:
             # This view is frozen before it is served. A ready result can be
             # consumed only from an earlier run; it never changes this run later.
             if processing_allowed and run and run.get("run_id"):
+                consume_started = time.perf_counter()
                 try:
                     earlier = self._store.consume_prepared_order(
                         user_id=owner.user_id, target_run_id=str(run["run_id"]),
                         eligibility_key=eligibility_key,
-                        policy_digest=self._policy.effective_policy_digest)
+                        policy_digest=self._policy.effective_policy_digest,
+                        candidate_ids=tuple(candidate.candidate_id for candidate in request.candidates),
+                        minimum_overlap=self._policy.next_run_preparation_minimum_overlap)
                     prepared_order = select_prepared_order(earlier, owner_id=owner.user_id,
                         run_id=str(run["run_id"]), eligibility_key=eligibility_key,
                         policy_digest=self._policy.effective_policy_digest,
@@ -499,6 +502,9 @@ class RankingService:
                 except Exception as error:
                     log_suppressed_exception("m2_prepared_order_unavailable", error,
                         stream=sys.stderr)
+                finally:
+                    _page_diagnostic({"event": "m2_preparation_stage_timing", "stage": "consume",
+                        "duration_ms": round((time.perf_counter() - consume_started) * 1000, 3)})
             receipt = self._adapter.fallback(request,
                 "next_run_preparation_pending" if processing_allowed else
                 "provider_processing_consent_required")
@@ -701,8 +707,9 @@ class RankingService:
                 and processing_allowed and request.candidates and run and run.get("run_id")):
             # Enqueue after the current order and first response are durable.
             # A queue failure never delays or mutates the page being read.
+            enqueue_started = time.perf_counter()
             try:
-                self._store.enqueue_prepared_order(user_id=owner.user_id,
+                queued = self._store.enqueue_prepared_order(user_id=owner.user_id,
                     source_run_id=str(run["run_id"]), eligibility_key=eligibility_key,
                     policy_digest=self._policy.effective_policy_digest,
                     history_generation=request.history_generation,
@@ -711,9 +718,14 @@ class RankingService:
                     provider_policy_id=self._policy.provider_policy_id,
                     request_id=request_id, request_payload=request_to_payload(request),
                     ttl_seconds=self._policy.next_run_preparation_ttl_seconds)
+                if not queued:
+                    _page_diagnostic({"event": "m2_preparation_enqueue_rejected"})
             except Exception as error:
                 log_suppressed_exception("m2_preparation_enqueue_failed", error,
                     stream=sys.stderr)
+            finally:
+                _page_diagnostic({"event": "m2_preparation_stage_timing", "stage": "enqueue",
+                    "duration_ms": round((time.perf_counter() - enqueue_started) * 1000, 3)})
         next_cursor = (self._cursor(frozen_id, min(page_size, len(cards)), expires_at,
                                     response_number=2 if cards else 1)
                        if page_size < len(cards) or has_more else None)

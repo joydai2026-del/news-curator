@@ -26,8 +26,7 @@ create table public.m2_prepared_orders (
 );
 create index m2_prepared_orders_pending_idx on public.m2_prepared_orders(created_at)
   where status = 'pending';
-create index m2_prepared_orders_expired_payload_idx on public.m2_prepared_orders(expires_at)
-  where status in ('pending','claimed','attempting');
+create index m2_prepared_orders_expired_idx on public.m2_prepared_orders(expires_at);
 create index m2_prepared_orders_ready_idx on public.m2_prepared_orders(user_id, eligibility_key, created_at desc)
   where status = 'ready';
 alter table public.m2_prepared_orders enable row level security;
@@ -36,6 +35,37 @@ revoke all on public.m2_prepared_orders from public, anon, authenticated;
 grant select, insert, update, delete on public.m2_prepared_orders to service_role;
 create policy m2_prepared_orders_service on public.m2_prepared_orders to service_role
   using (true) with check (true);
+
+-- A prepared model is a snapshot. Later positive reading activity does not
+-- invalidate it, but a negative preference or unexplained revision gap does.
+-- Callers hold the owner's behavior advisory lock before invoking this check.
+create or replace function public.m2_prepared_history_is_compatible(
+  p_user_id uuid,p_history_generation bigint,p_behavior_revision bigint
+) returns boolean language plpgsql security definer set search_path=pg_catalog,public as $$
+declare live_generation bigint; live_revision bigint; event_count bigint; positive_count bigint;
+begin
+  if coalesce(auth.jwt()->>'role','') <> 'service_role' then
+    raise exception 'service role required' using errcode='42501';
+  end if;
+  if p_user_id is null or p_history_generation is null or p_behavior_revision is null then
+    return false;
+  end if;
+  select history_generation,latest_revision into live_generation,live_revision
+    from public.user_behavior_revisions where user_id=p_user_id;
+  if not found then live_generation:=1; live_revision:=0; end if;
+  if live_generation is distinct from p_history_generation
+     or live_revision < p_behavior_revision then return false; end if;
+  if live_revision = p_behavior_revision then return true; end if;
+  select count(*), count(*) filter (
+      where event_type in ('read_more','open_original','search_query',
+                           'search_zero_results','search_result_click','more_like_this')
+         or (event_type='save' and payload->'saved'='true'::jsonb))
+    into event_count,positive_count from public.user_behavior_events
+    where user_id=p_user_id and event_revision>p_behavior_revision
+      and event_revision<=live_revision;
+  return event_count=live_revision-p_behavior_revision
+     and positive_count=event_count;
+end; $$;
 
 create or replace function public.m2_enqueue_prepared_order(
   p_user_id uuid, p_source_run_id uuid, p_eligibility_key text,
@@ -64,10 +94,8 @@ begin
                     where s.user_id=p_user_id and s.learning_enabled and s.provider_processing_enabled
                       and s.provider_policy_id=p_provider_policy_id
                       and s.consent_revision=p_consent_revision)
-     or coalesce((select history_generation from public.user_behavior_revisions
-                  where user_id=p_user_id),1) <> p_history_generation
-     or coalesce((select latest_revision from public.user_behavior_revisions
-                  where user_id=p_user_id),0) <> p_behavior_revision then
+     or not public.m2_prepared_history_is_compatible(
+                  p_user_id,p_history_generation,p_behavior_revision) then
     return false;
   end if;
   insert into public.m2_prepared_orders(request_id,user_id,source_run_id,eligibility_key,
@@ -79,13 +107,13 @@ begin
   return queued is not null;
 end; $$;
 
--- Expiration removes the owner history and query carried by queued jobs,
--- including jobs claimed before a worker crash or an ambiguous provider call.
--- Keep the ledger row and any reservation for cost reconciliation. A worker
--- calls this bounded routine on each claim; operations may also call it alone.
+-- Expiration removes queued private request data and deletes expired model
+-- inferences. The independent spend ledger and reservations remain for cost
+-- reconciliation. Each call touches at most p_limit jobs; a worker calls it
+-- on each claim, and operations may also call it alone.
 create or replace function public.m2_scrub_expired_prepared_orders(p_limit integer default 100)
 returns integer language plpgsql security definer set search_path=pg_catalog,public as $$
-declare changed integer;
+declare selected_ids uuid[]; deleted_count integer := 0; scrubbed_count integer := 0;
 begin
   if coalesce(auth.jwt()->>'role','') <> 'service_role' then
     raise exception 'service role required' using errcode='42501';
@@ -93,16 +121,20 @@ begin
   if p_limit is null or p_limit not between 1 and 1000 then
     raise exception 'invalid scrub limit';
   end if;
-  with expired as (
+  select array_agg(job_id) into selected_ids from (
     select job_id from public.m2_prepared_orders
-      where status in ('pending','claimed','attempting') and expires_at <= now()
+      where expires_at <= now()
       order by expires_at, job_id for update skip locked limit p_limit
-  )
-  update public.m2_prepared_orders j
+  ) expired;
+  if selected_ids is null then return 0; end if;
+  delete from public.m2_prepared_orders
+    where job_id=any(selected_ids) and status in ('ready','consumed','failed');
+  get diagnostics deleted_count = row_count;
+  update public.m2_prepared_orders
     set status='failed', request_payload='{}'::jsonb, claim_token=null
-    from expired where j.job_id=expired.job_id;
-  get diagnostics changed = row_count;
-  return changed;
+    where job_id=any(selected_ids) and status in ('pending','claimed','attempting');
+  get diagnostics scrubbed_count = row_count;
+  return deleted_count + scrubbed_count;
 end; $$;
 
 -- Claimed jobs are never automatically re-claimed. A crashed or ambiguous
@@ -123,34 +155,6 @@ begin
     where job_id=job.job_id;
   return jsonb_build_object('job_id',job.job_id,'request_id',job.request_id,
     'user_id',job.user_id,'claim_token',token,'request_payload',job.request_payload);
-end; $$;
-
--- A prepared model is a snapshot. Later positive reading activity does not
--- invalidate it, but a negative preference or unexplained revision gap does.
--- Callers hold the owner's behavior advisory lock before invoking this check.
-create or replace function public.m2_prepared_history_is_compatible(
-  p_user_id uuid,p_history_generation bigint,p_behavior_revision bigint
-) returns boolean language plpgsql security definer set search_path=pg_catalog,public as $$
-declare live_generation bigint; live_revision bigint; event_count bigint; negative_count bigint;
-begin
-  if coalesce(auth.jwt()->>'role','') <> 'service_role' then
-    raise exception 'service role required' using errcode='42501';
-  end if;
-  if p_user_id is null or p_history_generation is null or p_behavior_revision is null then
-    return false;
-  end if;
-  select history_generation,latest_revision into live_generation,live_revision
-    from public.user_behavior_revisions where user_id=p_user_id;
-  if not found then live_generation:=1; live_revision:=0; end if;
-  if live_generation is distinct from p_history_generation
-     or live_revision < p_behavior_revision then return false; end if;
-  if live_revision = p_behavior_revision then return true; end if;
-  select count(*), count(*) filter (where event_type='less_like_this'
-                                      or (event_type='save' and payload->'saved'='false'::jsonb))
-    into event_count,negative_count from public.user_behavior_events
-    where user_id=p_user_id and event_revision>p_behavior_revision
-      and event_revision<=live_revision;
-  return event_count=live_revision-p_behavior_revision and negative_count=0;
 end; $$;
 
 -- The one-shot worker prepares the prompt before this call. Reservation and
@@ -265,29 +269,47 @@ begin
 end; $$;
 
 create or replace function public.m2_consume_prepared_order(
-  p_user_id uuid,p_target_run_id uuid,p_eligibility_key text,p_policy_digest text
+  p_user_id uuid,p_target_run_id uuid,p_eligibility_key text,p_policy_digest text,
+  p_candidate_ids text[],p_minimum_overlap integer
 ) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
-declare job public.m2_prepared_orders%rowtype;
+declare job public.m2_prepared_orders%rowtype; overlap_count integer;
 begin
   if coalesce(auth.jwt()->>'role','') <> 'service_role' then
     raise exception 'service role required' using errcode='42501';
   end if;
+  if p_candidate_ids is null or cardinality(p_candidate_ids) not between 1 and 100
+     or p_minimum_overlap is null
+     or p_minimum_overlap not between 1 and cardinality(p_candidate_ids)
+     or array_position(p_candidate_ids,null) is not null
+     or (select count(distinct candidate_id) from unnest(p_candidate_ids) c(candidate_id))
+          <> cardinality(p_candidate_ids) then return null; end if;
   perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':behavior',0));
   if not exists (select 1 from public.m2_reading_runs r
                  where r.run_id=p_target_run_id and r.user_id=p_user_id and r.closed_at is null) then
     return null;
   end if;
-  select * into job from public.m2_prepared_orders
-    where user_id=p_user_id and eligibility_key=p_eligibility_key and policy_digest=p_policy_digest
-      and source_run_id<>p_target_run_id and status='ready' and expires_at>now()
-    order by created_at desc for update skip locked limit 1;
+  select * into job from public.m2_prepared_orders j
+    where j.user_id=p_user_id and j.eligibility_key=p_eligibility_key
+      and j.policy_digest=p_policy_digest and j.source_run_id<>p_target_run_id
+      and j.status='ready' and j.expires_at>now()
+      and case when jsonb_typeof(j.ranked_candidate_ids)='array' then
+        (select count(distinct ranked.candidate_id)
+           from jsonb_array_elements_text(j.ranked_candidate_ids) ranked(candidate_id)
+          where ranked.candidate_id=any(p_candidate_ids)) >= p_minimum_overlap
+        else false end
+    order by j.created_at desc for update of j skip locked limit 1;
   if not found then return null; end if;
   if not exists (select 1 from public.user_behavior_settings s
                  where s.user_id=p_user_id and s.learning_enabled and s.provider_processing_enabled
                    and s.provider_policy_id=job.provider_policy_id
                    and s.consent_revision=job.consent_revision)
      or not public.m2_prepared_history_is_compatible(
-                  p_user_id,job.history_generation,job.behavior_revision) then return null; end if;
+                  p_user_id,job.history_generation,job.behavior_revision)
+     or jsonb_typeof(job.ranked_candidate_ids) is distinct from 'array' then return null; end if;
+  select count(distinct candidate_id) into overlap_count
+    from jsonb_array_elements_text(job.ranked_candidate_ids) ranked(candidate_id)
+    where candidate_id=any(p_candidate_ids);
+  if overlap_count < p_minimum_overlap then return null; end if;
   update public.m2_prepared_orders set status='consumed',consumed_by_run_id=p_target_run_id
     where job_id=job.job_id;
   return jsonb_build_object('owner_id',job.user_id,'source_run_id',job.source_run_id,
@@ -319,7 +341,8 @@ create trigger m2_clear_prepared_orders_on_generation
   after insert or update of history_generation on public.user_behavior_revisions
   for each row execute function public.m2_clear_prepared_orders_on_privacy_change();
 create trigger m2_clear_prepared_orders_on_consent
-  after insert or update of consent_revision on public.user_behavior_settings
+  after insert or update of consent_revision,learning_enabled,
+    provider_processing_enabled,provider_policy_id on public.user_behavior_settings
   for each row execute function public.m2_clear_prepared_orders_on_privacy_change();
 
 revoke execute on function public.m2_enqueue_prepared_order(uuid,uuid,text,text,bigint,bigint,bigint,text,uuid,jsonb,integer),
@@ -330,7 +353,7 @@ revoke execute on function public.m2_enqueue_prepared_order(uuid,uuid,text,text,
   public.m2_mark_prepared_attempt(uuid,uuid),
   public.m2_finish_prepared_order(uuid,uuid,jsonb),
   public.m2_fail_prepared_order(uuid,uuid),
-  public.m2_consume_prepared_order(uuid,uuid,text,text),
+  public.m2_consume_prepared_order(uuid,uuid,text,text,text[],integer),
   public.m2_clear_prepared_orders_on_privacy_change() from public,anon,authenticated;
 grant execute on function public.m2_enqueue_prepared_order(uuid,uuid,text,text,bigint,bigint,bigint,text,uuid,jsonb,integer),
   public.m2_claim_prepared_order(text),
@@ -340,6 +363,6 @@ grant execute on function public.m2_enqueue_prepared_order(uuid,uuid,text,text,b
   public.m2_mark_prepared_attempt(uuid,uuid),
   public.m2_finish_prepared_order(uuid,uuid,jsonb),
   public.m2_fail_prepared_order(uuid,uuid),
-  public.m2_consume_prepared_order(uuid,uuid,text,text) to service_role;
+  public.m2_consume_prepared_order(uuid,uuid,text,text,text[],integer) to service_role;
 
 commit;

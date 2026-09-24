@@ -93,6 +93,17 @@ scaledown_window = _bounded_int("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", 60, 2, 3
 
 
 if deployment_mode == "service":
+    from .runtime import load_ranker_policy
+
+    _, staged_policy = load_ranker_policy(os.environ, root=context_path)
+    next_run = staged_policy.get("next_run_preparation")
+    if not isinstance(next_run, dict) or type(next_run.get("enabled")) is not bool:
+        raise ValueError("next_run_preparation.enabled must be boolean in the staged policy")
+    worker_enabled = _enabled("NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED")
+    if next_run["enabled"] != worker_enabled:
+        raise ValueError(
+            "next_run_preparation.enabled and "
+            "NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED must match")
     runtime_secret = modal.Secret.from_name(os.environ["NEWS_CURATOR_RANKER_SECRET_NAME"])
     endpoint = app.function(image=image, secrets=[runtime_secret], timeout=function_timeout,
         max_containers=max_containers, min_containers=min_containers, scaledown_window=scaledown_window,
@@ -110,7 +121,7 @@ if deployment_mode == "service":
 
     # A separate, explicit deploy switch prevents an ordinary service redeploy
     # from starting a paid schedule. The image policy is a second runtime gate.
-    if _enabled("NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED"):
+    if worker_enabled:
         preparation_batch_size = _bounded_int(
             "NEWS_CURATOR_MODAL_PREPARATION_BATCH_SIZE", 1, 1, 5)
         preparation_timeout = _bounded_int(

@@ -19,6 +19,14 @@ from curator.recommendation.runtime import (RANKER_POLICY_DEFAULT, load_ranker_p
 from curator.recommendation import runtime
 from curator.recommendation.deployment import FUNCTION_TIMEOUT_ENV
 
+
+@pytest.mark.parametrize("value", [0, "", False, [], {"ttl_second": 7200},
+                                    {"enabled": True, "unknown": 1}])
+def test_next_run_preparation_rejects_wrong_types_and_unknown_keys(value):
+    with pytest.raises(ValueError, match="next_run_preparation"):
+        runtime.next_run_preparation_policy({"next_run_preparation": value})
+
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
