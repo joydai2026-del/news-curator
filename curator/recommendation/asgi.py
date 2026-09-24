@@ -113,6 +113,7 @@ class RankingASGI:
     async def _reply(self, send, status, value):
         body = b"" if value is None else json.dumps(value, separators=(",", ":")).encode()
         headers = [(b"content-type", b"application/json"), (b"access-control-allow-origin", self._origin.encode()),
-            (b"access-control-allow-headers", b"authorization,content-type"), (b"access-control-allow-methods", b"GET,POST,OPTIONS")]
+            (b"access-control-allow-headers", b"authorization,content-type"), (b"access-control-allow-methods", b"GET,POST,OPTIONS"),
+            (b"vary", b"Accept"), (b"cache-control", b"no-store")]
         await send({"type": "http.response.start", "status": status, "headers": headers})
         await send({"type": "http.response.body", "body": body})

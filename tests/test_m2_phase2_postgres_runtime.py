@@ -1640,6 +1640,36 @@ def test_consent_change_erases_queued_payload_without_revision_bump(db, setting,
         _sql(db, f"delete from auth.users where id='{owner}';")
 
 
+@pytest.mark.parametrize('null_field', [
+    'eligibility_key', 'policy_digest', 'request_payload', 'ttl_seconds',
+])
+def test_enqueue_null_inputs_fail_before_private_database_detail(db, null_field):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = str(uuid.uuid4())
+        payload = json.dumps({'request_id': request_id, 'owner': {'user_id': owner},
+                              'candidates': [], 'query': 'private enqueue query'})
+        values = {
+            'eligibility_key': _quote('a' * 64),
+            'policy_digest': _quote('b' * 64),
+            'request_payload': _quote(payload) + '::jsonb',
+            'ttl_seconds': '3600',
+        }
+        values[null_field] = 'null'
+        result = _service(db, "select public.m2_enqueue_prepared_order("
+            f"'{owner}','{run_id}',{values['eligibility_key']},{values['policy_digest']},"
+            f"1,1,0,'provider-policy-test','{request_id}',"
+            f"{values['request_payload']},{values['ttl_seconds']});", check=False)
+        assert result.returncode != 0
+        assert 'invalid prepared order' in result.stderr.lower()
+        assert 'private enqueue query' not in result.stderr
+        assert 'failing row contains' not in result.stderr.lower()
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '0'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
 def test_duplicate_preparation_for_one_run_and_view_keeps_one_job(db):
     owner, run_id = _prepared_owner(db)
     try:
@@ -1694,7 +1724,7 @@ def test_preparation_mutation_rpcs_lock_owner_before_private_work(db):
         assert definition.index('pg_advisory_xact_lock') < definition.index(protected_read), signature
 
 
-def test_standalone_history_compatibility_waits_for_owner_behavior_lock(db):
+def test_standalone_history_compatibility_fails_closed_without_waiting(db):
     owner, _run_id = _prepared_owner(db)
     lock = f"hashtextextended('{owner}:behavior',0)"
     try:
@@ -1715,8 +1745,8 @@ def test_standalone_history_compatibility_waits_for_owner_behavior_lock(db):
                 f"select public.m2_prepared_history_is_compatible('{owner}',1,0);"))
             elapsed = time.monotonic() - started
             holder.result(timeout=5)
-        assert result == 't'
-        assert elapsed >= 0.25, "standalone history check bypassed the held owner lock"
+        assert result == 'f'
+        assert elapsed < 1.0, "standalone history check waited behind owner feedback"
     finally:
         _sql(db, f"delete from auth.users where id='{owner}';")
 

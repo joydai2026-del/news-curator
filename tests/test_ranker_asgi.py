@@ -220,7 +220,11 @@ def test_order_origin_projection_respects_exact_reader_capability(
     assert sent[0]["status"] == 200
     result = json.loads(sent[1]["body"])
     assert result.get("order_origin") == expected_origin
-    assert dict(sent[0]["headers"])[b"access-control-allow-headers"] == b"authorization,content-type"
+    response_headers = dict(sent[0]["headers"])
+    assert response_headers[b"access-control-allow-headers"] == b"authorization,content-type"
+    assert response_headers[b"access-control-allow-origin"] == b"https://reader.example"
+    assert response_headers[b"vary"] == b"Accept"
+    assert response_headers[b"cache-control"] == b"no-store"
 
 
 def test_preflight_keeps_the_older_ranker_cors_header_contract():
