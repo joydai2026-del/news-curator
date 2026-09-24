@@ -238,7 +238,8 @@ def build_application(*, environ=None, policy_path: str | None = None):
     adapter = RankLLMAdapter(policy=ranker_policy, engine=engine)
     transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key,
         timeout_seconds=supabase_timeout, timeout_retries=supabase_retries,
-        general_candidate_query=supabase_general_candidate_query(policy))
+        general_candidate_query=supabase_general_candidate_query(policy),
+        filtered_candidate_query=supabase_filtered_candidate_query(policy))
     next_run = next_run_preparation_policy(policy)
     service_policy = ServicePolicy(policy_version=_required(policy, "prompt_revision"),
         model_version=_required(policy, "model"), provider_policy_id=_required(policy, "provider_policy_id"),
@@ -376,7 +377,7 @@ def supabase_timeout_seconds(policy) -> float:
     section = policy["supabase"]
     if not isinstance(section, dict):
         raise ValueError("ranker policy `supabase` must be a mapping")
-    unknown = set(section) - {"timeout_seconds", "timeout_retries", "general_candidate_query"}
+    unknown = set(section) - {"timeout_seconds", "timeout_retries", "general_candidate_query", "filtered_candidate_query"}
     if unknown:
         raise ValueError(f"unknown ranker policy supabase keys: {sorted(unknown)}")
     if "timeout_seconds" not in section:
@@ -402,6 +403,16 @@ def supabase_general_candidate_query(policy) -> str:
     value = section.get("general_candidate_query", "owner")
     if value not in ("owner", "owner_narrow"):
         raise ValueError("invalid supabase.general_candidate_query")
+    return value
+
+
+def supabase_filtered_candidate_query(policy) -> str:
+    section = policy.get("supabase", {})
+    if not isinstance(section, dict):
+        raise ValueError("ranker policy `supabase` must be a mapping")
+    value = section.get("filtered_candidate_query", "owner")
+    if value not in ("owner", "owner_narrow"):
+        raise ValueError("invalid supabase.filtered_candidate_query")
     return value
 
 

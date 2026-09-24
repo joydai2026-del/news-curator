@@ -116,3 +116,5 @@ supabase:
   timeout_retries: 1
   # Switch back to owner if the narrow All/general SQL misses live parity.
   general_candidate_query: owner_narrow
+  # Category and search reads retain the old owner RPC as a config rollback.
+  filtered_candidate_query: owner_narrow

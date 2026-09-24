@@ -262,6 +262,38 @@ def test_narrow_general_query_rejects_unknown_selector():
                      service_role_key="sb_secret_canary", general_candidate_query="unfiltered")
 
 
+
+def test_filtered_narrow_route_keeps_full_owner_and_lane_arguments():
+    client = SupabaseHTTP(origin="https://example.test", publishable_key="public",
+                          service_role_key="sb_secret_canary", filtered_candidate_query="owner_narrow")
+    calls = []
+    client._request = lambda _method, path, **kwargs: calls.append((path, kwargs["body"])) or []
+    owner = "11111111-1111-1111-1111-111111111111"
+    args = dict(_candidate_args(), owner_id=owner, hide_already_opened=True,
+                category_id="ai", query="生成式人工智能", before_published_at="2026-09-23T00:00:00Z",
+                before_story_id="story:before", before_source_count=2,
+                excluded_story_ids=("story:excluded",), suppressed_sources=("source",),
+                suppressed_topics=("topic",))
+    client.retained_candidates_v2(**args)
+    path, body = calls.pop()
+    assert path == "/rest/v1/rpc/m2_retained_candidates_filtered_narrow_for_owner"
+    assert body == {"p_owner_id": owner, "p_hide_already_opened": True,
+        "p_trend_window_hours": 48, "p_before_published_at": "2026-09-23T00:00:00Z",
+        "p_before_story_id": "story:before", "p_excluded_story_ids": ["story:excluded"],
+        "p_suppressed_sources": ["source"], "p_suppressed_topics": ["topic"],
+        "p_limit": 12, "p_category_id": "ai", "p_query": "生成式人工智能", "p_lane": "hot",
+        "p_profile_categories": [], "p_profile_sources": [], "p_trend_min_sources": 2,
+        "p_max_age_hours": None, "p_min_age_hours": None, "p_before_source_count": 2}
+    client.retained_candidates_v2(**(args | {"category_id": None, "query": None}))
+    assert calls.pop()[0] == "/rest/v1/rpc/m2_retained_candidates_for_owner"
+
+
+def test_filtered_candidate_query_rejects_unknown_selector():
+    with pytest.raises(ValueError, match="invalid filtered candidate query"):
+        SupabaseHTTP(origin="https://example.test", publishable_key="public",
+                     service_role_key="sb_secret_canary", filtered_candidate_query="unfiltered")
+
+
 def test_candidate_rpc_uses_a_private_no_redirect_opener_per_lane_call(monkeypatch):
     client = _client()
     built = []

@@ -91,7 +91,8 @@ class SupabaseHTTP:
     def __init__(self, *, origin: str, publishable_key: str, service_role_key: str,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                  timeout_retries: int = MINIMUM_TIMEOUT_RETRIES,
-                 general_candidate_query: str = "owner") -> None:
+                 general_candidate_query: str = "owner",
+                 filtered_candidate_query: str = "owner") -> None:
         validate_https_origin(origin)
         if not publishable_key or not service_role_key:
             raise ValueError("Supabase keys must be configured")
@@ -101,6 +102,9 @@ class SupabaseHTTP:
         if general_candidate_query not in ("owner", "owner_narrow"):
             raise ValueError("invalid general candidate query")
         self._general_candidate_query = general_candidate_query
+        if filtered_candidate_query not in ("owner", "owner_narrow"):
+            raise ValueError("invalid filtered candidate query")
+        self._filtered_candidate_query = filtered_candidate_query
         self._opener = urllib.request.build_opener(_NoRedirect)
 
     def _service_token(self) -> str:
@@ -176,7 +180,10 @@ class SupabaseHTTP:
         narrow_general = (self._general_candidate_query == "owner_narrow" and lane is None
             and category_id is None and not query and max_age_hours is None
             and min_age_hours is None and before_source_count is None)
+        narrow_filtered = (self._filtered_candidate_query == "owner_narrow"
+            and (category_id is not None or bool(query)))
         path = ("/rest/v1/rpc/m2_retained_candidates_general_narrow_for_owner" if narrow_general
+                else "/rest/v1/rpc/m2_retained_candidates_filtered_narrow_for_owner" if narrow_filtered
                 else "/rest/v1/rpc/m2_retained_candidates_for_owner")
         body = {"p_owner_id": owner_id, "p_hide_already_opened": hide_already_opened,
             "p_trend_window_hours": trend_window_hours,

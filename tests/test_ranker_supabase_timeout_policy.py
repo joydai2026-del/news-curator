@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from curator.recommendation.runtime import (RANKER_POLICY_DEFAULT, load_ranker_policy,
-                                            supabase_general_candidate_query,
+                                            supabase_general_candidate_query, supabase_filtered_candidate_query,
                                             supabase_timeout_retries, supabase_timeout_seconds)
 from curator.recommendation import runtime
 from curator.recommendation.deployment import FUNCTION_TIMEOUT_ENV
@@ -90,8 +90,10 @@ def test_a_misspelled_key_is_refused_rather_than_silently_ignored():
 def test_the_policy_file_on_disk_parses_to_the_value_the_transport_receives():
     raw = yaml.safe_load((ROOT / RANKER_POLICY_DEFAULT).read_text())
     assert raw["supabase"] == {"timeout_seconds": 5, "timeout_retries": 1,
-                               "general_candidate_query": "owner_narrow"}
+                               "general_candidate_query": "owner_narrow",
+                               "filtered_candidate_query": "owner_narrow"}
     assert supabase_general_candidate_query(raw) == "owner_narrow"
+    assert supabase_filtered_candidate_query(raw) == "owner_narrow"
 
 
 @pytest.mark.parametrize("value", ["owner", "owner_narrow"])
@@ -103,6 +105,18 @@ def test_general_candidate_query_accepts_only_reviewed_routes(value):
 def test_general_candidate_query_rejects_other_routes(value):
     with pytest.raises(ValueError, match="general_candidate_query"):
         supabase_general_candidate_query({"supabase": {"general_candidate_query": value}})
+
+
+
+@pytest.mark.parametrize("value", ["owner", "owner_narrow"])
+def test_filtered_candidate_query_accepts_reviewed_routes(value):
+    assert supabase_filtered_candidate_query({"supabase": {"filtered_candidate_query": value}}) == value
+
+
+@pytest.mark.parametrize("value", [None, "unfiltered", 0, True])
+def test_filtered_candidate_query_rejects_other_routes(value):
+    with pytest.raises(ValueError, match="filtered_candidate_query"):
+        supabase_filtered_candidate_query({"supabase": {"filtered_candidate_query": value}})
 
 
 @pytest.mark.parametrize("value", [0, 1, 2])

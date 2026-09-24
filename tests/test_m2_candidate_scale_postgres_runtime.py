@@ -75,6 +75,7 @@ MIGRATIONS = (
     'supabase/migrations/202609230003_m2_opened_candidate_ids.sql',
     'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
     'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
+    'supabase/migrations/202609240004_m2_filtered_narrow_for_owner.sql',
 )
 
 # Seeded corpus size. The live retained corpus was about 6,500 rows when the
@@ -239,7 +240,8 @@ def _seed_corpus_at_scale(container):
       select
         'story:' || encode(extensions.digest('https://scale.test/story/' || i, 'sha256'), 'hex'),
         'https://scale.test/story/' || i,
-        case when i % 26 in (0, 4) then 'Markets react to the overnight decision, round ' || (i / 26)
+        case when i = 142 then '生成式人工智能'
+             when i % 26 in (0, 4) then 'Markets react to the overnight decision, round ' || (i / 26)
              else 'Story number ' || i || ': ' || (array['regulators open a review of',
                     'a second outlet confirms', 'engineers describe', 'the filing shows',
                     'analysts disagree about'])[1 + i % 5] || ' the ' ||
@@ -451,6 +453,66 @@ def test_owner_narrow_general_matches_old_owner_rpc_at_scale(db):
             median = statistics.median(samples)
             print(f'owner narrow general {limit} rows: {median:.1f} ms median of {REPEATS}')
             assert median < LANE_BUDGET_MS, f'owner narrow general read took {median:.1f} ms'
+
+
+def test_owner_narrow_filtered_category_search_matches_old_rpc_at_scale(db):
+    owner = '11111111-1111-1111-1111-111111111111'
+    _sql(db, "insert into public.user_story_state(user_id,story_id,read_at) "
+        f"select '{owner}'::uuid, story_id, now() from ("
+        "select story_id from public.retained_corpus_observations "
+        "order by published_at desc, story_id desc limit 100) head "
+        "on conflict(user_id,story_id) do update set read_at=excluded.read_at;")
+    def payload(name, arguments):
+        return _last(_service(db, "select coalesce(jsonb_agg(value),'[]'::jsonb) "
+            f"from public.{name}({arguments}) rows(value);"))
+
+    cases = (
+        ("p_category_id => 'ai'", 'category'),
+        ("p_category_id => 'ai', p_dedupe_window_hours => 0", 'category without dedupe'),
+        ("p_query => 'reactor'", 'English search'),
+        ("p_query => '生成式人工智能'", 'CJK search'),
+        ("p_category_id => 'crypto', p_query => 'story'", 'category and search'),
+    )
+    for filter_args, label in cases:
+        for lane_args in (
+            '',
+            ", p_lane => 'updates', p_max_age_hours => 6",
+            ", p_lane => 'hot', p_max_age_hours => 24, p_min_age_hours => 6",
+            ", p_lane => 'interested', p_min_age_hours => 6, "
+            "p_profile_categories => array['ai','world']::text[]",
+            ", p_lane => 'surprise', p_max_age_hours => 48, p_min_age_hours => 6, "
+            "p_profile_categories => array['ai','world']::text[]",
+        ):
+            args = (f"p_owner_id => '{owner}', p_hide_already_opened => true, "
+                    f"p_limit => 50, {filter_args}{lane_args}, "
+                    "p_suppressed_sources => array['source-3']::text[], "
+                    "p_suppressed_topics => array['energy']::text[]")
+            old_bytes = payload('m2_retained_candidates_for_owner', args)
+            new_bytes = payload('m2_retained_candidates_filtered_narrow_for_owner', args)
+            assert new_bytes == old_bytes, (label, lane_args)
+            old = json.loads(old_bytes)
+            if label == 'CJK search' and not lane_args:
+                assert len(old) == 1
+            if old:
+                cursor = (f", p_before_published_at => {_quote(old[0]['published_at'])}, "
+                          f"p_before_story_id => {_quote(old[0]['story_id'])}")
+                if "p_lane => 'hot'" in lane_args:
+                    cursor += f", p_before_source_count => {old[0]['independent_source_count']}"
+                assert payload('m2_retained_candidates_filtered_narrow_for_owner', args + cursor) == (
+                    payload('m2_retained_candidates_for_owner', args + cursor))
+            samples = _timed(db, 'select count(*) from '
+                f'public.m2_retained_candidates_filtered_narrow_for_owner({args});')
+            median = statistics.median(samples)
+            print(f'owner narrow {label} {lane_args or "general"}: {median:.1f} ms')
+            assert median < LANE_BUDGET_MS, (label, lane_args, median)
+
+
+def test_filtered_narrow_rpc_is_service_only(db):
+    owner = '11111111-1111-1111-1111-111111111111'
+    result = _sql(db, f"set role authenticated; select count(*) from "
+        f"public.m2_retained_candidates_filtered_narrow_for_owner('{owner}',true,p_category_id=>'ai');",
+        check=False)
+    assert result.returncode != 0 and 'permission denied for function' in result.stderr
 
 
 def test_general_pool_accepts_two_hundred_but_refuses_unbounded_reads(db):
