@@ -6,9 +6,13 @@ crash after a provider attempt cannot prove whether the provider charged.
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Mapping
+
 from curator.contracts.enums import RankingResultMode
 from curator.contracts.ranking_request import validate_ranking_response
 
+from .diagnostics import log_suppressed_exception
 from .prepared_order import request_from_payload
 from .rankllm_adapter import BudgetState
 
@@ -16,11 +20,34 @@ from .rankllm_adapter import BudgetState
 def process_one_preparation(*, store, adapter, policy) -> str:
     if not policy.next_run_preparation_enabled:
         return "disabled"
-    job = store.claim_prepared_order(policy_digest=policy.effective_policy_digest)
-    if job is None:
-        return "empty"
-    job_id, claim_token = str(job["job_id"]), str(job["claim_token"])
-    request_id, user_id = str(job["request_id"]), str(job["user_id"])
+    job_id = claim_token = None
+    try:
+        job = store.claim_prepared_order(policy_digest=policy.effective_policy_digest)
+        if job is None:
+            return "empty"
+        if not isinstance(job, Mapping):
+            raise TypeError()
+        claimed_id, claimed_token = job.get("job_id"), job.get("claim_token")
+        if (type(claimed_id) is not str or not claimed_id
+                or type(claimed_token) is not str or not claimed_token):
+            raise TypeError()
+        job_id, claim_token = claimed_id, claimed_token
+        request_id, user_id = job["request_id"], job["user_id"]
+        if (type(request_id) is not str or not request_id
+                or type(user_id) is not str or not user_id
+                or not isinstance(job["request_payload"], Mapping)):
+            raise TypeError()
+    except Exception as error:
+        if job_id is not None and claim_token is not None:
+            try:
+                store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
+            except Exception:
+                pass
+        try:
+            log_suppressed_exception("m2_preparation_claim_failed", error, stream=sys.stderr)
+        except Exception:
+            pass
+        return "failed"
     attempted = False
     reserved = False
     attempt_mark_uncertain = False

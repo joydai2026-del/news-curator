@@ -1,4 +1,5 @@
 from dataclasses import dataclass, replace
+import json
 
 import pytest
 
@@ -379,3 +380,60 @@ def test_uncertain_retry_mark_settles_completed_observed_attempt():
     store = UncertainRetryStore()
     assert process_one_preparation(store=store, adapter=ObservingAdapter(), policy=policy()) == "failed"
     assert store.calls == ["claim", "reserve", "mark", "mark", ("settle", "settled", .001), "fail"]
+
+
+def test_claim_failure_returns_failed_without_private_detail(capsys):
+    from curator.recommendation.preparation_worker import process_one_preparation
+
+    class RaisingStore(Store):
+        def claim_prepared_order(self, **kwargs):
+            self.calls.append("claim")
+            raise RuntimeError("private query for user-1 in claim response")
+
+    store, adapter = RaisingStore(), Adapter()
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "failed"
+    assert store.calls == ["claim"] and adapter.calls == []
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert len(records) == 1
+    assert set(records[0]) - {"frame"} == {"event", "exception_class", "detail"}
+    assert records[0]["event"] == "m2_preparation_claim_failed"
+    assert records[0]["detail"] == "suppressed"
+    assert "private query" not in json.dumps(records)
+    assert "user-1" not in json.dumps(records)
+
+
+@pytest.mark.parametrize("row, expected", (
+    ({"job_id": "job"}, ["claim"]),
+    (["job"], ["claim"]),
+    ("job", ["claim"]),
+    ({"job_id": "job", "claim_token": "claim"}, ["claim", "fail"]),
+    ({"job_id": "job", "claim_token": None}, ["claim"]),
+))
+def test_malformed_claim_row_is_refused_before_spending(row, expected, capsys):
+    from curator.recommendation.preparation_worker import process_one_preparation
+
+    class MalformedStore(Store):
+        def claim_prepared_order(self, **kwargs):
+            self.calls.append("claim")
+            return row
+
+    store, adapter = MalformedStore(), Adapter()
+    assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "failed"
+    assert store.calls == expected and adapter.calls == []
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert len(records) == 1 and records[0]["event"] == "m2_preparation_claim_failed"
+    assert records[0]["detail"] == "suppressed"
+
+
+def test_contract_invalid_model_order_is_never_published():
+    from curator.recommendation.preparation_worker import process_one_preparation
+
+    class InvalidModelAdapter(Adapter):
+        def rank(self, req, **kwargs):
+            receipt = super().rank(req, **kwargs)
+            return replace(receipt, ranked_candidate_ids=(req.candidates[0].candidate_id,))
+
+    store = Store()
+    assert process_one_preparation(store=store, adapter=InvalidModelAdapter(), policy=policy()) == "failed"
+    assert store.calls == ["claim", "reserve", "mark", ("settle", "settled"), "fail"]
+    assert "finish" not in store.calls
