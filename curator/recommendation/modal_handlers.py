@@ -27,6 +27,21 @@ def endpoint():
     return build_application()
 
 
+def scrub_expired_preparations():
+    """Remove at most 100 expired private payloads; report aggregate count only."""
+    import json
+    import time
+
+    from .runtime import build_application
+
+    started = time.monotonic()
+    count = build_application()._service._store.scrub_expired_prepared_orders()
+    result = {"event": "m2_preparation_scrub", "scrubbed": count,
+              "duration_ms": round((time.monotonic() - started) * 1000)}
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
+    return result
+
+
 def prepare_next_run():
     """Process a bounded batch from the owner-scoped durable queue.
 

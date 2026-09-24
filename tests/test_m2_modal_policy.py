@@ -47,6 +47,7 @@ def _modal_double(captured):
 
     def concurrent(**kwargs):
         captured["concurrent"] = kwargs
+        captured.setdefault("concurrent_calls", []).append(kwargs)
         return lambda fn: fn
 
     return types.SimpleNamespace(
@@ -114,7 +115,7 @@ def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(mon
     assert captured["functions"][0]["scaledown_window"] == 60
     assert captured["functions"][0]["enable_memory_snapshot"] is True
     assert captured["functions"][0]["restrict_modal_access"] is True
-    assert captured["concurrent"]["max_inputs"] == 8
+    assert captured["concurrent_calls"][0]["max_inputs"] == 8
 
 
 def test_modal_policy_uses_validated_overrides(monkeypatch, tmp_path):
@@ -132,7 +133,7 @@ def test_modal_policy_uses_validated_overrides(monkeypatch, tmp_path):
     assert captured["functions"][0]["max_containers"] == 7
     assert captured["functions"][0]["scaledown_window"] == 300
     assert captured["functions"][0]["enable_memory_snapshot"] is False
-    assert captured["concurrent"]["max_inputs"] == 12
+    assert captured["concurrent_calls"][0]["max_inputs"] == 12
 
 
 @pytest.mark.parametrize("minimum", ["0", "1", "7"])

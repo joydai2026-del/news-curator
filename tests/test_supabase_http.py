@@ -482,3 +482,40 @@ def test_out_of_range_timeout_is_refused(value):
 @pytest.mark.parametrize("value", [1, 1.0, 3.0, 10, 30])
 def test_in_range_timeout_is_accepted(value):
     assert validate_timeout_seconds(value) == float(value)
+
+
+def test_prepared_scrub_uses_service_role_and_exact_100_limit(capsys):
+    client = SupabaseHTTP(origin="https://example.test", publishable_key="public",
+        service_role_key="sb_secret_canary")
+    seen = {}
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return b"2"
+    class Capture:
+        def open(self, request, timeout):
+            seen.update(method=request.method, url=request.full_url,
+                        body=json.loads(request.data), headers=dict(request.header_items()))
+            return Response()
+    client._opener = Capture()
+    assert client.scrub_expired_prepared_orders() == 2
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://example.test/rest/v1/rpc/m2_scrub_expired_prepared_orders"
+    assert seen["body"] == {"p_limit": 100}
+    assert seen["headers"]["Apikey"] == "sb_secret_canary"
+    assert "Authorization" not in seen["headers"]
+    assert "sb_secret_canary" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("result", [b"true", b"-1", b"101", b'"2"'])
+def test_prepared_scrub_rejects_invalid_count(result):
+    client = _client()
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return result
+    class Capture:
+        def open(self, request, timeout): return Response()
+    client._opener = Capture()
+    with pytest.raises(SupabaseHTTPError, match="invalid count"):
+        client.scrub_expired_prepared_orders()

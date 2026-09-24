@@ -217,6 +217,13 @@ class SupabaseHTTP:
             raise SupabaseHTTPError("prepared consume RPC returned an invalid row")
         return result
 
+    def scrub_expired_prepared_orders(self) -> int:
+        result = self._request("POST", "/rest/v1/rpc/m2_scrub_expired_prepared_orders",
+            token=self._service_token(), key=self._service, body={"p_limit": 100})
+        if type(result) is not int or not 0 <= result <= 100:
+            raise SupabaseHTTPError("prepared scrub RPC returned an invalid count")
+        return result
+
     def claim_prepared_order(self, *, policy_digest: str):
         result = self._request("POST", "/rest/v1/rpc/m2_claim_prepared_order",
             token=self._service_token(), key=self._service, body={"p_policy_digest": policy_digest})

@@ -11,6 +11,7 @@ import modal
 from .deployment import bounded_int, function_timeout_seconds
 from .modal_handlers import endpoint as _endpoint
 from .modal_handlers import prepare_next_run as _prepare_next_run
+from .modal_handlers import scrub_expired_preparations as _scrub_expired_preparations
 from .modal_handlers import smoke_rankllm_image as _smoke_rankllm_image
 
 
@@ -97,6 +98,15 @@ if deployment_mode == "service":
         max_containers=max_containers, min_containers=min_containers, scaledown_window=scaledown_window,
         enable_memory_snapshot=_enabled("NEWS_CURATOR_MODAL_MEMORY_SNAPSHOT_ENABLED", default=True),
         restrict_modal_access=True)(modal.concurrent(max_inputs=max_inputs)(modal.asgi_app()(_endpoint)))
+
+    # Private payload expiry continues even when paid preparation is disabled.
+    scrub_cron = os.environ.get("NEWS_CURATOR_MODAL_PREPARATION_SCRUB_CRON", "* * * * *")
+    if not scrub_cron or len(scrub_cron) > 80:
+        raise ValueError("NEWS_CURATOR_MODAL_PREPARATION_SCRUB_CRON must be a nonempty cron expression")
+    scrub_expired_preparations = app.function(
+        image=image, secrets=[runtime_secret], schedule=modal.Cron(scrub_cron),
+        timeout=90, max_containers=1, min_containers=0, restrict_modal_access=True,
+    )(modal.concurrent(max_inputs=1)(_scrub_expired_preparations))
 
     # A separate, explicit deploy switch prevents an ordinary service redeploy
     # from starting a paid schedule. The image policy is a second runtime gate.
