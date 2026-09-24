@@ -39,7 +39,9 @@ create policy m2_prepared_orders_service on public.m2_prepared_orders to service
 -- A prepared model is a snapshot. Later positive reading activity does not
 -- invalidate it, but a negative preference or unexplained revision gap does.
 -- A standalone post-consume check must fail closed immediately under owner
--- contention. Callers already holding the same transaction lock can re-enter.
+-- contention. This may discard an already consumed paid order, but keeps the
+-- reader response bounded and never serves an unverified order; the per-owner
+-- daily budget limits the cost. In-database callers holding this lock re-enter.
 create or replace function public.m2_prepared_history_is_compatible(
   p_user_id uuid,p_history_generation bigint,p_behavior_revision bigint
 ) returns boolean language plpgsql security definer set search_path=pg_catalog,public as $$

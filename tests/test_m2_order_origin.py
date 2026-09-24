@@ -246,13 +246,20 @@ def test_compatibility_rpc_failure_discards_prepared_permutation(capsys):
 
 def test_no_private_preparation_without_provider_processing_consent(capsys):
     class NoProviderConsentStore(PreparedStore):
+        def __init__(self):
+            super().__init__()
+            self.consume_attempted = False
+            self.enqueue_attempted = False
+
         def history_snapshot(self, token):
             return {**super().history_snapshot(token), "provider_processing_enabled": False}
 
         def consume_prepared_order(self, **kwargs):
+            self.consume_attempted = True
             raise AssertionError("consent-off run must not consume a private preparation")
 
         def enqueue_prepared_order(self, **kwargs):
+            self.enqueue_attempted = True
             raise AssertionError("consent-off run must not enqueue a private payload")
 
     store = NoProviderConsentStore()
@@ -263,6 +270,8 @@ def test_no_private_preparation_without_provider_processing_consent(capsys):
     assert response["cards"] and response["order_origin"] == "recipe"
     assert response["fallback_reason"] == "provider_processing_consent_required"
     assert store.enqueued is None and not store.reservations
+    assert store.consume_attempted is False
+    assert store.enqueue_attempted is False
     preparation = [json.loads(line) for line in capsys.readouterr().err.splitlines()
                    if '"event":"m2_prepar' in line]
     assert all(line.get("stage") != "enqueue" for line in preparation)
