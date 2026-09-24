@@ -176,7 +176,11 @@ class SupabaseHTTP:
         narrow_general = (self._general_candidate_query == "owner_narrow" and lane is None
             and category_id is None and not query and max_age_hours is None
             and min_age_hours is None and before_source_count is None)
+        narrow_interested = (self._general_candidate_query == "owner_narrow" and lane == "interested"
+            and category_id is None and not query and max_age_hours is None
+            and min_age_hours is not None and before_source_count is None)
         path = ("/rest/v1/rpc/m2_retained_candidates_general_narrow_for_owner" if narrow_general
+                else "/rest/v1/rpc/m2_retained_candidates_interested_narrow_for_owner" if narrow_interested
                 else "/rest/v1/rpc/m2_retained_candidates_for_owner")
         body = {"p_owner_id": owner_id, "p_hide_already_opened": hide_already_opened,
             "p_trend_window_hours": trend_window_hours,
@@ -186,7 +190,10 @@ class SupabaseHTTP:
             "p_suppressed_sources": list(suppressed_sources),
             "p_suppressed_topics": list(suppressed_topics),
             "p_limit": min(200 if lane is None else 100, max(1, limit))}
-        if not narrow_general:
+        if narrow_interested:
+            body.update({"p_profile_categories": list(profile_categories),
+                "p_profile_sources": list(profile_sources), "p_min_age_hours": min_age_hours})
+        elif not narrow_general:
             body.update({"p_category_id": category_id, "p_query": query, "p_lane": lane,
                 "p_profile_categories": list(profile_categories), "p_profile_sources": list(profile_sources),
                 "p_trend_min_sources": trend_min_sources,

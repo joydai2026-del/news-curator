@@ -75,6 +75,7 @@ MIGRATIONS = (
     'supabase/migrations/202609230003_m2_opened_candidate_ids.sql',
     'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
     'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
+    'supabase/migrations/202609240003_m2_fast_owner_all_pools.sql',
 )
 
 # Seeded corpus size. The live retained corpus was about 6,500 rows when the
@@ -451,6 +452,126 @@ def test_owner_narrow_general_matches_old_owner_rpc_at_scale(db):
             median = statistics.median(samples)
             print(f'owner narrow general {limit} rows: {median:.1f} ms median of {REPEATS}')
             assert median < LANE_BUDGET_MS, f'owner narrow general read took {median:.1f} ms'
+
+
+
+def test_fast_owner_all_pools_keep_bytes_and_sharply_reduce_work(db):
+    owner = '11111111-1111-1111-1111-111111111111'
+    def payload(name, args):
+        value = _last(_service(db, "select coalesce(jsonb_agg(value),'[]'::jsonb) "
+            f"from public.{name}({args}) rows(value);"))
+        return json.loads(value)
+    shared = f"p_owner_id => '{owner}', p_hide_already_opened => true"
+    general_old = 'm2_retained_candidates_for_owner'
+    general_new = 'm2_retained_candidates_general_narrow_for_owner'
+    interested_new = 'm2_retained_candidates_interested_narrow_for_owner'
+    profiles = (
+        "p_profile_categories => array['ai','energy','world']::text[], "
+        "p_profile_sources => array['source-3','source-7']::text[]")
+    cursor = ("p_before_published_at => now() - interval '2 days', "
+              "p_before_story_id => 'story:zz'")
+    suppress = ("p_suppressed_sources => array['source-7']::text[], "
+                "p_suppressed_topics => array['ai']::text[]")
+    for extras in ('', cursor, suppress, cursor + ', ' + suppress,
+                   'p_dedupe_window_hours => 0'):
+        args = shared + ', p_limit => 75' + (', ' + extras if extras else '')
+        assert payload(general_new, args) == payload(general_old, args)
+    for extras in ('', cursor, suppress, cursor + ', ' + suppress,
+                   'p_dedupe_window_hours => 0'):
+        args = shared + ', ' + profiles + ', p_min_age_hours => 6, p_limit => 66'
+        if extras:
+            args += ', ' + extras
+        assert payload(interested_new, args) == payload(general_old,
+            args + ", p_lane => 'interested'")
+    for new_name, old_name, args in (
+        (general_new, general_old, shared + ', p_limit => 75'),
+        (interested_new, general_old,
+            shared + ', ' + profiles + ', p_min_age_hours => 6, p_limit => 66')):
+        old_args = args + (", p_lane => 'interested'" if new_name == interested_new else '')
+        old_ms = statistics.median(_timed(db,
+            f'select count(*) from public.{old_name}({old_args});'))
+        new_ms = statistics.median(_timed(db,
+            f'select count(*) from public.{new_name}({args});'))
+        print(f'{new_name}: {old_ms:.1f} ms old, {new_ms:.1f} ms new')
+        assert new_ms < old_ms * 0.6, 'the narrow route did not reduce measured work'
+
+
+
+def test_fast_owner_paths_keep_tied_duplicate_hidden_after_owner_filters(db):
+    # Same publication instant uses story_id as the final dedupe tie-break.
+    # The newer twin is opened and explicitly excluded, but still suppresses
+    # its older copy because dedupe precedes those owner filters.
+    owner = '11111111-1111-1111-1111-111111111111'
+    title = 'Tied headline for indexed owner deduplication'
+    script = f"""begin;
+      insert into public.canonical_stories(
+        story_id, canonical_url, title, summary, language, source_kind, source_name, published_at)
+      select 'story:' || encode(extensions.digest('https://tie.test/' || i, 'sha256'), 'hex'),
+        'https://tie.test/' || i, '{title}', '', 'en', 'outlet', 'Tie Source',
+        now() - interval '7 hours' from generate_series(1,2) g(i);
+      insert into public.retained_corpus_observations(
+        story_id, source_id, source_name, source_is_aggregator, language, title,
+        summary, canonical_url, published_at, first_observed_at, source_observed_at)
+      select story_id, 'source-3', source_name, false, language, title,
+        summary, canonical_url, published_at, published_at, published_at
+      from public.canonical_stories where canonical_url like 'https://tie.test/%';
+      insert into public.user_story_state(user_id, story_id, read_at)
+      select '{owner}'::uuid, max(story_id), now()
+      from public.retained_corpus_observations where title = '{title}';
+      set role service_role;
+      with excluded as (
+        select array[max(story_id)]::text[] ids, min(story_id) older
+        from public.retained_corpus_observations where title = '{title}'
+      ), results as (
+        select
+          (select coalesce(jsonb_agg(value),'[]'::jsonb)
+           from public.m2_retained_candidates_for_owner(
+             p_owner_id => '{owner}', p_hide_already_opened => true,
+             p_limit => 200, p_excluded_story_ids => excluded.ids) rows(value)) as old_general,
+          (select coalesce(jsonb_agg(value),'[]'::jsonb)
+           from public.m2_retained_candidates_general_narrow_for_owner(
+             p_owner_id => '{owner}', p_hide_already_opened => true,
+             p_limit => 200, p_excluded_story_ids => excluded.ids) rows(value)) as new_general,
+          (select coalesce(jsonb_agg(value),'[]'::jsonb)
+           from public.m2_retained_candidates_for_owner(
+             p_owner_id => '{owner}', p_hide_already_opened => true,
+             p_lane => 'interested', p_profile_sources => array['source-3']::text[],
+             p_min_age_hours => 6, p_limit => 100,
+             p_excluded_story_ids => excluded.ids) rows(value)) as old_interested,
+          (select coalesce(jsonb_agg(value),'[]'::jsonb)
+           from public.m2_retained_candidates_interested_narrow_for_owner(
+             p_owner_id => '{owner}', p_hide_already_opened => true,
+             p_profile_sources => array['source-3']::text[],
+             p_min_age_hours => 6, p_limit => 100,
+             p_excluded_story_ids => excluded.ids) rows(value)) as new_interested,
+          older from excluded
+      ) select old_general = new_general and old_interested = new_interested
+          and not exists (select 1 from jsonb_array_elements(new_general) item
+                          where item->>'story_id' = older)
+          and not exists (select 1 from jsonb_array_elements(new_interested) item
+                          where item->>'story_id' = older)
+        from results;
+      rollback;"""
+    assert 't' in _sql(db, script).stdout.splitlines()
+
+
+def test_fixed_width_dedupe_index_accepts_maximum_title(db):
+    script = """begin;
+      insert into public.canonical_stories(
+        story_id, canonical_url, title, summary, language, source_kind, source_name, published_at)
+      select 'story:' || encode(extensions.digest('https://long.test/title','sha256'),'hex'),
+        'https://long.test/title', repeat('a',8000), '', 'en', 'outlet', 'Long Title', now();
+      insert into public.retained_corpus_observations(
+        story_id, source_id, source_name, source_is_aggregator, language, title,
+        summary, canonical_url, published_at, first_observed_at, source_observed_at)
+      select story_id, 'long-title', source_name, false, language, title,
+        summary, canonical_url, published_at, published_at, published_at
+      from public.canonical_stories where canonical_url='https://long.test/title';
+      set role service_role;
+      select count(*) from public.m2_retained_candidates_general_narrow_for_owner(
+        '11111111-1111-1111-1111-111111111111',true);
+      rollback;"""
+    assert _last(_sql(db, script)) == 'ROLLBACK'
 
 
 def test_general_pool_accepts_two_hundred_but_refuses_unbounded_reads(db):

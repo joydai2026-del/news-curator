@@ -256,6 +256,30 @@ def test_narrow_general_route_keeps_verified_owner_and_only_supported_arguments(
         assert calls.pop()[0] == "/rest/v1/rpc/m2_retained_candidates_for_owner"
 
 
+
+def test_narrow_interested_route_only_for_all_without_search_or_age_ceiling():
+    client = SupabaseHTTP(origin="https://example.test", publishable_key="public",
+                          service_role_key="sb_secret_canary", general_candidate_query="owner_narrow")
+    calls = []
+    client._request = lambda _method, path, **kwargs: calls.append((path, kwargs["body"])) or []
+    args = dict(_candidate_args(), lane="interested", profile_categories=("ai",),
+                profile_sources=("source",), min_age_hours=6,
+                owner_id="11111111-1111-1111-1111-111111111111", hide_already_opened=True)
+    client.retained_candidates_v2(**args)
+    path, body = calls.pop()
+    assert path == "/rest/v1/rpc/m2_retained_candidates_interested_narrow_for_owner"
+    assert body == {"p_owner_id": args["owner_id"], "p_hide_already_opened": True,
+                    "p_profile_categories": ["ai"], "p_profile_sources": ["source"],
+                    "p_trend_window_hours": 48, "p_min_age_hours": 6,
+                    "p_before_published_at": None, "p_before_story_id": None,
+                    "p_excluded_story_ids": [], "p_suppressed_sources": [],
+                    "p_suppressed_topics": [], "p_limit": 12}
+    for change in ({"category_id": "ai"}, {"query": "AI"}, {"max_age_hours": 24},
+                   {"min_age_hours": None}, {"before_source_count": 2}):
+        client.retained_candidates_v2(**(args | change))
+        assert calls.pop()[0] == "/rest/v1/rpc/m2_retained_candidates_for_owner"
+
+
 def test_narrow_general_query_rejects_unknown_selector():
     with pytest.raises(ValueError, match="invalid general candidate query"):
         SupabaseHTTP(origin="https://example.test", publishable_key="public",
