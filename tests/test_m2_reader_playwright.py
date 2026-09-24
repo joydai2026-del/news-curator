@@ -289,7 +289,7 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                 ?new Promise((resolve,reject)=>{
                     const timer=setTimeout(()=>originalFetch(url,options).then(async(response)=>{
                       const payload=await response.json();
-                      if(window.__stallM2ForceModel!==false){payload.result_mode="model";payload.fallback_reason="";}
+                      if(window.__stallM2ForceModel!==false){payload.result_mode="model";payload.fallback_reason="";payload.order_origin="direct_model";}
                       resolve(new Proxy(response,{get(target,key){
                         return key==="text" ? async()=>JSON.stringify(payload) : Reflect.get(target,key,target);
                       }}));
@@ -304,7 +304,7 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
         try:
             page.goto(READER + '?silent=1',wait_until='networkidle')
             page.wait_for_function("() => document.querySelectorAll('[data-m2-card=true]').length===25")
-            assert '/rank' in requests and 'Freshness order' in page.locator('#m2-mode').inner_text()
+            assert '/rank' in requests and 'Model ranking was not used' in page.locator('#m2-mode').inner_text()
             if inject_saved_race:
                 saved_only = rows[-1]['story_id']
                 replacement_saved = rows[-2]['story_id']
@@ -461,7 +461,7 @@ def _drive_the_reader(tmp_path, *, include_the_tail, inject_server_selected_surp
                     document.querySelector('#m2-mode').textContent.includes('still loading')''', timeout=12000)
                 page.wait_for_function('''() =>
                     document.querySelectorAll('[data-m2-card=true]').length===25 &&
-                    document.querySelector('#m2-mode').textContent.includes('Freshness order')''', timeout=15000)
+                    document.querySelector('#m2-mode').textContent.includes('Model ranking was not used')''', timeout=15000)
                 return
             race_card = page.locator('[data-m2-card=true]').nth(1)
             race_story_id = race_card.get_attribute('data-story-id')

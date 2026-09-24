@@ -130,6 +130,20 @@ function response(value, url) { return { ok: true, redirected: false, url,
   // end_of_run is optional on the wire, so reader and ranker deploy in either
   // order: an older ranker never sends it, and the reader defaults it to false.
   assert.equal(reader.validateM2Response(payload(), frozenBinding).end_of_run, false);
+  // Provenance is optional for frozen orders from older releases. New orders
+  // name whether the current view used feed rules or which model timing path.
+  assert.equal(reader.validateM2Response(payload(), frozenBinding).order_origin, null);
+  for (const origin of ["recipe", "freshness"]) {
+    assert.equal(reader.validateM2Response({ ...payload(), order_origin: origin }, frozenBinding).order_origin, origin);
+  }
+  for (const origin of ["prepared_model", "direct_model"]) {
+    assert.equal(reader.validateM2Response({ ...payload(), result_mode: "model", fallback_reason: "",
+      order_origin: origin }, frozenBinding).order_origin, origin);
+  }
+  assert.throws(() => reader.validateM2Response({ ...payload(), order_origin: "prepared_model" }, frozenBinding),
+    /feed response/);
+  assert.throws(() => reader.validateM2Response({ ...payload(), order_origin: "unknown" }, frozenBinding),
+    /feed response/);
   assert.equal(reader.validateM2Response({ ...payload(), end_of_run: true }, frozenBinding).end_of_run, true);
   assert.throws(() => reader.validateM2Response({ ...payload(), end_of_run: "yes" }, frozenBinding),
     /feed response/);

@@ -41,6 +41,7 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'supabase.timeout_retries must be an integer',
     'verified owner required for candidate retrieval',
     'NEWS_CURATOR_MODAL_MODE must be service or smoke',
+    'NEWS_CURATOR_MODAL_PREPARATION_CRON must be a nonempty cron expression',
     'NEWS_CURATOR_RANKER_CONTEXT_SHA256 must be lowercase SHA-256',
     'Supabase keys must be configured',
     'Supabase origin must be a fixed HTTPS origin',
@@ -76,6 +77,8 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'invalid provider token budget',
     'invalid provider token count',
     'invalid provider transport configuration',
+    'invalid persisted owner',
+    'invalid persisted request',
     'invalid ranker image context entry',
     'invalid ranker policy',
     'invalid supabase.general_candidate_query',
@@ -89,6 +92,10 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'invalid_translation_overlay',
     'model results cannot carry a fallback reason',
     'model tokenizer mismatch',
+    'next_run_preparation must be an object',
+    'next_run_preparation_enabled must be boolean',
+    'next_run_preparation_minimum_overlap must be 1..50',
+    'next_run_preparation_ttl_seconds must be 3600..86400',
     'maximum_excluded_story_ids must be between 0 and 1000',
     'now must be timezone-aware',
     'observed usage exceeded its reservation',
@@ -131,6 +138,7 @@ KNOWN_DIAGNOSTIC_MESSAGES = frozenset({
     'unreviewed tokenizer encoding',
     'unsafe or duplicate ranker image context path',
     'unsupported schema version',
+    'unsupported private request field',
 })
 
 

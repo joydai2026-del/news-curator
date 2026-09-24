@@ -27,6 +27,38 @@ def endpoint():
     return build_application()
 
 
+def prepare_next_run():
+    """Process a bounded batch from the owner-scoped durable queue.
+
+    Return only aggregate outcomes. Job, owner and story identifiers stay out of
+    Modal's response and logs. Every claim and cost decision remains in the
+    reviewed worker and database RPCs, including the no-retry charge boundary.
+    """
+    import json
+    import os
+    import time
+
+    from .deployment import bounded_int
+    from .preparation_worker import process_one_preparation
+    from .runtime import build_application
+
+    batch_size = bounded_int(os.environ, "NEWS_CURATOR_MODAL_PREPARATION_BATCH_SIZE", 1, 1, 5)
+    service = build_application()._service
+    counts = {}
+    started = time.monotonic()
+    for _ in range(batch_size):
+        outcome = process_one_preparation(
+            store=service._store, adapter=service._adapter, policy=service._policy)
+        counts[outcome] = counts.get(outcome, 0) + 1
+        if outcome in {"disabled", "empty"}:
+            break
+    result = {"event": "m2_preparation_batch", "jobs": sum(
+        value for key, value in counts.items() if key not in {"disabled", "empty"}),
+        "outcomes": counts, "duration_ms": round((time.monotonic() - started) * 1000)}
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
+    return result
+
+
 def smoke_rankllm_image():
     """Credential-free shipping-engine preparation check using public stories."""
     import hashlib

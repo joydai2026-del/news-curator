@@ -10,6 +10,7 @@ import modal
 
 from .deployment import bounded_int, function_timeout_seconds
 from .modal_handlers import endpoint as _endpoint
+from .modal_handlers import prepare_next_run as _prepare_next_run
 from .modal_handlers import smoke_rankllm_image as _smoke_rankllm_image
 
 
@@ -96,6 +97,25 @@ if deployment_mode == "service":
         max_containers=max_containers, min_containers=min_containers, scaledown_window=scaledown_window,
         enable_memory_snapshot=_enabled("NEWS_CURATOR_MODAL_MEMORY_SNAPSHOT_ENABLED", default=True),
         restrict_modal_access=True)(modal.concurrent(max_inputs=max_inputs)(modal.asgi_app()(_endpoint)))
+
+    # A separate, explicit deploy switch prevents an ordinary service redeploy
+    # from starting a paid schedule. The image policy is a second runtime gate.
+    if _enabled("NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED"):
+        preparation_batch_size = _bounded_int(
+            "NEWS_CURATOR_MODAL_PREPARATION_BATCH_SIZE", 1, 1, 5)
+        preparation_timeout = _bounded_int(
+            "NEWS_CURATOR_MODAL_PREPARATION_TIMEOUT_SECONDS", 300, 90, 1800)
+        preparation_cron = os.environ.get("NEWS_CURATOR_MODAL_PREPARATION_CRON", "* * * * *")
+        if not preparation_cron or len(preparation_cron) > 80:
+            raise ValueError("NEWS_CURATOR_MODAL_PREPARATION_CRON must be a nonempty cron expression")
+        preparation_image = image.env({
+            "NEWS_CURATOR_MODAL_PREPARATION_BATCH_SIZE": str(preparation_batch_size),
+        })
+        prepare_next_run = app.function(
+            image=preparation_image, secrets=[runtime_secret],
+            schedule=modal.Cron(preparation_cron), timeout=preparation_timeout,
+            max_containers=1, min_containers=0, restrict_modal_access=True,
+        )(modal.concurrent(max_inputs=1)(_prepare_next_run))
 
 if deployment_mode == "smoke":
     smoke_rankllm_image = app.function(image=image, timeout=function_timeout, max_containers=1,

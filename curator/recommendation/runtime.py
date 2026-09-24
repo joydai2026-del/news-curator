@@ -229,6 +229,9 @@ def build_application(*, environ=None, policy_path: str | None = None):
     transport = SupabaseHTTP(origin=supabase_origin, publishable_key=publishable, service_role_key=service_key,
         timeout_seconds=supabase_timeout, timeout_retries=supabase_retries,
         general_candidate_query=supabase_general_candidate_query(policy))
+    next_run = policy.get("next_run_preparation") or {}
+    if not isinstance(next_run, dict):
+        raise ValueError("next_run_preparation must be an object")
     service_policy = ServicePolicy(policy_version=_required(policy, "prompt_revision"),
         model_version=_required(policy, "model"), provider_policy_id=_required(policy, "provider_policy_id"),
         tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
@@ -248,6 +251,9 @@ def build_application(*, environ=None, policy_path: str | None = None):
         # Unsetting composition_policy is the documented rollback to the
         # pre-Phase-2 window; it is a config change, not a revert.
         composition=composition,
+        next_run_preparation_enabled=next_run.get("enabled", False),
+        next_run_preparation_ttl_seconds=next_run.get("ttl_seconds", 7200),
+        next_run_preparation_minimum_overlap=next_run.get("minimum_overlap", 5),
         effective_policy_digest=effective_ranking_policy_digest(
             policy, composition_path, prompt_path))
     service = RankingService(auth=transport, store=transport, adapter=adapter, policy=service_policy,

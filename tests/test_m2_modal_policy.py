@@ -27,7 +27,13 @@ class _Resource:
 
     @classmethod
     def from_dockerfile(cls, value, **kwargs):
-        return ("dockerfile", value, kwargs)
+        return cls(value, kwargs)
+
+    def __init__(self, value, kwargs):
+        self.value, self.kwargs = value, kwargs
+
+    def env(self, values):
+        return ("image-with-env", self.value, values)
 
 
 def _modal_double(captured):
@@ -49,6 +55,7 @@ def _modal_double(captured):
         Secret=_Resource,
         concurrent=concurrent,
         asgi_app=lambda: (lambda fn: fn),
+        Cron=lambda expression: ("cron", expression),
     )
 
 

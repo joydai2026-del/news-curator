@@ -1229,6 +1229,38 @@ def paid(store, **kwargs):
     return subject
 
 
+def test_prepared_order_discards_negative_feedback_committed_after_consume():
+    class RacingPreparedStore(PaidStore):
+        def consume_prepared_order(self, **kwargs):
+            prepared = {"owner_id": kwargs["user_id"],
+                "source_run_id": "earlier-run",
+                "eligibility_key": kwargs["eligibility_key"],
+                "policy_digest": kwargs["policy_digest"],
+                "history_generation": 1, "consent_revision": 1,
+                "behavior_revision": self.commit_revision,
+                "provider_policy_id": "policy", "status": "ready",
+                "expires_at": CLOCK + 3600,
+                "ranked_candidate_ids": [row["story_id"] for row in reversed(self.rows)]}
+            # A less-like-this event committed just after the atomic consume.
+            self.revision = self.commit_revision + 1
+            return prepared
+
+        def enqueue_prepared_order(self, **kwargs):
+            return True
+
+    store = RacingPreparedStore(events=liked_events())
+    # The real fallback receipt is a frozen dataclass. CountingAdapter's older
+    # lightweight Receipt fixture cannot exercise dataclasses.replace here.
+    subject = build(store)
+    subject._policy = replace(subject._policy,
+        next_run_preparation_enabled=True,
+        effective_policy_digest="a" * 64)
+    response = rank(subject, store)
+    assert response["order_origin"] == "recipe"
+    assert response["result_mode"] != "model"
+    assert not store.reservations
+
+
 def test_one_reading_run_buys_exactly_one_provider_call_across_every_page_turn():
     store = PaidStore(events=liked_events())
     subject = paid(store)
@@ -1307,7 +1339,7 @@ def test_one_readable_continuation_refills_a_short_backend_batch_before_spending
             bindings={"corpus_has_more": more,
                       "continuation_offsets": list(frozen["bindings"].get("continuation_offsets") or [])
                           + [len(frozen["cards"])]})
-        return tuple(added), more
+        return tuple(added), more, None
 
     subject._continue_frozen_order = append_sparse_batch
     third = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
@@ -1345,7 +1377,7 @@ def test_still_older_corpus_does_not_spend_a_partial_page_slot():
         store.extend_frozen_order(user_id=owner.user_id,
             frozen_order_id=frozen_order_id, cards=added,
             bindings={"corpus_has_more": True, "corpus_scan_has_more": True})
-        return tuple(added), True
+        return tuple(added), True, None
 
     subject._continue_frozen_order = sparse_batch
     pending = subject.page(authorization="Bearer valid", cursor=second["next_cursor"])
@@ -2549,6 +2581,50 @@ def test_complete_later_page_reuses_the_persisted_refill_snapshot(complete_conti
     assert len(store.extensions) == 1
     assert subject._adapter.calls == len(store.reservations) == 1
     assert store.page_reads == 3, "a complete persisted page was fetched twice"
+
+
+def _enable_atomic_continuation_snapshot(store):
+    def claim_with_snapshot(*, user_id, run_id, eligibility_key, frozen_order_id,
+                            token, ttl_seconds):
+        claim = store.claim_run_ranking(user_id=user_id, run_id=run_id,
+            eligibility_key=eligibility_key, token=token, ttl_seconds=ttl_seconds)
+        if not claim["granted"]:
+            return {"granted": False, "frozen_order": None}
+        if claim["frozen_order_id"] != frozen_order_id:
+            return {"granted": True, "frozen_order": None}
+        return {"granted": True, "frozen_order": copy.deepcopy(
+            Store.load_frozen_order(store, user_id=user_id, frozen_order_id=frozen_order_id))}
+    store.claim_continuation_snapshot = claim_with_snapshot
+
+
+def test_complete_continuation_avoids_both_locked_round_trips(complete_continuation_page):
+    store, subject, cursor, offset = complete_continuation_page
+    _enable_atomic_continuation_snapshot(store)
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert len(response["cards"]) == 25
+    assert [card["story_id"] for card in response["cards"]] == [
+        card["story_id"] for card in store.frozen["frozen-1"]["cards"][offset:offset + 25]]
+    assert store.page_reads == 1
+    assert store.response_reservations == 1
+    assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_atomic_snapshot_rejects_privacy_deletion_after_append(complete_continuation_page):
+    store, subject, cursor, _offset = complete_continuation_page
+    _enable_atomic_continuation_snapshot(store)
+    original_extend = store.extend_frozen_order
+
+    def delete_after_append(**kwargs):
+        total = original_extend(**kwargs)
+        store.frozen.clear()
+        return total
+
+    store.extend_frozen_order = delete_after_append
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    assert response["cards"] == [] and response["end_of_run"] is True
+    assert store.response_reservations == 1
+    assert next(iter(store.views.values()))["pages_served"] == 1
+    assert all(view["claim_token"] is None for view in store.views.values())
 
 
 def test_page_stage_timing_has_only_fixed_labels_and_durations(
