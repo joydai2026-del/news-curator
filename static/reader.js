@@ -798,6 +798,13 @@
     // in either order: an older ranker simply never sends it. It is lifted out
     // before the exact-field check and put back after.
     let endOfRun = false;
+    let orderOrigin = null;
+    if (isObject(value) && "order_origin" in value) {
+      if (!["recipe", "prepared_model", "direct_model", "freshness"].includes(value.order_origin))
+        fail("The M2 feed response was invalid.");
+      orderOrigin = value.order_origin;
+      delete value.order_origin;
+    }
     if (isObject(value) && "end_of_run" in value) {
       if (typeof value.end_of_run !== "boolean") fail("The M2 feed response was invalid.");
       endOfRun = value.end_of_run;
@@ -818,6 +825,8 @@
         !["model", "fallback"].includes(value.result_mode) || typeof value.fallback_reason !== "string" ||
         (value.result_mode === "model" && value.fallback_reason !== "") ||
         (value.result_mode === "fallback" && !boundedString(value.fallback_reason, 256)) ||
+        (orderOrigin !== null && (value.result_mode === "model") !==
+          ["prepared_model", "direct_model"].includes(orderOrigin)) ||
         !Array.isArray(value.cards) || value.cards.length > expected.page_size ||
         !(value.next_cursor === null || boundedString(value.next_cursor, 4096))) fail("The M2 feed response was invalid.");
     const seen = new Set();
@@ -871,6 +880,7 @@
       seen.add(card.story_id);
     });
     value.end_of_run = endOfRun;
+    value.order_origin = orderOrigin;
     return value;
   }
   function createM2Service(rawConfig, sessionProvider, fetchImpl = fetch) {
@@ -887,7 +897,8 @@
       if (!before || !boundedString(before.access_token, 16384)) fail("Sign in to continue.");
       const url = `${config.url}${path}`;
       const response = await fetchImpl(url, { method, headers: {
-        accept: "application/json", "content-type": "application/json",
+        accept: "application/vnd.news-curator.order-origin+json",
+        "content-type": "application/json",
         authorization: `Bearer ${before.access_token}`,
       }, body: body === null ? undefined : JSON.stringify(body), credentials: "omit",
       redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(timeoutMs) });
@@ -1437,6 +1448,16 @@
       const interest = pendingInterestMutations.get(storyId);
       if (interest) card.newsCuratorInterestMutation = interest;
     }
+    function m2OrderReason(response) {
+      switch (response.order_origin) {
+        case "recipe": return "Your reading mix, ordered by feed rules. Model ranking was not used for this view.";
+        case "prepared_model": return "Uses a model order prepared earlier; new stories follow feed rules.";
+        case "direct_model": return "Ranked using this request’s query and permitted reading history.";
+        case "freshness": return "Freshness order. Model ranking was not used.";
+        default: return response.result_mode === "model"
+          ? "Ranked using the model." : "Reading order. Model ranking was not used.";
+      }
+    }
     function rerenderM2Cards() {
       if (!m2Active || !m2Binding) return;
       const entries = m2Entries.slice();
@@ -1452,9 +1473,7 @@
         };
         if (pending.stateToken || pending.pendingRead || pending.interest) pendingMutations.set(storyId, pending);
       });
-      const reason = m2Binding.result_mode === "model"
-        ? "Ranked using your current query and permitted reading history."
-        : "Freshness order. Model ranking was not used.";
+      const reason = m2OrderReason(m2Binding);
       clearM2Cards();
       m2Entries = entries;
       if (!m2Section) {
@@ -1543,7 +1562,7 @@
         m2Section = element("section", "topic-section"); m2Section.dataset.section = "__m2__";
         m2Section.append(element("div", "grid")); document.getElementById("sections").append(m2Section);
       }
-      const reason = response.result_mode === "model" ? "Ranked using your current query and permitted reading history." : "Freshness order. Model ranking was not used.";
+      const reason = m2OrderReason(response);
       response.cards.forEach((incoming) => {
         // An older in-flight response cannot repaint a clicked hidden story.
         if (m2HiddenStoryIds.has(incoming.story_id)) return;

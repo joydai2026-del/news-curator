@@ -12,23 +12,25 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from typing import Mapping, Protocol, Sequence
 
 from curator.dedup import normalize_title
-from curator.contracts.enums import ActorKind, EventType, M2HistoryEventType
+from curator.contracts.enums import ActorKind, EventType, M2HistoryEventType, RankingResultMode
 from curator.contracts.ranking_request import (
     AuthenticatedOwner,
     OrderedHistoryEvent,
     RankingCandidate,
     RankingRequest,
+    validate_ranking_response,
 )
 
 from .composition import BACKFILL_LANE, CompositionPolicy
 from .diagnostics import log_suppressed_exception
 from .finalize import _duplicate_keys, finalize_order
 from .lane_diagnostics import LaneDiagnostics
+from .prepared_order import request_to_payload, select_prepared_order
 from .profile import BehaviorProfile, build_profile
 from .rankllm_adapter import BudgetState, RankLLMAdapter
 from .recipe import LanedCandidate, assign_lane, build_window, lane_window_quotas
@@ -158,6 +160,9 @@ class RankingStore(Protocol):
                             excluded_story_ids: Sequence[str] = (),
                             suppressed_sources: Sequence[str] = (),
                             suppressed_topics: Sequence[str] = ()) -> Sequence[Mapping[str, object]]: ...
+    def enqueue_prepared_order(self, **kwargs) -> bool: ...
+    def consume_prepared_order(self, **kwargs) -> Mapping[str, object] | None: ...
+    def prepared_history_is_compatible(self, **kwargs) -> bool: ...
     def open_reading_run(self, *, user_id: str, idle_minutes: int, max_minutes: int,
                          profile: Mapping[str, object]) -> Mapping[str, object]: ...
     def record_reading_run_filter(self, *, user_id: str, run_id: str,
@@ -168,6 +173,9 @@ class RankingStore(Protocol):
                               frozen_order_id: str, token: str | None = None) -> bool: ...
     def claim_run_ranking(self, *, user_id: str, run_id: str, eligibility_key: str, token: str,
                           ttl_seconds: int) -> Mapping[str, object]: ...
+    def claim_continuation_snapshot(self, *, user_id: str, run_id: str,
+                                    eligibility_key: str, frozen_order_id: str,
+                                    token: str, ttl_seconds: int) -> Mapping[str, object]: ...
     def release_run_ranking_claim(self, *, user_id: str, run_id: str, eligibility_key: str,
                                   token: str) -> bool: ...
     def record_run_page(self, *, user_id: str, run_id: str, eligibility_key: str,
@@ -224,6 +232,9 @@ class ServicePolicy:
     # binds checked-in policies, prompt content, and ranking code into this.
     # Alternate composition roots receive a deterministic dataclass digest.
     effective_policy_digest: str = ""
+    next_run_preparation_enabled: bool = False
+    next_run_preparation_ttl_seconds: int = 7200
+    next_run_preparation_minimum_overlap: int = 5
 
     def __post_init__(self) -> None:
         # Two layers, both required, because the gap between them is where F5
@@ -239,6 +250,14 @@ class ServicePolicy:
             raise ValueError("preview_owner_ids entries must be non-empty owner ids")
         if self.effective_policy_digest and re.fullmatch(r"[0-9a-f]{64}", self.effective_policy_digest) is None:
             raise ValueError("effective_policy_digest must be lowercase SHA-256")
+        if type(self.next_run_preparation_enabled) is not bool:
+            raise ValueError("next_run_preparation_enabled must be boolean")
+        if (type(self.next_run_preparation_ttl_seconds) is not int
+                or not 3600 <= self.next_run_preparation_ttl_seconds <= 86400):
+            raise ValueError("next_run_preparation_ttl_seconds must be 3600..86400")
+        if (type(self.next_run_preparation_minimum_overlap) is not int
+                or not 1 <= self.next_run_preparation_minimum_overlap <= 50):
+            raise ValueError("next_run_preparation_minimum_overlap must be 1..50")
         if self.display_language not in ("en", "zh"):
             raise ValueError("display_language must be a supported language")
         if self.exclusive_category_id and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", self.exclusive_category_id):
@@ -455,56 +474,102 @@ class RankingService:
         observed_usage = {}
         attempts_started = 0
         settled_cost = 0.0
-        def record_usage(outcome, unknown_attempts, elapsed):
-            observed_usage.update(input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens,
-                unknown_attempts=unknown_attempts, provider_elapsed_seconds=elapsed)
-        def record_attempt(attempt, elapsed):
-            nonlocal attempts_started
-            attempts_started += 1
-        preparation_reason = ""
-        if processing_allowed and request.candidates:
-            prepared, preparation_reason = self._adapter.prepare_with_reason(request)
+        prepared = None
+        prepared_order = None
+        reservation_created = False
+        if composition is not None and self._policy.next_run_preparation_enabled:
+            # This view is frozen before it is served. A ready result can be
+            # consumed only from an earlier run; it never changes this run later.
+            if processing_allowed and run and run.get("run_id"):
+                consume_started = time.perf_counter()
+                try:
+                    earlier = self._store.consume_prepared_order(
+                        user_id=owner.user_id, target_run_id=str(run["run_id"]),
+                        eligibility_key=eligibility_key,
+                        policy_digest=self._policy.effective_policy_digest,
+                        candidate_ids=tuple(candidate.candidate_id for candidate in request.candidates),
+                        minimum_overlap=self._policy.next_run_preparation_minimum_overlap)
+                    prepared_order = select_prepared_order(earlier, owner_id=owner.user_id,
+                        run_id=str(run["run_id"]), eligibility_key=eligibility_key,
+                        policy_digest=self._policy.effective_policy_digest,
+                        history_generation=request.history_generation,
+                        consent_revision=request.consent_revision,
+                        behavior_revision=snapshot.get("history_revision"),
+                        provider_policy_id=self._policy.provider_policy_id,
+                        provider_processing_enabled=processing_allowed,
+                        candidate_ids=tuple(candidate.candidate_id for candidate in request.candidates),
+                        minimum_overlap=self._policy.next_run_preparation_minimum_overlap,
+                        now=self._clock())
+                except Exception as error:
+                    log_suppressed_exception("m2_prepared_order_unavailable", error,
+                        stream=sys.stderr)
+                finally:
+                    _page_diagnostic({"event": "m2_preparation_stage_timing", "stage": "consume",
+                        "duration_ms": round((time.perf_counter() - consume_started) * 1000, 3)})
+            receipt = self._adapter.fallback(request,
+                "next_run_preparation_pending" if processing_allowed else
+                "provider_processing_consent_required")
+            if prepared_order is not None:
+                receipt = replace(receipt, ranked_candidate_ids=prepared_order,
+                    result_mode=RankingResultMode.MODEL, fallback_reason="")
+                validate_ranking_response(receipt, request)
         else:
-            prepared = None
-        estimate = None if prepared is None else self._adapter.reservation_estimate(
-            estimated_input_tokens=prepared.input_tokens_bound, estimated_output_tokens=prepared.output_tokens_budget)
-        # The reservation re-checks the claim in its OWN transaction. A config
-        # rule keeps a claim from expiring while its holder may still be calling
-        # the provider; this is the backstop for everything that rule cannot see,
-        # and a caller whose claim has moved on spends nothing at all.
-        reservation_created = estimate is not None and self._reserve(
-            owner, request_id, estimate, run, eligibility_key, claim_token)
-        if not reservation_created:
-            receipt = self._adapter.fallback(request, "no_candidates" if not request.candidates else
-                "provider_processing_consent_required" if not processing_allowed else preparation_reason or
-                "budget_reservation_failed")
-        else:
-            try:
-                receipt = self._adapter.rank(request, provider_processing_consent=processing_allowed,
-                    budget=BudgetState(0), estimated_input_tokens=prepared.input_tokens_bound,
-                    estimated_output_tokens=prepared.output_tokens_budget, prepared=prepared,
-                    usage_observer=record_usage, attempt_observer=record_attempt)
-                if observed_usage:
-                    settled_cost = self._adapter.settle_observed_cost(
-                        input_tokens=observed_usage["input_tokens"], output_tokens=observed_usage["output_tokens"],
-                        unknown_attempts=observed_usage["unknown_attempts"], reserved_usd=estimate)
-                    self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
-                        actual_usd=settled_cost, status="settled")
-                elif attempts_started == 0:
-                    self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
-                        actual_usd=0.0, status="released")
-                else:
-                    # Once an attempt starts, transport/parser failure cannot
-                    # prove zero provider charge. Retain the ceiling reservation.
-                    # SQL003 scopes capacity by UTC statement_date, so an
-                    # unresolved prior-day reservation cannot consume a new day.
-                    settled_cost = 0.0
-            except Exception:
-                # An ambiguous settlement retains the durable reservation.
-                # Releasing zero here could erase a provider charge.
-                raise
+            def record_usage(outcome, unknown_attempts, elapsed):
+                observed_usage.update(input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens,
+                    unknown_attempts=unknown_attempts, provider_elapsed_seconds=elapsed)
+            def record_attempt(attempt, elapsed):
+                nonlocal attempts_started
+                attempts_started += 1
+            preparation_reason = ""
+            if processing_allowed and request.candidates:
+                prepared, preparation_reason = self._adapter.prepare_with_reason(request)
+            estimate = None if prepared is None else self._adapter.reservation_estimate(
+                estimated_input_tokens=prepared.input_tokens_bound, estimated_output_tokens=prepared.output_tokens_budget)
+            reservation_created = estimate is not None and self._reserve(
+                owner, request_id, estimate, run, eligibility_key, claim_token)
+            if not reservation_created:
+                receipt = self._adapter.fallback(request, "no_candidates" if not request.candidates else
+                    "provider_processing_consent_required" if not processing_allowed else preparation_reason or
+                    "budget_reservation_failed")
+            else:
+                try:
+                    receipt = self._adapter.rank(request, provider_processing_consent=processing_allowed,
+                        budget=BudgetState(0), estimated_input_tokens=prepared.input_tokens_bound,
+                        estimated_output_tokens=prepared.output_tokens_budget, prepared=prepared,
+                        usage_observer=record_usage, attempt_observer=record_attempt)
+                    if observed_usage:
+                        settled_cost = self._adapter.settle_observed_cost(
+                            input_tokens=observed_usage["input_tokens"], output_tokens=observed_usage["output_tokens"],
+                            unknown_attempts=observed_usage["unknown_attempts"], reserved_usd=estimate)
+                        self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
+                            actual_usd=settled_cost, status="settled")
+                    elif attempts_started == 0:
+                        self._store.settle_budget(user_id=owner.user_id, request_id=request_id,
+                            actual_usd=0.0, status="released")
+                    else:
+                        # An uncertain provider attempt retains its reservation.
+                        settled_cost = 0.0
+                except Exception:
+                    # An ambiguous settlement retains the durable reservation.
+                    raise
         latest = self._store.history_snapshot(token)
         self._assert_fresh(snapshot, latest)
+        if (prepared_order is not None
+                and latest.get("history_revision") != snapshot.get("history_revision")):
+            # Consume proved compatibility at its own transaction. A later
+            # positive tap should not waste a paid order; a negative or
+            # unexplained change must still refuse that order before freeze.
+            compatible = False
+            try:
+                compatible = self._store.prepared_history_is_compatible(
+                    user_id=owner.user_id, history_generation=request.history_generation,
+                    behavior_revision=snapshot.get("history_revision"))
+            except Exception as error:
+                log_suppressed_exception("m2_prepared_order_history_check_failed", error,
+                    stream=sys.stderr)
+            if not compatible:
+                prepared_order = None
+                receipt = self._adapter.fallback(request, "prepared_order_history_changed")
         owner_states = self._store.owner_states(token, [str(row["story_id"]) for row in rows])
         finalization = None
         if composition is not None:
@@ -556,6 +621,10 @@ class RankingService:
                 next_corpus = {"pending_only": True}
         expires_at = int(self._clock()) + self._policy.cursor_ttl_seconds
         bindings = self._bindings(receipt)
+        bindings["order_origin"] = (
+            "prepared_model" if prepared_order is not None else
+            "direct_model" if receipt.result_mode.value == "model" else
+            "recipe" if composition is not None else "freshness")
         if latest.get("history_revision") != snapshot.get("history_revision"):
             # F1. A behavior write landed during the provider call. The order was
             # paid for and is still the right order; rebinding it to the CURRENT
@@ -643,6 +712,29 @@ class RankingService:
                     eligibility_key, frozen_id, 1, 0,
                     min(page_size, len(cards))) is None:
                 raise RuntimeError("page_budget_unavailable")
+        if (composition is not None and self._policy.next_run_preparation_enabled
+                and processing_allowed and request.candidates and run and run.get("run_id")):
+            # Enqueue after the current order and first response are durable.
+            # A queue failure never delays or mutates the page being read.
+            enqueue_started = time.perf_counter()
+            try:
+                queued = self._store.enqueue_prepared_order(user_id=owner.user_id,
+                    source_run_id=str(run["run_id"]), eligibility_key=eligibility_key,
+                    policy_digest=self._policy.effective_policy_digest,
+                    history_generation=request.history_generation,
+                    consent_revision=request.consent_revision,
+                    behavior_revision=request.server_commit_revision,
+                    provider_policy_id=self._policy.provider_policy_id,
+                    request_id=request_id, request_payload=request_to_payload(request),
+                    ttl_seconds=self._policy.next_run_preparation_ttl_seconds)
+                if not queued:
+                    _page_diagnostic({"event": "m2_preparation_enqueue_rejected"})
+            except Exception as error:
+                log_suppressed_exception("m2_preparation_enqueue_failed", error,
+                    stream=sys.stderr)
+            finally:
+                _page_diagnostic({"event": "m2_preparation_stage_timing", "stage": "enqueue",
+                    "duration_ms": round((time.perf_counter() - enqueue_started) * 1000, 3)})
         next_cursor = (self._cursor(frozen_id, min(page_size, len(cards)), expires_at,
                                     response_number=2 if cards else 1)
                        if page_size < len(cards) or has_more else None)
@@ -741,8 +833,9 @@ class RankingService:
                         or re.fullmatch(r"[0-9a-f]{64}", eligibility_key) is None):
                     raise RuntimeError("page_budget_unavailable")
                 with _page_stage(stages, "claim"):
-                    continuation_token = self._claim_continuation(
-                        owner, str(run_id), eligibility_key, composition)
+                    continuation_token, claimed_snapshot = self._claim_continuation(
+                        owner, str(run_id), eligibility_key, composition,
+                        str(payload["frozen_order_id"]))
                 try:
                     # The first snapshot was loaded before the lock. Reload
                     # inside it: a caller that waited for another continuation
@@ -756,9 +849,12 @@ class RankingService:
                     terminal_pending = None
                     complete_snapshot = None
                     for attempt in range(composition.continuation_refill_max_passes):
-                        with _page_stage(stages, "locked_load"):
-                            locked = self._store.load_frozen_order(user_id=owner.user_id,
-                                frozen_order_id=str(payload["frozen_order_id"]))
+                        if attempt == 0 and claimed_snapshot is not None:
+                            locked = claimed_snapshot
+                        else:
+                            with _page_stage(stages, "locked_load"):
+                                locked = self._store.load_frozen_order(user_id=owner.user_id,
+                                    frozen_order_id=str(payload["frozen_order_id"]))
                         if not locked or int(locked["expires_at"]) < int(self._clock()):
                             raise StaleRankingError("cursor_expired")
                         locked_cards = list(locked["cards"])
@@ -792,9 +888,22 @@ class RankingService:
                         if attempt and general_budget > composition.pool_scan_max_batches:
                             break
                         with _page_stage(stages, "continuation_pass"):
-                            added, continuation_pending = self._continue_frozen_order(
+                            added, continuation_pending, appended_snapshot = self._continue_frozen_order(
                                 token, owner, locked, str(payload["frozen_order_id"]), size,
                                 page_prefix=locked_preview)
+                        # Only a fully persisted later page can reuse the append
+                        # result. Privacy deletion and response-budget races still
+                        # fail in the atomic response reservation below.
+                        if (claimed_snapshot is not None and appended_snapshot is not None
+                                and response_number > 1 and offset > 0):
+                            appended_preview, _, _ = self._slice(
+                                appended_snapshot["cards"], offset, size, current,
+                                continuation_offsets=appended_snapshot["bindings"].get("continuation_offsets"),
+                                event_group_ids=appended_snapshot["bindings"].get("event_group_ids"),
+                                selected_category=selected_category)
+                            if len(appended_preview) == size:
+                                complete_snapshot = appended_snapshot
+                                break
                         # An empty bounded scan preserves the same response
                         # ordinal for the caller to retry. Do not turn it into
                         # an unbounded search inside this one request.
@@ -942,7 +1051,7 @@ class RankingService:
         bindings = frozen.get("bindings", {})
         cursor = bindings.get("corpus_cursor") or {}
         if composition is None or not isinstance(cursor, Mapping):
-            return (), False
+            return (), False, None
         lane_diagnostics = LaneDiagnostics()
         eligibility = bindings.get("eligibility") or {}
         category_id = eligibility.get("category") if isinstance(eligibility, Mapping) else None
@@ -958,7 +1067,7 @@ class RankingService:
         pending_exclusive_story_ids = self._load_pending_exclusive_story_ids(
             bindings, pending, composition)
         if not cursor and (exclusive or not pending):
-            return (), False
+            return (), False, None
         if exclusive:
             pooled, cursor_rows, fetched_more = self._exclusive_display_rows(
                 query=query, before_published=cursor.get("before_published_at"),
@@ -1110,7 +1219,7 @@ class RankingService:
         except Exception as error:
             _page_suppressed_exception("m2_continuation_failed", error,
                 reason="store_unavailable", frozen_order_id=frozen_order_id)
-            return (), False
+            return (), False, None
         _page_diagnostic({"event": "m2_continuation_pass_timing",
             "pass_total_ms": round((time.perf_counter() - started_at) * 1000),
             "pool_ms": pool_ms,
@@ -1123,8 +1232,13 @@ class RankingService:
             # matched. Either way this run is over, and saying so is better than
             # silently repeating the page she just read.
             _page_diagnostic({"event": "m2_continuation_exhausted", "reason": "order_at_capacity"})
-            return (), False
-        return tuple(added), more
+            return (), False, None
+        accepted_snapshot = None
+        if added and total == previous_total + len(added):
+            accepted_snapshot = {**frozen,
+                "cards": list(frozen.get("cards", ())) + added,
+                "bindings": {**bindings, **continuation_bindings}}
+        return tuple(added), more, accepted_snapshot
 
     def _record_run_page(self, owner, run_id, eligibility_key, pages):
         """This view's page high-water mark before this page. Never fails a page."""
@@ -1173,7 +1287,8 @@ class RankingService:
             "history_generation": snapshot.get("history_generation"),
             "consent_revision": snapshot.get("consent_revision"),
             "server_commit_revision": snapshot.get("history_revision"),
-            "result_mode": "fallback", "fallback_reason": "run_page_budget_exhausted"}
+            "result_mode": "fallback", "fallback_reason": "run_page_budget_exhausted",
+            "order_origin": "recipe" if self._policy.composition is not None else "freshness"}
         return {"schema_version": 1, **bindings, "cards": [], "next_cursor": None,
                 "end_of_run": True}
 
@@ -1853,7 +1968,8 @@ class RankingService:
             return None
         return claim if isinstance(claim, Mapping) else None
 
-    def _claim_continuation(self, owner, run_id, eligibility_key, composition):
+    def _claim_continuation(self, owner, run_id, eligibility_key, composition,
+                            frozen_order_id):
         """Serialize append-at-end continuations on the existing view row.
 
         The frozen-order append RPC concatenates by design. Reusing the ranking
@@ -1863,16 +1979,23 @@ class RankingService:
         """
         token = str(uuid.uuid4())
         try:
-            claim = self._store.claim_run_ranking(user_id=owner.user_id, run_id=run_id,
-                eligibility_key=eligibility_key, token=token,
-                ttl_seconds=composition.ranking_claim_seconds)
+            claim_with_snapshot = getattr(self._store, "claim_continuation_snapshot", None)
+            if claim_with_snapshot is None:
+                claim = self._store.claim_run_ranking(user_id=owner.user_id, run_id=run_id,
+                    eligibility_key=eligibility_key, token=token,
+                    ttl_seconds=composition.ranking_claim_seconds)
+            else:
+                claim = claim_with_snapshot(user_id=owner.user_id, run_id=run_id,
+                    eligibility_key=eligibility_key, frozen_order_id=frozen_order_id,
+                    token=token, ttl_seconds=composition.ranking_claim_seconds)
         except Exception as error:
             _page_suppressed_exception("m2_claim_unavailable", error,
                 run_id=run_id)
             raise RuntimeError("page_budget_unavailable") from error
         if not isinstance(claim, Mapping) or not claim.get("granted"):
             raise RankingInProgressError()
-        return token
+        snapshot = claim.get("frozen_order") if claim_with_snapshot is not None else None
+        return token, snapshot
 
     def _existing_run_page(self, token, owner, view, snapshot, page_size):
         """Page one of the ranking this VIEW already paid for, or None.
@@ -2241,12 +2364,19 @@ class RankingService:
     @staticmethod
     def _public_bindings(bindings):
         fields = ("request_id", "policy_version", "model_version", "history_revision", "history_generation",
-                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason")
+                  "consent_revision", "server_commit_revision", "result_mode", "fallback_reason", "order_origin")
         # run_id, short_lane_reasons, lane_counts and calibration_alarm are
         # PERSISTED on the frozen order and read back by m2_owner_reading_pages.
-        # They are deliberately not in the response: the reader validates its
-        # fields exactly, so widening the wire shape would break every card.
-        return {key: bindings[key] for key in fields if key in bindings}
+        # They are deliberately not in the response. Order origin is the one
+        # explicit extension the reader accepts while older orders remain valid.
+        result = {key: bindings[key] for key in fields if key in bindings}
+        if "order_origin" not in result:
+            # Frozen orders from the prior release did not persist provenance.
+            # Their recipe bindings still contain lane counts, so page turns
+            # can describe that order truthfully without rewriting the order.
+            result["order_origin"] = ("direct_model" if bindings.get("result_mode") == "model" else
+                "recipe" if "lane_counts" in bindings else "freshness")
+        return result
 
     @classmethod
     def _page_response(cls, bindings, cards, cursor, receipt):

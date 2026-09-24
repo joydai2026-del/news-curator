@@ -55,6 +55,14 @@ class RankingASGI:
                     pass
             else:
                 return await self._reply(send, 404, {"error": "not_found"})
+            # A cached reader from before provenance support rejects extra
+            # response fields. Project the same frozen order to each client's
+            # declared capability, including page turns, without changing the
+            # stored order or its server-side binding.
+            if (path in {"/rank", "/page"} and
+                    headers.get("accept") != "application/vnd.news-curator.order-origin+json"):
+                result = dict(result)
+                result.pop("order_origin", None)
             await self._reply(send, 200, result)
         except AuthenticationError:
             await self._reply(send, 401, {"error": "authentication_required"})
@@ -105,6 +113,7 @@ class RankingASGI:
     async def _reply(self, send, status, value):
         body = b"" if value is None else json.dumps(value, separators=(",", ":")).encode()
         headers = [(b"content-type", b"application/json"), (b"access-control-allow-origin", self._origin.encode()),
-            (b"access-control-allow-headers", b"authorization,content-type"), (b"access-control-allow-methods", b"GET,POST,OPTIONS")]
+            (b"access-control-allow-headers", b"authorization,content-type"), (b"access-control-allow-methods", b"GET,POST,OPTIONS"),
+            (b"vary", b"Accept"), (b"cache-control", b"no-store")]
         await send({"type": "http.response.start", "status": status, "headers": headers})
         await send({"type": "http.response.body", "body": body})

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import shutil
 import subprocess
@@ -64,6 +65,8 @@ MIGRATIONS = (
     'supabase/migrations/202609230003_m2_opened_candidate_ids.sql',
     'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
     'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
+    'supabase/migrations/202609240001_m2_next_run_preparations.sql',
+    'supabase/migrations/202609240002_m2_claim_continuation_snapshot.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
@@ -1244,6 +1247,42 @@ def test_a_closed_run_gets_the_strict_check_back(db):
                         run_id=run['run_id'], check=False) is None
 
 
+def test_atomic_continuation_claim_returns_only_owners_snapshot_to_one_winner(db):
+    _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
+    run = _open_run(db, OWNER)
+    _open_view(db, run['run_id'], ALL_VIEW)
+    cards = [{"story_id": _story_id(MIXED), "lane": "updates"}]
+    request_id = _freeze_page(db, OWNER, _iso(NOW), cards, run_id=run['run_id'])
+    frozen_id = _last(_service(db, "select frozen_order_id from public.m2_frozen_rankings "
+        f"where request_id = {_quote(request_id)}::uuid;"))
+    assert _last(_service(db, "select public.m2_bind_run_frozen_order("
+        f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, "
+        f"{_quote(ALL_VIEW)}, {_quote(frozen_id)}::uuid);")) == 't'
+    call = ("select public.m2_claim_continuation_snapshot("
+        f"{_quote(OWNER)}::uuid, {_quote(run['run_id'])}::uuid, "
+        f"{_quote(ALL_VIEW)}, {_quote(frozen_id)}::uuid, gen_random_uuid(), 60);")
+    prefix = ("set role service_role;"
+              "set request.jwt.claims = '{\"role\":\"service_role\"}';")
+    processes = [subprocess.Popen(_psql_command(db), stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(4)]
+    outputs = [process.communicate(prefix + call)[0] for process in processes]
+    assert all(process.returncode == 0 for process in processes)
+    answers = [json.loads(output.strip().splitlines()[-1]) for output in outputs]
+    winners = [answer for answer in answers if answer['granted']]
+    assert len(winners) == 1
+    assert winners[0]['frozen_order']['cards'] == cards
+    assert winners[0]['frozen_order']['page_size'] == 25
+    assert all(answer['frozen_order'] is None for answer in answers if not answer['granted'])
+    denied = _service(db, "select public.m2_claim_continuation_snapshot("
+        f"{_quote(OTHER)}::uuid, {_quote(run['run_id'])}::uuid, {_quote(ALL_VIEW)}, "
+        f"{_quote(frozen_id)}::uuid, gen_random_uuid(), 60);")
+    assert json.loads(_last(denied))['frozen_order'] is None
+    assert _as_owner(db, OWNER, call, check=False).returncode != 0
+    definition = _sql(db, "select pg_get_functiondef('public.m2_claim_continuation_snapshot("
+        "uuid,uuid,text,uuid,uuid,integer)'::regprocedure);").stdout
+    assert definition.index('pg_advisory_xact_lock') < definition.index('m2_claim_run_ranking')
+
+
 def test_a_continuation_appends_to_the_same_order(db):
     _service(db, f"delete from public.m2_reading_runs where user_id = {_quote(OWNER)}::uuid;")
     run = _open_run(db, OWNER)
@@ -1551,3 +1590,646 @@ def benchmark_owner_candidates_long_opened_head(db):
 
 def test_owner_candidates_refill_past_long_opened_head(db):
     assert benchmark_owner_candidates_long_opened_head(db)['returned_rows'] == 12
+
+
+# --- next-run preparation privacy and cost gates ---------------------------
+
+def _prepared_owner(db):
+    owner = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    _sql(db, f"insert into auth.users(id) values ('{owner}');"
+             f"insert into public.user_behavior_settings(user_id,learning_enabled,"
+             f"provider_processing_enabled,provider_policy_id) "
+             f"values ('{owner}',true,true,'provider-policy-test');"
+             f"insert into public.user_behavior_revisions(user_id) values ('{owner}');"
+             f"insert into public.m2_reading_runs(run_id,user_id) values ('{run_id}','{owner}');")
+    return owner, run_id
+
+
+def _enqueue_prepared(db, owner, run_id, key, *, accepted=True, candidate_ids=('candidate-one',)):
+    request_id = str(uuid.uuid4())
+    payload = {'request_id': request_id, 'owner': {'user_id': owner},
+               'candidates': [{'candidate_id': candidate_id} for candidate_id in candidate_ids],
+               'query': 'private test query'}
+    statement = ("select public.m2_enqueue_prepared_order("
+                 f"'{owner}','{run_id}','{key * 64}','{'a' * 64}',"
+                 f"1,1,0,'provider-policy-test','{request_id}',"
+                 f"{_quote(json.dumps(payload))}::jsonb,3600);")
+    assert _last(_service(db, statement)) == ('t' if accepted else 'f')
+    return request_id
+
+
+@pytest.mark.parametrize('setting,change', [
+    ('provider_processing_enabled', 'false'),
+    ('learning_enabled', 'false'),
+    ('provider_policy_id', "'provider-policy-changed'"),
+])
+def test_consent_change_erases_queued_payload_without_revision_bump(db, setting, change):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '9')
+        before = _last(_sql(db, f"select consent_revision from public.user_behavior_settings "
+                                   f"where user_id='{owner}';"))
+        _sql(db, f"update public.user_behavior_settings set {setting}={change} "
+                 f"where user_id='{owner}';")
+        assert _last(_sql(db, f"select consent_revision from public.user_behavior_settings "
+                                  f"where user_id='{owner}';")) == before
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '0'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+@pytest.mark.parametrize('null_field', [
+    'eligibility_key', 'policy_digest', 'request_payload', 'ttl_seconds',
+])
+def test_enqueue_null_inputs_fail_before_private_database_detail(db, null_field):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = str(uuid.uuid4())
+        payload = json.dumps({'request_id': request_id, 'owner': {'user_id': owner},
+                              'candidates': [], 'query': 'private enqueue query'})
+        values = {
+            'eligibility_key': _quote('a' * 64),
+            'policy_digest': _quote('b' * 64),
+            'request_payload': _quote(payload) + '::jsonb',
+            'ttl_seconds': '3600',
+        }
+        values[null_field] = 'null'
+        result = _service(db, "select public.m2_enqueue_prepared_order("
+            f"'{owner}','{run_id}',{values['eligibility_key']},{values['policy_digest']},"
+            f"1,1,0,'provider-policy-test','{request_id}',"
+            f"{values['request_payload']},{values['ttl_seconds']});", check=False)
+        assert result.returncode != 0
+        assert 'invalid prepared order' in result.stderr.lower()
+        assert 'private enqueue query' not in result.stderr
+        assert 'failing row contains' not in result.stderr.lower()
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '0'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_duplicate_preparation_for_one_run_and_view_keeps_one_job(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        first = _enqueue_prepared(db, owner, run_id, 'a')
+        second = _enqueue_prepared(db, owner, run_id, 'a', accepted=False)
+        assert first != second
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}' and source_run_id='{run_id}' "
+                                      f"and eligibility_key='{'a' * 64}';")) == '1'
+        assert _last(_service(db, f"select request_id from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == first
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_preparation_rpc_execute_grants_are_service_only(db):
+    signatures = (
+        'm2_enqueue_prepared_order(uuid,uuid,text,text,bigint,bigint,bigint,text,uuid,jsonb,integer)',
+        'm2_claim_prepared_order(text)',
+        'm2_scrub_expired_prepared_orders(integer)',
+        'm2_prepared_history_is_compatible(uuid,bigint,bigint)',
+        'm2_reserve_prepared_budget(uuid,uuid,numeric,numeric)',
+        'm2_mark_prepared_attempt(uuid,uuid)',
+        'm2_finish_prepared_order(uuid,uuid,jsonb)',
+        'm2_fail_prepared_order(uuid,uuid)',
+        'm2_consume_prepared_order(uuid,uuid,text,text,text[],integer)',
+        'm2_clear_prepared_orders_on_privacy_change()',
+    )
+    for signature in signatures:
+        privileges = _last(_sql(db, "select concat_ws(',',"
+            f"has_function_privilege('anon','public.{signature}','EXECUTE'),"
+            f"has_function_privilege('authenticated','public.{signature}','EXECUTE'),"
+            f"has_function_privilege('service_role','public.{signature}','EXECUTE'));"))
+        assert privileges == ('f,f,f' if signature.startswith(
+            'm2_clear_prepared_orders_on_privacy_change') else 'f,f,t'), signature
+
+
+def test_preparation_mutation_rpcs_lock_owner_before_private_work(db):
+    checks = (
+        ('m2_enqueue_prepared_order(uuid,uuid,text,text,bigint,bigint,bigint,text,uuid,jsonb,integer)',
+         'select 1 from public.m2_reading_runs'),
+        ('m2_reserve_prepared_budget(uuid,uuid,numeric,numeric)',
+         'select * into job from public.m2_prepared_orders'),
+        ('m2_mark_prepared_attempt(uuid,uuid)',
+         'select * into job from public.m2_prepared_orders'),
+        ('m2_consume_prepared_order(uuid,uuid,text,text,text[],integer)',
+         'select 1 from public.m2_reading_runs'),
+    )
+    for signature, protected_read in checks:
+        definition = _sql(db, f"select pg_get_functiondef("
+            f"'public.{signature}'::regprocedure);").stdout.lower()
+        assert definition.index('pg_advisory_xact_lock') < definition.index(protected_read), signature
+
+
+def test_standalone_history_compatibility_fails_closed_without_waiting(db):
+    owner, _run_id = _prepared_owner(db)
+    lock = f"hashtextextended('{owner}:behavior',0)"
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            holder = pool.submit(_sql, db,
+                f"begin; select pg_advisory_xact_lock({lock});"
+                "select pg_sleep(2); commit;")
+            deadline = time.monotonic() + 1
+            observed_lock = False
+            while time.monotonic() < deadline:
+                if _last(_sql(db, f"select pg_try_advisory_xact_lock({lock});")) == 'f':
+                    observed_lock = True
+                    break
+                time.sleep(0.02)
+            assert observed_lock, "the holder never acquired the owner behavior lock"
+            started = time.monotonic()
+            result = _last(_service(db,
+                f"select public.m2_prepared_history_is_compatible('{owner}',1,0);"))
+            elapsed = time.monotonic() - started
+            holder.result(timeout=5)
+        assert result == 'f'
+        assert elapsed < 1.0, "standalone history check waited behind owner feedback"
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_finish_and_fail_scrub_private_payload_and_claim_token(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, 'b')
+        _enqueue_prepared(db, owner, run_id, 'c')
+        first = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        first_id, first_token = first['job_id'], first['claim_token']
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{first_id}','{first_token}',0.01,1.00);")) == 't'
+        assert _last(_service(db, f"select public.m2_mark_prepared_attempt("
+            f"'{first_id}','{first_token}');")) == 't'
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{first_id}','{first_token}','[\"candidate-one\"]'::jsonb);")) == 't'
+        second = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        second_id, second_token = second['job_id'], second['claim_token']
+        assert second_id != first_id
+        assert _last(_service(db, f"select public.m2_fail_prepared_order("
+            f"'{second_id}','{second_token}');")) == 't'
+        rows = json.loads(_last(_service(db,
+            "select jsonb_agg(jsonb_build_object('status',status,"
+            "'payload',request_payload,'token',claim_token) order by status) "
+            f"from public.m2_prepared_orders where user_id='{owner}';")))
+        assert [row['status'] for row in rows] == ['failed', 'ready']
+        assert all(row['payload'] == {} and row['token'] is None for row in rows)
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_expired_inference_rows_are_purged_in_bounded_batches(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        requests = [_enqueue_prepared(db, owner, run_id, key) for key in 'abcde']
+        _service(db, f"update public.m2_prepared_orders set status='ready',"
+                     "ranked_candidate_ids='[\"candidate-one\"]'::jsonb "
+                     f"where request_id='{requests[0]}';"
+                     f"update public.m2_prepared_orders set status='consumed',"
+                     "ranked_candidate_ids='[\"candidate-one\"]'::jsonb "
+                     f"where request_id='{requests[1]}';"
+                     f"update public.m2_prepared_orders set status='failed' "
+                     f"where request_id='{requests[2]}';"
+                     f"update public.m2_prepared_orders set expires_at=now()-interval '1 second' "
+                     f"where request_id in ('{requests[0]}','{requests[1]}','{requests[2]}','{requests[3]}');")
+        private_count = ("select count(*) from public.m2_prepared_orders "
+                         f"where user_id='{owner}' and expires_at<=now() "
+                         "and (request_payload<>'{}'::jsonb or ranked_candidate_ids is not null);")
+        assert _last(_service(db, private_count)) == '4'
+        assert _last(_service(db, 'select public.m2_scrub_expired_prepared_orders(2);')) == '2'
+        assert _last(_service(db, private_count)) == '2'
+        assert _last(_service(db, 'select public.m2_scrub_expired_prepared_orders(100);')) in ('2', '3')
+        assert _last(_service(db, private_count)) == '0'
+        # One more pass removes the just-scrubbed failed row too. The live
+        # unexpired job remains available.
+        _service(db, 'select public.m2_scrub_expired_prepared_orders(100);')
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}' and expires_at<=now();")) == '0'
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where request_id='{requests[4]}' and status='pending';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_expiration_scrubs_private_payload_in_bounded_batches(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        requests = [_enqueue_prepared(db, owner, run_id, key) for key in 'bcde']
+        _service(db, f"update public.m2_prepared_orders set expires_at=now()-interval '1 second' "
+                     f"where request_id in ('{requests[0]}','{requests[1]}','{requests[2]}');"
+                     f"update public.m2_prepared_orders set status='claimed',claim_token=gen_random_uuid() "
+                     f"where request_id='{requests[1]}';"
+                     f"update public.m2_prepared_orders set status='attempting',claim_token=gen_random_uuid() "
+                     f"where request_id='{requests[2]}';")
+        statement = 'select public.m2_scrub_expired_prepared_orders(1);'
+        assert _sql(db, 'set role anon;' + statement, check=False).returncode != 0
+        assert _as_owner(db, owner, statement, check=False).returncode != 0
+        assert _service(db, 'select public.m2_scrub_expired_prepared_orders(0);',
+                        check=False).returncode != 0
+        assert _last(_service(db, statement)) == '1'
+        assert _last(_service(db, 'select public.m2_scrub_expired_prepared_orders(100);')) == '3'
+        rows = json.loads(_last(_service(db,
+            "select jsonb_agg(jsonb_build_object('status',status,'payload',request_payload,"
+            "'token',claim_token) order by request_id) from public.m2_prepared_orders "
+            f"where user_id='{owner}';")))
+        assert len([row for row in rows if row['status'] == 'failed'
+                    and row['payload'] == {} and row['token'] is None]) == 2
+        # The first scrubbed row becomes terminal and the second pass purges it.
+        assert len([row for row in rows if row['status'] == 'pending'
+                    and row['payload']['query'] == 'private test query']) == 1
+        # Claim also invokes the scrub, so expiration is not dependent on an
+        # operator remembering a separate command.
+        _service(db, f"update public.m2_prepared_orders set expires_at=now()-interval '1 second' "
+                     f"where request_id='{requests[3]}';")
+        assert _last(_service(db, f"select coalesce(public.m2_claim_prepared_order('{'a' * 64}'),"
+                                  "'{}'::jsonb)::text;")) == '{}'
+        assert _last(_service(db, f"select request_payload::text from public.m2_prepared_orders "
+                                  f"where request_id='{requests[3]}';")) == '{}'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_a_crashed_prepared_claim_is_never_reclaimed_before_expiry(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '7')
+        claim = f"select public.m2_claim_prepared_order('{'a' * 64}');"
+        job = json.loads(_last(_service(db, claim)))
+        assert job is not None
+        for status in ('claimed', 'attempting'):
+            _service(db, f"update public.m2_prepared_orders set status='{status}', "
+                         "claimed_at=now()-interval '30 minutes' "
+                         f"where job_id='{job['job_id']}';")
+            assert _last(_service(db, f"select coalesce(public.m2_claim_prepared_order("
+                                      f"'{'a' * 64}'),'{{}}'::jsonb)::text;")) == '{}'
+        assert _last(_service(db, "select count(*) from public.m2_prepared_orders "
+                                  f"where job_id='{job['job_id']}' and "
+                                  "status='attempting' and request_payload <> '{}'::jsonb;")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_owner_consent_revision_budget_and_single_attempt_gates(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = _enqueue_prepared(db, owner, run_id, 'f')
+        wrong_owner_request = str(uuid.uuid4())
+        wrong_payload = json.dumps({'request_id': wrong_owner_request,
+            'owner': {'user_id': OTHER}, 'candidates': []})
+        assert _last(_service(db, "select public.m2_enqueue_prepared_order("
+            f"'{OTHER}','{run_id}','{'0' * 64}','{'a' * 64}',1,1,0,"
+            f"'provider-policy-test','{wrong_owner_request}',"
+            f"{_quote(wrong_payload)}::jsonb,3600);")) == 'f'
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        assert job['user_id'] == owner and job['request_id'] == request_id
+        job_id, token = job['job_id'], job['claim_token']
+        reserve = ("select public.m2_reserve_prepared_budget("
+                   f"'{job_id}','{token}',0.01,1.00);")
+        mark = f"select public.m2_mark_prepared_attempt('{job_id}','{token}');"
+        _sql(db, f"update public.user_behavior_settings "
+                     f"set provider_processing_enabled=false where user_id='{owner}';")
+        assert _last(_service(db, reserve)) == 'f'
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where job_id='{job_id}';")) == '0'
+        _sql(db, f"update public.user_behavior_settings "
+                     f"set provider_processing_enabled=true where user_id='{owner}';")
+        # Consent withdrawal destroys the old private job. Continue the
+        # revision, budget, and retry gates with a newly authorized job.
+        request_id = _enqueue_prepared(db, owner, run_id, 'f')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        assert job['request_id'] == request_id
+        job_id, token = job['job_id'], job['claim_token']
+        reserve = ("select public.m2_reserve_prepared_budget("
+                   f"'{job_id}','{token}',0.01,1.00);")
+        mark = f"select public.m2_mark_prepared_attempt('{job_id}','{token}');"
+        _sql(db, f"update public.user_behavior_revisions "
+                     f"set latest_revision=1 where user_id='{owner}';")
+        assert _last(_service(db, reserve)) == 'f'
+        _sql(db, f"update public.user_behavior_revisions "
+                     f"set latest_revision=0 where user_id='{owner}';")
+        assert _last(_service(db, reserve)) == 't'
+        assert _last(_service(db, reserve)) == 'f'
+        reservation_count = _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
+                                      f"where request_id='{request_id}';"))
+        assert reservation_count == '1', reservation_count
+        _sql(db, f"update public.user_behavior_revisions "
+                     f"set latest_revision=1 where user_id='{owner}';")
+        assert _last(_service(db, mark)) == 'f'
+        _sql(db, f"update public.user_behavior_revisions "
+                     f"set latest_revision=0 where user_id='{owner}';")
+        assert _last(_service(db, mark)) == 't'
+        assert _last(_service(db, mark)) == 't'  # same reserved attempt, reauthorized
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{job_id}','{token}','[\"candidate-one\"]'::jsonb);")) == 't'
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{job_id}','{token}','[\"candidate-one\"]'::jsonb);")) == 'f'
+        assert _last(_service(db, mark)) == 'f'  # finished job cannot start again
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def _append_prepared_event(db, owner, event_type, payload):
+    event_id = 'event:' + hashlib.sha256(uuid.uuid4().bytes).hexdigest()
+    statement = ("select public.append_behavior_event("
+                 f"'{event_id}','{event_type}',{_quote(json.dumps(payload))}::jsonb,"
+                 "now(),1)::text;")
+    receipt = json.loads(_last(_as_owner(db, owner, statement)))
+    assert receipt['status'] == 'recorded'
+    return receipt['event_revision']
+
+
+def test_prepared_order_allows_accounted_positive_events_through_consume(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = _enqueue_prepared(db, owner, run_id, '1')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        job_id, token = job['job_id'], job['claim_token']
+        story_id = 'story:' + 'a' * 64
+        _append_prepared_event(db, owner, 'read_more',
+                               {'story_id': story_id, 'surface': 'test'})
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job_id}','{token}',0.01,1.00);")) == 't'
+        _append_prepared_event(db, owner, 'save',
+                               {'story_id': story_id, 'saved': True, 'surface': 'test'})
+        assert _last(_service(db,
+            f"select public.m2_mark_prepared_attempt('{job_id}','{token}');")) == 't'
+        _append_prepared_event(db, owner, 'open_original',
+                               {'story_id': story_id, 'surface': 'test'})
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{job_id}','{token}','[\"candidate-one\"]'::jsonb);")) == 't'
+        _append_prepared_event(db, owner, 'more_like_this',
+                               {'story_id': story_id, 'surface': 'test'})
+        target_run = str(uuid.uuid4())
+        _sql(db, f"update public.m2_reading_runs set closed_at=now() where run_id='{run_id}';"
+                 f"insert into public.m2_reading_runs(run_id,user_id) "
+                 f"values ('{target_run}','{owner}');")
+        consumed = json.loads(_last(_service(db,
+            f"select public.m2_consume_prepared_order('{owner}','{target_run}',"
+            f"'{'1' * 64}','{'a' * 64}',array['candidate-one']::text[],1)::text;")))
+        assert consumed['ranked_candidate_ids'] == ['candidate-one']
+        assert consumed['owner_id'] == owner
+        assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
+                                   f"where request_id='{request_id}';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+@pytest.mark.parametrize('event_type,payload', [
+    ('less_like_this', {'story_id': 'story:' + 'b' * 64, 'surface': 'test'}),
+    ('save', {'story_id': 'story:' + 'b' * 64, 'saved': False, 'surface': 'test'}),
+])
+def test_prepared_order_rejects_negative_feedback_before_budget(db, event_type, payload):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = _enqueue_prepared(db, owner, run_id, '2')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        _append_prepared_event(db, owner, event_type, payload)
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job['job_id']}','{job['claim_token']}',0.01,1.00);")) == 'f'
+        assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
+                                   f"where request_id='{request_id}';")) == '0'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_history_allows_only_valid_search_activity(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '0')
+        story_id = 'story:' + 'd' * 64
+        _append_prepared_event(db, owner, 'search_query',
+                               {'query': 'energy storage', 'surface': 'test'})
+        _append_prepared_event(db, owner, 'search_zero_results',
+                               {'query': 'rare query', 'result_count': 0, 'surface': 'test'})
+        _append_prepared_event(db, owner, 'search_result_click',
+                               {'query': 'energy storage', 'story_id': story_id,
+                                'result_position': 1, 'surface': 'test'})
+        assert _last(_service(db,
+            f"select public.m2_prepared_history_is_compatible('{owner}',1,0);")) == 't'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_history_rejects_future_unrecognized_event_types(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '8')
+        # A future migration may extend the event enum. Simulate that inside
+        # a rolled-back transaction: unknown feedback must fail closed.
+        result = _sql(db, f"""
+            begin;
+            alter table public.user_behavior_events
+              drop constraint user_behavior_events_event_type_check;
+            insert into public.user_behavior_events(
+              user_id,event_id,event_revision,schema_version,actor_kind,event_type,
+              payload,request_digest,occurred_at)
+            values ('{owner}','event:{'f' * 64}',1,1,'human','mute_source',
+              '{{"source_id":"private-source"}}'::jsonb,'{'a' * 64}',now());
+            update public.user_behavior_revisions set latest_revision=1
+              where user_id='{owner}';
+            set local role service_role;
+            set local request.jwt.claims = '{{"role":"service_role"}}';
+            do $block$ begin
+              if public.m2_prepared_history_is_compatible('{owner}',1,0) then
+                raise exception 'unknown event was accepted as positive';
+              end if;
+            end $block$;
+            rollback;
+        """, check=False)
+        assert result.returncode == 0, result.stderr
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_enqueue_accepts_only_accounted_positive_events_after_snapshot(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        story_id = 'story:' + 'e' * 64
+        _append_prepared_event(db, owner, 'read_more',
+                               {'story_id': story_id, 'surface': 'test'})
+        accepted_request = _enqueue_prepared(db, owner, run_id, 'a')
+        assert _last(_service(db, f"select behavior_revision from public.m2_prepared_orders "
+                                      f"where request_id='{accepted_request}';")) == '0'
+        _append_prepared_event(db, owner, 'less_like_this',
+                               {'story_id': story_id, 'surface': 'test'})
+        _enqueue_prepared(db, owner, run_id, 'b', accepted=False)
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_consume_keeps_ready_job_when_current_window_overlap_is_too_small(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        candidates = tuple(f'candidate-{number}' for number in range(1, 6))
+        request_id = _enqueue_prepared(db, owner, run_id, 'e',
+                                       candidate_ids=candidates)
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        job_id, token = job['job_id'], job['claim_token']
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job_id}','{token}',0.01,1.00);")) == 't'
+        assert _last(_service(db, f"select public.m2_mark_prepared_attempt("
+            f"'{job_id}','{token}');")) == 't'
+        ranked = _quote(json.dumps(candidates)) + '::jsonb'
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{job_id}','{token}',{ranked});")) == 't'
+        target_run = str(uuid.uuid4())
+        _sql(db, f"update public.m2_reading_runs set closed_at=now() where run_id='{run_id}';"
+                 f"insert into public.m2_reading_runs(run_id,user_id) "
+                 f"values ('{target_run}','{owner}');")
+        prefix = (f"select coalesce(public.m2_consume_prepared_order("
+                  f"'{owner}','{target_run}','{'e' * 64}','{'a' * 64}',")
+        for current in ("array['candidate-1','candidate-2','candidate-3','candidate-4']::text[]",
+                        "array['candidate-1','candidate-1','candidate-1','candidate-1','candidate-1']::text[]"):
+            assert _last(_service(db, prefix + current + ",5),'{}'::jsonb)::text;")) == '{}'
+            assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                          f"where request_id='{request_id}';")) == 'ready'
+        consumed = json.loads(_last(_service(db, prefix +
+            "array['candidate-1','candidate-2','candidate-3','candidate-4','candidate-5']::text[],5),'{}'::jsonb)::text;")))
+        assert consumed['ranked_candidate_ids'] == list(candidates)
+        assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                      f"where request_id='{request_id}';")) == 'consumed'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_consume_skips_newest_unusable_ready_order_for_an_older_match(db):
+    owner, first_run = _prepared_owner(db)
+    try:
+        older = _enqueue_prepared(db, owner, first_run, 'f')
+        second_run, target_run = str(uuid.uuid4()), str(uuid.uuid4())
+        _sql(db, f"update public.m2_reading_runs set closed_at=now() where run_id='{first_run}';"
+                 f"insert into public.m2_reading_runs(run_id,user_id) "
+                 f"values ('{second_run}','{owner}');")
+        newer = _enqueue_prepared(db, owner, second_run, 'f')
+        _sql(db, f"update public.m2_reading_runs set closed_at=now() where run_id='{second_run}';"
+                 f"insert into public.m2_reading_runs(run_id,user_id) "
+                 f"values ('{target_run}','{owner}');")
+        _service(db, f"update public.m2_prepared_orders set status='ready',"
+                     "ranked_candidate_ids='[\"older-candidate\"]'::jsonb,"
+                     "request_payload='{}'::jsonb,created_at=now()-interval '2 minutes' "
+                     f"where request_id='{older}';"
+                     f"update public.m2_prepared_orders set status='ready',"
+                     "ranked_candidate_ids='[\"newer-candidate\"]'::jsonb,"
+                     "request_payload='{}'::jsonb,created_at=now()-interval '1 minute' "
+                     f"where request_id='{newer}';")
+        consumed = json.loads(_last(_service(db,
+            f"select public.m2_consume_prepared_order('{owner}','{target_run}',"
+            f"'{'f' * 64}','{'a' * 64}',array['older-candidate']::text[],1)::text;")))
+        assert consumed['ranked_candidate_ids'] == ['older-candidate']
+        assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                      f"where request_id='{older}';")) == 'consumed'
+        assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                      f"where request_id='{newer}';")) == 'ready'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_history_rejects_unexplained_revision_gap(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, '3')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        _append_prepared_event(db, owner, 'read_more',
+            {'story_id': 'story:' + 'c' * 64, 'surface': 'test'})
+        _sql(db, f"update public.user_behavior_revisions set latest_revision=3 "
+                 f"where user_id='{owner}';")
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job['job_id']}','{job['claim_token']}',0.01,1.00);")) == 'f'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_prepared_retry_reauthorization_checks_live_consent_and_negative_feedback(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = _enqueue_prepared(db, owner, run_id, '4')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        job_id, token = job['job_id'], job['claim_token']
+        mark = f"select public.m2_mark_prepared_attempt('{job_id}','{token}');"
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job_id}','{token}',0.01,1.00);")) == 't'
+        assert _last(_service(db, mark)) == 't'
+        _append_prepared_event(db, owner, 'read_more',
+            {'story_id': 'story:' + 'd' * 64, 'surface': 'test'})
+        assert _last(_service(db, mark)) == 't'
+        assert _last(_service(db, f"select public.m2_mark_prepared_attempt("
+            f"'{job_id}','{uuid.uuid4()}');")) == 'f'
+        _append_prepared_event(db, owner, 'less_like_this',
+            {'story_id': 'story:' + 'd' * 64, 'surface': 'test'})
+        assert _last(_service(db, mark)) == 'f'
+        assert _last(_service(db, f"select status from public.m2_prepared_orders "
+                                      f"where job_id='{job_id}';")) == 'attempting'
+        assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
+                                   f"where request_id='{request_id}' and status='reserved';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_consent_withdrawal_deletes_attempting_payload_and_refuses_retry(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        request_id = _enqueue_prepared(db, owner, run_id, 'c')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        job_id, token = job['job_id'], job['claim_token']
+        mark = f"select public.m2_mark_prepared_attempt('{job_id}','{token}');"
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job_id}','{token}',0.01,1.00);")) == 't'
+        assert _last(_service(db, mark)) == 't'
+        _sql(db, f"update public.user_behavior_settings set provider_processing_enabled=false "
+                 f"where user_id='{owner}';")
+        assert _last(_service(db, mark)) == 'f'
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '0'
+        # A possibly attempted provider call still has its cost record for
+        # reconciliation even after owner-private payloads are erased.
+        assert _last(_sql(db, f"select count(*) from public.m2_ranker_reservations "
+                                   f"where request_id='{request_id}' and status='reserved';")) == '1'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_first_positive_event_preserves_preparations_but_history_reset_clears_them(db):
+    owner, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+    try:
+        # No revisions row yet: enqueue uses the documented generation 1,
+        # revision 0 defaults. The first behavior event creates that row.
+        _sql(db, f"insert into auth.users(id) values ('{owner}');"
+                 f"insert into public.user_behavior_settings(user_id,learning_enabled,"
+                 f"provider_processing_enabled,provider_policy_id) "
+                 f"values ('{owner}',true,true,'provider-policy-test');"
+                 f"insert into public.m2_reading_runs(run_id,user_id) values ('{run_id}','{owner}');")
+        ready_request = _enqueue_prepared(db, owner, run_id, '5')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        assert job['request_id'] == ready_request
+        job_id, token = job['job_id'], job['claim_token']
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{job_id}','{token}',0.01,1.00);")) == 't'
+        assert _last(_service(db,
+            f"select public.m2_mark_prepared_attempt('{job_id}','{token}');")) == 't'
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{job_id}','{token}','[\"candidate-one\"]'::jsonb);")) == 't'
+        _enqueue_prepared(db, owner, run_id, '6')
+        _append_prepared_event(db, owner, 'read_more',
+            {'story_id': 'story:' + 'e' * 64, 'surface': 'test'})
+        assert _last(_service(db, f"select string_agg(status,',' order by status) "
+                                      f"from public.m2_prepared_orders where user_id='{owner}';")) == 'pending,ready'
+        _sql(db, f"update public.user_behavior_revisions set history_generation=2 "
+                 f"where user_id='{owner}';")
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == '0'
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")

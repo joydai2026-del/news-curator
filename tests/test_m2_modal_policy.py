@@ -6,6 +6,7 @@ import types
 import ast
 from pathlib import Path
 import json
+import yaml
 
 from scripts.prepare_ranker_image_context import copy_python_tree, validate_containerfile_sources
 
@@ -27,7 +28,13 @@ class _Resource:
 
     @classmethod
     def from_dockerfile(cls, value, **kwargs):
-        return ("dockerfile", value, kwargs)
+        return cls(value, kwargs)
+
+    def __init__(self, value, kwargs):
+        self.value, self.kwargs = value, kwargs
+
+    def env(self, values):
+        return ("image-with-env", self.value, values)
 
 
 def _modal_double(captured):
@@ -41,6 +48,7 @@ def _modal_double(captured):
 
     def concurrent(**kwargs):
         captured["concurrent"] = kwargs
+        captured.setdefault("concurrent_calls", []).append(kwargs)
         return lambda fn: fn
 
     return types.SimpleNamespace(
@@ -49,6 +57,7 @@ def _modal_double(captured):
         Secret=_Resource,
         concurrent=concurrent,
         asgi_app=lambda: (lambda fn: fn),
+        Cron=lambda expression: ("cron", expression),
     )
 
 
@@ -61,15 +70,22 @@ def _load(monkeypatch, **values):
     return importlib.import_module(MODULE), captured
 
 
-def _required(tmp_path):
+def _required(tmp_path, *, preparation_enabled=False, policy_text=None):
     context = tmp_path / "context"
     context.mkdir()
     containerfile = context / "Containerfile"
     containerfile.write_text("FROM scratch\n")
+    policy = context / "config" / "ranker-policy-r1.yaml"
+    policy.parent.mkdir()
+    policy.write_text(policy_text if policy_text is not None else
+                      "schema_version: 1\nnext_run_preparation:\n"
+                      f"  enabled: {str(preparation_enabled).lower()}\n")
     manifest = context / "context-manifest.json"
-    data = containerfile.read_bytes()
-    manifest.write_text(json.dumps({"files": [{"path": "Containerfile", "size": len(data),
-        "sha256": hashlib.sha256(data).hexdigest()}]}) + "\n")
+    files = [containerfile, policy]
+    manifest.write_text(json.dumps({"files": [
+        {"path": item.relative_to(context).as_posix(), "size": len(item.read_bytes()),
+         "sha256": hashlib.sha256(item.read_bytes()).hexdigest()} for item in files
+    ]}) + "\n")
     return {
         "NEWS_CURATOR_MODAL_DEPLOYMENT_ENABLED": "true",
         "NEWS_CURATOR_RANKER_CONTEXT": str(context),
@@ -107,7 +123,7 @@ def test_modal_policy_defaults_are_bounded_and_platform_access_is_restricted(mon
     assert captured["functions"][0]["scaledown_window"] == 60
     assert captured["functions"][0]["enable_memory_snapshot"] is True
     assert captured["functions"][0]["restrict_modal_access"] is True
-    assert captured["concurrent"]["max_inputs"] == 8
+    assert captured["concurrent_calls"][0]["max_inputs"] == 8
 
 
 def test_modal_policy_uses_validated_overrides(monkeypatch, tmp_path):
@@ -125,7 +141,7 @@ def test_modal_policy_uses_validated_overrides(monkeypatch, tmp_path):
     assert captured["functions"][0]["max_containers"] == 7
     assert captured["functions"][0]["scaledown_window"] == 300
     assert captured["functions"][0]["enable_memory_snapshot"] is False
-    assert captured["concurrent"]["max_inputs"] == 12
+    assert captured["concurrent_calls"][0]["max_inputs"] == 12
 
 
 @pytest.mark.parametrize("minimum", ["0", "1", "7"])
@@ -257,3 +273,35 @@ def test_containerfile_copy_sources_must_all_exist(tmp_path):
         validate_containerfile_sources(tmp_path)
     (tmp_path / "vendor-manifest.json").write_text("{}\n")
     validate_containerfile_sources(tmp_path)
+
+
+def test_absent_preparation_block_is_disabled_for_rollback(monkeypatch, tmp_path):
+    values = _required(tmp_path, policy_text="schema_version: 1\n")
+    module, _captured = _load(monkeypatch, **values)
+    assert not hasattr(module, "prepare_next_run")
+    with pytest.raises(ValueError, match="must match"):
+        _load(monkeypatch, **(values | {
+            "NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED": "true"}))
+
+
+@pytest.mark.parametrize("policy_text,error", [
+    ("schema_version: 1\nnext_run_preparation: null\n", "must be an object"),
+    ("schema_version: 1\nnext_run_preparation:\n  enabld: false\n", "unknown keys"),
+    ("schema_version: 1\nnext_run_preparation:\n  enabled: 'false'\n", "must be boolean"),
+])
+def test_staged_preparation_block_rejects_malformed_values(
+        monkeypatch, tmp_path, policy_text, error):
+    with pytest.raises(ValueError, match=error):
+        _load(monkeypatch, **_required(tmp_path, policy_text=policy_text))
+
+
+def test_checked_in_policy_requires_paid_worker_at_service_deploy(monkeypatch, tmp_path):
+    checked_in = (Path(__file__).resolve().parents[1] /
+                  "config/ranker-policy-r1.yaml").read_text()
+    assert yaml.safe_load(checked_in)["next_run_preparation"]["enabled"] is True
+    values = _required(tmp_path, policy_text=checked_in)
+    with pytest.raises(ValueError, match="must match"):
+        _load(monkeypatch, **values)
+    module, _captured = _load(monkeypatch, **(values | {
+        "NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED": "true"}))
+    assert hasattr(module, "prepare_next_run")

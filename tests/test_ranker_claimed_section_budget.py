@@ -270,7 +270,7 @@ def test_empty_high_exclusion_scan_does_not_add_a_claimed_progress_read():
         f"story:{index + 10000:064x}" for index in range(1000)]
     next(iter(store.views.values()))["pages_served"] = 2
     store.claimed_calls.clear()
-    subject._continue_frozen_order = lambda *args, **kwargs: ((), True)
+    subject._continue_frozen_order = lambda *args, **kwargs: ((), True, None)
 
     subject.page(authorization="Bearer valid", cursor=subject._cursor(
         "frozen-1", len(frozen["cards"]), int(frozen["expires_at"]), response_number=3))

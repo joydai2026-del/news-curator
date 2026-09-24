@@ -74,6 +74,13 @@ exclusivity_policy_id: pairing-json-v1
 # this at a revision-1-shaped file, or removing the key, returns the feed to the
 # newest-`candidate_limit` window without a code change.
 composition_policy: config/ranking-policy-r2.yaml
+# Show a frozen four-lane order now. A consented model order is prepared in a
+# durable owner-scoped queue for a later reading run and is refused if feedback
+# changed the behavior revision before use.
+next_run_preparation:
+  enabled: true
+  ttl_seconds: 7200
+  minimum_overlap: 5
 # Client-side budget for ONE Supabase call, in seconds (1 to 30, validated at
 # boot). The transport used to hardcode 3.0, and every POST /rank answered 503
 # "Supabase request failed" with no way to tell a timeout from a permission

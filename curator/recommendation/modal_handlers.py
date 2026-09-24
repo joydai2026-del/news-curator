@@ -3,6 +3,10 @@
 # Where the image puts the tree. Everything below is discovered from the ranker
 # policy relative to it; no handler names a config file of its own.
 IMAGE_ROOT = "/opt/news-curator"
+PREPARATION_OUTCOMES = frozenset({
+    "ready", "failed", "stale", "invalid", "unpreparable",
+    "budget_denied", "empty", "disabled",
+})
 
 
 def image_inputs(root=IMAGE_ROOT):
@@ -25,6 +29,57 @@ def image_inputs(root=IMAGE_ROOT):
 def endpoint():
     from .runtime import build_application
     return build_application()
+
+
+def scrub_expired_preparations():
+    """Remove at most 100 expired private payloads; report aggregate count only."""
+    import json
+    import time
+
+    from .runtime import build_application
+
+    started = time.monotonic()
+    count = build_application()._service._store.scrub_expired_prepared_orders()
+    if type(count) is not int or not 0 <= count <= 100:
+        raise ValueError("prepared scrub returned an invalid count")
+    result = {"event": "m2_preparation_scrub", "scrubbed": count,
+              "duration_ms": round((time.monotonic() - started) * 1000)}
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
+    return result
+
+
+def prepare_next_run():
+    """Process a bounded batch from the owner-scoped durable queue.
+
+    Return only aggregate outcomes. Job, owner and story identifiers stay out of
+    Modal's response and logs. Every claim and cost decision remains in the
+    reviewed worker and database RPCs, including the no-retry charge boundary.
+    """
+    import json
+    import os
+    import time
+
+    from .deployment import bounded_int
+    from .preparation_worker import process_one_preparation
+    from .runtime import build_application
+
+    batch_size = bounded_int(os.environ, "NEWS_CURATOR_MODAL_PREPARATION_BATCH_SIZE", 1, 1, 5)
+    service = build_application()._service
+    counts = {}
+    started = time.monotonic()
+    for _ in range(batch_size):
+        outcome = process_one_preparation(
+            store=service._store, adapter=service._adapter, policy=service._policy)
+        if type(outcome) is not str or outcome not in PREPARATION_OUTCOMES:
+            raise ValueError("preparation worker returned an invalid outcome")
+        counts[outcome] = counts.get(outcome, 0) + 1
+        if outcome in {"disabled", "empty"}:
+            break
+    result = {"event": "m2_preparation_batch", "jobs": sum(
+        value for key, value in counts.items() if key not in {"disabled", "empty"}),
+        "outcomes": counts, "duration_ms": round((time.monotonic() - started) * 1000)}
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
+    return result
 
 
 def smoke_rankllm_image():

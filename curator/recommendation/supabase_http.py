@@ -201,6 +201,80 @@ class SupabaseHTTP:
             raise SupabaseHTTPError("candidate RPC returned a non-list")
         return page
 
+    def enqueue_prepared_order(self, **kwargs) -> bool:
+        body = {"p_" + key: value for key, value in kwargs.items()}
+        result = self._request("POST", "/rest/v1/rpc/m2_enqueue_prepared_order",
+            token=self._service_token(), key=self._service, body=body)
+        if type(result) is not bool:
+            raise SupabaseHTTPError("prepared enqueue RPC returned a non-boolean")
+        return result
+
+    def consume_prepared_order(self, **kwargs):
+        body = {"p_" + key: value for key, value in kwargs.items()}
+        result = self._request("POST", "/rest/v1/rpc/m2_consume_prepared_order",
+            token=self._service_token(), key=self._service, body=body)
+        if result is not None and not isinstance(result, Mapping):
+            raise SupabaseHTTPError("prepared consume RPC returned an invalid row")
+        return result
+
+    def prepared_history_is_compatible(self, **kwargs) -> bool:
+        body = {"p_" + key: value for key, value in kwargs.items()}
+        result = self._request("POST", "/rest/v1/rpc/m2_prepared_history_is_compatible",
+            token=self._service_token(), key=self._service, body=body)
+        if type(result) is not bool:
+            raise SupabaseHTTPError("prepared history RPC returned a non-boolean")
+        return result
+
+    def scrub_expired_prepared_orders(self) -> int:
+        result = self._request("POST", "/rest/v1/rpc/m2_scrub_expired_prepared_orders",
+            token=self._service_token(), key=self._service, body={"p_limit": 100})
+        if type(result) is not int or not 0 <= result <= 100:
+            raise SupabaseHTTPError("prepared scrub RPC returned an invalid count")
+        return result
+
+    def claim_prepared_order(self, *, policy_digest: str):
+        result = self._request("POST", "/rest/v1/rpc/m2_claim_prepared_order",
+            token=self._service_token(), key=self._service, body={"p_policy_digest": policy_digest})
+        if result is not None and not isinstance(result, Mapping):
+            raise SupabaseHTTPError("prepared claim RPC returned an invalid row")
+        return result
+
+    def reserve_prepared_budget(self, *, job_id: str, claim_token: str,
+                                amount_usd: float, daily_limit_usd: float) -> bool:
+        result = self._request("POST", "/rest/v1/rpc/m2_reserve_prepared_budget",
+            token=self._service_token(), key=self._service,
+            body={"p_job_id": job_id, "p_claim_token": claim_token,
+                  "p_amount_usd": amount_usd, "p_daily_limit_usd": daily_limit_usd})
+        if type(result) is not bool:
+            raise SupabaseHTTPError("prepared budget RPC returned a non-boolean")
+        return result
+
+    def mark_prepared_attempt(self, *, job_id: str, claim_token: str) -> bool:
+        result = self._request("POST", "/rest/v1/rpc/m2_mark_prepared_attempt",
+            token=self._service_token(), key=self._service,
+            body={"p_job_id": job_id, "p_claim_token": claim_token})
+        if type(result) is not bool:
+            raise SupabaseHTTPError("prepared attempt RPC returned a non-boolean")
+        return result
+
+    def finish_prepared_order(self, *, job_id: str, claim_token: str,
+                              ranked_candidate_ids) -> bool:
+        result = self._request("POST", "/rest/v1/rpc/m2_finish_prepared_order",
+            token=self._service_token(), key=self._service,
+            body={"p_job_id": job_id, "p_claim_token": claim_token,
+                  "p_ranked_candidate_ids": list(ranked_candidate_ids)})
+        if type(result) is not bool:
+            raise SupabaseHTTPError("prepared finish RPC returned a non-boolean")
+        return result
+
+    def fail_prepared_order(self, *, job_id: str, claim_token: str) -> bool:
+        result = self._request("POST", "/rest/v1/rpc/m2_fail_prepared_order",
+            token=self._service_token(), key=self._service,
+            body={"p_job_id": job_id, "p_claim_token": claim_token})
+        if type(result) is not bool:
+            raise SupabaseHTTPError("prepared fail RPC returned a non-boolean")
+        return result
+
     def open_reading_run(self, *, user_id: str, idle_minutes: int, max_minutes: int, profile):
         result = self._request("POST", "/rest/v1/rpc/m2_open_or_join_reading_run_v2", token=self._service_token(),
             key=self._service, body={"p_user_id": user_id, "p_idle_minutes": idle_minutes,
@@ -316,6 +390,29 @@ class SupabaseHTTP:
         if not isinstance(result, Mapping):
             raise SupabaseHTTPError("ranking claim RPC returned a non-object")
         return result
+
+    def claim_continuation_snapshot(self, *, user_id: str, run_id: str,
+                                    eligibility_key: str, frozen_order_id: str,
+                                    token: str, ttl_seconds: int):
+        result = self._request("POST", "/rest/v1/rpc/m2_claim_continuation_snapshot",
+            token=self._service_token(), key=self._service,
+            body={"p_user_id": user_id, "p_run_id": run_id,
+                "p_eligibility_key": eligibility_key,
+                "p_frozen_order_id": frozen_order_id,
+                "p_token": token, "p_ttl_seconds": ttl_seconds})
+        if not isinstance(result, Mapping) or type(result.get("granted")) is not bool:
+            raise SupabaseHTTPError("continuation claim RPC returned an invalid result")
+        snapshot = result.get("frozen_order")
+        if snapshot is not None:
+            if (not isinstance(snapshot, Mapping) or not isinstance(snapshot.get("bindings"), Mapping)
+                    or not isinstance(snapshot.get("cards"), list)
+                    or type(snapshot.get("page_size")) is not int
+                    or not isinstance(snapshot.get("expires_at"), str)):
+                raise SupabaseHTTPError("continuation claim RPC returned an invalid frozen order")
+            snapshot = dict(snapshot)
+            snapshot["expires_at"] = int(__import__("datetime").datetime.fromisoformat(
+                snapshot["expires_at"].replace("Z", "+00:00")).timestamp())
+        return {"granted": result["granted"], "frozen_order": snapshot}
 
     def release_run_ranking_claim(self, *, user_id: str, run_id: str, eligibility_key: str,
                                   token: str) -> bool:
