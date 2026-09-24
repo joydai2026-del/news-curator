@@ -230,7 +230,7 @@ def build_application(*, environ=None, policy_path: str | None = None):
         timeout_seconds=supabase_timeout, timeout_retries=supabase_retries,
         general_candidate_query=supabase_general_candidate_query(policy))
     service_policy = ServicePolicy(policy_version=_required(policy, "prompt_revision"),
-        model_version=_required(policy, "model"), provider_policy_id=_required(policy, "prompt_revision"),
+        model_version=_required(policy, "model"), provider_policy_id=_required(policy, "provider_policy_id"),
         tenant_id=tenant_id, candidate_limit=policy["candidate_limit"], maximum_page_size=policy["maximum_page_size"],
         maximum_excluded_story_ids=policy["maximum_excluded_story_ids"],
         exclusive_scan_max_batches=exclusive_scan_max_batches,

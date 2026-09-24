@@ -121,10 +121,8 @@ run:
   # ever. A run that has run out says so.
   max_pages_per_run: 4
   immediate_negative_filter: true
-  # How long one "less like this" keeps hiding a source or a topic. It used to
-  # hide it for ever on every page: one tap in September would still be removing
-  # that outlet in December, which is not what "less like this" says. It still
-  # lowers the profile affinity after this window; it just stops erasing.
+  # How long one "less like this" hides the clicked story. Its topic remains
+  # a soft ranking signal; the publisher and broad topic stay eligible.
   negative_suppression_days: 7
   # How long one request may hold the run's ranking claim before another may take
   # it over. It is a crash guard, not a timeout: the claim is released as soon as

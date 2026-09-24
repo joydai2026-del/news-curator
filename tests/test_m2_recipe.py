@@ -56,12 +56,12 @@ def test_positive_actions_build_affinity_and_negatives_suppress(policy):
     profile = build_profile(snapshot([
         event("save", source="reuters", topic="world", saved=True),
         event("open_original", source="reuters", topic="world"),
-        event("less_like_this", source="cnbeta", topic="gadgets"),
+        event("less_like_this", source="cnbeta", topic="gadgets", story_id="story:clicked"),
     ]), policy=policy, now=NOW)
     assert profile.affinity(source_id="reuters", category_ids=("world",)) > 0
     assert profile.affinity(source_id="cnbeta", category_ids=("gadgets",)) < 0
-    assert profile.suppressed_sources == frozenset({"cnbeta"})
-    assert profile.suppressed_topics == frozenset({"gadgets"})
+    assert profile.source_affinity.get("cnbeta", 0) == 0
+    assert profile.hidden_story_ids == frozenset({"story:clicked"})
 
 
 def test_an_unsave_withdraws_its_own_save(policy):
@@ -76,6 +76,16 @@ def test_older_behavior_counts_for_less(policy):
     old = build_profile(snapshot([event("save", source="a", topic="t", hours=500, saved=True)]),
                         policy=policy, now=NOW)
     assert recent.affinity(source_id="a", category_ids=()) > old.affinity(source_id="a", category_ids=())
+
+
+def test_legacy_run_profile_does_not_carry_source_wide_dislike():
+    legacy = {"schema_version": 1, "source_affinity": {"disliked": -4, "liked": 3},
+              "topic_affinity": {"world": -1}, "suppressed_sources": ["disliked"],
+              "suppressed_topics": ["world"], "event_count": 2}
+    profile = BehaviorProfile.from_snapshot(legacy)
+    assert profile.source_affinity == {"liked": 3}
+    assert profile.topic_affinity == {"world": -1}
+    assert profile.hidden_story_ids == frozenset()
 
 
 def test_the_profile_survives_a_freeze_and_thaw(policy):
@@ -179,25 +189,26 @@ def test_the_window_is_replayable(policy):
     assert [item.story_id for item in first] == [item.story_id for item in second]
 
 
-def test_less_like_this_stops_erasing_after_the_configured_window(policy):
-    """One tap must not hide an outlet for ever. Inside the window it removes the
-    source from the page; outside it, it only lowers affinity."""
+def test_less_like_this_hides_only_clicked_story_during_configured_window(policy):
     inside = build_profile(snapshot([event("less_like_this", source="cnbeta", topic="gadgets",
+                                           story_id="story:clicked",
                                            hours=policy.negative_suppression_days * 24 - 1)]),
                            policy=policy, now=NOW)
-    assert inside.suppressed_sources == frozenset({"cnbeta"})
+    assert inside.hidden_story_ids == frozenset({"story:clicked"})
+    assert inside.source_affinity.get("cnbeta", 0) == 0
     outside = build_profile(snapshot([event("less_like_this", source="cnbeta", topic="gadgets",
+                                            story_id="story:clicked",
                                             hours=policy.negative_suppression_days * 24 + 1)]),
                             policy=policy, now=NOW)
-    assert outside.suppressed_sources == frozenset()
-    assert outside.suppressed_topics == frozenset()
-    # It still counts against the source, which is the part that should persist.
-    assert outside.affinity(source_id="cnbeta", category_ids=("gadgets",)) < 0
+    assert outside.hidden_story_ids == frozenset()
+    assert outside.source_affinity.get("cnbeta", 0) == 0
+    assert outside.topic_affinity["gadgets"] < 0
 
 
 def test_the_exact_suppression_boundary(policy):
     at_the_boundary = build_profile(
-        snapshot([event("less_like_this", source="cnbeta", hours=policy.negative_suppression_days * 24)]),
+        snapshot([event("less_like_this", source="cnbeta", story_id="story:clicked",
+                        hours=policy.negative_suppression_days * 24)]),
         policy=policy, now=NOW)
-    assert at_the_boundary.suppressed_sources == frozenset({"cnbeta"}), \
-        "exactly at the window the suppression still applies"
+    assert at_the_boundary.hidden_story_ids == frozenset({"story:clicked"}), \
+        "exactly at the window the clicked story is still hidden"
