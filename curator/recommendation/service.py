@@ -162,6 +162,7 @@ class RankingStore(Protocol):
                             suppressed_topics: Sequence[str] = ()) -> Sequence[Mapping[str, object]]: ...
     def enqueue_prepared_order(self, **kwargs) -> bool: ...
     def consume_prepared_order(self, **kwargs) -> Mapping[str, object] | None: ...
+    def prepared_history_is_compatible(self, **kwargs) -> bool: ...
     def open_reading_run(self, *, user_id: str, idle_minutes: int, max_minutes: int,
                          profile: Mapping[str, object]) -> Mapping[str, object]: ...
     def record_reading_run_filter(self, *, user_id: str, run_id: str,
@@ -555,12 +556,20 @@ class RankingService:
         self._assert_fresh(snapshot, latest)
         if (prepared_order is not None
                 and latest.get("history_revision") != snapshot.get("history_revision")):
-            # Consume proved compatibility only at its own transaction. A
-            # negative preference can commit before this final snapshot, so a
-            # prepared permutation cannot outlive any intervening behavior
-            # change. The already-built recipe remains safe to freeze.
-            prepared_order = None
-            receipt = self._adapter.fallback(request, "prepared_order_history_changed")
+            # Consume proved compatibility at its own transaction. A later
+            # positive tap should not waste a paid order; a negative or
+            # unexplained change must still refuse that order before freeze.
+            compatible = False
+            try:
+                compatible = self._store.prepared_history_is_compatible(
+                    user_id=owner.user_id, history_generation=request.history_generation,
+                    behavior_revision=snapshot.get("history_revision"))
+            except Exception as error:
+                log_suppressed_exception("m2_prepared_order_history_check_failed", error,
+                    stream=sys.stderr)
+            if not compatible:
+                prepared_order = None
+                receipt = self._adapter.fallback(request, "prepared_order_history_changed")
         owner_states = self._store.owner_states(token, [str(row["story_id"]) for row in rows])
         finalization = None
         if composition is not None:

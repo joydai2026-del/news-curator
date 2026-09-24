@@ -38,7 +38,8 @@ create policy m2_prepared_orders_service on public.m2_prepared_orders to service
 
 -- A prepared model is a snapshot. Later positive reading activity does not
 -- invalidate it, but a negative preference or unexplained revision gap does.
--- Callers hold the owner's behavior advisory lock before invoking this check.
+-- Take the owner's behavior lock here too, so a standalone post-consume
+-- check serializes with concurrent feedback and consent writes.
 create or replace function public.m2_prepared_history_is_compatible(
   p_user_id uuid,p_history_generation bigint,p_behavior_revision bigint
 ) returns boolean language plpgsql security definer set search_path=pg_catalog,public as $$
@@ -50,6 +51,7 @@ begin
   if p_user_id is null or p_history_generation is null or p_behavior_revision is null then
     return false;
   end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':behavior',0));
   select history_generation,latest_revision into live_generation,live_revision
     from public.user_behavior_revisions where user_id=p_user_id;
   if not found then live_generation:=1; live_revision:=0; end if;
@@ -79,7 +81,11 @@ begin
   if coalesce(auth.jwt()->>'role','') <> 'service_role' then
     raise exception 'service role required' using errcode='42501';
   end if;
-  if p_eligibility_key !~ '^[0-9a-f]{64}$' or p_policy_digest !~ '^[0-9a-f]{64}$'
+  if p_user_id is null or p_source_run_id is null or p_provider_policy_id is null
+     or p_history_generation is null or p_history_generation < 1
+     or p_consent_revision is null or p_consent_revision < 0
+     or p_behavior_revision is null or p_behavior_revision < 0
+     or p_eligibility_key !~ '^[0-9a-f]{64}$' or p_policy_digest !~ '^[0-9a-f]{64}$'
      or p_request_id is null or p_ttl_seconds not between 3600 and 86400
      or jsonb_typeof(p_request_payload) <> 'object'
      or octet_length(p_request_payload::text) > 262144

@@ -583,3 +583,47 @@ def test_consume_prepared_order_uses_exact_service_rpc_and_body():
                             "p_minimum_overlap": 5}
     assert seen["headers"]["Apikey"] == "sb_secret_canary"
     assert "Authorization" not in seen["headers"]
+
+
+def test_prepared_history_compatibility_uses_exact_service_rpc_and_body():
+    client = _client()
+    seen = {}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return b"true"
+
+    class Capture:
+        def open(self, request, timeout):
+            seen.update(method=request.method, url=request.full_url,
+                        body=json.loads(request.data), headers=dict(request.header_items()))
+            return Response()
+
+    client._opener = Capture()
+    assert client.prepared_history_is_compatible(user_id="owner-1",
+        history_generation=3, behavior_revision=17) is True
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://example.test/rest/v1/rpc/m2_prepared_history_is_compatible"
+    assert seen["body"] == {"p_user_id": "owner-1", "p_history_generation": 3,
+                            "p_behavior_revision": 17}
+    assert seen["headers"]["Apikey"] == "sb_secret_canary"
+    assert "Authorization" not in seen["headers"]
+
+
+@pytest.mark.parametrize("result", [b"null", b"1", b'"true"', b"{}"])
+def test_prepared_history_compatibility_rejects_non_boolean(result):
+    client = _client()
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def read(self): return result
+
+    class Capture:
+        def open(self, request, timeout): return Response()
+
+    client._opener = Capture()
+    with pytest.raises(SupabaseHTTPError, match="non-boolean"):
+        client.prepared_history_is_compatible(user_id="owner-1",
+            history_generation=3, behavior_revision=17)

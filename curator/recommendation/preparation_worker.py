@@ -106,8 +106,12 @@ def process_one_preparation(*, store, adapter, policy) -> str:
             store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
             return "failed" if attempted else "stale"
         if attempt_mark_uncertain:
-            # The RPC may have committed. Retain the reservation and never
-            # retry or publish this job after an ambiguous boundary.
+            # A failed retry authorization cannot start another transport.
+            # Account for a completed earlier attempt when its usage is known;
+            # otherwise retain the ceiling for reconciliation. Never retry or
+            # publish after the ambiguous authorization boundary.
+            if attempted and observed:
+                settle_observed_usage()
             store.fail_prepared_order(job_id=job_id, claim_token=claim_token)
             return "failed"
         if observed:

@@ -10,6 +10,8 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from pathlib import Path
 from urllib.parse import urlsplit
 from curator.models import Item
@@ -890,3 +892,105 @@ def test_reader_surfaces_after_leaving_the_personalized_feed(tmp_path):
 def test_order_origin_copy_is_exact_for_each_reader_branch(tmp_path, origin, copy):
     _drive_the_reader(tmp_path, include_the_tail=False,
                       order_case=origin, expected_order_copy=copy)
+
+
+@pytest.mark.allow_socket
+def test_new_reader_accept_works_with_older_ranker_preflight():
+    """Chromium must omit safelisted Accept from the old ranker's preflight."""
+    preflights = []
+    requests = []
+
+    class ReaderHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"<!doctype html><title>Reader origin</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    reader_server = ThreadingHTTPServer(("127.0.0.1", 0), ReaderHandler)
+    reader_origin = f"http://127.0.0.1:{reader_server.server_port}"
+
+    class OldRankerHandler(BaseHTTPRequestHandler):
+        def _cors(self):
+            self.send_header("Access-Control-Allow-Origin", reader_origin)
+            self.send_header("Access-Control-Allow-Headers", "authorization,content-type")
+            self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+
+        def do_OPTIONS(self):
+            preflights.append((self.path, self.headers.get("Access-Control-Request-Headers", "")))
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            requests.append((self.path, self.headers.get("Accept")))
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def do_GET(self):
+            requests.append((self.path, self.headers.get("Accept")))
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, *_args):
+            pass
+
+    ranker_server = ThreadingHTTPServer(("127.0.0.1", 0), OldRankerHandler)
+    reader_thread = Thread(target=reader_server.serve_forever, daemon=True)
+    ranker_thread = Thread(target=ranker_server.serve_forever, daemon=True)
+    reader_thread.start()
+    ranker_thread.start()
+    try:
+        with playwright.sync_playwright() as runtime:
+            browser = runtime.chromium.launch(headless=True, channel="chrome", args=["--mute-audio"])
+            context = browser.new_context()
+            context.add_init_script("""(() => {
+                if (window.speechSynthesis) window.speechSynthesis.speak = () => {};
+                if (window.HTMLMediaElement) window.HTMLMediaElement.prototype.play = () => Promise.resolve();
+            })();""")
+            page = context.new_page()
+            try:
+                page.goto(reader_origin + "/?silent=1")
+                results = page.evaluate("""async (rankerOrigin) => {
+                    const headers = {
+                        accept: "application/vnd.news-curator.order-origin+json",
+                        "content-type": "application/json",
+                        authorization: "Bearer local-test"
+                    };
+                    const rank = await fetch(rankerOrigin + "/rank", {
+                        method: "POST", headers, body: "{}"
+                    });
+                    const next = await fetch(rankerOrigin + "/page?cursor=local", {headers});
+                    return [rank.status, next.status];
+                }""", f"http://127.0.0.1:{ranker_server.server_port}")
+                assert results == [200, 200]
+            finally:
+                context.close()
+                browser.close()
+        assert [path for path, _accept in requests] == ["/rank", "/page?cursor=local"]
+        assert all(accept == "application/vnd.news-curator.order-origin+json"
+                   for _path, accept in requests)
+        assert len(preflights) == 2
+        assert [path for path, _headers in preflights] == ["/rank", "/page?cursor=local"]
+        for _path, request_headers in preflights:
+            assert set(request_headers.lower().split(",")) <= {"authorization", "content-type"}
+            assert "authorization" in request_headers.lower().split(",")
+    finally:
+        reader_server.shutdown()
+        ranker_server.shutdown()
+        reader_server.server_close()
+        ranker_server.server_close()
+        reader_thread.join(timeout=5)
+        ranker_thread.join(timeout=5)

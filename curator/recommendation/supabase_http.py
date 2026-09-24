@@ -217,6 +217,14 @@ class SupabaseHTTP:
             raise SupabaseHTTPError("prepared consume RPC returned an invalid row")
         return result
 
+    def prepared_history_is_compatible(self, **kwargs) -> bool:
+        body = {"p_" + key: value for key, value in kwargs.items()}
+        result = self._request("POST", "/rest/v1/rpc/m2_prepared_history_is_compatible",
+            token=self._service_token(), key=self._service, body=body)
+        if type(result) is not bool:
+            raise SupabaseHTTPError("prepared history RPC returned a non-boolean")
+        return result
+
     def scrub_expired_prepared_orders(self) -> int:
         result = self._request("POST", "/rest/v1/rpc/m2_scrub_expired_prepared_orders",
             token=self._service_token(), key=self._service, body={"p_limit": 100})

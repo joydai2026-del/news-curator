@@ -1248,6 +1248,9 @@ def test_prepared_order_discards_negative_feedback_committed_after_consume():
         def enqueue_prepared_order(self, **kwargs):
             return True
 
+        def prepared_history_is_compatible(self, **kwargs):
+            return False
+
     store = RacingPreparedStore(events=liked_events())
     # The real fallback receipt is a frozen dataclass. CountingAdapter's older
     # lightweight Receipt fixture cannot exercise dataclasses.replace here.
@@ -1258,6 +1261,45 @@ def test_prepared_order_discards_negative_feedback_committed_after_consume():
     response = rank(subject, store)
     assert response["order_origin"] == "recipe"
     assert response["result_mode"] != "model"
+    assert not store.reservations
+
+
+def test_prepared_order_survives_positive_feedback_committed_after_consume():
+    class RacingPreparedStore(PaidStore):
+        compatibility_checks = 0
+
+        def consume_prepared_order(self, **kwargs):
+            prepared = {"owner_id": kwargs["user_id"],
+                "source_run_id": "earlier-run",
+                "eligibility_key": kwargs["eligibility_key"],
+                "policy_digest": kwargs["policy_digest"],
+                "history_generation": 1, "consent_revision": 1,
+                "behavior_revision": self.commit_revision,
+                "provider_policy_id": "policy", "status": "ready",
+                "expires_at": CLOCK + 3600,
+                "ranked_candidate_ids": list(reversed(kwargs["candidate_ids"]))}
+            # A save/read event lands after consume but before the final
+            # history snapshot. The database compatibility check sees it.
+            self.revision = self.commit_revision + 1
+            return prepared
+
+        def prepared_history_is_compatible(self, **kwargs):
+            self.compatibility_checks += 1
+            assert kwargs["behavior_revision"] == 2
+            assert kwargs["history_generation"] == 1
+            return True
+
+        def enqueue_prepared_order(self, **kwargs):
+            return True
+
+    store = RacingPreparedStore(events=liked_events())
+    subject = build(store)
+    subject._policy = replace(subject._policy,
+        next_run_preparation_enabled=True, effective_policy_digest="a" * 64)
+    response = rank(subject, store)
+    assert response["result_mode"] == "model"
+    assert response["order_origin"] == "prepared_model"
+    assert store.compatibility_checks == 1
     assert not store.reservations
 
 
@@ -2609,6 +2651,59 @@ def test_complete_continuation_avoids_both_locked_round_trips(complete_continuat
     assert store.page_reads == 1
     assert store.response_reservations == 1
     assert subject._adapter.calls == len(store.reservations) == 1
+
+
+def test_atomic_snapshot_short_append_reloads_the_persisted_order(complete_continuation_page):
+    store, subject, cursor, offset = complete_continuation_page
+    _enable_atomic_continuation_snapshot(store)
+    original_extend = store.extend_frozen_order
+    attempted = []
+
+    def short_first_append(**kwargs):
+        attempted.append(len(kwargs["cards"]))
+        if len(attempted) == 1:
+            kwargs = {**kwargs, "cards": kwargs["cards"][:4]}
+        return original_extend(**kwargs)
+
+    store.extend_frozen_order = short_first_append
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    persisted = store.frozen["frozen-1"]["cards"]
+
+    assert attempted and attempted[0] > 4
+    assert store.page_reads >= 2, "an incomplete append must reload persisted state"
+    assert [card["story_id"] for card in response["cards"]] == [
+        card["story_id"] for card in persisted[offset:offset + len(response["cards"])]]
+    assert len({card["story_id"] for card in persisted}) == len(persisted)
+    assert store.response_reservations == 1
+
+
+def test_atomic_snapshot_interleaved_append_falls_back_to_persisted_order(
+        complete_continuation_page):
+    store, subject, cursor, offset = complete_continuation_page
+    _enable_atomic_continuation_snapshot(store)
+    original_extend = store.extend_frozen_order
+    interleaved_ids = []
+
+    def append_one_more_after_commit(**kwargs):
+        total = original_extend(**kwargs)
+        persisted = store.frozen[kwargs["frozen_order_id"]]["cards"]
+        extra = copy.deepcopy(persisted[-1])
+        extra["story_id"] = store.rows[-1]["story_id"]
+        persisted.append(extra)
+        interleaved_ids.append(extra["story_id"])
+        return total + 1
+
+    store.extend_frozen_order = append_one_more_after_commit
+    response = subject.page(authorization="Bearer valid", cursor=cursor)
+    persisted = store.frozen["frozen-1"]["cards"]
+
+    assert interleaved_ids
+    assert store.page_reads >= 2, "a changed append total cannot reuse a local guess"
+    assert len(response["cards"]) == 25
+    assert [card["story_id"] for card in response["cards"]] == [
+        card["story_id"] for card in persisted[offset:offset + 25]]
+    assert response["order_origin"] == "direct_model"
+    assert store.response_reservations == 1
 
 
 def test_atomic_snapshot_rejects_privacy_deletion_after_append(complete_continuation_page):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import shutil
 import subprocess
@@ -1639,6 +1640,117 @@ def test_consent_change_erases_queued_payload_without_revision_bump(db, setting,
         _sql(db, f"delete from auth.users where id='{owner}';")
 
 
+def test_duplicate_preparation_for_one_run_and_view_keeps_one_job(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        first = _enqueue_prepared(db, owner, run_id, 'a')
+        second = _enqueue_prepared(db, owner, run_id, 'a', accepted=False)
+        assert first != second
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where user_id='{owner}' and source_run_id='{run_id}' "
+                                      f"and eligibility_key='{'a' * 64}';")) == '1'
+        assert _last(_service(db, f"select request_id from public.m2_prepared_orders "
+                                      f"where user_id='{owner}';")) == first
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_preparation_rpc_execute_grants_are_service_only(db):
+    signatures = (
+        'm2_enqueue_prepared_order(uuid,uuid,text,text,bigint,bigint,bigint,text,uuid,jsonb,integer)',
+        'm2_claim_prepared_order(text)',
+        'm2_scrub_expired_prepared_orders(integer)',
+        'm2_prepared_history_is_compatible(uuid,bigint,bigint)',
+        'm2_reserve_prepared_budget(uuid,uuid,numeric,numeric)',
+        'm2_mark_prepared_attempt(uuid,uuid)',
+        'm2_finish_prepared_order(uuid,uuid,jsonb)',
+        'm2_fail_prepared_order(uuid,uuid)',
+        'm2_consume_prepared_order(uuid,uuid,text,text,text[],integer)',
+        'm2_clear_prepared_orders_on_privacy_change()',
+    )
+    for signature in signatures:
+        privileges = _last(_sql(db, "select concat_ws(',',"
+            f"has_function_privilege('anon','public.{signature}','EXECUTE'),"
+            f"has_function_privilege('authenticated','public.{signature}','EXECUTE'),"
+            f"has_function_privilege('service_role','public.{signature}','EXECUTE'));"))
+        assert privileges == ('f,f,f' if signature.startswith(
+            'm2_clear_prepared_orders_on_privacy_change') else 'f,f,t'), signature
+
+
+def test_preparation_mutation_rpcs_lock_owner_before_private_work(db):
+    checks = (
+        ('m2_enqueue_prepared_order(uuid,uuid,text,text,bigint,bigint,bigint,text,uuid,jsonb,integer)',
+         'select 1 from public.m2_reading_runs'),
+        ('m2_reserve_prepared_budget(uuid,uuid,numeric,numeric)',
+         'select * into job from public.m2_prepared_orders'),
+        ('m2_mark_prepared_attempt(uuid,uuid)',
+         'select * into job from public.m2_prepared_orders'),
+        ('m2_consume_prepared_order(uuid,uuid,text,text,text[],integer)',
+         'select 1 from public.m2_reading_runs'),
+    )
+    for signature, protected_read in checks:
+        definition = _sql(db, f"select pg_get_functiondef("
+            f"'public.{signature}'::regprocedure);").stdout.lower()
+        assert definition.index('pg_advisory_xact_lock') < definition.index(protected_read), signature
+
+
+def test_standalone_history_compatibility_waits_for_owner_behavior_lock(db):
+    owner, _run_id = _prepared_owner(db)
+    lock = f"hashtextextended('{owner}:behavior',0)"
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            holder = pool.submit(_sql, db,
+                f"begin; select pg_advisory_xact_lock({lock});"
+                "select pg_sleep(2); commit;")
+            deadline = time.monotonic() + 1
+            observed_lock = False
+            while time.monotonic() < deadline:
+                if _last(_sql(db, f"select pg_try_advisory_xact_lock({lock});")) == 'f':
+                    observed_lock = True
+                    break
+                time.sleep(0.02)
+            assert observed_lock, "the holder never acquired the owner behavior lock"
+            started = time.monotonic()
+            result = _last(_service(db,
+                f"select public.m2_prepared_history_is_compatible('{owner}',1,0);"))
+            elapsed = time.monotonic() - started
+            holder.result(timeout=5)
+        assert result == 't'
+        assert elapsed >= 0.25, "standalone history check bypassed the held owner lock"
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
+def test_finish_and_fail_scrub_private_payload_and_claim_token(db):
+    owner, run_id = _prepared_owner(db)
+    try:
+        _enqueue_prepared(db, owner, run_id, 'b')
+        _enqueue_prepared(db, owner, run_id, 'c')
+        first = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        first_id, first_token = first['job_id'], first['claim_token']
+        assert _last(_service(db, f"select public.m2_reserve_prepared_budget("
+            f"'{first_id}','{first_token}',0.01,1.00);")) == 't'
+        assert _last(_service(db, f"select public.m2_mark_prepared_attempt("
+            f"'{first_id}','{first_token}');")) == 't'
+        assert _last(_service(db, f"select public.m2_finish_prepared_order("
+            f"'{first_id}','{first_token}','[\"candidate-one\"]'::jsonb);")) == 't'
+        second = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        second_id, second_token = second['job_id'], second['claim_token']
+        assert second_id != first_id
+        assert _last(_service(db, f"select public.m2_fail_prepared_order("
+            f"'{second_id}','{second_token}');")) == 't'
+        rows = json.loads(_last(_service(db,
+            "select jsonb_agg(jsonb_build_object('status',status,"
+            "'payload',request_payload,'token',claim_token) order by status) "
+            f"from public.m2_prepared_orders where user_id='{owner}';")))
+        assert [row['status'] for row in rows] == ['failed', 'ready']
+        assert all(row['payload'] == {} and row['token'] is None for row in rows)
+    finally:
+        _sql(db, f"delete from auth.users where id='{owner}';")
+
+
 def test_expired_inference_rows_are_purged_in_bounded_batches(db):
     owner, run_id = _prepared_owner(db)
     try:
@@ -1751,9 +1863,21 @@ def test_prepared_owner_consent_revision_budget_and_single_attempt_gates(db):
         _sql(db, f"update public.user_behavior_settings "
                      f"set provider_processing_enabled=false where user_id='{owner}';")
         assert _last(_service(db, reserve)) == 'f'
+        assert _last(_service(db, f"select count(*) from public.m2_prepared_orders "
+                                      f"where job_id='{job_id}';")) == '0'
         _sql(db, f"update public.user_behavior_settings "
-                     f"set provider_processing_enabled=true where user_id='{owner}';"
-                     f"update public.user_behavior_revisions "
+                     f"set provider_processing_enabled=true where user_id='{owner}';")
+        # Consent withdrawal destroys the old private job. Continue the
+        # revision, budget, and retry gates with a newly authorized job.
+        request_id = _enqueue_prepared(db, owner, run_id, 'f')
+        job = json.loads(_last(_service(db,
+            f"select public.m2_claim_prepared_order('{'a' * 64}');")))
+        assert job['request_id'] == request_id
+        job_id, token = job['job_id'], job['claim_token']
+        reserve = ("select public.m2_reserve_prepared_budget("
+                   f"'{job_id}','{token}',0.01,1.00);")
+        mark = f"select public.m2_mark_prepared_attempt('{job_id}','{token}');"
+        _sql(db, f"update public.user_behavior_revisions "
                      f"set latest_revision=1 where user_id='{owner}';")
         assert _last(_service(db, reserve)) == 'f'
         _sql(db, f"update public.user_behavior_revisions "

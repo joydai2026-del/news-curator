@@ -350,3 +350,32 @@ def test_refused_retry_settles_already_observed_usage():
     store, adapter = RefusingRetryStore(), ObservingAdapter()
     assert process_one_preparation(store=store, adapter=adapter, policy=policy()) == "failed"
     assert store.calls == ["claim", "reserve", "mark", "mark", ("settle", "settled", .001), "fail"]
+
+
+def test_uncertain_retry_mark_settles_completed_observed_attempt():
+    from curator.recommendation.preparation_worker import process_one_preparation
+    from curator.recommendation.rankllm_adapter import ProviderOutcome
+
+    class UncertainRetryStore(Store):
+        def mark_prepared_attempt(self, **kwargs):
+            self.calls.append("mark")
+            if self.calls.count("mark") == 2:
+                raise TimeoutError("retry authorization outcome unknown")
+            return True
+
+        def settle_budget(self, **kwargs):
+            self.calls.append(("settle", kwargs["status"], kwargs["actual_usd"]))
+
+    class ObservingAdapter(Adapter):
+        def rank(self, req, **kwargs):
+            kwargs["attempt_observer"](0, 0)
+            kwargs["usage_observer"](ProviderOutcome((), 100, 10, "provider"), 0, 1)
+            try:
+                kwargs["attempt_observer"](1, 1)
+            except TimeoutError:
+                return type("Fallback", (), {"result_mode": RankingResultMode.FALLBACK})()
+            raise AssertionError("retry must stop before provider transport")
+
+    store = UncertainRetryStore()
+    assert process_one_preparation(store=store, adapter=ObservingAdapter(), policy=policy()) == "failed"
+    assert store.calls == ["claim", "reserve", "mark", "mark", ("settle", "settled", .001), "fail"]

@@ -198,8 +198,9 @@ def test_plain_runtime_error_503_is_unchanged():
 ])
 @pytest.mark.parametrize("capability,expected_origin", [
     (None, None),
-    (b"0", None),
-    (b"1", "prepared_model"),
+    (b"application/json", None),
+    (b"application/vnd.news-curator.order-origin+json; q=1", None),
+    (b"application/vnd.news-curator.order-origin+json", "prepared_model"),
 ])
 def test_order_origin_projection_respects_exact_reader_capability(
         path, method, query, body, capability, expected_origin):
@@ -213,10 +214,22 @@ def test_order_origin_projection_respects_exact_reader_capability(
             return {"schema_version": 1, "cards": [],
                     "order_origin": "prepared_model"}
 
-    headers = [] if capability is None else [(b"x-news-curator-order-origin", capability)]
+    headers = [] if capability is None else [(b"accept", capability)]
     sent = request(RankingASGI(service=ProvenanceService(), reader_origin="https://reader.example"),
                    path=path, method=method, query=query, body=body, headers=headers)
     assert sent[0]["status"] == 200
     result = json.loads(sent[1]["body"])
     assert result.get("order_origin") == expected_origin
-    assert "x-news-curator-order-origin" in dict(sent[0]["headers"])[b"access-control-allow-headers"].decode()
+    assert dict(sent[0]["headers"])[b"access-control-allow-headers"] == b"authorization,content-type"
+
+
+def test_preflight_keeps_the_older_ranker_cors_header_contract():
+    sent = request(RankingASGI(service=Service(), reader_origin="https://reader.example"),
+        method="OPTIONS", path="/rank", headers=(
+            (b"access-control-request-method", b"POST"),
+            (b"access-control-request-headers", b"authorization,content-type"),
+        ))
+    assert sent[0]["status"] == 204
+    response_headers = dict(sent[0]["headers"])
+    assert response_headers[b"access-control-allow-headers"] == b"authorization,content-type"
+    assert response_headers[b"access-control-allow-methods"] == b"GET,POST,OPTIONS"

@@ -46,7 +46,8 @@ function response(value, url) { return { ok: true, redirected: false, url,
   assert.equal(JSON.parse(calls[0].options.body).server_commit_revision, 8);
   assert.equal(calls[0].options.signal instanceof AbortSignal, true);
   assert.equal(calls[0].options.headers.authorization, "Bearer token-a");
-  assert.equal(calls[0].options.headers["x-news-curator-order-origin"], "1");
+  assert.equal(calls[0].options.headers.accept, "application/vnd.news-curator.order-origin+json");
+  assert.equal(calls[0].options.headers["x-news-curator-order-origin"], undefined);
   assert.equal(JSON.stringify(calls[0]).includes("user_id"), false);
 
   const changed = reader.createM2Service(config, async () => ({ access_token: token }),
@@ -128,7 +129,8 @@ function response(value, url) { return { ok: true, redirected: false, url,
   assert.equal(pagedAfterReads.server_commit_revision, history.history_revision,
     "a page must keep answering with the frozen order's own binding");
   assert.equal(pagedAfterReads.cards.length > 0, true, "load more fell back after a read or save");
-  assert.equal(pagerCalls[0].options.headers["x-news-curator-order-origin"], "1");
+  assert.equal(pagerCalls[0].options.headers.accept, "application/vnd.news-curator.order-origin+json");
+  assert.equal(pagerCalls[0].options.headers["x-news-curator-order-origin"], undefined);
 
   // end_of_run is optional on the wire, so reader and ranker deploy in either
   // order: an older ranker never sends it, and the reader defaults it to false.

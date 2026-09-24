@@ -93,14 +93,14 @@ scaledown_window = _bounded_int("NEWS_CURATOR_MODAL_SCALEDOWN_SECONDS", 60, 2, 3
 
 
 if deployment_mode == "service":
-    from .runtime import load_ranker_policy
+    from .runtime import load_ranker_policy, next_run_preparation_policy
 
     _, staged_policy = load_ranker_policy(os.environ, root=context_path)
-    next_run = staged_policy.get("next_run_preparation")
-    if not isinstance(next_run, dict) or type(next_run.get("enabled")) is not bool:
+    next_run = next_run_preparation_policy(staged_policy)
+    if "enabled" in next_run and type(next_run["enabled"]) is not bool:
         raise ValueError("next_run_preparation.enabled must be boolean in the staged policy")
     worker_enabled = _enabled("NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED")
-    if next_run["enabled"] != worker_enabled:
+    if next_run.get("enabled", False) != worker_enabled:
         raise ValueError(
             "next_run_preparation.enabled and "
             "NEWS_CURATOR_MODAL_PREPARATION_WORKER_ENABLED must match")
