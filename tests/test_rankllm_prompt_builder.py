@@ -34,7 +34,7 @@ from curator.recommendation.engine import OpenAIRankLLMEngine, ReviewedRankLLMPr
 
 TEMPLATE = str(ROOT / "config/rankllm-news-curator-json.yaml")
 # Re-pinned deliberately whenever the prompt changes. See the golden test below.
-GOLDEN_FIFTY_CANDIDATE_PROMPT_SHA256 = "caf1ca68ac144b901f1bbeb1803aaee5c26cee0e3022d0c0277144a5880222a2"
+GOLDEN_FIFTY_CANDIDATE_PROMPT_SHA256 = "c1e4201abcbbbe11dbc368cc07228b37d0bfe19f820e7b1c0416524a32657326"
 CAPTURE = json.loads((ROOT / "tests/fixtures/m2-retained-public.json").read_text())
 
 

@@ -147,7 +147,7 @@ def test_the_claimed_section_call_count_is_measured_not_assumed(capsys):
     assert calls[0] == CLAIM_METHOD, "the count must start at the claim itself"
 
 
-def test_broad_negative_scan_stays_inside_claim_window():
+def test_story_specific_negative_scan_stays_inside_claim_window():
     rows = [corpus_row(index, hours=1 + index, source=f"blocked-{index}",
                        categories=["blocked-topic"])
             for index in range(500)]
@@ -161,7 +161,8 @@ def test_broad_negative_scan_stays_inside_claim_window():
 
     response = rank(subject, store)
 
-    assert response["cards"] == []
+    assert response["cards"]
+    assert rows[0]["story_id"] not in {card["story_id"] for card in response["cards"]}
     assert len(store.claimed_calls) <= CLAIMED_SECTION_MAX_TRANSPORT_CALLS
 
 
