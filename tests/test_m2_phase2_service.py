@@ -872,6 +872,24 @@ def test_a_cap_of_zero_turns_promotion_off():
     assert store.exclusive_calls == 0, "a cap of zero must not even ask"
 
 
+def test_selected_category_does_not_fetch_or_mix_all_only_promotions():
+    class ByCategory(Store):
+        def retained_candidates_v2(self, *, category_id, **kwargs):
+            rows = super().retained_candidates_v2(category_id=category_id, **kwargs)
+            return rows if category_id is None else [
+                row for row in rows if category_id in row["category_ids"]]
+
+    rows = [corpus_row(index, hours=2, source=f"ai{index}", categories=["ai"])
+            for index in range(30)]
+    store = ByCategory(rows, events=liked_events(), exclusive=exclusive_corpus(6))
+    response = rank(build(store, exclusive_category="only-other-language-press"), store,
+                    eligibility={"category": "ai", "query": None})
+
+    assert store.exclusive_calls == 0, "only All and unscoped search can fetch promotions"
+    assert all("ai" in card["category_ids"] for card in response["cards"])
+    assert promoted(response) == []
+
+
 def test_promotion_timing_log_contains_no_query_or_story_data(capsys):
     store = Store(events=liked_events(), exclusive=exclusive_corpus(6))
     rank(build(store, exclusive_category="only-other-language-press"), store,
