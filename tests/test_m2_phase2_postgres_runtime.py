@@ -67,6 +67,8 @@ MIGRATIONS = (
     'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
     'supabase/migrations/202609240001_m2_next_run_preparations.sql',
     'supabase/migrations/202609240002_m2_claim_continuation_snapshot.sql',
+    'supabase/migrations/202609240003_m2_fast_owner_all_pools.sql',
+    'supabase/migrations/202609240004_m2_activate_fast_owner_all_pools.sql',
 )
 OWNER = '11111111-1111-1111-1111-111111111111'
 OTHER = '22222222-2222-2222-2222-222222222222'
