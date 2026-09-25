@@ -76,7 +76,7 @@ MIGRATIONS = (
     'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
     'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
     'supabase/migrations/202609240003_m2_fast_owner_all_pools.sql',
-    'supabase/migrations/202609240004_m2_fast_owner_all_pools.sql',
+    'supabase/migrations/202609240004_m2_activate_fast_owner_all_pools.sql',
 )
 
 # Seeded corpus size. The live retained corpus was about 6,500 rows when the
@@ -495,6 +495,7 @@ def test_fast_owner_all_pools_keep_bytes_and_sharply_reduce_work(db):
             f'select count(*) from public.{new_name}({args});'))
         print(f'{new_name}: {old_ms:.1f} ms old, {new_ms:.1f} ms new')
         assert new_ms < old_ms * 0.6, 'the narrow route did not reduce measured work'
+        assert new_ms < LANE_BUDGET_MS, f'owner narrow {new_name} took {new_ms:.1f} ms'
 
 
 
@@ -565,7 +566,11 @@ def test_interested_dedupe_ignores_young_and_off_profile_twins(db):
         ('https://lane.test/older-young', 'Age boundary twin', 'source-3', 362),
         ('https://lane.test/newer-young', 'Age boundary twin', 'source-3', 180),
         ('https://lane.test/older-profile', 'Profile boundary twin', 'source-3', 362),
-        ('https://lane.test/newer-profile', 'Profile boundary twin', 'source-4', 361)
+        ('https://lane.test/newer-profile', 'Profile boundary twin', 'source-4', 361),
+        ('https://lane.test/older-category', 'Category boundary twin', 'source-4', 362),
+        ('https://lane.test/newer-category', 'Category boundary twin', 'source-5', 361),
+        ('https://lane.test/older-cross', 'Cross membership twin', 'source-4', 362),
+        ('https://lane.test/newer-cross', 'Cross membership twin', 'source-3', 361)
       )
       insert into public.canonical_stories(
         story_id, canonical_url, title, summary, language, source_kind, source_name,
@@ -579,23 +584,34 @@ def test_interested_dedupe_ignores_young_and_off_profile_twins(db):
       select story_id, source_name, source_name, false,
         language, title, summary, canonical_url, published_at, published_at, published_at
       from public.canonical_stories where canonical_url like 'https://lane.test/%';
+      insert into public.retained_corpus_categories(story_id, category_id)
+      select story_id, 'ai' from public.retained_corpus_observations
+      where canonical_url in ('https://lane.test/older-category',
+                              'https://lane.test/older-cross');
       set role service_role;
       with old_rows as (
         select coalesce(jsonb_agg(value), '[]'::jsonb) rows
         from public.m2_retained_candidates_for_owner(
           p_owner_id => '{owner}', p_hide_already_opened => true,
           p_lane => 'interested', p_profile_sources => array['source-3']::text[],
+          p_profile_categories => array['ai']::text[],
           p_min_age_hours => 6, p_limit => 100) items(value)
       ), new_rows as (
         select coalesce(jsonb_agg(value), '[]'::jsonb) rows
         from public.m2_retained_candidates_interested_narrow_for_owner(
           p_owner_id => '{owner}', p_hide_already_opened => true,
           p_profile_sources => array['source-3']::text[],
+          p_profile_categories => array['ai']::text[],
           p_min_age_hours => 6, p_limit => 100) items(value)
       )
       select old_rows.rows = new_rows.rows
         and (select count(*) from jsonb_array_elements(new_rows.rows) item
-             where item->>'title' in ('Age boundary twin', 'Profile boundary twin')) = 2
+             where item->>'title' in ('Age boundary twin', 'Profile boundary twin',
+                                     'Category boundary twin')) = 3
+        and exists (select 1 from jsonb_array_elements(new_rows.rows) item
+                    where item->>'canonical_url' = 'https://lane.test/newer-cross')
+        and not exists (select 1 from jsonb_array_elements(new_rows.rows) item
+                        where item->>'canonical_url' = 'https://lane.test/older-cross')
       from old_rows, new_rows;
       rollback;"""
     assert 't' in _sql(db, script).stdout.splitlines()
@@ -614,10 +630,10 @@ def test_fixed_width_dedupe_index_accepts_maximum_title(db):
         summary, canonical_url, published_at, published_at, published_at
       from public.canonical_stories where canonical_url='https://long.test/title';
       set role service_role;
-      select count(*) from public.m2_retained_candidates_general_narrow_for_owner(
+      select count(*) > 0 from public.m2_retained_candidates_general_narrow_for_owner(
         '11111111-1111-1111-1111-111111111111',true);
       rollback;"""
-    assert _last(_sql(db, script)) == 'ROLLBACK'
+    assert 't' in _sql(db, script).stdout.splitlines()
 
 
 def test_general_pool_accepts_two_hundred_but_refuses_unbounded_reads(db):

@@ -1,5 +1,17 @@
 begin;
 
+-- A failed concurrent build can leave an invalid index behind. Fail closed
+-- before exposing RPCs that rely on indexed deduplication.
+do $$ begin
+  if not exists (
+    select 1 from pg_catalog.pg_index i
+    where i.indexrelid = to_regclass('public.retained_corpus_dedupe_peer_idx')
+      and i.indisvalid and i.indisready
+  ) then
+    raise exception 'retained corpus dedupe index is not valid and ready';
+  end if;
+end $$;
+
 -- Populate expression-index statistics before the new candidate RPCs serve traffic.
 analyze public.retained_corpus_observations;
 
