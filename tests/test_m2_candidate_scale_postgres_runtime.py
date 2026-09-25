@@ -76,6 +76,7 @@ MIGRATIONS = (
     'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
     'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
     'supabase/migrations/202609240003_m2_fast_owner_all_pools.sql',
+    'supabase/migrations/202609240004_m2_fast_owner_all_pools.sql',
 )
 
 # Seeded corpus size. The live retained corpus was about 6,500 rows when the
@@ -551,6 +552,51 @@ def test_fast_owner_paths_keep_tied_duplicate_hidden_after_owner_filters(db):
           and not exists (select 1 from jsonb_array_elements(new_interested) item
                           where item->>'story_id' = older)
         from results;
+      rollback;"""
+    assert 't' in _sql(db, script).stdout.splitlines()
+
+
+def test_interested_dedupe_ignores_young_and_off_profile_twins(db):
+    # The old RPC filters age and Interested membership before deduplication.
+    # A newer twin outside either boundary must not hide the older lane member.
+    owner = '11111111-1111-1111-1111-111111111111'
+    script = f"""begin;
+      with sample(url, title, source_id, age_minutes) as (values
+        ('https://lane.test/older-young', 'Age boundary twin', 'source-3', 362),
+        ('https://lane.test/newer-young', 'Age boundary twin', 'source-3', 180),
+        ('https://lane.test/older-profile', 'Profile boundary twin', 'source-3', 362),
+        ('https://lane.test/newer-profile', 'Profile boundary twin', 'source-4', 361)
+      )
+      insert into public.canonical_stories(
+        story_id, canonical_url, title, summary, language, source_kind, source_name,
+        published_at)
+      select 'story:' || encode(extensions.digest(url, 'sha256'), 'hex'), url,
+        title, '', 'en', 'outlet', source_id,
+        now() - make_interval(mins => age_minutes) from sample;
+      insert into public.retained_corpus_observations(
+        story_id, source_id, source_name, source_is_aggregator, language, title,
+        summary, canonical_url, published_at, first_observed_at, source_observed_at)
+      select story_id, source_name, source_name, false,
+        language, title, summary, canonical_url, published_at, published_at, published_at
+      from public.canonical_stories where canonical_url like 'https://lane.test/%';
+      set role service_role;
+      with old_rows as (
+        select coalesce(jsonb_agg(value), '[]'::jsonb) rows
+        from public.m2_retained_candidates_for_owner(
+          p_owner_id => '{owner}', p_hide_already_opened => true,
+          p_lane => 'interested', p_profile_sources => array['source-3']::text[],
+          p_min_age_hours => 6, p_limit => 100) items(value)
+      ), new_rows as (
+        select coalesce(jsonb_agg(value), '[]'::jsonb) rows
+        from public.m2_retained_candidates_interested_narrow_for_owner(
+          p_owner_id => '{owner}', p_hide_already_opened => true,
+          p_profile_sources => array['source-3']::text[],
+          p_min_age_hours => 6, p_limit => 100) items(value)
+      )
+      select old_rows.rows = new_rows.rows
+        and (select count(*) from jsonb_array_elements(new_rows.rows) item
+             where item->>'title' in ('Age boundary twin', 'Profile boundary twin')) = 2
+      from old_rows, new_rows;
       rollback;"""
     assert 't' in _sql(db, script).stdout.splitlines()
 

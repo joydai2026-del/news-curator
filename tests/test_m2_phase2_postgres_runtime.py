@@ -66,6 +66,7 @@ MIGRATIONS = (
     'supabase/migrations/202609230004_m2_retained_candidates_for_owner.sql',
     'supabase/migrations/202609230005_m2_retained_candidates_general_narrow_for_owner.sql',
     'supabase/migrations/202609240003_m2_fast_owner_all_pools.sql',
+    'supabase/migrations/202609240004_m2_fast_owner_all_pools.sql',
     'supabase/migrations/202609240001_m2_next_run_preparations.sql',
     'supabase/migrations/202609240002_m2_claim_continuation_snapshot.sql',
 )
