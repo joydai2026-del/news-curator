@@ -605,13 +605,13 @@ def test_interested_dedupe_ignores_young_and_off_profile_twins(db):
           p_min_age_hours => 6, p_limit => 100) items(value)
       )
       select old_rows.rows = new_rows.rows
-        and (select count(*) from jsonb_array_elements(new_rows.rows) item
-             where item->>'title' in ('Age boundary twin', 'Profile boundary twin',
-                                     'Category boundary twin')) = 3
-        and exists (select 1 from jsonb_array_elements(new_rows.rows) item
-                    where item->>'canonical_url' = 'https://lane.test/newer-cross')
-        and not exists (select 1 from jsonb_array_elements(new_rows.rows) item
-                        where item->>'canonical_url' = 'https://lane.test/older-cross')
+        and (select array_agg(item->>'canonical_url' order by item->>'canonical_url')
+             from jsonb_array_elements(new_rows.rows) item
+             where item->>'canonical_url' like 'https://lane.test/%') = array[
+               'https://lane.test/newer-cross',
+               'https://lane.test/older-category',
+               'https://lane.test/older-profile',
+               'https://lane.test/older-young']::text[]
       from old_rows, new_rows;
       rollback;"""
     assert 't' in _sql(db, script).stdout.splitlines()
@@ -630,8 +630,9 @@ def test_fixed_width_dedupe_index_accepts_maximum_title(db):
         summary, canonical_url, published_at, published_at, published_at
       from public.canonical_stories where canonical_url='https://long.test/title';
       set role service_role;
-      select count(*) > 0 from public.m2_retained_candidates_general_narrow_for_owner(
-        '11111111-1111-1111-1111-111111111111',true);
+      select count(*) = 1 from public.m2_retained_candidates_general_narrow_for_owner(
+        '11111111-1111-1111-1111-111111111111',true) item
+      where item->>'canonical_url' = 'https://long.test/title';
       rollback;"""
     assert 't' in _sql(db, script).stdout.splitlines()
 
